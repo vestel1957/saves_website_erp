@@ -44,3 +44,14 @@ export class CreateSupplierDto {
   @IsOptional() @IsString() account?: string;
   @IsOptional() @IsString() company?: string;
 }
+
+/** Pago/abono a una orden de compra (o devolución). Crea un movimiento de tesorería. */
+export class PayOrderDto {
+  @IsNumber() @Min(1) amount!: number;
+  @IsString() method!: string; // Cash | Bank
+  @IsOptional() @IsInt() cashAccountId?: number;
+  @IsOptional() @IsString() accountName?: string;
+  @IsOptional() @IsString() bankName?: string;
+  @IsOptional() @IsString() date?: string;
+  @IsOptional() @IsString() note?: string;
+}

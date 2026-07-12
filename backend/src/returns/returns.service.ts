@@ -22,6 +22,16 @@ export class CreateReturnDto {
   @IsArray() @ValidateNested({ each: true }) @Type(() => ReturnItemDto) items!: ReturnItemDto[];
 }
 
+/** Pago/abono de una devolución (crédito del proveedor). */
+export class PayReturnDto {
+  @IsNumber() @Min(1) amount!: number;
+  @IsString() method!: string;
+  @IsOptional() @IsInt() cashAccountId?: number;
+  @IsOptional() @IsString() accountName?: string;
+  @IsOptional() @IsString() date?: string;
+  @IsOptional() @IsString() note?: string;
+}
+
 @Injectable()
 export class ReturnsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -116,5 +126,31 @@ export class ReturnsService {
       await tx.stockReturn.delete({ where: { id } });
     });
     return { id, deleted: true };
+  }
+
+  /** Registra el pago/crédito de una devolución: ingreso en tesorería + saldo. */
+  async pay(id: string, dto: PayReturnDto, user: AuthUser) {
+    const r = await this.prisma.stockReturn.findUnique({ where: { id } });
+    if (!r) throw new NotFoundException('Devolución no encontrada');
+    const amount = round2(Number(dto.amount));
+    if (amount <= 0) throw new BadRequestException('El monto debe ser mayor a cero');
+    const balance = round2(num(r.total) - num(r.paidAmount));
+    if (amount > balance + 0.01) throw new BadRequestException(`El abono (${amount}) supera el saldo de la devolución (${balance}).`);
+    return this.prisma.$transaction(async (tx) => {
+      const t = await tx.transaction.create({
+        data: {
+          type: 'INCOME', category: 'Devolución proveedor', credit: amount, debit: 0,
+          method: dto.method ?? 'Cash', date: dateOnly(dto.date),
+          cashAccountId: dto.cashAccountId ?? null, accountName: dto.accountName ?? null,
+          ext: true, status: 'VIGENTE', issuerUserId: null,
+          note: dto.note ?? `Crédito devolución #${r.tid}`,
+          stockReturnId: r.id, supplierId: r.supplierId,
+        },
+      });
+      const newPaid = round2(num(r.paidAmount) + amount);
+      const status = newPaid >= num(r.total) ? 'paid' : 'partial';
+      await tx.stockReturn.update({ where: { id }, data: { paidAmount: newPaid, status } });
+      return { ok: true, transactionId: t.id, paidAmount: newPaid, status };
+    });
   }
 }

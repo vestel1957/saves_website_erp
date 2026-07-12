@@ -1,5 +1,5 @@
 import { Body, Controller, Delete, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
-import { ReturnsService, CreateReturnDto } from './returns.service';
+import { ReturnsService, CreateReturnDto, PayReturnDto } from './returns.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AreaGuard } from '../auth/area.guard';
 import { RequireArea } from '../auth/require-area.decorator';
@@ -19,5 +19,6 @@ export class ReturnsController {
   }
   @Get(':id') detail(@Param('id') id: string) { return this.returns.detail(id); }
   @Post() create(@Body() dto: CreateReturnDto, @CurrentUser() user: AuthUser) { return this.returns.create(dto, user); }
+  @Post(':id/pay') pay(@Param('id') id: string, @Body() dto: PayReturnDto, @CurrentUser() user: AuthUser) { return this.returns.pay(id, dto, user); }
   @Delete(':id') remove(@Param('id') id: string) { return this.returns.remove(id); }
 }

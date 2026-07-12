@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { Workbook } from 'exceljs';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { CreateMaterialDto, SimpleCatalogDto, TransferDto, UpdateMaterialDto } from './dto/inventory.dto';
@@ -54,6 +55,90 @@ export class InventoryService {
     return { ok: true };
   }
   createWarehouse(dto: SimpleCatalogDto) { return this.prisma.materialWarehouse.create({ data: { title: dto.title, extra: dto.extra ?? null } }); }
+  updateWarehouse(id: string, dto: SimpleCatalogDto) { return this.prisma.materialWarehouse.update({ where: { id }, data: { title: dto.title, extra: dto.extra ?? null } }); }
+  async deleteWarehouse(id: string) {
+    const count = await this.prisma.material.count({ where: { warehouseId: id } });
+    if (count > 0) throw new BadRequestException(`No se puede eliminar: la bodega tiene ${count} material(es). Trasládalos primero.`);
+    await this.prisma.materialWarehouse.delete({ where: { id } });
+    return { ok: true };
+  }
+
+  /**
+   * Importa materiales desde un Excel. Cabeceras reconocidas (fila 1, insensible a
+   * mayúsculas): nombre, codigo, categoria, bodega, precio, costo, iva, cantidad,
+   * alerta. Crea la categoría/bodega por título si no existe. Devuelve el resumen.
+   */
+  async importMaterials(buffer: Buffer) {
+    const wb = new Workbook();
+    await wb.xlsx.load(buffer as any);
+    const ws = wb.worksheets[0];
+    if (!ws) throw new BadRequestException('El archivo no tiene hojas.');
+
+    const headers: Record<string, number> = {};
+    ws.getRow(1).eachCell((cell, col) => { headers[String(cell.value ?? '').trim().toLowerCase()] = col; });
+    const pick = (names: string[]) => { for (const n of names) if (headers[n] != null) return headers[n]; return null; };
+    const cName = pick(['nombre', 'name', 'material', 'producto']);
+    if (!cName) throw new BadRequestException('Falta la columna "nombre" en la primera fila.');
+    const cCode = pick(['codigo', 'código', 'code', 'sku']);
+    const cCat = pick(['categoria', 'categoría', 'category']);
+    const cWh = pick(['bodega', 'almacen', 'almacén', 'warehouse']);
+    const cPrice = pick(['precio', 'price', 'venta']);
+    const cCost = pick(['costo', 'cost', 'compra']);
+    const cTax = pick(['iva', 'impuesto', 'tax']);
+    const cQty = pick(['cantidad', 'qty', 'stock', 'existencia']);
+    const cAlert = pick(['alerta', 'minimo', 'mínimo', 'alert']);
+
+    const [cats, whs] = await Promise.all([
+      this.prisma.materialCategory.findMany({ select: { id: true, title: true } }),
+      this.prisma.materialWarehouse.findMany({ select: { id: true, title: true } }),
+    ]);
+    const catMap = new Map(cats.map((c) => [c.title.trim().toLowerCase(), c.id]));
+    const whMap = new Map(whs.map((w) => [w.title.trim().toLowerCase(), w.id]));
+
+    const str = (row: any, col: number | null) => (col ? String(row.getCell(col).value ?? '').trim() : '');
+    const numv = (row: any, col: number | null) => {
+      if (!col) return 0;
+      const v = row.getCell(col).value;
+      const n = typeof v === 'number' ? v : parseFloat(String(v ?? '').replace(/[^\d.-]/g, ''));
+      return Number.isFinite(n) ? n : 0;
+    };
+
+    let created = 0, skipped = 0;
+    const errors: string[] = [];
+    for (let i = 2; i <= ws.rowCount; i++) {
+      const row = ws.getRow(i);
+      const name = str(row, cName);
+      if (!name) { skipped++; continue; }
+      try {
+        let categoryId: string | null = null;
+        const catTitle = str(row, cCat);
+        if (catTitle) {
+          const key = catTitle.toLowerCase();
+          categoryId = catMap.get(key) ?? null;
+          if (!categoryId) { const c = await this.prisma.materialCategory.create({ data: { title: catTitle } }); categoryId = c.id; catMap.set(key, c.id); }
+        }
+        let warehouseId: string | null = null;
+        const whTitle = str(row, cWh);
+        if (whTitle) {
+          const key = whTitle.toLowerCase();
+          warehouseId = whMap.get(key) ?? null;
+          if (!warehouseId) { const w = await this.prisma.materialWarehouse.create({ data: { title: whTitle } }); warehouseId = w.id; whMap.set(key, w.id); }
+        }
+        await this.prisma.material.create({
+          data: {
+            name, code: str(row, cCode) || null, categoryId, warehouseId,
+            price: numv(row, cPrice), cost: numv(row, cCost), taxRate: numv(row, cTax),
+            qty: Math.round(numv(row, cQty)), alert: cAlert ? Math.round(numv(row, cAlert)) : null,
+          },
+        });
+        created++;
+      } catch (e) {
+        if (errors.length < 12) errors.push(`Fila ${i} (${name}): ${(e as Error).message}`);
+        skipped++;
+      }
+    }
+    return { created, skipped, errors };
+  }
 
   /** Listado de material con filtros. */
   async materials(params: { search?: string; categoryId?: string; warehouseId?: string; lowStock?: string; page?: number; pageSize?: number }) {

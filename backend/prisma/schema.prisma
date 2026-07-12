@@ -3306,6 +3306,11 @@ model Transaction {
   attach       String? // comprobante/evidencia: nombre almacenado (uuid.ext) en uploads/treasury
   attachName   String? // nombre original del archivo subido
 
+  // Enlaces a compras/devoluciones/proveedor (para pagos y estado de cuenta del proveedor)
+  supplyOrderId String? // pago/abono a una orden de compra
+  stockReturnId String? // pago/abono a una devolución
+  supplierId    String? // proveedor (pago directo o derivado de la orden/devolución)
+
   receiptLinks ReceiptTransaction[]
   voiding      Voiding?
 
@@ -3316,6 +3321,9 @@ model Transaction {
   @@index([category])
   @@index([date])
   @@index([type, date])
+  @@index([supplierId])
+  @@index([supplyOrderId])
+  @@index([stockReturnId])
 }
 
 /// Recibo de pago (legacy `recibos_de_pago`). Agrupa 1..N transacciones (M:N).

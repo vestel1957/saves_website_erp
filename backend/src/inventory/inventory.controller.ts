@@ -1,4 +1,6 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Query, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import { InventoryService } from './inventory.service';
 import { CreateMaterialDto, SimpleCatalogDto, TransferDto, UpdateMaterialDto } from './dto/inventory.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -20,6 +22,8 @@ export class InventoryController {
   @Patch('categories/:id') updateCategory(@Param('id') id: string, @Body() dto: SimpleCatalogDto) { return this.inv.updateCategory(id, dto); }
   @Delete('categories/:id') deleteCategory(@Param('id') id: string) { return this.inv.deleteCategory(id); }
   @Post('warehouses') createWarehouse(@Body() dto: SimpleCatalogDto) { return this.inv.createWarehouse(dto); }
+  @Patch('warehouses/:id') updateWarehouse(@Param('id') id: string, @Body() dto: SimpleCatalogDto) { return this.inv.updateWarehouse(id, dto); }
+  @Delete('warehouses/:id') deleteWarehouse(@Param('id') id: string) { return this.inv.deleteWarehouse(id); }
 
   @Get('materials')
   materials(
@@ -30,6 +34,18 @@ export class InventoryController {
   }
   @Get('materials/:id') materialDetail(@Param('id') id: string) { return this.inv.materialDetail(id); }
   @Post('materials') createMaterial(@Body() dto: CreateMaterialDto) { return this.inv.createMaterial(dto); }
+
+  /** Importa materiales desde un Excel (.xlsx). Campo "file". */
+  @Post('materials/import')
+  @UseInterceptors(FileInterceptor('file', {
+    storage: memoryStorage(),
+    limits: { fileSize: 10 * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => cb(null, /spreadsheet|excel|\.xlsx$/.test(file.mimetype) || file.originalname.toLowerCase().endsWith('.xlsx')),
+  }))
+  importMaterials(@UploadedFile() file?: { buffer: Buffer }) {
+    if (!file) throw new BadRequestException('Sube un archivo .xlsx en el campo "file".');
+    return this.inv.importMaterials(file.buffer);
+  }
   @Patch('materials/:id') updateMaterial(@Param('id') id: string, @Body() dto: UpdateMaterialDto) { return this.inv.updateMaterial(id, dto); }
   @Delete('materials/:id') deleteMaterial(@Param('id') id: string) { return this.inv.deleteMaterial(id); }
 

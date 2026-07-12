@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
-import { CategoryNameDto, CreateOrderDto, CreateSupplierDto, OrderItemDto, ReceiveOrderDto } from './dto/orders.dto';
+import { CategoryNameDto, CreateOrderDto, CreateSupplierDto, OrderItemDto, PayOrderDto, ReceiveOrderDto } from './dto/orders.dto';
 
 const num = (d: Prisma.Decimal | number | null | undefined) => (d == null ? 0 : Number(d));
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -106,6 +106,72 @@ export class OrdersService {
       name: dto.name, category: dto.category ?? 1, nit: dto.nit ?? null, phone: dto.phone ?? null, email: dto.email ?? null,
       address: dto.address ?? null, city: dto.city ?? null, bank: dto.bank ?? null, account: dto.account ?? null, company: dto.company ?? null,
     } });
+  }
+
+  async updateSupplier(id: string, dto: CreateSupplierDto) {
+    const s = await this.prisma.supplier.findUnique({ where: { id } });
+    if (!s) throw new NotFoundException('Proveedor no encontrado');
+    return this.prisma.supplier.update({ where: { id }, data: {
+      name: dto.name, category: dto.category ?? s.category, nit: dto.nit ?? null, phone: dto.phone ?? null, email: dto.email ?? null,
+      address: dto.address ?? null, city: dto.city ?? null, bank: dto.bank ?? null, account: dto.account ?? null, company: dto.company ?? null,
+    } });
+  }
+
+  /** Elimina un proveedor. Bloquea si tiene órdenes o devoluciones asociadas. */
+  async deleteSupplier(id: string) {
+    const s = await this.prisma.supplier.findUnique({ where: { id }, include: { _count: { select: { supplyOrders: true, stockReturns: true } } } });
+    if (!s) throw new NotFoundException('Proveedor no encontrado');
+    if (s._count.supplyOrders > 0 || s._count.stockReturns > 0) {
+      throw new BadRequestException('No se puede eliminar: el proveedor tiene órdenes o devoluciones asociadas.');
+    }
+    await this.prisma.supplier.delete({ where: { id } });
+    return { id, deleted: true };
+  }
+
+  /** Estado de cuenta del proveedor: órdenes, devoluciones, pagos y saldos. */
+  async supplierStatement(id: string) {
+    const s = await this.prisma.supplier.findUnique({ where: { id } });
+    if (!s) throw new NotFoundException('Proveedor no encontrado');
+    const [orders, returns, payments] = await Promise.all([
+      this.prisma.supplyOrder.findMany({ where: { supplierId: id }, orderBy: { createdAt: 'desc' }, select: { id: true, tid: true, orderDate: true, total: true, paidAmount: true, status: true, kind: true } }),
+      this.prisma.stockReturn.findMany({ where: { supplierId: id }, orderBy: { createdAt: 'desc' }, select: { id: true, tid: true, date: true, total: true, paidAmount: true, status: true } }),
+      this.prisma.transaction.findMany({ where: { supplierId: id, status: 'VIGENTE' }, orderBy: { date: 'desc' }, take: 200, select: { id: true, date: true, type: true, debit: true, credit: true, category: true, note: true, supplyOrderId: true } }),
+    ]);
+    const totalOrdered = round2(orders.reduce((a, o) => a + num(o.total), 0));
+    const totalPaid = round2(orders.reduce((a, o) => a + num(o.paidAmount), 0));
+    return {
+      supplier: { id: s.id, name: s.name, nit: s.nit, phone: s.phone, email: s.email, city: s.city, bank: s.bank, account: s.account },
+      orders: orders.map((o) => ({ id: o.id, tid: o.tid, date: o.orderDate, total: num(o.total), paid: num(o.paidAmount), balance: round2(num(o.total) - num(o.paidAmount)), status: o.status, kind: o.kind })),
+      returns: returns.map((r) => ({ id: r.id, tid: r.tid, date: r.date, total: num(r.total), paid: num(r.paidAmount), status: r.status })),
+      payments: payments.map((p) => ({ id: p.id, date: p.date, type: p.type, amount: p.type === 'EXPENSE' ? num(p.debit) : num(p.credit), category: p.category, note: p.note, orderId: p.supplyOrderId })),
+      totals: { totalOrdered, totalPaid, saldo: round2(totalOrdered - totalPaid) },
+    };
+  }
+
+  /** Pago/abono a una orden de compra: crea el egreso en tesorería y actualiza el saldo. */
+  async paySupplyOrder(id: string, dto: PayOrderDto, user: AuthUser) {
+    const order = await this.prisma.supplyOrder.findUnique({ where: { id } });
+    if (!order) throw new NotFoundException('Orden no encontrada');
+    const amount = round2(Number(dto.amount));
+    if (amount <= 0) throw new BadRequestException('El monto debe ser mayor a cero');
+    const balance = round2(num(order.total) - num(order.paidAmount));
+    if (amount > balance + 0.01) throw new BadRequestException(`El abono (${amount}) supera el saldo de la orden (${balance}).`);
+    return this.prisma.$transaction(async (tx) => {
+      const t = await tx.transaction.create({
+        data: {
+          type: 'EXPENSE', category: 'Compras', debit: amount, credit: 0,
+          method: dto.method ?? 'Cash', date: dateOnly(dto.date),
+          cashAccountId: dto.cashAccountId ?? null, accountName: dto.accountName ?? null,
+          bankName: dto.method === 'Bank' ? (dto.bankName ?? null) : null,
+          ext: true, status: 'VIGENTE', issuerUserId: null,
+          note: dto.note ?? `Pago orden de compra #${order.tid}`,
+          supplyOrderId: order.id, supplierId: order.supplierId,
+        },
+      });
+      const newPaid = round2(num(order.paidAmount) + amount);
+      await tx.supplyOrder.update({ where: { id }, data: { paidAmount: newPaid } });
+      return { ok: true, transactionId: t.id, paidAmount: newPaid, balance: round2(num(order.total) - newPaid) };
+    });
   }
 
   // --- Sedes (el nombre vive libre en SupplyOrder.branchRef; se listan las que existen) ---

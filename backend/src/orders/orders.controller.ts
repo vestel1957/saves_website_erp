@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { OrdersService } from './orders.service';
-import { CategoryNameDto, CreateOrderDto, CreateSupplierDto, ReceiveOrderDto } from './dto/orders.dto';
+import { CategoryNameDto, CreateOrderDto, CreateSupplierDto, PayOrderDto, ReceiveOrderDto } from './dto/orders.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AreaGuard } from '../auth/area.guard';
 import { RequireArea } from '../auth/require-area.decorator';
@@ -20,6 +20,9 @@ export class OrdersController {
     return this.orders.suppliers({ category, search, page: Number(page), pageSize: Number(pageSize) });
   }
   @Post('suppliers') createSupplier(@Body() dto: CreateSupplierDto) { return this.orders.createSupplier(dto); }
+  @Get('suppliers/:id/statement') supplierStatement(@Param('id') id: string) { return this.orders.supplierStatement(id); }
+  @Patch('suppliers/:id') updateSupplier(@Param('id') id: string, @Body() dto: CreateSupplierDto) { return this.orders.updateSupplier(id, dto); }
+  @Delete('suppliers/:id') deleteSupplier(@Param('id') id: string) { return this.orders.deleteSupplier(id); }
 
   @Get('branches') branches() { return this.orders.branches(); }
 
@@ -48,5 +51,6 @@ export class OrdersController {
   @Get(':id') detail(@Param('id') id: string) { return this.orders.detail(id); }
   @Post() create(@Body() dto: CreateOrderDto, @CurrentUser() user: AuthUser) { return this.orders.create(dto, user); }
   @Post(':id/receive') receive(@Param('id') id: string, @Body() dto: ReceiveOrderDto, @CurrentUser() user: AuthUser) { return this.orders.receive(id, dto, user); }
+  @Post(':id/pay') pay(@Param('id') id: string, @Body() dto: PayOrderDto, @CurrentUser() user: AuthUser) { return this.orders.paySupplyOrder(id, dto, user); }
   @Delete(':id') remove(@Param('id') id: string) { return this.orders.remove(id); }
 }

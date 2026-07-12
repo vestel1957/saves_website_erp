@@ -65,6 +65,8 @@ const principal: NavItem[] = [
     label: "WhatsApp",
     children: [
       { icon: "message-square", label: "Inbox", href: "/configuracion/mensajes" },
+      { icon: "file-text", label: "Plantillas", href: "/configuracion/whatsapp/plantillas" },
+      { icon: "send", label: "Envío masivo", href: "/configuracion/whatsapp/masivo" },
       { icon: "settings", label: "Configurar API", href: "/configuracion/whatsapp" },
     ],
   },

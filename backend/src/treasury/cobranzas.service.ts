@@ -2,7 +2,10 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
-import { CashCloseDto, CashOpenDto, CollectDto, ExpenseDto, TransferDto, VoidTxDto } from './dto/cobranzas.dto';
+import {
+  CashAccountDto, CashCloseDto, CashOpenDto, CollectDto, EditTxDto, ExpenseDto,
+  IncomeDto, TransferDto, TxCategoryDto, VoidTxDto,
+} from './dto/cobranzas.dto';
 
 const num = (d: Prisma.Decimal | number | null | undefined) => (d == null ? 0 : Number(d));
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -55,6 +58,94 @@ export class CobranzasService {
     await tx.subscriber.update({
       where: { id: subscriberId },
       data: { debitCache: agg._sum.debit ?? 0, creditCache: agg._sum.credit ?? 0 },
+    });
+  }
+
+  /**
+   * Saldo persistente de una caja (legacy `accounts.lastbal`). Se recalcula desde
+   * cero (SUM crédito − débito de movimientos VIGENTES de esa caja) para ser
+   * siempre correcto e idempotente. `cashAccountId` es el id legacy que llevan las
+   * transacciones; la fila CashAccount se resuelve por `legacyId`.
+   */
+  private async recomputeCashBalance(tx: Tx, cashAccountId: number | null | undefined) {
+    if (cashAccountId == null) return;
+    const acc = await tx.cashAccount.findFirst({ where: { legacyId: cashAccountId }, select: { id: true } });
+    if (!acc) return; // caja derivada sin fila propia: nada que materializar
+    const agg = await tx.transaction.aggregate({
+      _sum: { credit: true, debit: true },
+      where: { cashAccountId, status: 'VIGENTE' },
+    });
+    const balance = round2(num(agg._sum.credit) - num(agg._sum.debit));
+    await tx.cashAccount.update({ where: { id: acc.id }, data: { balance } });
+  }
+
+  /**
+   * Ingreso manual libre: INCOME no ligado a factura. Actualiza el saldo de la caja.
+   * Equivale a `Transactions_model::save_trans` con pay_type=Income del legacy.
+   */
+  async createIncome(dto: IncomeDto, user: AuthUser) {
+    const amount = round2(Number(dto.amount));
+    if (!(amount > 0)) throw new BadRequestException('El monto debe ser mayor a cero');
+    if (dto.subscriberId) {
+      const sub = await this.prisma.subscriber.findUnique({ where: { id: dto.subscriberId }, select: { id: true } });
+      if (!sub) throw new NotFoundException('Cliente no encontrado');
+    }
+    return this.prisma.$transaction(async (tx) => {
+      const t = await tx.transaction.create({
+        data: {
+          type: 'INCOME', category: dto.category, credit: amount, debit: 0,
+          payerName: dto.payerName ?? null, subscriberId: dto.subscriberId ?? null,
+          method: dto.method,
+          date: dto.date ? dateOnly(dto.date) : dateOnly(new Date().toISOString()),
+          cashAccountId: dto.cashAccountId ?? null, accountName: dto.accountName ?? null,
+          bankName: dto.method === 'Bank' ? (dto.bankName ?? null) : null,
+          ext: false, status: 'VIGENTE', note: dto.note ?? null, issuerUserId: null,
+        },
+      });
+      await this.recomputeCashBalance(tx, dto.cashAccountId);
+      if (dto.subscriberId) await this.recomputeSubscriber(tx, dto.subscriberId);
+      return { id: t.id, amount };
+    });
+  }
+
+  /**
+   * Editar un movimiento. Campos seguros siempre; el monto solo si NO es un pago
+   * de venta ligado a factura (esos se anulan y rehacen para no descuadrar cartera).
+   */
+  async editTransaction(id: string, dto: EditTxDto, user: AuthUser) {
+    return this.prisma.$transaction(async (tx) => {
+      const t = await tx.transaction.findUnique({ where: { id } });
+      if (!t) throw new NotFoundException('Movimiento no encontrado');
+      if (t.status === 'ANULADA') throw new BadRequestException('No se puede editar un movimiento anulado');
+
+      const data: Prisma.TransactionUpdateInput = {};
+      if (dto.category !== undefined) data.category = dto.category;
+      if (dto.note !== undefined) data.note = dto.note;
+      if (dto.date !== undefined) data.date = dateOnly(dto.date);
+      if (dto.method !== undefined) data.method = dto.method;
+      if (dto.payerName !== undefined) data.payerName = dto.payerName;
+      if (dto.accountName !== undefined) data.accountName = dto.accountName;
+      if (dto.cashAccountId !== undefined) data.cashAccountId = dto.cashAccountId;
+      if (dto.bankName !== undefined) data.bankName = dto.bankName;
+
+      if (dto.amount !== undefined) {
+        const isSalePayment = !!t.invoiceId && t.category === 'Sales' && t.type === 'INCOME';
+        if (isSalePayment) {
+          throw new BadRequestException('No se puede editar el monto de un pago de venta. Anula el movimiento y regístralo de nuevo.');
+        }
+        const amount = round2(Number(dto.amount));
+        if (t.type === 'INCOME') { data.credit = amount; data.debit = 0; }
+        else { data.debit = amount; data.credit = 0; }
+      }
+
+      await tx.transaction.update({ where: { id }, data });
+      // Recalcular saldo de la(s) caja(s) afectada(s).
+      const affected = new Set<number>();
+      if (t.cashAccountId != null) affected.add(t.cashAccountId);
+      if (dto.cashAccountId != null) affected.add(dto.cashAccountId);
+      for (const acid of affected) await this.recomputeCashBalance(tx, acid);
+      if (t.subscriberId) await this.recomputeSubscriber(tx, t.subscriberId);
+      return { id, ok: true };
     });
   }
 
@@ -181,6 +272,7 @@ export class CobranzasService {
       }
 
       await this.recomputeSubscriber(tx, sub.id);
+      await this.recomputeCashBalance(tx, dto.cashAccountId);
 
       // Recibo de caja (materializado al pagar, no al imprimir como el legacy).
       const receipt = await tx.paymentReceipt.create({
@@ -242,6 +334,7 @@ export class CobranzasService {
       }
 
       if (t.subscriberId) await this.recomputeSubscriber(tx, t.subscriberId);
+      await this.recomputeCashBalance(tx, t.cashAccountId);
       return { id, status: 'ANULADA' };
     });
   }
@@ -249,19 +342,22 @@ export class CobranzasService {
   /** Registrar un egreso/gasto de caja. */
   async createExpense(dto: ExpenseDto, user: AuthUser) {
     const amount = round2(Number(dto.amount));
-    const t = await this.prisma.transaction.create({
-      data: {
-        type: 'EXPENSE', category: dto.category, debit: amount, credit: 0,
-        payerName: dto.payerName ?? null,
-        method: dto.method,
-        date: dto.date ? dateOnly(dto.date) : dateOnly(new Date().toISOString()),
-        cashAccountId: dto.cashAccountId ?? null, accountName: dto.accountName ?? null,
-        bankName: dto.method === 'Bank' ? (dto.bankName ?? null) : null,
-        ext: true, status: 'VIGENTE', note: dto.note ?? null,
-        issuerUserId: null,
-      },
+    return this.prisma.$transaction(async (tx) => {
+      const t = await tx.transaction.create({
+        data: {
+          type: 'EXPENSE', category: dto.category, debit: amount, credit: 0,
+          payerName: dto.payerName ?? null,
+          method: dto.method,
+          date: dto.date ? dateOnly(dto.date) : dateOnly(new Date().toISOString()),
+          cashAccountId: dto.cashAccountId ?? null, accountName: dto.accountName ?? null,
+          bankName: dto.method === 'Bank' ? (dto.bankName ?? null) : null,
+          ext: true, status: 'VIGENTE', note: dto.note ?? null,
+          issuerUserId: null,
+        },
+      });
+      await this.recomputeCashBalance(tx, dto.cashAccountId);
+      return { id: t.id, amount };
     });
-    return { id: t.id, amount };
   }
 
   /**
@@ -300,6 +396,8 @@ export class CobranzasService {
           note: `Transferencia desde ${fromName}${baseNote ? ` — ${baseNote}` : ''}`,
         },
       });
+      await this.recomputeCashBalance(tx, dto.fromCashAccountId);
+      await this.recomputeCashBalance(tx, dto.toCashAccountId);
       return {
         amount, date,
         from: { cashAccountId: dto.fromCashAccountId, name: fromName, transactionId: out.id },
@@ -308,25 +406,139 @@ export class CobranzasService {
     });
   }
 
-  /** Cajas disponibles (derivadas de las transacciones existentes). */
+  /**
+   * Cajas disponibles: la tabla CashAccount es la autoritativa (incluye cajas
+   * nuevas y con saldo persistente), fusionada con las cajas "derivadas" que
+   * aparecen en transacciones antiguas pero aún no tienen fila propia, para no
+   * perder selectores. El `id` expuesto es el legacyId (el que llevan las tx).
+   */
   async cashAccounts() {
-    const rows = await this.prisma.transaction.groupBy({
-      by: ['cashAccountId', 'accountName'],
-      where: { cashAccountId: { not: null } },
-      _count: { _all: true },
-    });
-    const byId = new Map<number, { id: number; name: string; count: number }>();
-    for (const r of rows) {
-      if (r.cashAccountId == null) continue;
-      const prev = byId.get(r.cashAccountId);
-      const count = r._count._all;
-      if (!prev || count > prev.count) {
-        byId.set(r.cashAccountId, { id: r.cashAccountId, name: r.accountName ?? `Caja ${r.cashAccountId}`, count });
-      }
+    const [accounts, derived] = await Promise.all([
+      this.prisma.cashAccount.findMany({
+        select: { id: true, legacyId: true, holder: true, balance: true, branchLegacy: true, accountNumber: true, code: true },
+        orderBy: { holder: 'asc' },
+      }),
+      this.prisma.transaction.groupBy({
+        by: ['cashAccountId', 'accountName'],
+        where: { cashAccountId: { not: null } },
+        _count: { _all: true },
+      }),
+    ]);
+    const known = new Set(accounts.map((a) => a.legacyId).filter((x): x is number => x != null));
+    const out = accounts
+      .filter((a) => a.legacyId != null)
+      .map((a) => ({
+        id: a.legacyId as number, cuid: a.id, name: a.holder,
+        balance: num(a.balance), branchLegacy: a.branchLegacy,
+        accountNumber: a.accountNumber, code: a.code, persisted: true,
+      }));
+    // Derivadas: id presente en tx pero sin fila CashAccount.
+    const seen = new Set<number>();
+    for (const r of derived) {
+      if (r.cashAccountId == null || known.has(r.cashAccountId) || seen.has(r.cashAccountId)) continue;
+      seen.add(r.cashAccountId);
+      out.push({
+        id: r.cashAccountId, cuid: null as any, name: r.accountName ?? `Caja ${r.cashAccountId}`,
+        balance: 0, branchLegacy: null, accountNumber: null, code: null, persisted: false,
+      });
     }
-    return [...byId.values()]
-      .map(({ id, name }) => ({ id, name }))
-      .sort((a, b) => a.name.localeCompare(b.name));
+    return out.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /** Asigna el siguiente legacyId libre para una caja nueva (max entre cajas y tx + 1). */
+  private async nextCashLegacyId(tx: Tx): Promise<number> {
+    const [maxAcc, maxTx] = await Promise.all([
+      tx.cashAccount.aggregate({ _max: { legacyId: true } }),
+      tx.transaction.aggregate({ _max: { cashAccountId: true } }),
+    ]);
+    return Math.max(1000, (maxAcc._max.legacyId ?? 0), (maxTx._max.cashAccountId ?? 0)) + 1;
+  }
+
+  /** Crear una caja o banco. Le asigna un legacyId estable (el que usarán las tx). */
+  async createCashAccount(dto: CashAccountDto, user: AuthUser) {
+    return this.prisma.$transaction(async (tx) => {
+      const legacyId = await this.nextCashLegacyId(tx);
+      const a = await tx.cashAccount.create({
+        data: {
+          legacyId, holder: dto.holder.trim(),
+          accountNumber: dto.accountNumber ?? null, branchLegacy: dto.branchLegacy ?? null,
+          code: dto.code ?? null, address: dto.address ?? null, phone: dto.phone ?? null,
+          departmentRef: dto.departmentRef ?? null, balance: 0,
+        },
+      });
+      return { id: a.legacyId, cuid: a.id, name: a.holder };
+    });
+  }
+
+  /** Editar una caja (por su legacyId). */
+  async updateCashAccount(legacyId: number, dto: CashAccountDto, user: AuthUser) {
+    const a = await this.prisma.cashAccount.findFirst({ where: { legacyId } });
+    if (!a) throw new NotFoundException('Caja no encontrada');
+    const upd = await this.prisma.cashAccount.update({
+      where: { id: a.id },
+      data: {
+        holder: dto.holder.trim(),
+        accountNumber: dto.accountNumber ?? null, branchLegacy: dto.branchLegacy ?? null,
+        code: dto.code ?? null, address: dto.address ?? null, phone: dto.phone ?? null,
+        departmentRef: dto.departmentRef ?? null,
+      },
+    });
+    return { id: upd.legacyId, cuid: upd.id, name: upd.holder };
+  }
+
+  /** Eliminar una caja. Bloquea si tiene movimientos asociados. */
+  async deleteCashAccount(legacyId: number) {
+    const a = await this.prisma.cashAccount.findFirst({ where: { legacyId } });
+    if (!a) throw new NotFoundException('Caja no encontrada');
+    const used = await this.prisma.transaction.count({ where: { cashAccountId: legacyId } });
+    if (used > 0) throw new BadRequestException(`No se puede eliminar: la caja tiene ${used} movimiento(s). Ciérrala en lugar de borrarla.`);
+    await this.prisma.cashAccount.delete({ where: { id: a.id } });
+    return { id: legacyId, deleted: true };
+  }
+
+  /** Recalcular el saldo persistente de una caja desde sus movimientos. */
+  async recomputeCashAccount(legacyId: number) {
+    return this.prisma.$transaction(async (tx) => {
+      await this.recomputeCashBalance(tx, legacyId);
+      const a = await tx.cashAccount.findFirst({ where: { legacyId }, select: { balance: true } });
+      return { id: legacyId, balance: num(a?.balance) };
+    });
+  }
+
+  // --- Categorías de transacción (CRUD) ---
+
+  /** Crear una categoría. */
+  async createCategory(dto: TxCategoryDto) {
+    const name = dto.name.trim();
+    const exists = await this.prisma.transactionCategory.findFirst({ where: { name: { equals: name, mode: 'insensitive' } } });
+    if (exists) throw new BadRequestException('Ya existe una categoría con ese nombre');
+    const max = await this.prisma.transactionCategory.aggregate({ _max: { legacyId: true } });
+    const c = await this.prisma.transactionCategory.create({
+      data: { name, legacyId: (max._max.legacyId ?? 0) + 1 },
+    });
+    return { id: c.id, name: c.name };
+  }
+
+  /** Renombrar una categoría (propaga el nombre a las transacciones que la usan). */
+  async updateCategory(id: string, dto: TxCategoryDto) {
+    const c = await this.prisma.transactionCategory.findUnique({ where: { id } });
+    if (!c) throw new NotFoundException('Categoría no encontrada');
+    const name = dto.name.trim();
+    return this.prisma.$transaction(async (tx) => {
+      await tx.transaction.updateMany({ where: { category: c.name }, data: { category: name } });
+      const upd = await tx.transactionCategory.update({ where: { id }, data: { name } });
+      return { id: upd.id, name: upd.name };
+    });
+  }
+
+  /** Eliminar una categoría. Bloquea si está en uso. */
+  async deleteCategory(id: string) {
+    const c = await this.prisma.transactionCategory.findUnique({ where: { id } });
+    if (!c) throw new NotFoundException('Categoría no encontrada');
+    const used = await this.prisma.transaction.count({ where: { category: c.name } });
+    if (used > 0) throw new BadRequestException(`No se puede eliminar: la categoría tiene ${used} movimiento(s).`);
+    await this.prisma.transactionCategory.delete({ where: { id } });
+    return { id, deleted: true };
   }
 
   /** Apertura de caja: registra la base inicial de una caja en una fecha. */

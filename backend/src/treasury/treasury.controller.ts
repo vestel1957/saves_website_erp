@@ -1,5 +1,5 @@
 import {
-  BadRequestException, Body, Controller, Get, Param, Post, Query, Res, UploadedFile, UseGuards, UseInterceptors,
+  BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, UploadedFile, UseGuards, UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
@@ -10,7 +10,10 @@ import type { Response } from 'express';
 import { TreasuryService } from './treasury.service';
 import { cashClosePdf, receiptPdf } from '../common/pdf/pdf-docs';
 import { CobranzasService } from './cobranzas.service';
-import { CashCloseDto, CashOpenDto, CollectDto, ExpenseDto, TransferDto, VoidTxDto } from './dto/cobranzas.dto';
+import {
+  CashAccountDto, CashCloseDto, CashOpenDto, CollectDto, EditTxDto, ExpenseDto,
+  IncomeDto, TransferDto, TxCategoryDto, VoidTxDto,
+} from './dto/cobranzas.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AreaGuard } from '../auth/area.guard';
 import { RequireArea } from '../auth/require-area.decorator';
@@ -140,6 +143,48 @@ export class TreasuryController {
     return this.cobranzas.cashAccounts();
   }
 
+  /** Crear una caja o banco. */
+  @Post('cash-accounts')
+  createCashAccount(@Body() dto: CashAccountDto, @CurrentUser() user: AuthUser) {
+    return this.cobranzas.createCashAccount(dto, user);
+  }
+
+  /** Editar una caja (por su id legacy). */
+  @Patch('cash-accounts/:id')
+  updateCashAccount(@Param('id') id: string, @Body() dto: CashAccountDto, @CurrentUser() user: AuthUser) {
+    return this.cobranzas.updateCashAccount(Number(id), dto, user);
+  }
+
+  /** Eliminar una caja (bloquea si tiene movimientos). */
+  @Delete('cash-accounts/:id')
+  deleteCashAccount(@Param('id') id: string) {
+    return this.cobranzas.deleteCashAccount(Number(id));
+  }
+
+  /** Recalcular el saldo persistente de una caja desde sus movimientos. */
+  @Post('cash-accounts/:id/recompute')
+  recomputeCashAccount(@Param('id') id: string) {
+    return this.cobranzas.recomputeCashAccount(Number(id));
+  }
+
+  /** Crear una categoría de transacción. */
+  @Post('categories')
+  createCategory(@Body() dto: TxCategoryDto) {
+    return this.cobranzas.createCategory(dto);
+  }
+
+  /** Renombrar una categoría (propaga a las transacciones). */
+  @Patch('categories/:id')
+  updateCategory(@Param('id') id: string, @Body() dto: TxCategoryDto) {
+    return this.cobranzas.updateCategory(id, dto);
+  }
+
+  /** Eliminar una categoría (bloquea si está en uso). */
+  @Delete('categories/:id')
+  deleteCategory(@Param('id') id: string) {
+    return this.cobranzas.deleteCategory(id);
+  }
+
   /** Facturas pendientes de un cliente (para el modal de recaudo). */
   @Get('subscribers/:id/debt')
   subscriberDebt(@Param('id') id: string) {
@@ -156,6 +201,18 @@ export class TreasuryController {
   @Post('expenses')
   expense(@Body() dto: ExpenseDto, @CurrentUser() user: AuthUser) {
     return this.cobranzas.createExpense(dto, user);
+  }
+
+  /** Registrar un ingreso manual libre (no ligado a factura). */
+  @Post('income')
+  income(@Body() dto: IncomeDto, @CurrentUser() user: AuthUser) {
+    return this.cobranzas.createIncome(dto, user);
+  }
+
+  /** Editar un movimiento (campos seguros; monto solo en no-ventas). */
+  @Patch('transactions/:id')
+  editTx(@Param('id') id: string, @Body() dto: EditTxDto, @CurrentUser() user: AuthUser) {
+    return this.cobranzas.editTransaction(id, dto, user);
   }
 
   /** Transferir dinero entre dos cajas. */

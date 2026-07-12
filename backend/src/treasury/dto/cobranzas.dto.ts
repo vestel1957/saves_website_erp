@@ -129,3 +129,104 @@ export class CashCloseDto {
   @IsOptional() @IsNumber() @Min(0)
   deposited?: number;
 }
+
+/**
+ * Ingreso manual libre: un INCOME que NO se aplica a facturas (otros conceptos,
+ * ingresos sin cliente). Equivale al `save_trans` con pay_type=Income del legacy.
+ */
+export class IncomeDto {
+  @IsNumber() @Min(1)
+  amount!: number;
+
+  @IsString()
+  category!: string;
+
+  @IsString()
+  method!: string;
+
+  @IsOptional() @IsInt()
+  cashAccountId?: number;
+
+  @IsOptional() @IsString()
+  accountName?: string;
+
+  @IsOptional() @IsString()
+  payerName?: string;
+
+  /** Opcional: ligar el ingreso a un cliente (sin tocar sus facturas). */
+  @IsOptional() @IsString()
+  subscriberId?: string;
+
+  @IsOptional() @IsString()
+  bankName?: string;
+
+  @IsOptional() @IsDateString()
+  date?: string;
+
+  @IsOptional() @IsString()
+  note?: string;
+}
+
+/**
+ * Editar un movimiento: campos seguros (categoría, nota, fecha, método, tercero).
+ * El monto solo se permite editar en movimientos NO ligados a factura de venta
+ * (los pagos de venta deben anularse y rehacerse para no descuadrar la cartera).
+ */
+export class EditTxDto {
+  @IsOptional() @IsString()
+  category?: string;
+
+  @IsOptional() @IsString()
+  note?: string;
+
+  @IsOptional() @IsDateString()
+  date?: string;
+
+  @IsOptional() @IsString()
+  method?: string;
+
+  @IsOptional() @IsString()
+  payerName?: string;
+
+  @IsOptional() @IsString()
+  accountName?: string;
+
+  @IsOptional() @IsInt()
+  cashAccountId?: number;
+
+  @IsOptional() @IsString()
+  bankName?: string;
+
+  @IsOptional() @IsNumber() @Min(0)
+  amount?: number;
+}
+
+/** Alta/edición de una caja o banco (Accounts del legacy). */
+export class CashAccountDto {
+  @IsString() @MinLength(1)
+  holder!: string;
+
+  @IsOptional() @IsString()
+  accountNumber?: string;
+
+  @IsOptional() @IsInt()
+  branchLegacy?: number;
+
+  @IsOptional() @IsString()
+  code?: string;
+
+  @IsOptional() @IsString()
+  address?: string;
+
+  @IsOptional() @IsString()
+  phone?: string;
+
+  @IsOptional() @IsString()
+  departmentRef?: string;
+}
+
+/** Alta/edición de una categoría de transacción. */
+export class TxCategoryDto {
+  @IsString() @MinLength(1)
+  name!: string;
+}

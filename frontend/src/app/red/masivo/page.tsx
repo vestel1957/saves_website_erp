@@ -127,6 +127,19 @@ export default function OperacionesMasivasPage() {
     finally { setBusy(false); setConfirmCut(false); }
   }
 
+  async function restoreBranch() {
+    if (!sede?.id) return;
+    if (!confirm(`¿Restaurar/sincronizar los secrets PPP de ${sede.name}? Recrea o actualiza en el Mikrotik el secret de cada abonado activo/cortado (recuperación tras formateo). Respeta el modo dry-run.`)) return;
+    setBusy(true);
+    try {
+      const res = await authFetch(`/network/mikrotik/restore-branch/${sede.id}`, { method: "POST", body: JSON.stringify({}) });
+      const d = await res.json();
+      if (!res.ok) { toast(d?.message ?? "Error", "x"); return; }
+      toast(`${d.dryRun ? "DRY-RUN: " : ""}Restaurados ${d.ok}/${d.total}${d.failed ? ` · ${d.failed} con error` : ""}`, "check");
+    } catch (e) { toast((e as Error).message, "x"); }
+    finally { setBusy(false); }
+  }
+
   async function sendWhatsapp() {
     setBusy(true);
     try {
@@ -193,7 +206,10 @@ export default function OperacionesMasivasPage() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <PageHeading icon="wifi-off" title={sede.name} subtitle="Corte, reconexión y mensajería en lote." />
-        <Button variant="secondary" size="sm" onClick={backToSedes}><Icon name="arrow-left" size={14} /> Sedes</Button>
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" size="sm" disabled={busy || !sede.id} onClick={restoreBranch}><Icon name="refresh-cw" size={14} /> Restaurar secrets</Button>
+          <Button variant="secondary" size="sm" onClick={backToSedes}><Icon name="arrow-left" size={14} /> Sedes</Button>
+        </div>
       </div>
 
       {/* Filtros */}

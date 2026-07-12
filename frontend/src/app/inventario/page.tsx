@@ -49,6 +49,20 @@ export default function MaterialPage() {
   const [page, setPage] = useState(1);
 
   const [modalOpen, setModalOpen] = useState(false);
+  const [importing, setImporting] = useState(false);
+
+  async function importExcel(file: File) {
+    setImporting(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await authFetch(`/inventory/materials/import`, { method: "POST", body: fd });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d?.message || "No se pudo importar");
+      toast(`Importados ${d.created} material(es)${d.skipped ? ` · ${d.skipped} omitidos` : ""}`, "check");
+      await load();
+    } catch (e: any) { toast(e.message, "alert-triangle"); } finally { setImporting(false); }
+  }
   const [form, setForm] = useState<any>(emptyForm);
   const [saving, setSaving] = useState(false);
 
@@ -139,6 +153,10 @@ export default function MaterialPage() {
         <PageHeading icon="boxes" title="Material" subtitle="Inventario de materiales y existencias" />
         <div className="flex items-center gap-2">
           <Link href="/inventario/traspasos"><Button variant="secondary" size="sm"><Icon name="arrow-left" size={14} />Traspasos</Button></Link>
+          <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border-default bg-surface px-3 py-1.5 text-[12px] font-semibold text-text-secondary transition-colors hover:bg-surface-2">
+            <Icon name={importing ? "loader" : "upload"} size={14} className={importing ? "animate-spin" : ""} /> {importing ? "Importando…" : "Importar Excel"}
+            <input type="file" accept=".xlsx" className="hidden" disabled={importing} onChange={(e) => { const f = e.target.files?.[0]; if (f) void importExcel(f); e.target.value = ""; }} />
+          </label>
           <Button variant="primary" size="sm" onClick={() => setModalOpen(true)}><Icon name="plus" size={14} />Nuevo material</Button>
         </div>
       </div>

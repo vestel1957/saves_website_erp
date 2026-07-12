@@ -6,8 +6,9 @@ import { useParams } from "next/navigation";
 import { PageHeading } from "@/components/accounting/PageHeading";
 import { Icon } from "@/components/Icon";
 import { Button } from "@/components/ui/Button";
-import { Input } from "@/components/ui/Field";
+import { Input, Select, Field } from "@/components/ui/Field";
 import { Badge } from "@/components/ui/Badge";
+import { Modal } from "@/components/Modal";
 import { DataTable } from "@/components/inventory/DataTable";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { toast } from "@/components/ui/Toast";
@@ -34,6 +35,12 @@ export default function OrdenDetallePage() {
   const [loading, setLoading] = useState(true);
   const [receive, setReceive] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  const [payOpen, setPayOpen] = useState(false);
+  const [payAmount, setPayAmount] = useState("");
+  const [payMethod, setPayMethod] = useState("Cash");
+  const [payCash, setPayCash] = useState("");
+  const [cashAccounts, setCashAccounts] = useState<{ id: number; name: string }[]>([]);
+  const [paying, setPaying] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -53,6 +60,29 @@ export default function OrdenDetallePage() {
   }, [authLoading, id, load]);
 
   const canReceive = useMemo(() => order && order.status !== "recibido" && order.status !== "finalizado", [order]);
+  const saldo = useMemo(() => order ? Math.max(0, (order.total ?? 0) - (order.paid ?? 0)) : 0, [order]);
+
+  function openPay() {
+    setPayAmount(String(saldo || ""));
+    setPayOpen(true);
+    void authFetch("/treasury/cash-accounts").then((r) => (r.ok ? r.json() : [])).then((a) => { setCashAccounts(a); if (a[0]) setPayCash(String(a[0].id)); }).catch(() => {});
+  }
+
+  async function submitPay() {
+    const amount = Number(payAmount) || 0;
+    if (amount <= 0) { toast("Ingresa un monto mayor a cero", "alert-triangle"); return; }
+    setPaying(true);
+    try {
+      const res = await authFetch(`/orders/${id}/pay`, {
+        method: "POST",
+        body: JSON.stringify({ amount, method: payMethod, cashAccountId: payCash ? Number(payCash) : undefined, accountName: cashAccounts.find((c) => String(c.id) === payCash)?.name }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d?.message || "No se pudo registrar el pago");
+      toast(`Pago registrado · saldo ${cop(d.balance)}`, "check");
+      setPayOpen(false); void load();
+    } catch (e: any) { toast(e.message, "alert-triangle"); } finally { setPaying(false); }
+  }
 
   const submitReceive = async () => {
     setSaving(true);
@@ -116,6 +146,9 @@ export default function OrdenDetallePage() {
           <div className="flex justify-between text-[13px]"><span className="text-text-tertiary">IVA</span><span className="text-text-secondary">{cop(order.tax ?? 0)}</span></div>
           {order.discount ? <div className="flex justify-between text-[13px]"><span className="text-text-tertiary">Descuento</span><span className="text-text-secondary">-{cop(order.discount)}</span></div> : null}
           <div className="mt-1 flex justify-between border-t border-border-subtle pt-1 text-[14px] font-bold text-text-primary"><span>Total</span><span>{cop(order.total ?? 0)}</span></div>
+          <div className="mt-1 flex justify-between text-[13px]"><span className="text-text-tertiary">Pagado</span><span className="text-success-text">{cop(order.paid ?? 0)}</span></div>
+          <div className="flex justify-between text-[13px]"><span className="text-text-tertiary">Saldo</span><span className={saldo > 0 ? "font-semibold text-error-text" : "text-text-tertiary"}>{cop(saldo)}</span></div>
+          {saldo > 0 && <Button variant="secondary" size="sm" className="mt-2 w-full" onClick={openPay}><Icon name="hand-coins" size={14} /> Registrar pago</Button>}
         </div>
       </div>
 
@@ -169,6 +202,18 @@ export default function OrdenDetallePage() {
           </div>
         </div>
       )}
+
+      <Modal open={payOpen} onClose={() => setPayOpen(false)} title="Registrar pago a proveedor" maxWidth="max-w-md">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Field label="Monto" required><Input type="number" min={0} value={payAmount} onChange={(e) => setPayAmount(e.target.value)} autoFocus /></Field>
+          <Field label="Método"><Select value={payMethod} onChange={(e) => setPayMethod(e.target.value)}><option value="Cash">Efectivo</option><option value="Bank">Consignación</option></Select></Field>
+          <div className="sm:col-span-2"><Field label="Caja / cuenta"><Select value={payCash} onChange={(e) => setPayCash(e.target.value)}><option value="">— Sin caja —</option>{cashAccounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</Select></Field></div>
+        </div>
+        <div className="mt-3 flex justify-end gap-2">
+          <Button variant="secondary" onClick={() => setPayOpen(false)} disabled={paying}>Cancelar</Button>
+          <Button variant="primary" onClick={submitPay} disabled={paying}>{paying ? "Guardando…" : "Registrar pago"}</Button>
+        </div>
+      </Modal>
     </>
   );
 }

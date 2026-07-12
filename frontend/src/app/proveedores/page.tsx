@@ -9,10 +9,12 @@ import { DataTable } from "@/components/inventory/DataTable";
 import { Pagination } from "@/components/ui/Pagination";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { Modal } from "@/components/Modal";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 
 const CATEGORY_LABEL: Record<number, string> = { 1: "Productos", 2: "Servicios" };
+const cop = (n: number) => new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 }).format(n || 0);
 
 const EMPTY_FORM = {
   name: "",
@@ -38,7 +40,11 @@ export default function ProveedoresPage() {
 
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<any>(EMPTY_FORM);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [toDelete, setToDelete] = useState<any>(null);
+  const [statement, setStatement] = useState<any>(null);
+  const [stmtLoading, setStmtLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -71,19 +77,49 @@ export default function ProveedoresPage() {
       for (const k of ["nit", "phone", "email", "address", "city", "bank", "account", "company"]) {
         if (form[k]?.trim()) body[k] = form[k].trim();
       }
-      const res = await authFetch("/orders/suppliers", { method: "POST", body: JSON.stringify(body) });
+      const url = editingId ? `/orders/suppliers/${editingId}` : "/orders/suppliers";
+      const res = await authFetch(url, { method: editingId ? "PATCH" : "POST", body: JSON.stringify(body) });
       const d = await res.json();
       if (!res.ok) throw new Error(d?.message || "Error");
-      toast("Proveedor creado");
+      toast(editingId ? "Proveedor actualizado" : "Proveedor creado");
       setOpen(false);
       setForm(EMPTY_FORM);
+      setEditingId(null);
       await load();
     } catch (e: any) {
-      toast(e?.message || "No se pudo crear el proveedor", "alert-triangle");
+      toast(e?.message || "No se pudo guardar el proveedor", "alert-triangle");
     } finally {
       setSaving(false);
     }
   };
+
+  function editSupplier(r: any) {
+    setEditingId(r.id);
+    setForm({
+      name: r.name ?? "", category: String(r.category ?? 1), nit: r.nit ?? "", phone: r.phone ?? "",
+      email: r.email ?? "", address: r.address ?? "", city: r.city ?? "", bank: r.bank ?? "", account: r.account ?? "", company: r.company ?? "",
+    });
+    setOpen(true);
+  }
+
+  async function doDelete() {
+    if (!toDelete) return;
+    try {
+      const res = await authFetch(`/orders/suppliers/${toDelete.id}`, { method: "DELETE" });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d?.message || "No se pudo eliminar");
+      toast("Proveedor eliminado"); setToDelete(null); await load();
+    } catch (e: any) { toast(e.message, "alert-triangle"); setToDelete(null); }
+  }
+
+  async function showStatement(r: any) {
+    setStmtLoading(true); setStatement({ loading: true, name: r.name });
+    try {
+      const res = await authFetch(`/orders/suppliers/${r.id}/statement`);
+      setStatement(await res.json());
+    } catch { toast("No se pudo cargar el estado de cuenta", "alert-triangle"); setStatement(null); }
+    finally { setStmtLoading(false); }
+  }
 
   if (authLoading) return <PageSkeleton />;
 
@@ -133,6 +169,13 @@ export default function ProveedoresPage() {
               { key: "city", header: "Ciudad", render: (r: any) => r.city ?? "—" },
               { key: "bank", header: "Banco", render: (r: any) => r.bank ?? "—" },
               { key: "orders", header: "# Órdenes", align: "right", render: (r: any) => <span className="font-semibold text-text-secondary">{r.orders ?? 0}</span> },
+              { key: "actions", header: "", align: "right", render: (r: any) => (
+                <div className="flex justify-end gap-2">
+                  <button type="button" title="Estado de cuenta" onClick={() => showStatement(r)} className="text-text-tertiary hover:text-brand"><Icon name="scroll-text" size={14} /></button>
+                  <button type="button" title="Editar" onClick={() => editSupplier(r)} className="text-text-tertiary hover:text-brand"><Icon name="pencil" size={14} /></button>
+                  <button type="button" title="Eliminar" onClick={() => setToDelete(r)} className="text-text-tertiary hover:text-error-text"><Icon name="trash" size={14} /></button>
+                </div>
+              ) },
             ]}
           />
           {data && data.pages > 1 && (
@@ -147,7 +190,7 @@ export default function ProveedoresPage() {
         </>
       )}
 
-      <Modal open={open} onClose={() => setOpen(false)} title="Nuevo proveedor">
+      <Modal open={open} onClose={() => { setOpen(false); setEditingId(null); }} title={editingId ? "Editar proveedor" : "Nuevo proveedor"}>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="sm:col-span-2">
             <Field label="Nombre" required>
@@ -188,12 +231,59 @@ export default function ProveedoresPage() {
           </div>
         </div>
         <div className="mt-2 flex items-center justify-end gap-2">
-          <Button variant="secondary" onClick={() => setOpen(false)} disabled={saving}>Cancelar</Button>
+          <Button variant="secondary" onClick={() => { setOpen(false); setEditingId(null); }} disabled={saving}>Cancelar</Button>
           <Button variant="primary" onClick={submit} disabled={saving}>
-            <Icon name="check" size={15} /> {saving ? "Guardando…" : "Crear proveedor"}
+            <Icon name="check" size={15} /> {saving ? "Guardando…" : editingId ? "Guardar" : "Crear proveedor"}
           </Button>
         </div>
       </Modal>
+
+      {/* Estado de cuenta del proveedor */}
+      <Modal open={!!statement} onClose={() => setStatement(null)} title={`Estado de cuenta · ${statement?.supplier?.name ?? statement?.name ?? ""}`} maxWidth="max-w-3xl">
+        {stmtLoading || statement?.loading ? (
+          <p className="py-6 text-center text-[13px] text-text-tertiary">Cargando…</p>
+        ) : statement ? (
+          <div className="flex flex-col gap-4">
+            <div className="grid grid-cols-3 gap-2">
+              {([["Total comprado", statement.totals?.totalOrdered], ["Pagado", statement.totals?.totalPaid], ["Saldo", statement.totals?.saldo]] as const).map(([lbl, val]) => (
+                <div key={lbl} className="rounded-lg border border-border-subtle bg-surface-2 p-3 text-center">
+                  <div className="text-[15px] font-bold tabular-nums text-text-primary">{cop(Number(val) || 0)}</div>
+                  <div className="text-[11px] text-text-tertiary">{lbl}</div>
+                </div>
+              ))}
+            </div>
+            <div>
+              <h3 className="mb-1 text-[12px] font-bold uppercase tracking-wide text-text-tertiary">Órdenes</h3>
+              <DataTable autoHeight rows={statement.orders ?? []} empty="Sin órdenes."
+                columns={[
+                  { key: "tid", header: "#", render: (o: any) => <span className="font-mono">#{o.tid}</span> },
+                  { key: "total", header: "Total", align: "right", render: (o: any) => cop(o.total) },
+                  { key: "paid", header: "Pagado", align: "right", render: (o: any) => cop(o.paid) },
+                  { key: "bal", header: "Saldo", align: "right", render: (o: any) => <span className={o.balance > 0 ? "text-error-text" : ""}>{cop(o.balance)}</span> },
+                  { key: "st", header: "Estado", render: (o: any) => o.status },
+                ]} />
+            </div>
+            <div>
+              <h3 className="mb-1 text-[12px] font-bold uppercase tracking-wide text-text-tertiary">Pagos</h3>
+              <DataTable autoHeight rows={statement.payments ?? []} empty="Sin pagos registrados."
+                columns={[
+                  { key: "date", header: "Fecha", render: (p: any) => p.date ? new Date(p.date).toLocaleDateString("es-CO") : "—" },
+                  { key: "amount", header: "Monto", align: "right", render: (p: any) => cop(p.amount) },
+                  { key: "note", header: "Concepto", render: (p: any) => <span className="text-text-secondary">{p.note ?? p.category}</span> },
+                ]} />
+            </div>
+          </div>
+        ) : null}
+      </Modal>
+
+      <ConfirmDialog
+        open={!!toDelete}
+        title="Eliminar proveedor"
+        message={<>¿Eliminar el proveedor <b>{toDelete?.name}</b>? Solo es posible si no tiene órdenes ni devoluciones.</>}
+        confirmLabel="Eliminar"
+        onConfirm={doDelete}
+        onClose={() => setToDelete(null)}
+      />
     </>
   );
 }

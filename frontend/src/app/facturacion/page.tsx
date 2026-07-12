@@ -158,6 +158,27 @@ export default function FacturacionPage() {
     finally { setSendingId(null); }
   }
 
+  async function creditNote(r: InvoiceRow) {
+    const live = !!eMode?.live;
+    const reason = window.prompt(
+      (live
+        ? `Vas a emitir una NOTA CRÉDITO ante la DIAN para la factura #${r.tid} (acto legal). `
+        : `Modo PRUEBA (DRY-RUN) — nota crédito de la factura #${r.tid}. `) + "Escribe el motivo:",
+      "Anulación de factura",
+    );
+    if (reason == null || reason.trim().length < 3) return;
+    setEmittingId(r.id);
+    try {
+      const res = await authFetch(`/einvoice/credit-note/${r.id}`, { method: "POST", body: JSON.stringify({ reason: reason.trim(), cause: 2 }) });
+      const d = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(d?.message || "No se pudo emitir la nota crédito");
+      if (d.dryRun) toast(`DRY-RUN: nota crédito de #${r.tid} construida, no se envió a la DIAN.`, "info");
+      else toast(`Nota crédito de #${r.tid} emitida: ${d.dianNumber}`, "check");
+      load();
+    } catch (e: any) { toast(e.message ?? "Error al emitir la nota crédito", "alert-circle"); }
+    finally { setEmittingId(null); }
+  }
+
   async function emitEinvoice(r: InvoiceRow) {
     const live = !!eMode?.live;
     const warn = live
@@ -373,7 +394,12 @@ export default function FacturacionPage() {
                     className="rounded-lg border border-border-default p-1.5 text-text-secondary transition-colors hover:bg-surface-2 disabled:opacity-40">
                     <Icon name={sendingId === r.id ? "loader" : "mail"} size={14} className={sendingId === r.id ? "animate-spin" : ""} /></button>
                   {canEmit && (r.eInvoiceFlag === "Factura Electronica Creada"
-                    ? <span title="Factura electrónica ya emitida" className="inline-flex rounded-lg border border-success/40 bg-success-soft p-1.5 text-success-text"><Icon name="file-signature" size={14} /></span>
+                    ? <>
+                        <span title="Factura electrónica ya emitida" className="inline-flex rounded-lg border border-success/40 bg-success-soft p-1.5 text-success-text"><Icon name="file-signature" size={14} /></span>
+                        <button type="button" onClick={() => creditNote(r)} disabled={emittingId === r.id} title={eMode?.live ? "Nota crédito (DIAN)" : "Nota crédito (DRY-RUN)"}
+                          className="rounded-lg border border-border-default p-1.5 text-text-secondary transition-colors hover:bg-surface-2 disabled:opacity-40">
+                          <Icon name={emittingId === r.id ? "loader" : "receipt"} size={14} className={emittingId === r.id ? "animate-spin" : ""} /></button>
+                      </>
                     : <button type="button" onClick={() => emitEinvoice(r)} disabled={emittingId === r.id} title={eMode?.live ? "Emitir e-factura (DIAN)" : "Emitir e-factura (DRY-RUN)"}
                         className="rounded-lg border border-border-default p-1.5 text-text-secondary transition-colors hover:bg-surface-2 disabled:opacity-40">
                         <Icon name={emittingId === r.id ? "loader" : "file-signature"} size={14} className={emittingId === r.id ? "animate-spin" : ""} /></button>)}

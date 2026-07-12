@@ -1,7 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { createHmac, timingSafeEqual } from 'crypto';
-import { WHATSAPP_INBOUND_EVENT, WHATSAPP_OUTBOUND_EVENT, type InboundWhatsappMessage } from './whatsapp.types';
+import {
+  WHATSAPP_INBOUND_EVENT, WHATSAPP_OUTBOUND_EVENT, WHATSAPP_STATUS_EVENT,
+  type InboundWhatsappMessage, type WhatsappStatusUpdate,
+} from './whatsapp.types';
 
 /**
  * Transporte de WhatsApp a través de KAPSO (https://kapso.com), un proxy sobre la
@@ -115,6 +118,8 @@ export class WhatsappService {
               // El audio requiere descarga async; no bloqueamos el ack 200 del webhook.
               void this.handleInboundMessage(m, contactWaId);
             }
+            // Estados de entrega de mensajes salientes (sent/delivered/read/failed).
+            for (const st of value?.statuses ?? []) this.handleStatus(st);
           }
         }
         return;
@@ -122,9 +127,21 @@ export class WhatsappService {
       // Modo 2: webhook estructurado de Kapso (whatsapp.message.received).
       const msg = body?.message ?? body?.data?.message ?? null;
       if (msg) {
-        if (msg?.kapso?.direction === 'outbound') return; // ignorar ecos salientes
+        if (msg?.kapso?.direction === 'outbound') {
+          // Un eco saliente con estado también sirve para trackear entrega.
+          if (msg?.status && (msg?.id || msg?.wa_message_id)) {
+            this.handleStatus({ id: msg.id ?? msg.wa_message_id, status: msg.status, errors: msg.errors });
+          }
+          return;
+        }
         const fallback = body?.conversation?.phone_number ?? body?.phone_number;
         void this.handleInboundMessage(msg, fallback);
+        return;
+      }
+      // Modo 3: evento de estado estructurado de Kapso.
+      const stMsg = body?.status ?? body?.data?.status ?? null;
+      if (stMsg && (body?.message_id || body?.wa_message_id || stMsg?.message_id)) {
+        this.handleStatus({ id: body?.message_id ?? body?.wa_message_id ?? stMsg?.message_id, status: stMsg?.value ?? stMsg, errors: body?.errors });
         return;
       }
       this.logger.log(`Webhook sin mensaje entrante reconocible. Claves: ${Object.keys(body ?? {}).join(', ')}`);
@@ -171,6 +188,66 @@ export class WhatsappService {
       // Otros tipos (imágenes, ubicación, etc.) se ignoran por ahora.
     } catch (e) {
       this.logger.warn(`Error normalizando mensaje Kapso: ${(e as Error).message}`);
+    }
+  }
+
+  /** Normaliza un cambio de estado de entrega y emite el evento para persistirlo. */
+  private handleStatus(st: any): void {
+    try {
+      const messageId = String(st?.id ?? st?.message_id ?? '').trim();
+      const raw = String(st?.status ?? '').toLowerCase();
+      if (!messageId || !raw) return;
+      const status = (['sent', 'delivered', 'read', 'failed'] as const).find((s) => raw === s);
+      if (!status) return;
+      const error = status === 'failed'
+        ? (st?.errors?.[0]?.title ?? st?.errors?.[0]?.message ?? st?.error ?? 'Error de entrega')
+        : undefined;
+      this.events.emit(WHATSAPP_STATUS_EVENT, { messageId, status, error } satisfies WhatsappStatusUpdate);
+    } catch (e) {
+      this.logger.warn(`Error normalizando estado Kapso: ${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * Envía una plantilla (HSM) aprobada en Meta. Es el único modo de INICIAR
+   * conversación fuera de la ventana de 24h. `bodyParams` son los valores de las
+   * variables {{1}},{{2}}… del cuerpo, en orden. Devuelve el id del mensaje (para
+   * trackear su estado por el webhook) o un error.
+   */
+  async sendTemplate(
+    to: string,
+    templateName: string,
+    languageCode: string,
+    bodyParams: string[] = [],
+  ): Promise<{ ok: boolean; messageId?: string; error?: string }> {
+    if (!this.enabled) {
+      this.logger.log(`[plantilla no enviada · WhatsApp deshabilitado] → ${to}: ${templateName}`);
+      return { ok: false, error: 'WhatsApp no está configurado (Kapso)' };
+    }
+    const url = `${this.baseUrl}/${this.graphVersion}/${this.phoneNumberId}/messages`;
+    const components = bodyParams.length
+      ? [{ type: 'body', parameters: bodyParams.map((t) => ({ type: 'text', text: String(t ?? '') })) }]
+      : undefined;
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { ...this.authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messaging_product: 'whatsapp',
+          to: to.replace(/\D/g, ''),
+          type: 'template',
+          template: { name: templateName, language: { code: languageCode }, components },
+        }),
+      });
+      const data = await res.json().catch(() => ({} as any));
+      if (!res.ok) {
+        const error = data?.error?.message ?? `HTTP ${res.status}`;
+        this.logger.warn(`Kapso ${res.status} enviando plantilla a ${to}: ${JSON.stringify(data)}`);
+        return { ok: false, error };
+      }
+      return { ok: true, messageId: data?.messages?.[0]?.id };
+    } catch (e) {
+      return { ok: false, error: (e as Error).message };
     }
   }
 

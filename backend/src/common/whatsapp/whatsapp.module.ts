@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AuthModule } from '../../auth/auth.module';
 import { WhatsappService } from './whatsapp.service';
 import { WhatsappLogService } from './whatsapp-log.service';
+import { WhatsappCampaignService } from './whatsapp-campaign.service';
 import { WhatsappController } from './whatsapp.controller';
 import { WhatsappWebhookController } from './whatsapp-webhook.controller';
 
@@ -13,7 +14,7 @@ import { WhatsappWebhookController } from './whatsapp-webhook.controller';
 @Module({
   imports: [AuthModule],
   controllers: [WhatsappController, WhatsappWebhookController],
-  providers: [WhatsappService, WhatsappLogService],
-  exports: [WhatsappService, WhatsappLogService],
+  providers: [WhatsappService, WhatsappLogService, WhatsappCampaignService],
+  exports: [WhatsappService, WhatsappLogService, WhatsappCampaignService],
 })
 export class WhatsappModule {}

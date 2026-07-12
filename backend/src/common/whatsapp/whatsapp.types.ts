@@ -12,6 +12,19 @@ export const WHATSAPP_INBOUND_EVENT = 'whatsapp.inbound';
 /** Evento emitido tras enviar un mensaje saliente (para el log de conversación). */
 export const WHATSAPP_OUTBOUND_EVENT = 'whatsapp.outbound';
 
+/** Evento emitido cuando el webhook trae un cambio de estado de un mensaje saliente. */
+export const WHATSAPP_STATUS_EVENT = 'whatsapp.status';
+
+/** Cambio de estado de entrega de un mensaje saliente (sent/delivered/read/failed). */
+export interface WhatsappStatusUpdate {
+  /** Id del mensaje en Meta (casa con WhatsappSend.waMessageId). */
+  messageId: string;
+  /** Estado normalizado del transporte. */
+  status: 'sent' | 'delivered' | 'read' | 'failed';
+  /** Descripción del error, si status = failed. */
+  error?: string;
+}
+
 /**
  * Identifica por cuál transporte entró/sale un mensaje. Hoy existe uno solo
  * (Kapso); se conserva como literal para no acoplar la clave de conversación

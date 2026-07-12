@@ -21,6 +21,7 @@ import {
 } from "@/lib/subscribers";
 import { TICKET_STATUS_LABEL, TICKET_STATUS_TONE } from "@/lib/support";
 import { SERVICE_KIND_LABEL } from "@/lib/plans";
+import { PlayhubPanel } from "@/components/playhub/PlayhubPanel";
 
 // Modales cargados bajo demanda: su JS NO entra en el chunk inicial de la
 // página (la más pesada de la app); se descarga al abrirlos por primera vez.
@@ -181,7 +182,7 @@ export default function ClienteDetallePage() {
   const [mkOpen, setMkOpen] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
   const [ordenOpen, setOrdenOpen] = useState(false);
-  const [tab, setTab] = useState<"resumen" | "facturas" | "cuenta" | "ordenes" | "equipos" | "historial" | "archivos">("resumen");
+  const [tab, setTab] = useState<"resumen" | "facturas" | "cuenta" | "ordenes" | "equipos" | "playhub" | "historial" | "archivos">("resumen");
   const [files, setFiles] = useState<any[]>([]);
   const [uploading, setUploading] = useState(false);
   const [statement, setStatement] = useState<any | null>(null);
@@ -381,6 +382,7 @@ export default function ClienteDetallePage() {
     { key: "cuenta", label: "Estado de cuenta", icon: "scroll-text" },
     { key: "ordenes", label: "Órdenes", icon: "wrench", count: c.workOrders?.length ?? 0 },
     { key: "equipos", label: "Equipos", icon: "package-check", count: c.equipment?.length ?? 0 },
+    { key: "playhub", label: "PlayHub", icon: "tv" },
     { key: "historial", label: "Historial", icon: "history", count: c.statusHistory?.length ?? 0 },
     { key: "archivos", label: "Archivos", icon: "folder", count: files.length },
   ];
@@ -705,6 +707,8 @@ export default function ClienteDetallePage() {
       )}
 
       {/* ── Historial de estados ── */}
+      {tab === "playhub" && <PlayhubPanel subscriberId={id} email={c.email} />}
+
       {tab === "historial" && (
         <Card title="Historial de estados" icon="history">
           {c.statusHistory?.length ? (

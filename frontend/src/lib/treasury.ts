@@ -30,7 +30,12 @@ export type CashClosePeriod = {
 };
 export type CashCloseSummary = { group: "day" | "week" | "month"; items: CashClosePeriod[] };
 
-export type CashAccountOpt = { id: number; name: string };
+export type CashAccountOpt = {
+  id: number; name: string;
+  cuid?: string | null; balance?: number;
+  branchLegacy?: number | null; accountNumber?: string | null;
+  code?: string | null; persisted?: boolean;
+};
 
 export const TX_TYPE_LABEL: Record<string, string> = { INCOME: "Ingreso", EXPENSE: "Egreso", TRANSFER: "Traslado" };
 export const TX_TYPE_TONE: Record<string, "success" | "error" | "info"> = { INCOME: "success", EXPENSE: "error", TRANSFER: "info" };

@@ -4,9 +4,10 @@ import { BillingService } from './billing.service';
 import { FacturasService } from './facturas.service';
 import { RecurringService } from './recurring.service';
 import { WhatsappModule } from '../common/whatsapp/whatsapp.module';
+import { MailModule } from '../common/mail/mail.module';
 
 @Module({
-  imports: [WhatsappModule],
+  imports: [WhatsappModule, MailModule],
   controllers: [BillingController],
   providers: [BillingService, FacturasService, RecurringService],
   exports: [BillingService, FacturasService, RecurringService],

@@ -2822,26 +2822,27 @@ model Subscriber {
   party   Party?  @relation(fields: [partyId], references: [id])
 
   // --- Relaciones ---
-  services           SubscriberService[]
-  statusHistory      SubscriberStatusHistory[]
-  invoices           SubInvoice[]
-  recurringInvoices  RecurringInvoice[]
-  projects           Project[]
-  transactions       Transaction[]
-  electronicInvoices ElectronicInvoice[]
-  oltOnus            OltOnu[]
-  ports              Port[]
-  equipment          Equipment[]
-  tickets            Ticket[]
-  ticketThreads      TicketThread[]
-  files              SubscriberFile[]
-  notes              SubscriberNote[]
-  mikrotikLogs       MikrotikActionLog[]
-  oltLogs            OltActionLog[]
-  playhubSubs        PlayhubSubscription[]
-  waMessages         WhatsappMessage[]
-  waSends            WhatsappSend[]
-  paymentOrders      PaymentOrder[]
+  services            SubscriberService[]
+  statusHistory       SubscriberStatusHistory[]
+  invoices            SubInvoice[]
+  recurringInvoices   RecurringInvoice[]
+  projects            Project[]
+  transactions        Transaction[]
+  electronicInvoices  ElectronicInvoice[]
+  oltOnus             OltOnu[]
+  ports               Port[]
+  equipment           Equipment[]
+  tickets             Ticket[]
+  ticketThreads       TicketThread[]
+  files               SubscriberFile[]
+  notes               SubscriberNote[]
+  mikrotikLogs        MikrotikActionLog[]
+  oltLogs             OltActionLog[]
+  playhubSubs         PlayhubSubscription[]
+  waMessages          WhatsappMessage[]
+  waSends             WhatsappSend[]
+  lastEmailReminderAt DateTime? // último recordatorio de cartera por correo (dedupe)
+  paymentOrders       PaymentOrder[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2946,6 +2947,18 @@ enum WhatsappSendStatus {
   DELIVERED
   READ
   FAILED
+}
+
+/// Plantilla de correo (factura disponible, recordatorio, vencida, recibo).
+model EmailTemplate {
+  id        String   @id @default(cuid())
+  kind      String   @unique // INVOICE_AVAILABLE | REMINDER | OVERDUE | RECEIPT | GENERIC
+  name      String
+  subject   String
+  bodyHtml  String   @db.Text // HTML con {{nombre}} {{abonado}} {{factura}} {{total}} {{vence}} {{deuda}} {{empresa}}
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 /// Plantilla de WhatsApp aprobada en Meta/Kapso (referencia local + mapeo de variables).

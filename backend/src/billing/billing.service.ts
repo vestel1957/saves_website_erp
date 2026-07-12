@@ -3,7 +3,10 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { scopeDate, currentYear } from '../common/date-scope';
 import { WhatsappService } from '../common/whatsapp/whatsapp.service';
+import { MailService } from '../common/mail/mail.service';
 import { invoicePdfBuffer } from './billing-pdf';
+
+const cop = (n: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(n || 0);
 
 const num = (d: Prisma.Decimal | null | undefined) => (d == null ? 0 : Number(d));
 
@@ -27,6 +30,7 @@ export class BillingService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly whatsapp: WhatsappService,
+    private readonly mail: MailService,
   ) {}
 
   /**
@@ -43,6 +47,32 @@ export class BillingService {
       + (inv.balance > 0 ? ` · Saldo pendiente ${new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(inv.balance)}` : ' · Pagada. ¡Gracias!');
     const sent = await this.whatsapp.sendDocument(phone, pdf, `factura-${inv.tid}.pdf`, caption);
     return { sent, phone };
+  }
+
+  /**
+   * Envía la factura (PDF adjunto) por correo usando la plantilla INVOICE_AVAILABLE.
+   * Tolerante: si SMTP no está configurado o el cliente no tiene correo, devuelve
+   * sent:false con el motivo, sin romper.
+   */
+  async sendEmail(id: string) {
+    const inv = await this.detail(id);
+    const email = inv.subscriber?.email?.trim();
+    if (!email) throw new BadRequestException('El cliente no tiene correo registrado.');
+    const pdf = await invoicePdfBuffer(inv as any);
+    const company = await this.prisma.companyInfo.findFirst({ select: { name: true } });
+    const ctx: Record<string, string> = {
+      nombre: inv.subscriber?.name ?? 'Cliente',
+      abonado: String(inv.subscriber?.abonado ?? ''),
+      factura: String(inv.tid),
+      total: cop(inv.total),
+      deuda: cop(inv.balance),
+      vence: inv.dueDate ? new Date(inv.dueDate).toLocaleDateString('es-CO') : '—',
+      empresa: company?.name ?? 'Vestel',
+    };
+    const res = await this.mail.sendTemplate('INVOICE_AVAILABLE', email, ctx, [
+      { filename: `factura-${inv.tid}.pdf`, content: pdf, contentType: 'application/pdf' },
+    ]);
+    return { ...res, email };
   }
 
   /** Resumen de facturación (actividad del periodo) y cartera (histórico completo). */

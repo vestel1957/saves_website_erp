@@ -33,4 +33,8 @@ export class CronController {
   @Post('run/cartera') runCartera(@CurrentUser() user: AuthUser) {
     return this.cron.runCartera({ manual: true, user });
   }
+
+  @Post('run/reminders') runReminders(@CurrentUser() user: AuthUser) {
+    return this.cron.runReminders({ manual: true, user });
+  }
 }

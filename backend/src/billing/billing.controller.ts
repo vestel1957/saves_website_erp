@@ -63,6 +63,12 @@ export class BillingController {
     return this.billing.sendWhatsapp(id);
   }
 
+  /** Envía la factura por correo (PDF adjunto) al cliente. */
+  @Post('invoices/:id/email')
+  sendEmail(@Param('id') id: string) {
+    return this.billing.sendEmail(id);
+  }
+
   @Get('invoices/:id')
   detail(@Param('id') id: string) {
     return this.billing.detail(id);

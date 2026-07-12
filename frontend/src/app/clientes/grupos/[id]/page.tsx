@@ -1,0 +1,106 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import { useParams } from "next/navigation";
+import { PageHeading } from "@/components/accounting/PageHeading";
+import { Icon } from "@/components/Icon";
+import { DataTable } from "@/components/inventory/DataTable";
+import { Badge } from "@/components/ui/Badge";
+import { Input, Select } from "@/components/ui/Field";
+import { Pagination } from "@/components/ui/Pagination";
+import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
+import { useAuth } from "@/context/AuthProvider";
+import { type SubscriberList, SUB_STATUS_LABEL, SUB_STATUS_TONE, cop } from "@/lib/subscribers";
+
+export default function SedeClientesPage() {
+  const { id } = useParams<{ id: string }>();
+  const { loading: authLoading, authFetch } = useAuth();
+
+  const [sedeName, setSedeName] = useState<string>("");
+  const [data, setData] = useState<SubscriberList | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+
+  // Nombre de la sede (desde branches-stats, que ya trae el total).
+  useEffect(() => {
+    if (authLoading) return;
+    void authFetch("/subscribers/branches-stats")
+      .then((r) => r.json())
+      .then((rows: any[]) => setSedeName(rows.find((b) => b.id === id)?.name ?? ""))
+      .catch(() => {});
+  }, [authLoading, authFetch, id]);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize), branchId: String(id) });
+    if (search.trim()) qs.set("search", search.trim());
+    if (status) qs.set("status", status);
+    try {
+      setData(await (await authFetch(`/subscribers?${qs.toString()}`)).json());
+    } finally {
+      setLoading(false);
+    }
+  }, [authFetch, id, page, pageSize, search, status]);
+
+  useEffect(() => {
+    if (authLoading) return;
+    const t = setTimeout(load, search ? 350 : 0);
+    return () => clearTimeout(t);
+  }, [authLoading, load]);
+  useEffect(() => { setPage(1); }, [search, status, pageSize]);
+
+  if (authLoading) return <PageSkeleton />;
+
+  return (
+    <div className="space-y-4">
+      <Link href="/clientes/grupos" className="inline-flex items-center gap-1.5 self-start text-[12px] font-semibold text-brand hover:underline">
+        <Icon name="arrow-left" size={14} /> Volver a sedes
+      </Link>
+      <PageHeading
+        icon="warehouse"
+        title={sedeName || "Sede"}
+        subtitle={data ? `${data.total.toLocaleString("es-CO")} clientes en esta sede` : "Clientes de la sede"}
+      />
+
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative min-w-[240px] flex-1">
+          <Icon name="search" size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary" />
+          <Input className="pl-9" placeholder="Buscar por nombre, documento, celular o abonado…" value={search} onChange={(e) => setSearch(e.target.value)} />
+        </div>
+        <Select value={status} onChange={(e) => setStatus(e.target.value)} className="w-auto">
+          <option value="">Todos los estados</option>
+          {Object.entries(SUB_STATUS_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        </Select>
+      </div>
+
+      {loading && !data ? (
+        <PageSkeleton />
+      ) : (
+        <>
+          <DataTable
+            rows={data?.items ?? []}
+            empty="No se encontraron clientes en esta sede con esos criterios."
+            columns={[
+              { key: "abonado", header: "Abonado", render: (r) => <span className="font-mono text-text-secondary">{r.abonado}</span> },
+              { key: "name", header: "Nombre", render: (r) => <span className="font-medium text-text-primary">{r.name}</span> },
+              { key: "doc", header: "Documento", render: (r) => <span className="text-text-secondary">{r.docNumber ?? "—"}</span> },
+              { key: "phone", header: "Celular", render: (r) => r.phone ?? "—" },
+              { key: "status", header: "Estado", render: (r) => <Badge label={SUB_STATUS_LABEL[r.status ?? ""] ?? r.status ?? "—"} tone={SUB_STATUS_TONE[r.status ?? ""] ?? "default"} /> },
+              { key: "balance", header: "Saldo", align: "right", render: (r) => <span className={r.balance > 0 ? "font-semibold text-success-text" : "text-text-tertiary"}>{cop(r.balance)}</span> },
+              { key: "go", header: "", align: "right", render: (r) => <Link href={`/clientes/${r.id}`} className="inline-flex items-center gap-1 rounded-lg border border-border-default px-3 py-1.5 text-[12px] font-semibold text-text-secondary transition-colors hover:bg-surface-2">Ver ficha →</Link> },
+            ]}
+          />
+          {data && data.pages > 1 && (
+            <div className="mt-3">
+              <Pagination meta={{ page: data.page, pageSize: data.pageSize, total: data.total, pageCount: data.pages }} onPage={setPage} onPageSize={setPageSize} />
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}

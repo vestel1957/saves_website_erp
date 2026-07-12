@@ -1,0 +1,196 @@
+import {
+  BadRequestException, Body, Controller, Get, Param, Post, Query, Res, UploadedFile, UseGuards, UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { diskStorage } from 'multer';
+import { existsSync, mkdirSync } from 'node:fs';
+import { extname, join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import type { Response } from 'express';
+import { TreasuryService } from './treasury.service';
+import { cashClosePdf, receiptPdf } from '../common/pdf/pdf-docs';
+import { CobranzasService } from './cobranzas.service';
+import { CashCloseDto, CashOpenDto, CollectDto, ExpenseDto, TransferDto, VoidTxDto } from './dto/cobranzas.dto';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { AreaGuard } from '../auth/area.guard';
+import { RequireArea } from '../auth/require-area.decorator';
+import { CurrentUser, AuthUser } from '../auth/current-user.decorator';
+
+/** Carpeta de comprobantes/evidencia de los movimientos de tesorería. */
+const TREASURY_ROOT = join(process.cwd(), 'uploads', 'treasury');
+type MulterFile = { originalname: string; filename: string; mimetype: string; size: number };
+
+/** Tesorería: movimientos, cajas y cierres (migrado de saves-vestel). */
+@Controller('treasury')
+@UseGuards(JwtAuthGuard, AreaGuard)
+@RequireArea('contabilidad', 'administracion', 'caja')
+export class TreasuryController {
+  constructor(
+    private readonly treasury: TreasuryService,
+    private readonly cobranzas: CobranzasService,
+  ) {}
+
+  @Get('stats')
+  stats(@Query('from') from?: string, @Query('to') to?: string, @Query('all') all?: string) {
+    return this.treasury.stats({ from, to, all });
+  }
+
+  @Get('categories')
+  categories() {
+    return this.treasury.categories();
+  }
+
+  @Get('cash-closes')
+  cashCloses(
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('all') all?: string,
+    @Query('cashAccountId') cashAccountId?: string,
+  ) {
+    return this.treasury.cashCloses({
+      page: Number(page), pageSize: Number(pageSize), from, to, all,
+      cashAccountId: cashAccountId ? Number(cashAccountId) : undefined,
+    });
+  }
+
+  /** Cierres agregados por día/semana/mes (vista consolidada). */
+  @Get('cash-closes/summary')
+  cashClosesSummary(
+    @Query('group') group?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('all') all?: string,
+    @Query('cashAccountId') cashAccountId?: string,
+  ) {
+    return this.treasury.cashClosesSummary({
+      group, from, to, all,
+      cashAccountId: cashAccountId ? Number(cashAccountId) : undefined,
+    });
+  }
+
+  /** PDF del cierre de caja (arqueo). */
+  @Get('cash-closes/:id/pdf')
+  async cashClosePdf(@Param('id') id: string, @Res() res: Response) {
+    const d = await this.treasury.cashClosePdfData(id);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="cierre-caja.pdf"`);
+    cashClosePdf(res, d);
+  }
+
+  /** PDF del recibo de caja (comprobante de pago). */
+  @Get('receipts/:id/pdf')
+  async receiptPdf(@Param('id') id: string, @Res() res: Response) {
+    const d = await this.treasury.receiptPdfData(id);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="recibo-${d.number}.pdf"`);
+    receiptPdf(res, d);
+  }
+
+  @Get('transactions')
+  list(
+    @Query('search') search?: string,
+    @Query('type') type?: string,
+    @Query('category') category?: string,
+    @Query('status') status?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('all') all?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    return this.treasury.list({ search, type, category, status, from, to, all, page: Number(page), pageSize: Number(pageSize) });
+  }
+
+  @Get('transactions/:id')
+  detail(@Param('id') id: string) {
+    return this.treasury.detail(id);
+  }
+
+  /** Adjuntar el comprobante/evidencia de un movimiento (imagen o PDF). */
+  @Post('transactions/:id/attach')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: diskStorage({
+        destination: (_req, _file, cb) => { if (!existsSync(TREASURY_ROOT)) mkdirSync(TREASURY_ROOT, { recursive: true }); cb(null, TREASURY_ROOT); },
+        filename: (_req, file, cb) => cb(null, `${randomUUID()}${extname(file.originalname).toLowerCase()}`),
+      }),
+      limits: { fileSize: 15 * 1024 * 1024 },
+      fileFilter: (_req, file, cb) => cb(null, file.mimetype.startsWith('image/') || file.mimetype === 'application/pdf'),
+    }),
+  )
+  attach(@Param('id') id: string, @UploadedFile() file: MulterFile) {
+    if (!file) throw new BadRequestException('Sube una imagen o PDF en el campo "file".');
+    return this.treasury.attachTransaction(id, file);
+  }
+
+  /** Sirve el comprobante adjunto de un movimiento (inline, para preview autenticado). */
+  @Get('transactions/:id/attachment')
+  async attachment(@Param('id') id: string, @Res() res: Response) {
+    const a = await this.treasury.getTransactionAttachment(id);
+    return res.sendFile(join(TREASURY_ROOT, a.storedName));
+  }
+
+  // --- Cobranzas (escritura) ---
+
+  /** Cajas disponibles (para selectores de recaudo/egreso/cierre). */
+  @Get('cash-accounts')
+  cashAccounts() {
+    return this.cobranzas.cashAccounts();
+  }
+
+  /** Facturas pendientes de un cliente (para el modal de recaudo). */
+  @Get('subscribers/:id/debt')
+  subscriberDebt(@Param('id') id: string) {
+    return this.cobranzas.subscriberDebt(id);
+  }
+
+  /** Registrar un recaudo/pago (multipago en cascada + recibo). */
+  @Post('collect')
+  collect(@Body() dto: CollectDto, @CurrentUser() user: AuthUser) {
+    return this.cobranzas.collect(dto, user);
+  }
+
+  /** Registrar un egreso/gasto de caja. */
+  @Post('expenses')
+  expense(@Body() dto: ExpenseDto, @CurrentUser() user: AuthUser) {
+    return this.cobranzas.createExpense(dto, user);
+  }
+
+  /** Transferir dinero entre dos cajas. */
+  @Post('transfer')
+  transfer(@Body() dto: TransferDto, @CurrentUser() user: AuthUser) {
+    return this.cobranzas.createTransfer(dto, user);
+  }
+
+  /** Anular una transacción (soft-delete + reversa de saldo). */
+  @Post('transactions/:id/void')
+  voidTx(@Param('id') id: string, @Body() dto: VoidTxDto, @CurrentUser() user: AuthUser) {
+    return this.cobranzas.voidTransaction(id, dto, user);
+  }
+
+  /** Cierre de caja (arqueo) de una caja en una fecha. */
+  @Post('cash-close')
+  cashClose(@Body() dto: CashCloseDto, @CurrentUser() user: AuthUser) {
+    return this.cobranzas.createCashClose(dto, user);
+  }
+
+  /** Apertura de caja (base inicial). */
+  @Post('cash-open')
+  cashOpen(@Body() dto: CashOpenDto, @CurrentUser() user: AuthUser) {
+    return this.cobranzas.openCash(dto, user);
+  }
+
+  /** Sugerencia de base para abrir: fondo fijo + arrastre del día anterior. */
+  @Get('cash-open-suggest')
+  cashOpenSuggest(@Query('cashAccountId') cashAccountId: string, @Query('date') date: string) {
+    return this.cobranzas.cashOpenSuggest(Number(cashAccountId), date);
+  }
+
+  /** Aperturas recientes. */
+  @Get('cash-opens')
+  cashOpens(@Query('page') page?: string, @Query('pageSize') pageSize?: string) {
+    return this.cobranzas.cashOpens({ page: Number(page), pageSize: Number(pageSize) });
+  }
+}

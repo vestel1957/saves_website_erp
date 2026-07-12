@@ -1,0 +1,174 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useParams } from "next/navigation";
+import { PageHeading } from "@/components/accounting/PageHeading";
+import { Icon } from "@/components/Icon";
+import { Button } from "@/components/ui/Button";
+import { Input } from "@/components/ui/Field";
+import { Badge } from "@/components/ui/Badge";
+import { DataTable } from "@/components/inventory/DataTable";
+import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
+import { toast } from "@/components/ui/Toast";
+import { useAuth } from "@/context/AuthProvider";
+import { cop } from "@/lib/subscribers";
+
+function statusTone(status: string): "default" | "success" | "error" | "warning" {
+  if (status === "recibido" || status === "finalizado") return "success";
+  if (status === "cancelado" || status === "anulado") return "error";
+  if (status === "recibido parcial") return "warning";
+  return "default";
+}
+
+function fmtDate(d?: string) {
+  return d ? new Date(d).toLocaleDateString("es-CO") : "—";
+}
+
+export default function OrdenDetallePage() {
+  const { loading: authLoading, authFetch } = useAuth();
+  const params = useParams();
+  const id = String(params?.id ?? "");
+
+  const [order, setOrder] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [receive, setReceive] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await authFetch(`/orders/${id}`);
+      const d = await res.json();
+      setOrder(d);
+      const init: Record<string, string> = {};
+      for (const it of d?.items ?? []) init[it.id] = String(it.received ?? 0);
+      setReceive(init);
+    } finally { setLoading(false); }
+  }, [authFetch, id]);
+
+  useEffect(() => {
+    if (authLoading || !id) return;
+    void load();
+  }, [authLoading, id, load]);
+
+  const canReceive = useMemo(() => order && order.status !== "recibido" && order.status !== "finalizado", [order]);
+
+  const submitReceive = async () => {
+    setSaving(true);
+    try {
+      const items = (order?.items ?? []).map((it: any) => ({ itemId: it.id, received: Number(receive[it.id]) || 0 }));
+      const res = await authFetch(`/orders/${id}/receive`, { method: "POST", body: JSON.stringify({ items }) });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d?.message || "Error");
+      toast("Recepción registrada");
+      await load();
+    } catch (e: any) {
+      toast(e?.message || "No se pudo registrar la recepción", "alert-triangle");
+    } finally { setSaving(false); }
+  };
+
+  if (authLoading || loading) return <PageSkeleton />;
+
+  if (!order) {
+    return (
+      <>
+        <Link href="/ordenes" className="inline-flex items-center gap-1 text-[13px] font-semibold text-text-secondary hover:text-brand">
+          <Icon name="arrow-left" size={15} /> Órdenes
+        </Link>
+        <div className="rounded-xl border border-dashed border-border-subtle bg-surface p-10 text-center text-[13px] text-text-tertiary">No se encontró la orden.</div>
+      </>
+    );
+  }
+
+  const isCompra = order.kind === "compra";
+
+  return (
+    <>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <PageHeading
+          icon="receipt"
+          title={`Orden ${order.tid}`}
+          subtitle={`Creada el ${fmtDate(order.date)}`}
+        />
+        <div className="flex items-center gap-2">
+          <Badge label={isCompra ? "Compra" : "Servicio"} tone={isCompra ? "brand" : "info"} />
+          <Badge label={order.status} tone={statusTone(order.status)} />
+        </div>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
+          <h2 className="mb-2 text-[11px] font-semibold uppercase text-text-tertiary">Proveedor</h2>
+          <p className="text-[14px] font-bold text-text-primary">{order.supplier?.name ?? "—"}</p>
+          <p className="text-[12px] text-text-tertiary">NIT {order.supplier?.nit ?? "—"}</p>
+          <p className="text-[12px] text-text-tertiary">Tel. {order.supplier?.phone ?? "—"}</p>
+        </div>
+        <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
+          <h2 className="mb-2 text-[11px] font-semibold uppercase text-text-tertiary">Fechas</h2>
+          <div className="flex justify-between text-[13px]"><span className="text-text-tertiary">Orden</span><span className="text-text-secondary">{fmtDate(order.date)}</span></div>
+          <div className="flex justify-between text-[13px]"><span className="text-text-tertiary">Vence</span><span className="text-text-secondary">{fmtDate(order.dueDate)}</span></div>
+          <div className="flex justify-between text-[13px]"><span className="text-text-tertiary">Recibida</span><span className="text-text-secondary">{fmtDate(order.receivedAt)}</span></div>
+        </div>
+        <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
+          <h2 className="mb-2 text-[11px] font-semibold uppercase text-text-tertiary">Totales</h2>
+          <div className="flex justify-between text-[13px]"><span className="text-text-tertiary">Subtotal</span><span className="text-text-secondary">{cop(order.subtotal ?? 0)}</span></div>
+          <div className="flex justify-between text-[13px]"><span className="text-text-tertiary">IVA</span><span className="text-text-secondary">{cop(order.tax ?? 0)}</span></div>
+          {order.discount ? <div className="flex justify-between text-[13px]"><span className="text-text-tertiary">Descuento</span><span className="text-text-secondary">-{cop(order.discount)}</span></div> : null}
+          <div className="mt-1 flex justify-between border-t border-border-subtle pt-1 text-[14px] font-bold text-text-primary"><span>Total</span><span>{cop(order.total ?? 0)}</span></div>
+        </div>
+      </div>
+
+      {order.notes ? (
+        <div className="rounded-xl border border-border-subtle bg-surface p-4 text-[13px] text-text-secondary shadow-sm">
+          <span className="mb-1 block text-[11px] font-semibold uppercase text-text-tertiary">Nota</span>
+          {order.notes}
+        </div>
+      ) : null}
+
+      <div>
+        <h2 className="mb-2 text-[13px] font-bold text-text-primary">Ítems</h2>
+        <DataTable
+          rows={order.items ?? []}
+          empty="La orden no tiene ítems."
+          columns={[
+            { key: "product", header: "Producto", render: (r: any) => <span className="font-medium text-text-primary">{r.product}</span> },
+            { key: "qty", header: "Cant.", align: "right", render: (r: any) => r.qty },
+            { key: "price", header: "Precio", align: "right", render: (r: any) => cop(r.price) },
+            { key: "subtotal", header: "Subtotal", align: "right", render: (r: any) => cop(r.subtotal ?? 0) },
+            { key: "received", header: "Recibido", align: "right", render: (r: any) => <span className="text-text-secondary">{r.received ?? 0} / {r.qty}</span> },
+          ]}
+        />
+      </div>
+
+      {canReceive && (
+        <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
+          <h2 className="mb-3 flex items-center gap-1.5 text-[13px] font-bold text-text-primary">
+            <Icon name="package" size={16} /> Recibir
+          </h2>
+          <div className="flex flex-col gap-2">
+            {(order.items ?? []).map((it: any) => (
+              <div key={it.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border-subtle px-3 py-2">
+                <span className="min-w-0 flex-1 text-[13px] font-medium text-text-primary">{it.product}</span>
+                <span className="text-[12px] text-text-tertiary">de {it.qty}</span>
+                <Input
+                  type="number"
+                  min={0}
+                  max={it.qty}
+                  className="w-24 text-right"
+                  value={receive[it.id] ?? "0"}
+                  onChange={(e) => setReceive((prev) => ({ ...prev, [it.id]: e.target.value }))}
+                />
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 flex justify-end">
+            <Button variant="primary" onClick={submitReceive} disabled={saving}>
+              <Icon name="check" size={15} /> {saving ? "Registrando…" : "Registrar recepción"}
+            </Button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}

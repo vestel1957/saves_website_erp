@@ -1,0 +1,167 @@
+/**
+ * Auth client helpers shared across the app.
+ *
+ * The backend issues a compact HMAC-signed token (JWT-shaped). We store it in a
+ * non-httpOnly cookie (`nexus_token`) so that both the Next.js middleware (edge)
+ * and client components can read it. The cookie is NOT the security boundary —
+ * every protected API call is verified server-side by the NestJS guards. The
+ * cookie + middleware only drive routing/UX.
+ */
+
+export const API_URL =
+  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api";
+
+export const TOKEN_COOKIE = "nexus_token";
+const TOKEN_MAX_AGE = 60 * 60 * 12; // 12h, mirrors the backend TTL
+
+export type AuthUser = {
+  id: string;
+  email: string;
+  name: string;
+  roles: string[];
+  permissions: string[];
+};
+
+/** Permission keys — must mirror backend `permissions.catalog.ts`. */
+export const PERM = {
+  DASHBOARD_VIEW: "dashboard.view",
+  ACCOUNTING_VIEW: "accounting.view",
+  ACCOUNTING_MANAGE: "accounting.manage",
+  HR_EMPLOYEES_READ: "hr.employees.read",
+  HR_EMPLOYEES_WRITE: "hr.employees.write",
+  HR_ACCESS_MANAGE: "hr.access.manage",
+  USERS_MANAGE: "system.users.manage",
+  WHATSAPP_MANAGE: "system.whatsapp",
+  SYSTEM_ADMIN: "system.admin",
+  // áreas de acceso Vestel (visibilidad de secciones del sidebar)
+  AREA_GERENCIA: "area.gerencia",
+  AREA_ADMINISTRACION: "area.administracion",
+  AREA_CONTABILIDAD: "area.contabilidad",
+  AREA_TECNICOS: "area.tecnicos",
+  AREA_SISTEMAS: "area.sistemas",
+  // inventory
+  INV_ADMIN: "inventory.admin",
+  INV_PRODUCTS_READ: "inventory.products.read",
+  INV_PRODUCTS_WRITE: "inventory.products.write",
+  INV_STOCK_READ: "inventory.stock.read",
+  INV_KARDEX_READ: "inventory.kardex.read",
+  INV_WAREHOUSES_READ: "inventory.warehouses.read",
+  INV_WAREHOUSES_WRITE: "inventory.warehouses.write",
+  INV_MOVEMENTS_WRITE: "inventory.movements.write",
+  INV_PURCHASE_ORDERS_READ: "inventory.purchase-orders.read",
+  INV_PURCHASE_ORDERS_WRITE: "inventory.purchase-orders.write",
+  INV_PURCHASE_ORDERS_APPROVE: "inventory.purchase-orders.approve",
+  INV_RECEIPTS_WRITE: "inventory.receipts.write",
+  INV_ADJUSTMENTS_WRITE: "inventory.adjustments.write",
+  INV_ADJUSTMENTS_APPROVE: "inventory.adjustments.approve",
+  INV_REPORTS_READ: "inventory.reports.read",
+  INV_WORK_ORDERS_WRITE: "inventory.work-orders.write",
+  INV_WORK_ORDERS_EXECUTE: "inventory.work-orders.execute",
+  INV_ASSETS_READ: "inventory.assets.read",
+  INV_ASSETS_WRITE: "inventory.assets.write",
+  INV_ASSETS_ASSIGN: "inventory.assets.assign",
+  // payroll (nómina)
+  PAYROLL_VIEW: "payroll.view",
+  PAYROLL_ADMIN: "payroll.admin",
+  PAYROLL_CONCEPTS_READ: "payroll.concepts.read",
+  PAYROLL_CONCEPTS_WRITE: "payroll.concepts.write",
+  PAYROLL_CONTRACTS_READ: "payroll.contracts.read",
+  PAYROLL_CONTRACTS_WRITE: "payroll.contracts.write",
+  PAYROLL_PERIODS_READ: "payroll.periods.read",
+  PAYROLL_PERIODS_WRITE: "payroll.periods.write",
+  PAYROLL_EVENTS_READ: "payroll.events.read",
+  PAYROLL_EVENTS_WRITE: "payroll.events.write",
+  PAYROLL_EVENTS_APPROVE: "payroll.events.approve",
+  PAYROLL_PAYSLIPS_READ: "payroll.payslips.read",
+  PAYROLL_PAYSLIPS_WRITE: "payroll.payslips.write",
+  PAYROLL_SELF_READ: "payroll.self.read",
+  PAYROLL_REPORTS_READ: "payroll.reports.read",
+  PAYROLL_INTEGRATIONS_MANAGE: "payroll.integrations.manage",
+} as const;
+
+/**
+ * Does `user` satisfy `required`? Mirrors the backend PermissionsGuard:
+ *  - `system.admin` is the GLOBAL superadmin → passes everything.
+ *  - `inventory.admin` is the inventory superuser → passes only `inventory.*`.
+ * With multiple required permissions, ANY match grants access (matching how
+ * nav/route gates express "you can see this if you hold any of these").
+ */
+export function can(
+  user: Pick<AuthUser, "permissions"> | null | undefined,
+  required?: string | string[],
+): boolean {
+  if (!user) return false;
+  const granted = user.permissions ?? [];
+  if (granted.includes(PERM.SYSTEM_ADMIN)) return true;
+  if (!required) return true;
+  const list = Array.isArray(required) ? required : [required];
+  if (list.length === 0) return true;
+  const hasInvAdmin = granted.includes(PERM.INV_ADMIN);
+  return list.some((p) => granted.includes(p) || (hasInvAdmin && p.startsWith("inventory.")));
+}
+
+/** Global superadmin only (system.admin). Inventory admin is NOT global. */
+export function isSuperadmin(user: Pick<AuthUser, "permissions"> | null | undefined): boolean {
+  return !!user && (user.permissions ?? []).includes(PERM.SYSTEM_ADMIN);
+}
+
+// ---- token cookie (client side) -------------------------------------------
+
+export function getTokenFromCookie(): string | null {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie.match(
+    new RegExp(`(?:^|; )${TOKEN_COOKIE}=([^;]*)`),
+  );
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+export function setTokenCookie(token: string) {
+  document.cookie = `${TOKEN_COOKIE}=${token}; path=/; max-age=${TOKEN_MAX_AGE}; samesite=lax`;
+}
+
+export function clearTokenCookie() {
+  document.cookie = `${TOKEN_COOKIE}=; path=/; max-age=0; samesite=lax`;
+}
+
+// ---- API calls -------------------------------------------------------------
+
+export async function apiLogin(
+  email: string,
+  password: string,
+): Promise<{ token: string; user: AuthUser }> {
+  const res = await fetch(`${API_URL}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!res.ok) {
+    let message = "No fue posible iniciar sesión.";
+    try {
+      const body = await res.json();
+      if (res.status === 401) message = "Credenciales inválidas.";
+      else if (body?.message) message = String(body.message);
+    } catch {
+      /* keep default */
+    }
+    throw new Error(message);
+  }
+  return res.json();
+}
+
+/** Fetches the current user (fresh permissions) using the cookie token. */
+export async function fetchMe(token: string): Promise<AuthUser> {
+  const res = await fetch(`${API_URL}/auth/me`, {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("session-invalid");
+  return res.json();
+}
+
+/** Initials for an avatar, e.g. "Camila Contadora" → "CC". */
+export function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}

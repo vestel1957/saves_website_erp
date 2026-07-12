@@ -1,0 +1,213 @@
+@import "tailwindcss";
+
+/*
+  Design tokens lifted verbatim from the Pencil design (untitled.pen).
+  Exposed through @theme so they become Tailwind utilities, e.g. bg-canvas,
+  text-primary, border-subtle, fill-brand, etc.
+*/
+@theme {
+  /* surfaces — soft off-white / light gray (intentionally not pure #fff) */
+  --color-canvas: #eaeef4;
+  --color-surface: #f8fafc;
+  --color-surface-2: #eef2f7;
+
+  /* sidebar (light theme — flips to dark under html.dark) */
+  --color-sidebar: #f8fafc;
+  /* la fila activa deriva del color de marca elegido (antes cian fijo) */
+  --color-sidebar-active: color-mix(in srgb, var(--color-brand) 14%, var(--color-surface));
+  --color-sidebar-hover: #eaeff5;
+
+  /* borders */
+  --color-border-subtle: #d9e0ea;
+  --color-border-default: #c3ccd8;
+  --color-border-strong: #93a0b2;
+  --color-border-focus: var(--color-brand);
+
+  /* text — valores subidos para garantizar WCAG AA sobre --color-surface */
+  --color-text-primary: #0d1526;
+  --color-text-secondary: #45525f;   /* ~8:1 sobre surface */
+  --color-text-tertiary: #586576;    /* ~5.4:1 sobre surface (antes #64748b ~4.7:1, al filo) */
+  --color-text-sidebar: #45525f;
+  --color-text-sidebar-muted: #586576;
+  --color-text-inverse: #ffffff;
+
+  /*
+    brand — el color primario es elegible por el usuario (BrandColorPicker).
+    --color-brand lo puede sobreescribir el JS en runtime; los tonos derivados
+    (hover/soft/ring) salen de color-mix, y --color-on-brand (texto legible
+    sobre la marca) lo fija el picker por luminancia. NO hardcodear tonos.
+  */
+  --color-brand: #0e7490;          /* primary teal — default */
+  --color-brand-hover: color-mix(in oklab, var(--color-brand), #000 16%);
+  --color-brand-soft: color-mix(in srgb, var(--color-brand) 12%, var(--color-surface));
+  --color-brand-ring: color-mix(in srgb, var(--color-brand) 30%, transparent);
+  --color-on-brand: #ffffff;       /* lo recalcula el picker (blanco vs. oscuro) */
+  --color-accent: var(--color-brand);
+  --color-brand-secondary: color-mix(in oklab, var(--color-brand), #fff 12%);
+  --color-brand-gold: #f2ae2e;     /* sun rays (gold) */
+  --color-brand-gold-soft: #fdf3da;
+  --color-brand-orange: #f28d35;   /* sun rays (orange) */
+  --color-brand-red: #bf303c;      /* emblem base */
+
+  /* ai — cool gradient (blue so white text on the DailyBriefing stays legible) */
+  --color-ai: #0e7490;
+  --color-ai-soft: #cffafe;
+  --color-ai-grad-start: #06b6d4;
+  --color-ai-grad-end: #0e7490;
+
+  /* semantic — señales universales, independientes del color de marca Vestel */
+  --color-success: #10b981;          /* green kept: universal "positive" signal */
+  --color-success-soft: #ecfdf5;
+  --color-success-text: #047857;
+  --color-error: #bf303c;            /* logo red */
+  --color-error-soft: #f9e9ea;
+  --color-error-text: #94252f;
+  --color-warning: #f2ae2e;          /* logo gold */
+  --color-warning-soft: #fdf3da;
+  --color-warning-text: #946610;
+  --color-info: #0367a6;             /* logo blue */
+  --color-info-soft: #e4eef7;
+  --color-info-text: #035aa6;
+
+  /* radii */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+}
+
+/*
+  Dark theme — overrides the same design tokens under html.dark.
+  These rules are unlayered, so they win over the @theme (layered) defaults
+  regardless of specificity. Toggled via the ThemeToggle button in the navbar.
+*/
+html.dark {
+  /* surfaces */
+  --color-canvas: #080d18;
+  --color-surface: #0f1728;
+  --color-surface-2: #18213a;
+
+  /* sidebar */
+  --color-sidebar: #0a1120;
+  /* deriva del color de marca (antes cian fijo) */
+  --color-sidebar-active: color-mix(in srgb, var(--color-brand) 26%, var(--color-sidebar));
+  --color-sidebar-hover: #18223a;
+
+  /* borders */
+  --color-border-subtle: #1e293e;
+  --color-border-default: #2c3a52;
+  --color-border-strong: #4a5a72;
+  --color-border-focus: var(--color-brand);
+
+  /* text — subidos para contraste sobre superficies oscuras */
+  --color-text-primary: #f1f5fb;
+  --color-text-secondary: #c2cede;
+  --color-text-tertiary: #93a2b8;   /* ~5.2:1 sobre surface oscuro (antes #94a3b8) */
+  --color-text-sidebar: #c2cede;
+  --color-text-sidebar-muted: #93a2b8;
+  --color-text-inverse: #0f172a;
+
+  /*
+    brand — en dark el hover ACLARA (mezcla con blanco) y el soft se mezcla con la
+    superficie oscura, así el color elegido por el usuario se lee bien sobre negro.
+  */
+  --color-brand-hover: color-mix(in oklab, var(--color-brand), #fff 14%);
+  --color-brand-soft: color-mix(in srgb, var(--color-brand) 26%, var(--color-surface));
+  --color-accent: var(--color-brand);
+
+  /* ai */
+  --color-ai: #22d3ee;
+  --color-ai-soft: #0c2b33;
+
+  /* semantic — dark pill backgrounds with light text (logo palette) */
+  --color-success-soft: #022c22;
+  --color-success-text: #6ee7b7;
+  --color-error-soft: #3a0f0e;
+  --color-error-text: #f0a3a0;
+  --color-warning-soft: #3a2606;
+  --color-warning-text: #f2c14e;
+  --color-info-soft: #07263e;
+  --color-info-text: #7cc0ec;
+}
+
+html,
+body {
+  background: var(--color-surface-2);
+  color: var(--color-text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* thin custom scrollbars to match the dense dashboard look */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 999px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+html.dark * {
+  scrollbar-color: #334155 transparent;
+}
+html.dark *::-webkit-scrollbar-thumb {
+  background: #334155;
+}
+
+/* Permite hacer scroll pero oculta la barra (usado en el sidebar) */
+.no-scrollbar {
+  scrollbar-width: none; /* Firefox */
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none; /* Chrome / Safari / Edge */
+}
+
+.ai-gradient {
+  background: linear-gradient(135deg, var(--color-ai-grad-start) 0%, var(--color-ai-grad-end) 100%);
+}
+.brand-gradient {
+  background: linear-gradient(135deg, var(--color-brand) 0%, var(--color-brand-hover) 100%);
+}
+/* gradiente decorativo cálido (dorado → naranja) */
+.sun-gradient {
+  background: linear-gradient(160deg, var(--color-brand-gold) 0%, var(--color-brand-orange) 100%);
+}
+
+/* Controles de formulario reutilizables (usados en administración / modales). */
+.input {
+  @apply w-full rounded-lg border border-border-default bg-surface px-3 py-2 text-[13px] text-text-primary shadow-sm outline-none transition-colors placeholder:text-text-tertiary hover:border-border-strong focus:border-border-focus focus:ring-2 focus:ring-brand/30;
+}
+.btn-primary {
+  @apply rounded-lg bg-brand px-3.5 py-2 text-[13px] font-semibold text-on-brand transition-colors hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-60;
+}
+.btn-ghost {
+  @apply rounded-lg px-3.5 py-2 text-[13px] font-semibold text-text-secondary transition-colors hover:bg-surface-2;
+}
+
+/* Escala tipográfica semántica — para reemplazar tamaños sueltos en px. */
+.heading-1 {
+  @apply text-[20px] font-bold text-text-primary;
+}
+.heading-2 {
+  @apply text-[15px] font-bold text-text-primary;
+}
+.heading-3 {
+  @apply text-[13px] font-semibold text-text-primary;
+}
+.body-text {
+  @apply text-[13px] text-text-primary;
+}
+.muted-text {
+  @apply text-[12px] text-text-secondary;
+}
+.caption-text {
+  @apply text-[11px] text-text-tertiary;
+}

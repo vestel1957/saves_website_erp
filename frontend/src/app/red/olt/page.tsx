@@ -1,0 +1,122 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { Icon } from "@/components/Icon";
+import { PageHeading } from "@/components/accounting/PageHeading";
+import { DataTable } from "@/components/inventory/DataTable";
+import { Badge } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
+import { toast } from "@/components/ui/Toast";
+import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
+import { useAuth } from "@/context/AuthProvider";
+import type { OltRow, OltDashboard, OltMode } from "@/lib/olt";
+
+function Kpi({ label, value, tone }: { label: string; value: number; tone?: string }) {
+  return (
+    <div className="rounded-xl border border-border-subtle bg-surface p-3">
+      <div className={`text-2xl font-bold ${tone ?? "text-text-primary"}`}>{value.toLocaleString("es-CO")}</div>
+      <div className="text-[12px] text-text-tertiary">{label}</div>
+    </div>
+  );
+}
+
+export default function OltPanelPage() {
+  const { loading: authLoading, authFetch } = useAuth();
+  const nav = useRouter();
+  const [mode, setMode] = useState<OltMode | null>(null);
+  const [dash, setDash] = useState<OltDashboard | null>(null);
+  const [olts, setOlts] = useState<OltRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [testing, setTesting] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [m, d, o] = await Promise.all([
+        authFetch("/network/olt/mode").then((r) => r.json()),
+        authFetch("/network/olt/dashboard").then((r) => r.json()),
+        authFetch("/network/olt/olts").then((r) => r.json()),
+      ]);
+      setMode(m); setDash(d); setOlts(o);
+    } finally {
+      setLoading(false);
+    }
+  }, [authFetch]);
+
+  useEffect(() => { if (!authLoading) void load(); }, [authLoading, load]);
+
+  const test = async (o: OltRow) => {
+    setTesting(o.id);
+    try {
+      const r = await authFetch(`/network/olt/${o.id}/test`, { method: "POST" }).then((x) => x.json());
+      if (r.ok) { toast(`${o.name}: conexión OK`, "check"); }
+      else { toast(`${o.name}: ${r.error || "sin conexión"}`, "x"); }
+      setOlts((prev) => prev.map((x) => (x.id === o.id ? { ...x, online: !!r.ok } : x)));
+    } catch {
+      toast("Error probando la conexión", "x");
+    } finally {
+      setTesting(null);
+    }
+  };
+
+  if (authLoading || (loading && !dash)) return <PageSkeleton />;
+
+  return (
+    <>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <PageHeading icon="router" title="Gestión OLT" />
+        <div className="flex items-center gap-2">
+          {mode && (
+            <Badge label={mode.live ? "MODO LIVE" : "DRY-RUN (simulación)"} tone={mode.live ? "error" : "info"} />
+          )}
+          <Link href="/red/onus"><Button variant="secondary"><Icon name="wand-sparkles" size={15} className="mr-1" />Inventario de ONUs</Button></Link>
+        </div>
+      </div>
+
+      {dash && (
+        <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+          <Kpi label="ONUs totales" value={dash.total} />
+          <Kpi label="Online" value={dash.online} tone="text-success-text" />
+          <Kpi label="Offline" value={dash.offline} tone="text-error-text" />
+          <Kpi label="Señal débil" value={dash.debil} tone="text-warning-text" />
+          <Kpi label="Señal crítica" value={dash.critica} tone="text-error-text" />
+          <Kpi label="Sin cliente" value={dash.sinCliente} tone="text-text-secondary" />
+        </div>
+      )}
+
+      <DataTable
+        rows={olts}
+        empty="No hay OLTs registradas."
+        onRowClick={(o) => nav.push(`/red/olt/${o.id}`)}
+        columns={[
+          { key: "name", header: "Nombre", render: (o) => (
+            <span className="flex items-center gap-1.5 font-medium text-text-primary">
+              <Icon name="radio-tower" size={14} className="text-brand" />
+              {o.name}
+              {o.isDefault && <Icon name="flag" size={13} className="text-success-text" />}
+            </span>
+          ) },
+          { key: "brand", header: "Marca / Tec.", render: (o) => <span className="text-text-secondary">{o.brand} · {o.tech}</span> },
+          { key: "ip", header: "IP:Puerto", render: (o) => <span className="font-mono text-text-secondary">{o.ip}:{o.port}</span> },
+          { key: "branch", header: "Sede", render: (o) => o.branch ?? "—" },
+          { key: "onus", header: "ONUs", align: "right", render: (o) => o.onus.toLocaleString("es-CO") },
+          { key: "online", header: "Online", align: "right", render: (o) => <span className="text-success-text">{(dash?.porOlt.find((p) => p.oltId === o.id)?.online ?? 0).toLocaleString("es-CO")}</span> },
+          { key: "critica", header: "Críticas", align: "right", render: (o) => <span className="text-error-text">{(dash?.porOlt.find((p) => p.oltId === o.id)?.critica ?? 0).toLocaleString("es-CO")}</span> },
+          { key: "st", header: "Estado", render: (o) => <Badge label={o.online ? "En línea" : "Desconocido"} tone={o.online ? "success" : "default"} /> },
+          { key: "acc", header: "Acciones", align: "right", render: (o) => (
+            <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+              <button title="Probar conexión" disabled={testing === o.id} onClick={() => test(o)}
+                className="rounded p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-brand disabled:opacity-50">
+                <Icon name={testing === o.id ? "loader" : "zap"} size={15} className={testing === o.id ? "animate-spin" : ""} />
+              </button>
+              <button title="Operar" onClick={() => nav.push(`/red/olt/${o.id}`)}
+                className="rounded p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-brand"><Icon name="play" size={15} /></button>
+            </div>
+          ) },
+        ]}
+      />
+    </>
+  );
+}

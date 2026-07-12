@@ -1,0 +1,4497 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Top KPI cards (two rows on the dashboard)
+model Kpi {
+  id         String @id @default(cuid())
+  group      String // "primary" | "secondary"
+  key        String @unique
+  label      String
+  value      String
+  delta      String
+  deltaLabel String
+  trend      String // "up" | "down" | "ai"
+  icon       String // lucide icon name
+  sortOrder  Int
+
+  @@index([group])
+}
+
+/// Monthly revenue vs target for the bar chart
+model RevenueMonth {
+  id        String  @id @default(cuid())
+  month     String
+  revenue   Int
+  target    Int
+  isCurrent Boolean @default(false)
+  sortOrder Int     @unique
+}
+
+/// Top deals closing this month
+model Deal {
+  id          String @id @default(cuid())
+  company     String
+  name        String
+  initials    String
+  avatarColor String
+  probability Int
+  amount      Int
+  sortOrder   Int    @unique
+}
+
+/// Recent activity feed
+model Activity {
+  id        String @id @default(cuid())
+  title     String
+  source    String
+  timeAgo   String
+  icon      String // lucide icon name
+  variant   String // success | brand | ai | accent | error
+  sortOrder Int    @unique
+}
+
+/// Sales leaderboard (Q2)
+model LeaderboardEntry {
+  id          String @id @default(cuid())
+  rank        Int    @unique
+  name        String
+  role        String
+  initials    String
+  avatarColor String
+  deals       Int
+  quotaPct    Int
+  amount      Int
+}
+
+/// Revenue by region (donut chart)
+model Region {
+  id        String @id @default(cuid())
+  name      String
+  color     String
+  amount    Int
+  pct       Int
+  sortOrder Int    @unique
+}
+
+// ============================================================================
+//  ACCOUNTING MODULE
+//  All monetary fields use Decimal(18,2). The dashboard models above keep Int.
+// ============================================================================
+
+enum AccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  INCOME
+  COST
+  EXPENSE
+}
+
+enum NormalSide {
+  DEBIT
+  CREDIT
+}
+
+enum EntryType {
+  MANUAL
+  AUTOMATIC
+  RECURRING
+  CLOSING
+}
+
+enum EntryStatus {
+  DRAFT
+  POSTED
+  REVERSED
+}
+
+enum PeriodType {
+  MONTH
+  YEAR
+}
+
+enum PeriodStatus {
+  OPEN
+  CLOSED
+  LOCKED
+}
+
+enum DepreciationMethod {
+  STRAIGHT_LINE // línea recta (default)
+  DECLINING_BALANCE // saldos decrecientes
+  UNITS_OF_PRODUCTION // unidades de producción
+}
+
+enum AssetStatus {
+  ACTIVE // en uso, depreciándose
+  FULLY_DEPRECIATED // valor en libros = valor residual
+  DISPOSED // dado de baja / vendido
+}
+
+enum PaymentDirection {
+  INBOUND // we receive money (customer pays us)
+  OUTBOUND // we pay money (we pay a supplier)
+}
+
+enum DocStatus {
+  ISSUED
+  PARTIAL
+  PAID
+  VOID
+}
+
+/// Accounting direction of a stock movement. OUT emits inventory.cost.posted → COGS.
+/// TRANSFER moves stock between warehouses without touching the P&L.
+enum MovementType {
+  IN
+  OUT
+  TRANSFER
+}
+
+/// Business reason behind a kardex movement (full traceability requirement).
+enum KardexReason {
+  OPENING // saldo inicial
+  PURCHASE // compra
+  SALE // venta
+  TRANSFER // transferencia entre bodegas
+  ADJUSTMENT // ajuste (conteo / corrección)
+  RETURN // devolución
+  INTERNAL_CONSUMPTION // consumo interno
+  PRODUCTION // producción / ensamble
+  LOSS // pérdida
+  THEFT // robo
+  DAMAGE // daño
+}
+
+/// Nature of a product — drives stock & costing behaviour.
+enum ProductType {
+  PHYSICAL // producto físico
+  RAW_MATERIAL // materia prima
+  FINISHED_GOOD // producto terminado
+  CONSUMABLE // consumible
+  SPARE_PART // repuesto
+  TOOL // herramienta
+  ASSET // activo
+}
+
+enum CostingMethod {
+  AVERAGE // costo promedio ponderado
+  STANDARD // costo estándar
+  LAST // último costo
+}
+
+enum WarehouseType {
+  MAIN // principal
+  SECONDARY // secundaria
+  PRODUCTION // producción
+  WORKSHOP // taller
+  VEHICLE // vehículos
+  CONSIGNMENT // consignación
+  TRANSIT // tránsito
+}
+
+/// Level within a warehouse's internal location tree: Zona→Pasillo→Estante→Ubicación.
+enum LocationKind {
+  ZONE
+  AISLE
+  RACK
+  BIN
+}
+
+enum SerialStatus {
+  IN_STOCK
+  ASSIGNED
+  SOLD
+  IN_REPAIR
+  RETIRED
+  LOST
+}
+
+/// Shared approval lifecycle for purchase orders & adjustments.
+enum FlowStatus {
+  DRAFT // borrador
+  PENDING // pendiente de aprobación
+  APPROVED // aprobada
+  PARTIAL // parcialmente atendida
+  COMPLETED // completada
+  CANCELLED // cancelada
+}
+
+enum ReceiptCondition {
+  OK // recibido conforme
+  DAMAGED // dañado
+  MISSING // faltante
+}
+
+enum AdjustmentReason {
+  DAMAGE // daño
+  THEFT // robo
+  LOSS // pérdida
+  OPERATIONAL_ERROR // error operativo
+  ADMIN_CORRECTION // corrección administrativa
+  COUNT_DIFFERENCE // diferencia de conteo
+}
+
+enum AssetAssignmentStatus {
+  ASSIGNED // en poder del empleado
+  RETURNED // devuelto
+  LOST // perdido
+}
+
+enum TaxKind {
+  SALES
+  PURCHASE
+  WITHHOLDING
+}
+
+enum WithholdingBase {
+  SUBTOTAL
+  TAX
+}
+
+enum PartyKind {
+  CUSTOMER
+  SUPPLIER
+  BOTH
+}
+
+/// Chart of accounts — hierarchical tree (Activo, Pasivo, Patrimonio, Ingreso, Costo, Gasto)
+model Account {
+  id         String      @id @default(cuid())
+  code       String      @unique
+  name       String
+  type       AccountType
+  normalSide NormalSide
+  parentId   String?
+  parent     Account?    @relation("AccountTree", fields: [parentId], references: [id])
+  children   Account[]   @relation("AccountTree")
+  level      Int         @default(1)
+  isPostable Boolean     @default(true) // only leaf accounts accept journal lines
+  isActive   Boolean     @default(true)
+  currency   String      @default("USD")
+
+  lines        JournalLine[]
+  taxCodes     TaxCode[]
+  mappings     AccountMapping[]
+  bankAccounts BankAccount[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([type])
+  @@index([parentId])
+}
+
+/// Cost centers — hierarchical, optional on every journal line
+model CostCenter {
+  id       String       @id @default(cuid())
+  code     String       @unique
+  name     String
+  parentId String?
+  parent   CostCenter?  @relation("CostCenterTree", fields: [parentId], references: [id])
+  children CostCenter[] @relation("CostCenterTree")
+  isActive Boolean      @default(true)
+
+  lines              JournalLine[]
+  inventoryMovements InventoryMovement[] // salidas de inventario imputadas a este centro de costo
+  createdAt DateTime      @default(now())
+}
+
+/// Fiscal periods drive the accounting close (monthly + annual)
+model FiscalPeriod {
+  id        String         @id @default(cuid())
+  name      String
+  type      PeriodType     @default(MONTH)
+  year      Int
+  month     Int? // 1-12 for MONTH periods, null for YEAR
+  startDate DateTime
+  endDate   DateTime
+  status    PeriodStatus   @default(OPEN)
+  closedAt  DateTime?
+  entries   JournalEntry[]
+  createdAt DateTime       @default(now())
+
+  @@unique([year, month])
+  @@index([status])
+}
+
+/// Journal entry (asiento) — manual, automatic, recurring or closing
+model JournalEntry {
+  id          String        @id @default(cuid())
+  number      Int           @unique
+  date        DateTime
+  periodId    String?
+  period      FiscalPeriod? @relation(fields: [periodId], references: [id])
+  type        EntryType     @default(MANUAL)
+  status      EntryStatus   @default(POSTED)
+  description String
+  reference   String?
+  sourceType  String? // SALES_INVOICE | PURCHASE_BILL | PAYMENT | INVENTORY | MANUAL | CLOSING | RECURRING
+  sourceId    String?
+  createdBy   String?
+
+  // self relation for reversals (1-1)
+  reversedById String?       @unique
+  reversedBy   JournalEntry? @relation("Reversal", fields: [reversedById], references: [id])
+  reversalOf   JournalEntry? @relation("Reversal")
+
+  lines     JournalLine[]
+  createdAt DateTime      @default(now())
+
+  @@unique([sourceType, sourceId]) // idempotency: one source doc -> one entry
+  @@index([date])
+  @@index([status])
+}
+
+/// Journal line — exactly one of debit/credit is > 0
+model JournalLine {
+  id           String       @id @default(cuid())
+  entryId      String
+  entry        JournalEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  accountId    String
+  account      Account      @relation(fields: [accountId], references: [id])
+  costCenterId String?
+  costCenter   CostCenter?  @relation(fields: [costCenterId], references: [id])
+  debit        Decimal      @default(0) @db.Decimal(18, 2)
+  credit       Decimal      @default(0) @db.Decimal(18, 2)
+  description  String?
+  lineOrder    Int          @default(0)
+
+  @@index([accountId])
+  @@index([entryId])
+}
+
+/// Recurring entry template — materialized into real entries when due
+model RecurringTemplate {
+  id          String    @id @default(cuid())
+  name        String
+  description String
+  frequency   String    @default("MONTHLY") // MONTHLY | QUARTERLY | YEARLY
+  nextRunDate DateTime
+  isActive    Boolean   @default(true)
+  lines       Json // [{ accountId, costCenterId?, debit, credit, description? }]
+  lastRunAt   DateTime?
+  createdAt   DateTime  @default(now())
+}
+
+/// Configurable tax engine — country agnostic (rate + linked GL account)
+model TaxCode {
+  id        String          @id @default(cuid())
+  code      String          @unique
+  name      String
+  kind      TaxKind         @default(SALES)
+  // 6 decimals so per-mil withholdings (ReteICA, e.g. 0.009660) are exact.
+  rate      Decimal         @db.Decimal(9, 6) // e.g. 0.190000 = 19%
+  // For WITHHOLDING codes: which amount the rate applies to.
+  //   SUBTOTAL → ReteFuente / ReteICA (over the base value)
+  //   TAX      → ReteIVA (over the IVA amount)
+  base      WithholdingBase @default(SUBTOTAL)
+  accountId String
+  account   Account         @relation(fields: [accountId], references: [id])
+  isActive  Boolean         @default(true)
+  createdAt DateTime        @default(now())
+}
+
+/// Maps domain events to GL accounts (configurable in DB, not hardcoded)
+model AccountMapping {
+  id          String  @id @default(cuid())
+  key         String  @unique // SALES_AR, SALES_REVENUE, SALES_TAX, PURCHASE_AP, PURCHASE_EXPENSE, PURCHASE_TAX, BANK_DEFAULT, COGS, INVENTORY, RETAINED_EARNINGS, INCOME_SUMMARY
+  accountId   String
+  account     Account @relation(fields: [accountId], references: [id])
+  description String?
+}
+
+/// Fixed-asset category — carries the depreciation policy and the GL accounts
+/// (cost / expense / accumulated) so every asset in it posts consistently.
+/// Account ids point at Account.id but are kept as plain strings (configurable,
+/// same philosophy as AccountMapping) to avoid coupling the chart of accounts.
+model FixedAssetCategory {
+  id                               String             @id @default(cuid())
+  code                             String             @unique
+  name                             String
+  method                           DepreciationMethod @default(STRAIGHT_LINE)
+  usefulLifeMonths                 Int                @default(60)
+  assetAccountId                   String // GL: costo del activo
+  depreciationExpenseAccountId     String // GL: gasto depreciación
+  accumulatedDepreciationAccountId String // GL: depreciación acumulada (contra-activo)
+  isActive                         Boolean            @default(true)
+  assets                           FixedAsset[]
+  createdAt                        DateTime           @default(now())
+}
+
+/// Fixed asset (propiedad, planta y equipo). Book value = acquisitionCost -
+/// accumulatedDepreciation; never depreciated below residualValue.
+model FixedAsset {
+  id                      String              @id @default(cuid())
+  code                    String              @unique
+  name                    String
+  categoryId              String
+  category                FixedAssetCategory  @relation(fields: [categoryId], references: [id])
+  costCenterId            String? // imputación del gasto de depreciación
+  acquisitionDate         DateTime
+  inServiceDate           DateTime // fecha desde la que se deprecia
+  acquisitionCost         Decimal             @db.Decimal(18, 2)
+  residualValue           Decimal             @default(0) @db.Decimal(18, 2)
+  usefulLifeMonths        Int
+  method                  DepreciationMethod  @default(STRAIGHT_LINE)
+  status                  AssetStatus         @default(ACTIVE)
+  accumulatedDepreciation Decimal             @default(0) @db.Decimal(18, 2)
+  acquisitionEntryId      String? // asiento de capitalización (opcional)
+  disposalDate            DateTime?
+  disposalProceeds        Decimal?            @db.Decimal(18, 2)
+  disposalEntryId         String? // asiento de baja/venta
+  notes                   String?
+  depreciations           DepreciationEntry[]
+  createdAt               DateTime            @default(now())
+  updatedAt               DateTime            @updatedAt
+
+  @@index([categoryId])
+  @@index([status])
+}
+
+/// One depreciation charge per asset per month — idempotent by (asset, year, month).
+model DepreciationEntry {
+  id               String     @id @default(cuid())
+  assetId          String
+  asset            FixedAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  year             Int
+  month            Int // 1-12
+  date             DateTime // último día del mes depreciado
+  amount           Decimal    @db.Decimal(18, 2)
+  accumulatedAfter Decimal    @db.Decimal(18, 2)
+  bookValueAfter   Decimal    @db.Decimal(18, 2)
+  journalEntryId   String? // asiento generado (Dr gasto / Cr dep. acumulada)
+  createdAt        DateTime   @default(now())
+
+  @@unique([assetId, year, month])
+  @@index([assetId])
+}
+
+/// Atomic counters (e.g. journal entry numbering)
+model Sequence {
+  key   String @id
+  value Int    @default(0)
+}
+
+// --- Source stubs (emit domain events; accounting reacts) ---
+
+/// Unified customer/supplier — base for receivables & payables
+model Party {
+  id            String         @id @default(cuid())
+  kind          PartyKind      @default(CUSTOMER)
+  name          String
+  taxId         String?
+  email         String?
+  phone         String?
+  isActive      Boolean        @default(true)
+  invoices      SalesInvoice[]
+  bills         PurchaseBill[]
+  payments      Payment[]
+  sstContractor SstContractor? // ficha de contratista SST (opcional)
+  inventoryMovements InventoryMovement[] // movimientos de inventario con este tercero como contraparte
+  subscribers   Subscriber[] // suscriptores ISP vinculados a este tercero (cuentas por cobrar)
+  createdAt     DateTime       @default(now())
+}
+
+model SalesInvoice {
+  id             String             @id @default(cuid())
+  number         String             @unique
+  partyId        String
+  party          Party              @relation(fields: [partyId], references: [id])
+  date           DateTime
+  dueDate        DateTime
+  subtotal       Decimal            @db.Decimal(18, 2)
+  taxTotal       Decimal            @db.Decimal(18, 2)
+  total          Decimal            @db.Decimal(18, 2)
+  balance        Decimal            @db.Decimal(18, 2)
+  status         DocStatus          @default(ISSUED)
+  taxCodeId      String?
+  journalEntryId String?
+  payments       Payment[]
+  lines          SalesInvoiceLine[]
+  createdAt      DateTime           @default(now())
+
+  @@index([partyId])
+}
+
+model PurchaseBill {
+  id             String             @id @default(cuid())
+  number         String             @unique
+  partyId        String
+  party          Party              @relation(fields: [partyId], references: [id])
+  date           DateTime
+  dueDate        DateTime
+  subtotal       Decimal            @db.Decimal(18, 2)
+  taxTotal       Decimal            @db.Decimal(18, 2)
+  total          Decimal            @db.Decimal(18, 2)
+  balance        Decimal            @db.Decimal(18, 2)
+  status         DocStatus          @default(ISSUED)
+  taxCodeId      String?
+  journalEntryId String?
+  payments       Payment[]
+  lines          PurchaseBillLine[]
+  goodsReceiptId String? // recepción que originó la factura
+  createdAt      DateTime           @default(now())
+
+  @@index([partyId])
+}
+
+model BankAccount {
+  id             String              @id @default(cuid())
+  name           String
+  accountNumber  String?
+  glAccountId    String
+  glAccount      Account             @relation(fields: [glAccountId], references: [id])
+  currency       String              @default("USD")
+  balance        Decimal             @default(0) @db.Decimal(18, 2)
+  movements      BankMovement[]
+  statementLines BankStatementLine[]
+  createdAt      DateTime            @default(now())
+}
+
+model BankMovement {
+  id              String             @id @default(cuid())
+  bankAccountId   String
+  bankAccount     BankAccount        @relation(fields: [bankAccountId], references: [id])
+  date            DateTime
+  description     String
+  amount          Decimal            @db.Decimal(18, 2) // signed: + inbound, - outbound
+  paymentId       String?
+  reconciled      Boolean            @default(false)
+  statementLineId String?            @unique
+  statementLine   BankStatementLine? @relation(fields: [statementLineId], references: [id])
+  createdAt       DateTime           @default(now())
+
+  @@index([bankAccountId])
+}
+
+model BankStatementLine {
+  id            String        @id @default(cuid())
+  bankAccountId String
+  bankAccount   BankAccount   @relation(fields: [bankAccountId], references: [id])
+  date          DateTime
+  description   String
+  amount        Decimal       @db.Decimal(18, 2)
+  matched       Boolean       @default(false)
+  movement      BankMovement?
+  createdAt     DateTime      @default(now())
+
+  @@index([bankAccountId])
+}
+
+model Payment {
+  id             String           @id @default(cuid())
+  direction      PaymentDirection
+  date           DateTime
+  amount         Decimal          @db.Decimal(18, 2)
+  partyId        String?
+  party          Party?           @relation(fields: [partyId], references: [id])
+  bankAccountId  String
+  invoiceId      String?
+  invoice        SalesInvoice?    @relation(fields: [invoiceId], references: [id])
+  billId         String?
+  bill           PurchaseBill?    @relation(fields: [billId], references: [id])
+  journalEntryId String?
+  reference      String?
+  createdAt      DateTime         @default(now())
+}
+
+/// Inventory movement header. Every stock change creates one of these plus a
+/// matching KardexEntry — stock is NEVER mutated without traceability.
+/// Kept backward-compatible: `productName` is retained (denormalised label) and
+/// the legacy fields still drive the accounting posting on OUT movements.
+model InventoryMovement {
+  id          String       @id @default(cuid())
+  reference   String? // documento origen (factura, OC, ajuste…)
+  type        MovementType
+  reason      KardexReason @default(ADJUSTMENT)
+  productName String // denormalised for legacy/audit readability
+
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id])
+
+  warehouseFromId String?
+  warehouseFrom   Warehouse? @relation("MovementFrom", fields: [warehouseFromId], references: [id])
+  warehouseToId   String?
+  warehouseTo     Warehouse? @relation("MovementTo", fields: [warehouseToId], references: [id])
+
+  serialId String?
+  serial   SerialNumber? @relation(fields: [serialId], references: [id])
+
+  // ---- Contraparte (de dónde / hacia dónde) más allá de la bodega ----------
+  // Da trazabilidad real al kardex: una ENTRADA viene de un proveedor; una
+  // SALIDA va hacia un funcionario, un centro de costo/área o un tercero externo
+  // (contratista). Todas opcionales: si no aplica, la columna se deriva del motivo.
+  partyId String? // proveedor (IN) o tercero/contratista externo (OUT)
+  party   Party?  @relation(fields: [partyId], references: [id])
+
+  counterpartyEmployeeId String? // funcionario que recibe el material (OUT)
+  counterpartyEmployee   Employee? @relation(fields: [counterpartyEmployeeId], references: [id])
+
+  costCenterId String? // centro de costo / área que consume (OUT)
+  costCenter   CostCenter? @relation(fields: [costCenterId], references: [id])
+
+  quantity  Decimal  @db.Decimal(18, 4)
+  unitCost  Decimal  @db.Decimal(18, 4)
+  totalCost Decimal  @db.Decimal(18, 2)
+  date      DateTime
+
+  /// Document that originated the movement (polymorphic, e.g. GOODS_RECEIPT, ADJUSTMENT, SALES_INVOICE).
+  sourceType String?
+  sourceId   String?
+
+  userId String? // quién realizó el movimiento
+  user   User?   @relation(fields: [userId], references: [id])
+
+  notes          String?
+  journalEntryId String?
+  kardex         KardexEntry[]
+  createdAt      DateTime      @default(now())
+
+  @@index([productId])
+  @@index([warehouseFromId])
+  @@index([warehouseToId])
+  @@index([partyId])
+  @@index([counterpartyEmployeeId])
+  @@index([costCenterId])
+  @@index([date])
+}
+
+// ============================================================================
+//  AUTH MODULE (User / Role / Permission) — activates the existing
+//  PermissionsGuard, which already reads req.user.permissions.
+// ============================================================================
+
+model User {
+  id                    String              @id @default(cuid())
+  email                 String              @unique
+  name                  String
+  passwordHash          String
+  isActive              Boolean             @default(true)
+  // Teléfono de WhatsApp en E.164 sin '+' (ej. 573001112233). Vincula el número
+  // entrante del chatbot con este usuario para heredar sus permisos RBAC.
+  whatsappPhone         String?             @unique
+  roles                 UserRole[]
+  permissionOverrides   UserPermission[] // ajustes por empleado (ALLOW/DENY sobre el rol)
+  movements             InventoryMovement[]
+  auditLogs             AuditLog[]
+  employee              Employee? // perfil de empleado SST/RRHH (1-1 opcional)
+  workOrdersAssigned    WorkOrder[]         @relation("WorkOrderAssignee") // órdenes de trabajo asignadas (técnico)
+  workOrdersCreated     WorkOrder[]         @relation("WorkOrderCreatedBy") // órdenes de trabajo creadas (jefe)
+  warehousesResponsible Warehouse[]         @relation("WarehouseResponsible") // bodegas de las que es responsable
+  createdAt             DateTime            @default(now())
+}
+
+model Role {
+  id          String           @id @default(cuid())
+  key         String           @unique // e.g. "inventory-manager"
+  name        String
+  description String?
+  area        String? // grupo para la UI (roles personalizados); los del catálogo lo derivan de ROLE_AREA_BY_KEY
+  users       UserRole[]
+  permissions RolePermission[]
+  createdAt   DateTime         @default(now())
+}
+
+model Permission {
+  id            String           @id @default(cuid())
+  key           String           @unique // e.g. "inventory.products.write"
+  label         String
+  roles         RolePermission[]
+  userOverrides UserPermission[]
+}
+
+/// Ajuste de acceso por EMPLEADO (encima de sus roles). Réplica del modelo
+/// legacy (roleid base + flags por usuario en `permisos_usuario`).
+/// effect=ALLOW concede un permiso extra; effect=DENY revoca uno que el rol daría.
+model UserPermission {
+  userId       String
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permissionId String
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  effect       String     @default("ALLOW") // "ALLOW" | "DENY"
+  createdAt    DateTime   @default(now())
+
+  @@id([userId, permissionId])
+}
+
+model UserRole {
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  roleId String
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+}
+
+model RolePermission {
+  roleId       String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permissionId String
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+}
+
+// ============================================================================
+//  INVENTORY — CATALOG
+// ============================================================================
+
+model Category {
+  id        String     @id @default(cuid())
+  code      String     @unique
+  name      String
+  parentId  String?
+  parent    Category?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children  Category[] @relation("CategoryTree")
+  products  Product[]
+  createdAt DateTime   @default(now())
+}
+
+model Brand {
+  id        String    @id @default(cuid())
+  name      String    @unique
+  products  Product[]
+  createdAt DateTime  @default(now())
+}
+
+/// Unit of measure (UND, KG, MT, CAJA…).
+model UnitOfMeasure {
+  id        String    @id @default(cuid())
+  code      String    @unique
+  name      String
+  products  Product[]
+  createdAt DateTime  @default(now())
+}
+
+model Product {
+  id           String      @id @default(cuid())
+  sku          String      @unique // código único de inventario
+  internalCode String?     @unique // código interno
+  barcode      String?     @unique // código de barras
+  name         String
+  description  String?
+  type         ProductType @default(PHYSICAL)
+  isActive     Boolean     @default(true)
+
+  categoryId String?
+  category   Category?      @relation(fields: [categoryId], references: [id])
+  brandId    String?
+  brand      Brand?         @relation(fields: [brandId], references: [id])
+  uomId      String?
+  uom        UnitOfMeasure? @relation(fields: [uomId], references: [id])
+
+  costingMethod CostingMethod @default(AVERAGE)
+  lastCost      Decimal       @default(0) @db.Decimal(18, 4) // último costo
+  averageCost   Decimal       @default(0) @db.Decimal(18, 4) // costo promedio ponderado
+  standardCost  Decimal       @default(0) @db.Decimal(18, 4) // costo estándar
+
+  trackSerials Boolean @default(false) // requiere número de serie
+
+  entryDate DateTime @default(now()) // fecha de ingreso/alta del producto (editable)
+
+  stockLevels         StockLevel[]
+  kardex              KardexEntry[]
+  movements           InventoryMovement[]
+  serials             SerialNumber[]
+  reorderRules        ReorderRule[]
+  poLines             POLine[]
+  grLines             GRLine[]
+  salesLines          SalesInvoiceLine[]
+  purchaseLines       PurchaseBillLine[]
+  sstEppDeliveries    SstEppDelivery[] // entregas de EPP (SST) — EPP es un Product
+  materialAssignments MaterialAssignment[] // material asignado a funcionarios (custodia)
+
+  maintenances     MaintenanceOrder[] // mantenimientos sobre este producto (sin serie)
+  maintenanceParts MaintenancePart[] // consumido como repuesto en mantenimientos
+  workOrderParts   WorkOrderPart[] // consumido como repuesto en órdenes de trabajo
+
+  createdAt DateTime @default(now())
+
+  @@index([categoryId])
+  @@index([brandId])
+  @@index([entryDate])
+}
+
+// ============================================================================
+//  INVENTORY — WAREHOUSES & LOCATIONS
+// ============================================================================
+
+model Warehouse {
+  id            String        @id @default(cuid())
+  code          String        @unique
+  name          String
+  type          WarehouseType @default(MAIN)
+  address       String?
+  isActive      Boolean       @default(true)
+  responsibleId String? // responsable (User)
+  responsible   User?         @relation("WarehouseResponsible", fields: [responsibleId], references: [id])
+
+  locations     Location[]
+  stockLevels   StockLevel[]
+  kardex        KardexEntry[]
+  movementsFrom InventoryMovement[] @relation("MovementFrom")
+  movementsTo   InventoryMovement[] @relation("MovementTo")
+  createdAt     DateTime            @default(now())
+}
+
+/// Hierarchical internal location: Zona → Pasillo → Estante → Ubicación.
+model Location {
+  id          String       @id @default(cuid())
+  warehouseId String
+  warehouse   Warehouse    @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  kind        LocationKind
+  code        String
+  name        String
+  parentId    String?
+  parent      Location?    @relation("LocationTree", fields: [parentId], references: [id])
+  children    Location[]   @relation("LocationTree")
+  stockLevels StockLevel[]
+  createdAt   DateTime     @default(now())
+
+  @@unique([warehouseId, code])
+  @@index([warehouseId])
+}
+
+/// Current quantity of a product at a (warehouse[, location]) slot.
+/// `reserved` = comprometido por ventas; available = onHand - reserved.
+model StockLevel {
+  id          String    @id @default(cuid())
+  productId   String
+  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  warehouseId String
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  locationId  String?
+  location    Location? @relation(fields: [locationId], references: [id])
+
+  onHand    Decimal  @default(0) @db.Decimal(18, 4)
+  reserved  Decimal  @default(0) @db.Decimal(18, 4)
+  updatedAt DateTime @updatedAt
+
+  @@unique([productId, warehouseId, locationId])
+  @@index([productId])
+  @@index([warehouseId])
+}
+
+// ============================================================================
+//  INVENTORY — KARDEX (immutable running ledger per product/warehouse)
+// ============================================================================
+
+/// One row per stock movement. Stores the running balance & average cost AFTER
+/// the movement (kardex valorizado). Never updated once written.
+model KardexEntry {
+  id          String       @id @default(cuid())
+  date        DateTime
+  productId   String
+  product     Product      @relation(fields: [productId], references: [id])
+  warehouseId String
+  warehouse   Warehouse    @relation(fields: [warehouseId], references: [id])
+  reason      KardexReason
+  direction   MovementType
+
+  // A TRANSFER writes TWO entries (OUT origen + IN destino) for the same movement,
+  // so this is no longer 1-1 with InventoryMovement.
+  movementId String
+  // Restrict: el kardex es un libro inmutable. Borrar un movimiento NO debe poder
+  // destruir filas del kardex y corromper los saldos corrientes posteriores.
+  movement   InventoryMovement @relation(fields: [movementId], references: [id], onDelete: Restrict)
+
+  quantityIn   Decimal @default(0) @db.Decimal(18, 4)
+  quantityOut  Decimal @default(0) @db.Decimal(18, 4)
+  unitCost     Decimal @db.Decimal(18, 4)
+  // Running figures AFTER applying this movement:
+  balanceQty   Decimal @db.Decimal(18, 4)
+  balanceValue Decimal @db.Decimal(18, 2)
+  avgCost      Decimal @db.Decimal(18, 4)
+
+  reference String?
+  userId    String?
+  createdAt DateTime @default(now())
+
+  @@index([productId, warehouseId, date])
+  @@index([movementId])
+}
+
+// ============================================================================
+//  INVENTORY — SERIALS
+// ============================================================================
+
+model SerialNumber {
+  id          String       @id @default(cuid())
+  serial      String       @unique
+  productId   String
+  product     Product      @relation(fields: [productId], references: [id])
+  status      SerialStatus @default(IN_STOCK)
+  warehouseId String?
+  notes       String?
+
+  movements    InventoryMovement[]
+  assignments  AssetAssignment[]
+  maintenances MaintenanceOrder[] // mantenimientos sobre esta unidad
+  createdAt    DateTime            @default(now())
+
+  @@index([productId])
+}
+
+// ============================================================================
+//  INVENTORY — PURCHASE ORDERS & GOODS RECEIPTS
+// ============================================================================
+
+model PurchaseOrder {
+  id          String     @id @default(cuid())
+  number      String     @unique
+  supplierId  String // Party
+  warehouseId String? // bodega destino
+  status      FlowStatus @default(DRAFT)
+  orderDate   DateTime
+  expectedAt  DateTime?
+  notes       String?
+
+  requestedById String?
+  approvedById  String?
+  approvedAt    DateTime?
+
+  subtotal Decimal @default(0) @db.Decimal(18, 2)
+  taxTotal Decimal @default(0) @db.Decimal(18, 2)
+  total    Decimal @default(0) @db.Decimal(18, 2)
+
+  lines     POLine[]
+  receipts  GoodsReceipt[]
+  createdAt DateTime       @default(now())
+
+  @@index([supplierId])
+}
+
+model POLine {
+  id        String        @id @default(cuid())
+  orderId   String
+  order     PurchaseOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product       @relation(fields: [productId], references: [id])
+
+  quantity         Decimal @db.Decimal(18, 4)
+  receivedQuantity Decimal @default(0) @db.Decimal(18, 4)
+  unitCost         Decimal @db.Decimal(18, 4)
+
+  grLines   GRLine[]
+  createdAt DateTime @default(now())
+
+  @@index([orderId])
+}
+
+/// Physical reception, decoupled from the purchase invoice. Updates stock and
+/// generates IN movements. Supports partial & multiple receipts per PO.
+model GoodsReceipt {
+  id           String         @id @default(cuid())
+  number       String         @unique
+  orderId      String?
+  order        PurchaseOrder? @relation(fields: [orderId], references: [id])
+  warehouseId  String
+  receivedAt   DateTime
+  receivedById String?
+  notes        String?
+  evidenceUrl  String?
+
+  lines     GRLine[]
+  createdAt DateTime @default(now())
+
+  @@index([orderId])
+}
+
+model GRLine {
+  id        String       @id @default(cuid())
+  receiptId String
+  receipt   GoodsReceipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  poLineId  String?
+  poLine    POLine?      @relation(fields: [poLineId], references: [id])
+  productId String
+  product   Product      @relation(fields: [productId], references: [id])
+
+  quantity  Decimal          @db.Decimal(18, 4) // recibido conforme
+  unitCost  Decimal          @db.Decimal(18, 4)
+  condition ReceiptCondition @default(OK)
+  notes     String?
+  createdAt DateTime         @default(now())
+
+  @@index([receiptId])
+}
+
+// ============================================================================
+//  INVENTORY — ADJUSTMENTS
+// ============================================================================
+
+/// Header for a manual adjustment. Each one resolves into IN/OUT movements + kardex.
+model InventoryAdjustment {
+  id            String           @id @default(cuid())
+  number        String           @unique
+  warehouseId   String
+  reason        AdjustmentReason
+  status        FlowStatus       @default(DRAFT)
+  responsibleId String?
+  approvedById  String?
+  evidenceUrl   String?
+  notes         String?
+  date          DateTime
+  createdAt     DateTime         @default(now())
+}
+
+// ============================================================================
+//  INVENTORY — REORDER RULES & ASSET CUSTODY
+// ============================================================================
+
+model ReorderRule {
+  id           String   @id @default(cuid())
+  productId    String
+  product      Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  warehouseId  String
+  minQty       Decimal  @db.Decimal(18, 4) // stock mínimo
+  maxQty       Decimal  @db.Decimal(18, 4) // stock máximo
+  reorderPoint Decimal  @db.Decimal(18, 4) // punto de reorden
+  createdAt    DateTime @default(now())
+
+  @@unique([productId, warehouseId])
+}
+
+/// Tipo de alerta de inventario que levanta el motor.
+enum InventoryAlertType {
+  LOW_STOCK // existencias en/por debajo del punto de reorden o mínimo
+  OUT_OF_STOCK // existencias en cero
+  MAINTENANCE_DUE // mantenimiento preventivo próximo a vencer / vencido
+}
+
+/// Notificación de inventario (stock bajo, agotado). Espeja el
+/// patrón de SstNotification: una fila por (tipo, entidad, ventana) vía dedupeKey,
+/// in-app + seams de salida (email/WhatsApp). Reutiliza AlertChannel/AlertStatus.
+model InventoryNotification {
+  id          String             @id @default(cuid())
+  type        InventoryAlertType
+  channel     AlertChannel       @default(IN_APP)
+  status      AlertStatus        @default(PENDIENTE)
+  title       String
+  message     String
+  productId   String?
+  warehouseId String?
+  entityType  String?
+  entityId    String?
+  sentAt      DateTime?
+  readAt      DateTime?
+  createdAt   DateTime           @default(now())
+
+  // Idempotencia del motor: una alerta por (tipo, entidad, ventana).
+  dedupeKey String @unique
+
+  @@index([status])
+  @@index([type])
+}
+
+/// Estado de una asignación de material a un funcionario.
+enum MaterialAssignmentStatus {
+  ASSIGNED // entregado / en poder del funcionario
+  RETURNED // devuelto (reingresa a stock)
+  CONSUMED // consumido (no se devuelve)
+  LOST // perdido / no recuperado
+}
+
+/// Naturaleza del material entregado, define el tratamiento contable:
+/// - CONSUMABLE: se gasta al entregar (sale del stock como consumo).
+/// - TOOL: herramienta/activo durable; NO se expensa al entregar (sigue siendo
+///   activo en custodia del empleado). Solo se da de baja (gasto) si se pierde o
+///   consume; al devolver simplemente se cierra la custodia.
+enum MaterialAssignmentKind {
+  CONSUMABLE
+  TOOL
+}
+
+/// Asignación de material (por cantidad) a un funcionario, con custodia y
+/// devolución. Al entregar desde una bodega descuenta stock vía Kardex
+/// (movimiento OUT, INTERNAL_CONSUMPTION) y al devolver lo reingresa
+/// (movimiento IN, RETURN). El inventario sigue siendo la única fuente de verdad.
+model MaterialAssignment {
+  id            String                   @id @default(cuid())
+  employeeId    String
+  employee      Employee                 @relation(fields: [employeeId], references: [id])
+  productId     String
+  product       Product                  @relation(fields: [productId], references: [id])
+  warehouseId   String? // bodega de la que sale (y a la que regresa) el material
+  quantity         Decimal               @default(1) @db.Decimal(18, 4)
+  returnedQuantity Decimal               @default(0) @db.Decimal(18, 4) // acumulado devuelto (soporta devolución parcial)
+  kind          MaterialAssignmentKind   @default(CONSUMABLE)
+  assignedAt    DateTime
+  returnedAt    DateTime?
+  status        MaterialAssignmentStatus @default(ASSIGNED)
+  outMovementId String? // InventoryMovement OUT generado al entregar
+  inMovementId  String? // InventoryMovement IN generado al devolver
+  notes         String?
+  assignedById  String? // usuario (jefe de bodega) que registró la entrega
+  createdAt     DateTime                 @default(now())
+
+  @@index([employeeId])
+  @@index([productId])
+  @@index([status])
+}
+
+/// Custody of tools/assets assigned to employees, with full history of holders.
+model AssetAssignment {
+  id         String                @id @default(cuid())
+  serialId   String
+  serial     SerialNumber          @relation(fields: [serialId], references: [id])
+  employeeId String // User
+  assignedAt DateTime
+  returnedAt DateTime?
+  status     AssetAssignmentStatus @default(ASSIGNED)
+  notes      String?
+  createdAt  DateTime              @default(now())
+
+  @@index([serialId])
+  @@index([employeeId])
+}
+
+// ============================================================================
+//  INVENTORY — MAINTENANCE & AREAS (trazabilidad de componentes)
+// ============================================================================
+
+enum MaintenanceKind {
+  PREVENTIVE // preventivo
+  CORRECTIVE // correctivo
+}
+
+enum MaintenanceStatus {
+  OPEN // abierto / en proceso
+  COMPLETED // completado
+  CANCELLED // cancelado
+}
+
+/// Área / departamento operativo donde se usa o consume el material
+/// (ej. Perforación, Taller, Planta). Catálogo para reportar consistente.
+model Area {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  maintenances MaintenanceOrder[]
+  workOrders   WorkOrder[]
+}
+
+/// Orden / registro de mantenimiento sobre un componente.
+/// El componente puede ser una unidad con serie (serialId) o un producto
+/// genérico sin serie (productId) — al menos uno debe estar presente.
+model MaintenanceOrder {
+  id     String            @id @default(cuid())
+  number String            @unique // MNT-0001
+  kind   MaintenanceKind
+  status MaintenanceStatus @default(COMPLETED)
+  date   DateTime // fecha en que se realizó
+
+  // ---- componente intervenido (serie y/o producto) ----
+  serialId  String?
+  serial    SerialNumber? @relation(fields: [serialId], references: [id])
+  productId String?
+  product   Product?      @relation(fields: [productId], references: [id])
+
+  // ---- dónde se usó / quién ----
+  areaId String?
+  area   Area?   @relation(fields: [areaId], references: [id])
+
+  technician   String? // técnico responsable
+  cost         Decimal @default(0) @db.Decimal(18, 2) // costo de mano de obra / servicio
+  meterReading Decimal? @db.Decimal(18, 2) // lectura de horómetro/odómetro del equipo al momento del servicio
+  description  String // qué se hizo / falla atendida
+  notes        String?
+  warehouseId  String? // bodega de donde salieron los repuestos
+
+  parts       MaintenancePart[]
+  attachments MaintenanceAttachment[]
+
+  // ---- plan de origen (si nació de un plan preventivo) ----
+  planId String?
+
+  // ---- origen ----
+  // Si el registro nació al cerrar una orden de trabajo de mantenimiento, queda
+  // enlazado a ella (único: una OT genera a lo sumo un registro en la bitácora).
+  // Los registros manuales ("express") dejan este campo en null.
+  workOrderId String?    @unique
+  workOrder   WorkOrder? @relation(fields: [workOrderId], references: [id], onDelete: SetNull)
+
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  @@index([serialId])
+  @@index([productId])
+  @@index([areaId])
+  @@index([kind])
+  @@index([date])
+}
+
+/// Repuesto consumido durante un mantenimiento. Descuenta stock vía kardex
+/// (movimiento OUT, razón INTERNAL_CONSUMPTION) cuando hay bodega.
+model MaintenancePart {
+  id            String           @id @default(cuid())
+  maintenanceId String
+  maintenance   MaintenanceOrder @relation(fields: [maintenanceId], references: [id], onDelete: Cascade)
+  productId     String
+  product       Product          @relation(fields: [productId], references: [id])
+  quantity      Decimal          @db.Decimal(18, 4)
+  unitCost      Decimal          @default(0) @db.Decimal(18, 4)
+  movementId    String? // movimiento de inventario generado (si descontó stock)
+  createdAt     DateTime         @default(now())
+
+  @@index([maintenanceId])
+  @@index([productId])
+}
+
+/// Adjunto de un mantenimiento (foto del trabajo, factura del repuesto, informe
+/// del técnico). El binario vive en disco (uploads/maintenance); aquí van los
+/// metadatos. Espeja a WorkOrderPhoto.
+model MaintenanceAttachment {
+  id            String           @id @default(cuid())
+  maintenanceId String
+  maintenance   MaintenanceOrder @relation(fields: [maintenanceId], references: [id], onDelete: Cascade)
+  fileName      String // nombre original
+  storedName    String // nombre en disco (único)
+  mimeType      String
+  size          Int // bytes
+  description   String?
+  uploadedById  String?
+  createdAt     DateTime         @default(now())
+
+  @@index([maintenanceId])
+}
+
+/// Frecuencia de un plan de mantenimiento preventivo: por días calendario o por
+/// lectura de horómetro/odómetro del equipo.
+enum MaintenanceFrequency {
+  BY_DAYS // cada N días calendario
+  BY_METER // cada N unidades de horómetro/odómetro (horas, km)
+}
+
+/// Plan de mantenimiento preventivo programado para un equipo/área. El cron diario
+/// lo evalúa: cuando se acerca/vence el próximo servicio, avisa al responsable
+/// (campana + WhatsApp) y, si está configurado, genera automáticamente una orden
+/// de trabajo a partir de su plantilla. Usa IDs escalares (sin relaciones FK) para
+/// mantenerse autocontenido; el servicio resuelve los nombres.
+model MaintenancePlan {
+  id     String  @id @default(cuid())
+  number String  @unique // MNP-000001
+  name   String // nombre del plan (ej. "Cambio de aceite — Bomba 1")
+  active Boolean @default(true)
+
+  // ---- equipo objetivo (serie y/o producto y/o área) ----
+  serialId  String?
+  productId String?
+  areaId    String?
+
+  // ---- frecuencia ----
+  kind          MaintenanceKind      @default(PREVENTIVE)
+  frequency     MaintenanceFrequency @default(BY_DAYS)
+  intervalDays  Int? // si BY_DAYS
+  intervalMeter Decimal?             @db.Decimal(18, 2) // si BY_METER
+  leadDays      Int                  @default(7) // días de anticipación del aviso
+
+  // ---- estado del ciclo ----
+  lastServiceDate  DateTime?
+  lastServiceMeter Decimal?  @db.Decimal(18, 2)
+  nextDueDate      DateTime?
+  nextDueMeter     Decimal?  @db.Decimal(18, 2)
+
+  // ---- responsable + plantilla para la OT generada ----
+  assigneeId          String? // técnico con login
+  assignedEmployeeId  String? // responsable sin login
+  warehouseId         String?
+  priority            WorkOrderPriority @default(MEDIUM)
+  autoCreateWorkOrder Boolean           @default(true)
+  taskTemplate        String[] // títulos del checklist para la OT
+  notes               String?
+
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([active])
+  @@index([nextDueDate])
+  @@index([serialId])
+  @@index([productId])
+}
+
+// ============================================================================
+//  INVENTORY — WORK ORDERS (órdenes de trabajo)
+//  El Jefe de bodega crea y asigna; el Técnico de mantenimiento ejecuta solo
+//  las suyas (cambia estado y consume repuestos contra su orden).
+// ============================================================================
+
+enum WorkOrderStatus {
+  PENDING // creada, sin iniciar
+  IN_PROGRESS // en ejecución
+  COMPLETED // terminada
+  CANCELLED // cancelada
+}
+
+enum WorkOrderPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum WorkOrderType {
+  CORRECTIVE // correctivo (reparación de falla)
+  PREVENTIVE // preventivo (mantenimiento programado)
+  INSTALLATION // instalación / montaje
+  CLEANING // limpieza / aseo
+  INSPECTION // inspección / revisión
+  OTHER // otra
+}
+
+/// Tipos de evento registrados en la bitácora de auditoría de una orden.
+enum WorkOrderEventType {
+  CREATED // se creó la orden
+  UPDATED // se editaron sus datos
+  STARTED // pasó a En progreso
+  COMPLETED // se terminó
+  CANCELLED // se canceló
+  REOPENED // se reabrió una orden cerrada (admin)
+  STATUS_FORCED // un admin forzó un cambio de estado fuera del flujo
+  PART_ADDED // se consumió un repuesto
+  PHOTO_ADDED // se subió evidencia fotográfica
+  PHOTO_DELETED // se eliminó una foto
+  TASK_DONE // se completó una tarea del checklist
+  TASK_UNDONE // se desmarcó una tarea del checklist
+}
+
+/// Orden de trabajo genérica: una tarea que el Jefe asigna a un Técnico
+/// (surtir, organizar, reparar, mover, etc.). No está atada a mantenimiento.
+model WorkOrder {
+  id          String            @id @default(cuid())
+  number      String            @unique // OT-000001
+  title       String
+  description String?
+  type        WorkOrderType     @default(CORRECTIVE)
+  priority    WorkOrderPriority @default(MEDIUM)
+  status      WorkOrderStatus   @default(PENDING)
+
+  // ---- dónde / contra qué bodega se consume ----
+  areaId      String?
+  area        Area?   @relation(fields: [areaId], references: [id])
+  warehouseId String? // bodega de donde salen los repuestos al cerrar
+
+  // ---- quién ----
+  assigneeId  String? // técnico responsable de ejecutarla (usuario con login)
+  assignee    User?   @relation("WorkOrderAssignee", fields: [assigneeId], references: [id])
+  // Responsable que NO requiere login: cualquier empleado de RRHH.
+  assignedEmployeeId String?
+  assignedEmployee   Employee? @relation("WorkOrderEmployee", fields: [assignedEmployeeId], references: [id])
+  createdById String? // jefe que la creó
+  createdBy   User?   @relation("WorkOrderCreatedBy", fields: [createdById], references: [id])
+
+  // ---- ciclo de vida ----
+  dueDate     DateTime? // fecha límite
+  startedAt   DateTime? // cuándo el técnico la inició
+  completedAt DateTime? // cuándo se terminó
+  resolution  String? // notas de cierre del técnico
+
+  parts  WorkOrderPart[]
+  tasks  WorkOrderTask[]
+  photos WorkOrderPhoto[]
+  events WorkOrderEvent[]
+
+  // Registro generado en la bitácora de Mantenimiento al cerrar la orden, cuando
+  // su tipo es preventivo o correctivo (1:1).
+  maintenance MaintenanceOrder?
+
+  // Plan de mantenimiento preventivo que la generó (si vino de un plan). Escalar:
+  // al cerrarse la OT, el servicio avanza el ciclo del plan.
+  planId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([assigneeId])
+  @@index([assignedEmployeeId])
+  @@index([status])
+  @@index([areaId])
+  @@index([priority])
+  @@index([type])
+}
+
+/// Ítem de checklist de una orden de trabajo. El Jefe define las tareas al
+/// crear la orden; el Técnico las va marcando como hechas durante la ejecución.
+model WorkOrderTask {
+  id          String    @id @default(cuid())
+  workOrderId String
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  title       String
+  done        Boolean   @default(false)
+  doneAt      DateTime? // cuándo se marcó como hecha
+  position    Int       @default(0) // orden de aparición en la lista
+  createdAt   DateTime  @default(now())
+
+  @@index([workOrderId])
+}
+
+/// Evidencia fotográfica de una orden de trabajo (antes / durante / después).
+/// El binario vive en disco (uploads/work-orders); aquí solo van los metadatos.
+model WorkOrderPhoto {
+  id           String    @id @default(cuid())
+  workOrderId  String
+  workOrder    WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  fileName     String // nombre original del archivo
+  storedName   String // nombre en disco (único)
+  mimeType     String
+  size         Int // bytes
+  description  String?
+  uploadedById String? // usuario que la subió
+  createdAt    DateTime  @default(now())
+
+  @@index([workOrderId])
+}
+
+/// Repuesto consumido al ejecutar una orden de trabajo. Descuenta stock vía
+/// kardex (movimiento OUT, razón INTERNAL_CONSUMPTION) cuando hay bodega.
+model WorkOrderPart {
+  id          String    @id @default(cuid())
+  workOrderId String
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  productId   String
+  product     Product   @relation(fields: [productId], references: [id])
+  quantity    Decimal   @db.Decimal(18, 4)
+  unitCost    Decimal   @default(0) @db.Decimal(18, 4)
+  movementId  String? // movimiento de inventario generado (si descontó stock)
+  createdAt   DateTime  @default(now())
+
+  @@index([workOrderId])
+  @@index([productId])
+}
+
+/// Bitácora de auditoría de una orden de trabajo: un registro inmutable por cada
+/// acción (crear, iniciar, subir foto, consumir repuesto, terminar, etc.) con
+/// quién la hizo y cuándo. `actorName` es una instantánea para sobrevivir si el
+/// usuario se elimina; `meta` guarda detalles estructurados del evento.
+model WorkOrderEvent {
+  id          String             @id @default(cuid())
+  workOrderId String
+  workOrder   WorkOrder          @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  type        WorkOrderEventType
+  message     String // resumen legible (es-CO)
+  meta        Json? // detalles estructurados ({ from, to }, { productName, quantity }, …)
+  actorId     String? // usuario que ejecutó la acción (sin FK: es un registro histórico)
+  actorName   String? // instantánea del nombre del actor
+  createdAt   DateTime           @default(now())
+
+  @@index([workOrderId])
+  @@index([createdAt])
+}
+
+// ============================================================================
+//  INVENTORY — DOCUMENT LINES (extend existing Sales/Purchase docs)
+// ============================================================================
+
+model SalesInvoiceLine {
+  id        String       @id @default(cuid())
+  invoiceId String
+  invoice   SalesInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product      @relation(fields: [productId], references: [id])
+
+  quantity  Decimal @db.Decimal(18, 4)
+  unitPrice Decimal @db.Decimal(18, 4)
+  unitCost  Decimal @db.Decimal(18, 4)
+  lineTotal Decimal @db.Decimal(18, 2)
+
+  @@index([invoiceId])
+}
+
+model PurchaseBillLine {
+  id        String       @id @default(cuid())
+  billId    String
+  bill      PurchaseBill @relation(fields: [billId], references: [id], onDelete: Cascade)
+  // Producto OPCIONAL: las facturas de gasto/servicio (honorarios, arriendos…) no
+  // tienen producto; las de inventario sí.
+  productId String?
+  product   Product?     @relation(fields: [productId], references: [id])
+
+  description String? // descripción libre de la línea (obligatoria si no hay producto)
+  quantity    Decimal @db.Decimal(18, 4)
+  unitCost    Decimal @db.Decimal(18, 4)
+  lineTotal   Decimal @db.Decimal(18, 2)
+  taxCodeId   String? // IVA descontable de la línea (opcional)
+  isInventory Boolean @default(false) // true → inventario, false → gasto
+
+  @@index([billId])
+}
+
+// ============================================================================
+//  AUDIT LOG (immutable) — who / when / action / before / after / IP
+// ============================================================================
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  action    String // CREATE | UPDATE | DELETE | APPROVE | …
+  entity    String // model name
+  entityId  String?
+  before    Json?
+  after     Json?
+  ipAddress String?
+  createdAt DateTime @default(now())
+
+  @@index([entity, entityId])
+  @@index([userId])
+}
+
+// ============================================================================
+//  HR BASE — Employee (reusable). SST attaches to this; not a duplicate of User.
+//  A User (login account) can optionally be linked 1-1 to an Employee.
+// ============================================================================
+
+enum EmployeeDocType {
+  CC // cédula de ciudadanía
+  CE // cédula de extranjería
+  TI // tarjeta de identidad
+  PASAPORTE
+  NIT
+  OTRO
+}
+
+enum EmployeeStatus {
+  ACTIVE // activo
+  ON_LEAVE // incapacidad/licencia
+  INACTIVE // inactivo
+  TERMINATED // retirado
+}
+
+model Employee {
+  id        String          @id @default(cuid())
+  docType   EmployeeDocType @default(CC)
+  docNumber String          @unique
+  firstName String
+  lastName  String
+  position  String? // cargo
+  area      String?
+  hireDate  DateTime?
+  birthDate DateTime?
+  phone     String?
+  email     String?
+  bloodType String? // RH
+  status    EmployeeStatus  @default(ACTIVE)
+
+  // ---- datos laborales / RRHH ----
+  address               String? // dirección de residencia
+  city                  String?
+  contractType          String? // Indefinido | Término fijo | Obra labor | Prestación de servicios
+  salary                Decimal? @db.Decimal(18, 2)
+  emergencyContactName  String?
+  emergencyContactPhone String?
+  eps                   String? // entidad de salud
+  arl                   String? // riesgos laborales
+  pensionFund           String? // fondo de pensiones (AFP)
+  compensationFund      String? // caja de compensación
+  bankName              String?
+  bankAccount           String?
+
+  // SST profile extras
+  laborRestrictions String? // restricciones laborales vigentes
+  sstObservations   String?
+
+  // optional link to a system login account (no duplicate identities)
+  userId String? @unique
+  user   User?   @relation(fields: [userId], references: [id])
+
+  documents EmployeeDocument[] // hojas de vida, cédula, contrato, certificados
+  workOrders WorkOrder[] @relation("WorkOrderEmployee") // órdenes de trabajo asignadas (sin requerir login)
+  inventoryMovements InventoryMovement[] // salidas de inventario entregadas a este funcionario
+
+  risks               SstEmployeeRisk[]
+  eppDeliveries       SstEppDelivery[]
+  materialAssignments MaterialAssignment[]
+  medicalExams        SstMedicalExam[]
+  trainings           SstTrainingAttendee[]
+  incidentRoles       SstIncidentPerson[]
+  brigadeRoles        SstBrigadeMember[]
+  drillRoles          SstDrillParticipant[]
+  notifications       SstNotification[]
+
+  // ---- nómina (módulo payroll) ----
+  payrollContracts PayrollContract[]
+  payrollEvents    PayrollEvent[]
+  payslips         Payslip[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([area])
+  @@index([status])
+}
+
+/// Categoría de un archivo adjunto al empleado.
+enum EmployeeDocumentKind {
+  CV // hoja de vida
+  IDENTITY // documento de identidad (cédula)
+  CONTRACT // contrato laboral
+  CERTIFICATE // certificados / exámenes / otros
+  OTHER
+}
+
+/// Archivo adjunto a un empleado (PDF/imagen/Word). El binario vive en disco
+/// (uploads/employees/) y se descarga por endpoint autenticado, no público.
+model EmployeeDocument {
+  id           String               @id @default(cuid())
+  employeeId   String
+  employee     Employee             @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  kind         EmployeeDocumentKind @default(OTHER)
+  fileName     String // nombre original del archivo
+  storedName   String // nombre en disco (único)
+  mimeType     String
+  size         Int // bytes
+  description  String?
+  uploadedById String? // usuario que lo subió
+  createdAt    DateTime             @default(now())
+
+  @@index([employeeId])
+  @@index([kind])
+}
+
+// ============================================================================
+//  SST — RISK MATRIX
+// ============================================================================
+
+enum RiskType {
+  FISICO // ruido, vibración, temperatura, radiación
+  QUIMICO // vapores, gases, sustancias
+  BIOLOGICO
+  MECANICO
+  ELECTRICO
+  ERGONOMICO
+  PSICOSOCIAL
+  LOCATIVO
+}
+
+enum RiskLevel {
+  BAJO
+  MEDIO
+  ALTO
+  CRITICO
+}
+
+model SstRiskMatrix {
+  id          String         @id @default(cuid())
+  name        String
+  area        String?
+  version     String         @default("1.0")
+  status      String         @default("ACTIVE") // ACTIVE | ARCHIVED
+  createdById String?
+  entries     SstRiskEntry[]
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+}
+
+model SstRiskEntry {
+  id                 String        @id @default(cuid())
+  matrixId           String
+  matrix             SstRiskMatrix @relation(fields: [matrixId], references: [id], onDelete: Cascade)
+  area               String
+  position           String? // cargo
+  activity           String
+  riskType           RiskType
+  hazard             String // descripción del peligro/riesgo
+  probability        Int           @default(1) // 1..5
+  impact             Int           @default(1) // 1..5
+  riskLevel          RiskLevel     @default(BAJO) // calculado de probability*impact
+  existingControls   String?
+  preventiveMeasures String?
+  notes              String?
+
+  employees SstEmployeeRisk[]
+  createdAt DateTime          @default(now())
+
+  @@index([matrixId])
+  @@index([riskType])
+  @@index([riskLevel])
+}
+
+model SstEmployeeRisk {
+  id          String       @id @default(cuid())
+  employeeId  String
+  employee    Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  riskEntryId String
+  riskEntry   SstRiskEntry @relation(fields: [riskEntryId], references: [id], onDelete: Cascade)
+  createdAt   DateTime     @default(now())
+
+  @@unique([employeeId, riskEntryId])
+  @@index([employeeId])
+}
+
+// ============================================================================
+//  SST — EPP (reuses Product + Kardex for stock)
+// ============================================================================
+
+enum EppDeliveryStatus {
+  ENTREGADO
+  DEVUELTO
+  VENCIDO
+  REPUESTO
+  PERDIDO
+}
+
+model SstEppDelivery {
+  id           String            @id @default(cuid())
+  employeeId   String
+  employee     Employee          @relation(fields: [employeeId], references: [id])
+  productId    String
+  product      Product           @relation(fields: [productId], references: [id])
+  warehouseId  String? // bodega de la que sale el EPP
+  quantity     Decimal           @default(1) @db.Decimal(18, 4)
+  deliveryDate DateTime
+  returnDate   DateTime?
+  expiresAt    DateTime? // vida útil del EPP
+  status       EppDeliveryStatus @default(ENTREGADO)
+  movementId   String? // InventoryMovement generado (trazabilidad de stock)
+  signatureUrl String? // firma digital del empleado
+  notes        String?
+  createdAt    DateTime          @default(now())
+
+  @@index([employeeId])
+  @@index([productId])
+  @@index([status])
+  @@index([expiresAt])
+}
+
+// ============================================================================
+//  SST — MEDICAL EXAMS
+// ============================================================================
+
+enum MedicalExamType {
+  INGRESO
+  PERIODICO
+  REINTEGRO
+  RETIRO
+}
+
+enum MedicalConcept {
+  APTO
+  APTO_CON_RESTRICCIONES
+  NO_APTO
+  APLAZADO
+}
+
+model SstMedicalExam {
+  id           String          @id @default(cuid())
+  employeeId   String
+  employee     Employee        @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  type         MedicalExamType
+  date         DateTime
+  provider     String? // IPS/centro médico
+  concept      MedicalConcept  @default(APTO)
+  restrictions String?
+  nextDueDate  DateTime? // próximo vencimiento (genera alerta)
+  fileUrl      String? // certificado médico
+  notes        String?
+  createdAt    DateTime        @default(now())
+
+  @@index([employeeId])
+  @@index([nextDueDate])
+}
+
+// ============================================================================
+//  SST — TRAINING
+// ============================================================================
+
+enum TrainingAttendeeStatus {
+  INSCRITO
+  ASISTIO
+  APROBADO
+  REPROBADO
+}
+
+model SstTraining {
+  id             String                @id @default(cuid())
+  title          String
+  category       String? // alturas, primeros auxilios, brigadas, etc.
+  instructor     String?
+  date           DateTime
+  durationHours  Decimal?              @db.Decimal(8, 2)
+  validityMonths Int? // vigencia de la certificación
+  description    String?
+  attendees      SstTrainingAttendee[]
+  createdAt      DateTime              @default(now())
+
+  @@index([category])
+  @@index([date])
+}
+
+model SstTrainingAttendee {
+  id             String                 @id @default(cuid())
+  trainingId     String
+  training       SstTraining            @relation(fields: [trainingId], references: [id], onDelete: Cascade)
+  employeeId     String
+  employee       Employee               @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  status         TrainingAttendeeStatus @default(INSCRITO)
+  score          Decimal?               @db.Decimal(5, 2)
+  certificateUrl String?
+  expiresAt      DateTime? // vencimiento de la certificación (alerta)
+  createdAt      DateTime               @default(now())
+
+  @@unique([trainingId, employeeId])
+  @@index([employeeId])
+  @@index([expiresAt])
+}
+
+// ============================================================================
+//  SST — INCIDENTS & ACCIDENTS
+// ============================================================================
+
+enum IncidentClass {
+  INCIDENTE
+  CASI_ACCIDENTE
+  ACCIDENTE_LEVE
+  ACCIDENTE_GRAVE
+}
+
+enum IncidentStatus {
+  REPORTADO
+  EN_INVESTIGACION
+  CON_ACCIONES
+  CERRADO
+}
+
+model SstIncident {
+  id             String              @id @default(cuid())
+  number         String              @unique
+  date           DateTime
+  time           String? // hora (HH:mm)
+  place          String
+  area           String?
+  reportedById   String? // User que reporta
+  classification IncidentClass
+  description    String
+  immediateCause String?
+  rootCause      String?
+  status         IncidentStatus      @default(REPORTADO)
+  closedAt       DateTime?
+  people         SstIncidentPerson[]
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  @@index([classification])
+  @@index([status])
+  @@index([date])
+}
+
+model SstIncidentPerson {
+  id           String      @id @default(cuid())
+  incidentId   String
+  incident     SstIncident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  employeeId   String?
+  employee     Employee?   @relation(fields: [employeeId], references: [id])
+  externalName String? // afectado/testigo sin ficha de empleado
+  role         String // AFFECTED | WITNESS
+  createdAt    DateTime    @default(now())
+
+  @@index([incidentId])
+}
+
+// ============================================================================
+//  SST — INSPECTIONS (configurable checklist engine)
+// ============================================================================
+
+enum InspectionItemResult {
+  CONFORME
+  NO_CONFORME
+  OBSERVACION
+}
+
+model SstInspectionTemplate {
+  id          String          @id @default(cuid())
+  name        String
+  type        String // bodega, oficina, vehículo, equipo, herramienta, área operativa
+  description String?
+  items       Json // [{ question, category }]
+  isActive    Boolean         @default(true)
+  inspections SstInspection[]
+  createdAt   DateTime        @default(now())
+}
+
+model SstInspection {
+  id           String                 @id @default(cuid())
+  number       String                 @unique
+  templateId   String?
+  template     SstInspectionTemplate? @relation(fields: [templateId], references: [id])
+  date         DateTime
+  inspectorId  String? // User
+  targetType   String? // VEHICLE | WAREHOUSE | EQUIPMENT | ...
+  targetRef    String? // id/placa/código del objeto inspeccionado
+  area         String?
+  globalResult InspectionItemResult   @default(CONFORME)
+  notes        String?
+  items        SstInspectionItem[]
+  createdAt    DateTime               @default(now())
+
+  @@index([date])
+  @@index([globalResult])
+}
+
+model SstInspectionItem {
+  id           String               @id @default(cuid())
+  inspectionId String
+  inspection   SstInspection        @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  question     String
+  result       InspectionItemResult @default(CONFORME)
+  note         String?
+  evidenceUrl  String?
+
+  @@index([inspectionId])
+}
+
+// ============================================================================
+//  SST — FINDINGS & CORRECTIVE ACTIONS (central CAPA engine)
+// ============================================================================
+
+enum FindingPriority {
+  BAJA
+  MEDIA
+  ALTA
+  CRITICA
+}
+
+enum FindingStatus {
+  ABIERTO
+  EN_PROGRESO
+  CERRADO
+  VENCIDO
+}
+
+enum ActionStatus {
+  PENDIENTE
+  EN_PROGRESO
+  COMPLETADA
+  VERIFICADA
+  VENCIDA
+}
+
+model SstFinding {
+  id          String                @id @default(cuid())
+  number      String                @unique
+  sourceType  String // INCIDENT | INSPECTION | AUDIT | DRILL | MANUAL
+  sourceId    String?
+  title       String
+  description String?
+  priority    FindingPriority       @default(MEDIA)
+  status      FindingStatus         @default(ABIERTO)
+  area        String?
+  detectedAt  DateTime
+  dueAt       DateTime?
+  actions     SstCorrectiveAction[]
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+
+  @@index([sourceType, sourceId])
+  @@index([status])
+  @@index([priority])
+}
+
+model SstCorrectiveAction {
+  id            String       @id @default(cuid())
+  findingId     String
+  finding       SstFinding   @relation(fields: [findingId], references: [id], onDelete: Cascade)
+  description   String
+  responsibleId String? // User/Employee responsable
+  dueAt         DateTime?
+  status        ActionStatus @default(PENDIENTE)
+  completedAt   DateTime?
+  verifiedById  String?
+  evidenceUrl   String?
+  notes         String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([findingId])
+  @@index([status])
+  @@index([dueAt])
+}
+
+// ============================================================================
+//  SST — DOCUMENT MANAGEMENT (versioned)
+// ============================================================================
+
+enum SstDocType {
+  POLITICA
+  PROCEDIMIENTO
+  MANUAL
+  INSTRUCTIVO
+  FORMATO
+  PROTOCOLO
+}
+
+enum SstDocStatus {
+  BORRADOR
+  EN_REVISION
+  VIGENTE
+  OBSOLETO
+}
+
+model SstDocument {
+  id             String               @id @default(cuid())
+  code           String               @unique
+  type           SstDocType
+  title          String
+  currentVersion String               @default("1.0")
+  status         SstDocStatus         @default(BORRADOR)
+  ownerId        String?
+  effectiveDate  DateTime?
+  expiresAt      DateTime?
+  fileUrl        String?
+  versions       SstDocumentVersion[]
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  @@index([type])
+  @@index([status])
+  @@index([expiresAt])
+}
+
+model SstDocumentVersion {
+  id           String      @id @default(cuid())
+  documentId   String
+  document     SstDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  version      String
+  fileUrl      String?
+  changeNote   String?
+  approvedById String?
+  approvedAt   DateTime?
+  createdAt    DateTime    @default(now())
+
+  @@index([documentId])
+}
+
+// ============================================================================
+//  SST — EMERGENCY EQUIPMENT
+// ============================================================================
+
+enum EmergencyEquipmentType {
+  EXTINTOR
+  BOTIQUIN
+  ALARMA
+  CAMILLA
+  EQUIPO_RESCATE
+  OTRO
+}
+
+enum EquipmentStatus {
+  OPERATIVO
+  EN_MANTENIMIENTO
+  VENCIDO
+  FUERA_SERVICIO
+}
+
+model SstEmergencyEquipment {
+  id               String                 @id @default(cuid())
+  code             String                 @unique
+  type             EmergencyEquipmentType
+  location         String
+  area             String?
+  status           EquipmentStatus        @default(OPERATIVO)
+  lastInspectionAt DateTime?
+  nextInspectionAt DateTime?
+  expiresAt        DateTime?
+  notes            String?
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  @@index([type])
+  @@index([status])
+  @@index([nextInspectionAt])
+  @@index([expiresAt])
+}
+
+// ============================================================================
+//  SST — BRIGADES
+// ============================================================================
+
+enum BrigadeRole {
+  JEFE
+  BRIGADISTA
+  PRIMEROS_AUXILIOS
+  CONTRA_INCENDIOS
+  EVACUACION
+}
+
+model SstBrigade {
+  id          String             @id @default(cuid())
+  name        String
+  type        String?
+  description String?
+  members     SstBrigadeMember[]
+  createdAt   DateTime           @default(now())
+}
+
+model SstBrigadeMember {
+  id             String      @id @default(cuid())
+  brigadeId      String
+  brigade        SstBrigade  @relation(fields: [brigadeId], references: [id], onDelete: Cascade)
+  employeeId     String
+  employee       Employee    @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  role           BrigadeRole @default(BRIGADISTA)
+  certifications String?
+  joinedAt       DateTime    @default(now())
+  active         Boolean     @default(true)
+
+  @@unique([brigadeId, employeeId])
+  @@index([employeeId])
+}
+
+// ============================================================================
+//  SST — DRILLS (simulacros)
+// ============================================================================
+
+enum DrillType {
+  EVACUACION
+  INCENDIO
+  SISMO
+  DERRAME
+  MEDICO
+  OTRO
+}
+
+model SstDrill {
+  id                String                @id @default(cuid())
+  number            String                @unique
+  type              DrillType
+  date              DateTime
+  scenario          String
+  location          String?
+  participantsCount Int?
+  result            String?
+  findingsSummary   String?
+  notes             String?
+  participants      SstDrillParticipant[]
+  createdAt         DateTime              @default(now())
+
+  @@index([date])
+  @@index([type])
+}
+
+model SstDrillParticipant {
+  id         String   @id @default(cuid())
+  drillId    String
+  drill      SstDrill @relation(fields: [drillId], references: [id], onDelete: Cascade)
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([drillId, employeeId])
+  @@index([drillId])
+}
+
+// ============================================================================
+//  SST — CONTRACTORS
+// ============================================================================
+
+model SstContractor {
+  id              String                  @id @default(cuid())
+  company         String
+  partyId         String?                 @unique // enlaza a un Party (proveedor) existente
+  party           Party?                  @relation(fields: [partyId], references: [id])
+  responsibleName String?
+  phone           String?
+  email           String?
+  status          String                  @default("ACTIVE") // ACTIVE | SUSPENDED | INACTIVE
+  documents       SstContractorDocument[]
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+}
+
+model SstContractorDocument {
+  id           String        @id @default(cuid())
+  contractorId String
+  contractor   SstContractor @relation(fields: [contractorId], references: [id], onDelete: Cascade)
+  type         String // ARL, seguro, certificación, etc.
+  fileUrl      String?
+  issuedAt     DateTime?
+  expiresAt    DateTime?
+  createdAt    DateTime      @default(now())
+
+  @@index([contractorId])
+  @@index([expiresAt])
+}
+
+// ============================================================================
+//  SST — COMPLIANCE AUDITS
+// ============================================================================
+
+model SstComplianceAudit {
+  id        String   @id @default(cuid())
+  number    String   @unique
+  type      String // INTERNA | EXTERNA
+  date      DateTime
+  auditor   String
+  scope     String?
+  summary   String?
+  score     Decimal? @db.Decimal(5, 2)
+  createdAt DateTime @default(now())
+
+  @@index([date])
+}
+
+// ============================================================================
+//  SST — EVIDENCE (cross-cutting) & NOTIFICATIONS/ALERTS
+// ============================================================================
+
+model SstEvidence {
+  id           String   @id @default(cuid())
+  entityType   String // INCIDENT | INSPECTION | EPP | DRILL | AUDIT | ...
+  entityId     String
+  type         String   @default("PHOTO") // PHOTO | DOC | SIGNATURE | OTHER
+  url          String
+  description  String?
+  uploadedById String?
+  createdAt    DateTime @default(now())
+
+  @@index([entityType, entityId])
+}
+
+enum SstAlertType {
+  EXAMEN_MEDICO
+  CAPACITACION
+  CERTIFICACION
+  EPP
+  DOCUMENTO
+  ACCION_CORRECTIVA
+  INSPECCION
+  EQUIPO_EMERGENCIA
+  CONTRATISTA
+}
+
+enum AlertChannel {
+  IN_APP
+  EMAIL
+  WHATSAPP
+}
+
+enum AlertStatus {
+  PENDIENTE
+  ENVIADA
+  LEIDA
+  DESCARTADA
+}
+
+model SstNotification {
+  id         String       @id @default(cuid())
+  type       SstAlertType
+  channel    AlertChannel @default(IN_APP)
+  status     AlertStatus  @default(PENDIENTE)
+  employeeId String?
+  employee   Employee?    @relation(fields: [employeeId], references: [id])
+  userId     String?
+  title      String
+  message    String
+  entityType String?
+  entityId   String?
+  dueDate    DateTime?
+  sentAt     DateTime?
+  readAt     DateTime?
+  createdAt  DateTime     @default(now())
+
+  // Idempotencia del motor de alertas: una alerta por (tipo, entidad, vencimiento).
+  dedupeKey String @unique
+
+  @@index([status])
+  @@index([type])
+  @@index([dueDate])
+}
+
+// ============================================================================
+//  PAYROLL — NÓMINA INTELIGENTE
+//  Lógica operativa de RRHH/Nómina, desacoplada de lo fiscal/contable.
+//  El cálculo NO está hardcodeado: cada PayrollConcept describe CÓMO se calcula
+//  (calcMethod + rate + base), de modo que las reglas viven en datos, no en código.
+// ============================================================================
+
+/// Naturaleza contable del concepto: suma (devengado) o resta (deducción).
+enum PayrollConceptType {
+  EARNING // devengado
+  DEDUCTION // deducción
+}
+
+/// Si el concepto constituye salario (afecta prestaciones) o no.
+enum PayrollSalaryNature {
+  SALARIAL
+  NON_SALARIAL
+}
+
+/// Familia funcional del concepto (para agrupar/reportar).
+enum PayrollConceptCategory {
+  BASIC_SALARY
+  OVERTIME
+  BONUS
+  ALLOWANCE
+  COMMISSION
+  VACATION
+  SICK_LEAVE
+  PENSION
+  HEALTH
+  TAX
+  OTHER
+}
+
+/// Estrategia de cálculo que aplica el motor para este concepto.
+enum PayrollCalcMethod {
+  FIXED // valor fijo (amount de la novedad o `rate` como monto)
+  PERCENTAGE // `rate` (0..1) aplicado sobre `base`
+  PER_QUANTITY // cantidad × valor unitario (`rate` = unitario, o unitario de la novedad)
+  PROPORTIONAL // prima causada: (salario/30) × `rate` días × (díasLaborados / cycleDays)
+}
+
+/// Base de cálculo para conceptos PERCENTAGE / PER_QUANTITY.
+enum PayrollCalcBase {
+  NONE
+  BASIC_SALARY // salario base del contrato (hora ordinaria = salario/monthlyHours)
+  DAILY_SALARY // salario diario (salario/divisor: 30 o días reales del mes según clase)
+  GROSS_SALARIAL // total devengado de naturaleza salarial
+  IBC // ingreso base de cotización (devengado salarial)
+}
+
+/// Clase de pago del trabajador. Gobierna el divisor diario.
+enum PayrollPayClass {
+  QUINCENAL // mes legal de 30 días (norma colombiana)
+  QUINCENAL_ROLL // días reales del mes (28/30/31)
+}
+
+enum PayrollContractType {
+  INDEFINITE // término indefinido
+  FIXED_TERM // término fijo
+  WORK_LABOR // obra o labor
+  SERVICES // prestación de servicios
+  APPRENTICESHIP // aprendizaje
+}
+
+enum PayrollPeriodStatus {
+  OPEN // admite novedades / borradores
+  PROCESSING // en cálculo
+  CLOSED // liquidado y cerrado (inmutable)
+}
+
+enum PayrollEventType {
+  VACATION
+  SICK_LEAVE
+  LICENSE
+  PERMISSION
+  ABSENCE
+  BONUS
+  COMMISSION
+  ALLOWANCE
+  DEDUCTION
+  OTHER
+}
+
+enum PayrollEventStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum PayslipStatus {
+  DRAFT // calculado, editable
+  ISSUED // emitido al empleado
+  PAID // pagado
+}
+
+/// Concepto salarial/no salarial configurable. El núcleo de "no hardcodear".
+model PayrollConcept {
+  id           String                 @id @default(cuid())
+  code         String                 @unique // ej. HED, RECN, AUXT
+  name         String
+  description  String?
+  type         PayrollConceptType
+  salaryNature PayrollSalaryNature    @default(SALARIAL)
+  category     PayrollConceptCategory @default(OTHER)
+
+  // --- cómo se calcula ---
+  calcMethod PayrollCalcMethod @default(FIXED)
+  rate       Decimal?          @db.Decimal(18, 6) // % (0..1), valor unitario, multiplicador o días de salario
+  base       PayrollCalcBase   @default(NONE)
+  // Se aplica automáticamente cada periodo sin novedad (ej. Prima de Habitación).
+  autoApply  Boolean           @default(false)
+  // Días del ciclo para conceptos PROPORTIONAL (semestral 180, anual 360).
+  cycleDays  Int?
+
+  // --- incidencia en bases prestacionales (informativo/reportería) ---
+  affectsHealth      Boolean @default(false)
+  affectsPension     Boolean @default(false)
+  affectsParafiscals Boolean @default(false)
+  affectsSeverance   Boolean @default(false) // cesantías
+  affectsVacation    Boolean @default(false)
+  affectsBonus       Boolean @default(false) // prima
+
+  active Boolean @default(true)
+
+  events PayrollEvent[]
+  lines  PayslipLine[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([type])
+  @@index([category])
+}
+
+/// Contrato laboral vinculado al Employee canónico (RRHH/SST/Nómina comparten persona).
+model PayrollContract {
+  id                 String              @id @default(cuid())
+  employeeId         String
+  employee           Employee            @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  contractType       PayrollContractType @default(INDEFINITE)
+  // Clase de pago: gobierna el divisor diario (30 vs días reales del mes).
+  payClass           PayrollPayClass     @default(QUINCENAL)
+  baseSalary         Decimal             @db.Decimal(18, 2)
+  // Jornada mensual de referencia para valorar la hora ordinaria (Colombia: 240).
+  monthlyHours       Decimal             @default(240) @db.Decimal(10, 2)
+  // ¿Tiene derecho a auxilio de transporte? (se materializa vía concepto al liquidar)
+  transportAllowance Boolean             @default(true)
+  startDate          DateTime
+  endDate            DateTime?
+  active             Boolean             @default(true)
+  notes              String?
+
+  payslips Payslip[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([employeeId])
+  @@index([active])
+}
+
+/// Periodo de nómina (quincenal/mensual). Gobierna el estado del cálculo.
+model PayrollPeriod {
+  id        String              @id @default(cuid())
+  name      String // ej. "Junio 2026 - 2da quincena"
+  startDate DateTime
+  endDate   DateTime
+  payday    DateTime?
+  status    PayrollPeriodStatus @default(OPEN)
+
+  events   PayrollEvent[]
+  payslips Payslip[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+}
+
+/// Novedad de nómina: vacaciones, incapacidad, bono, comisión, deducción, etc.
+/// Es la entrada manual que alimenta el motor (las horas extras llegan por su
+/// propio módulo en una fase posterior; aquí caben como novedad si se requiere).
+model PayrollEvent {
+  id           String             @id @default(cuid())
+  employeeId   String
+  employee     Employee           @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  conceptId    String?
+  concept      PayrollConcept?    @relation(fields: [conceptId], references: [id])
+  periodId     String?
+  period       PayrollPeriod?     @relation(fields: [periodId], references: [id])
+  type         PayrollEventType
+  startDate    DateTime
+  endDate      DateTime?
+  quantity     Decimal?           @db.Decimal(12, 2) // días, horas, unidades
+  amount       Decimal?           @db.Decimal(18, 2) // monto fijo, si aplica
+  notes        String?
+  status       PayrollEventStatus @default(PENDING)
+  approvedById String?
+  approvedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([employeeId])
+  @@index([periodId])
+  @@index([status])
+}
+
+/// Desprendible (colilla) de un empleado en un periodo. Una fila por persona/periodo.
+model Payslip {
+  id         String           @id @default(cuid())
+  periodId   String
+  period     PayrollPeriod    @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  employeeId String
+  employee   Employee         @relation(fields: [employeeId], references: [id])
+  contractId String?
+  contract   PayrollContract? @relation(fields: [contractId], references: [id])
+
+  // snapshot + totales (todo persistido para inmutabilidad al cerrar)
+  baseSalary      Decimal @default(0) @db.Decimal(18, 2)
+  grossSalary     Decimal @default(0) @db.Decimal(18, 2) // base + devengado salarial
+  totalEarnings   Decimal @default(0) @db.Decimal(18, 2)
+  totalDeductions Decimal @default(0) @db.Decimal(18, 2)
+  netSalary       Decimal @default(0) @db.Decimal(18, 2)
+
+  status   PayslipStatus @default(DRAFT)
+  issuedAt DateTime?
+
+  lines PayslipLine[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([periodId, employeeId])
+  @@index([employeeId])
+}
+
+/// Línea de desprendible: el desglose transparente. Cada valor lleva su origen,
+/// fórmula legible, cantidad, valor unitario y total para que el empleado lo entienda.
+model PayslipLine {
+  id        String          @id @default(cuid())
+  payslipId String
+  payslip   Payslip         @relation(fields: [payslipId], references: [id], onDelete: Cascade)
+  conceptId String?
+  concept   PayrollConcept? @relation(fields: [conceptId], references: [id])
+
+  type         PayrollConceptType
+  salaryNature PayrollSalaryNature    @default(SALARIAL)
+  category     PayrollConceptCategory @default(OTHER)
+
+  label     String // nombre mostrado (ej. "Hora Extra Diurna")
+  origin    String? // de dónde sale (ej. "Novedad aprobada", "Contrato", "Cálculo automático")
+  formula   String? // fórmula legible (ej. "12 x $8.500")
+  quantity  Decimal? @db.Decimal(12, 2)
+  unitValue Decimal? @db.Decimal(18, 2)
+  amount    Decimal  @db.Decimal(18, 2) // valor total de la línea
+  order     Int      @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@index([payslipId])
+}
+
+// ============================================================================
+//  PAYROLL — INTEGRACIONES CONTABLES (Siigo/Alegra/Odoo/…)
+//  Registro auditable de cada envío (o dry-run) hacia un proveedor externo.
+// ============================================================================
+
+enum IntegrationKind {
+  ACCOUNTING_ENTRY // contabilización (asiento)
+  ELECTRONIC_PAYROLL // nómina electrónica (DIAN)
+  EMPLOYEE_SYNC // sincronización de terceros/empleados
+  CONCEPT_SYNC // sincronización de conceptos
+}
+
+enum IntegrationStatus {
+  OK
+  FAILED
+  DRY_RUN
+}
+
+model AccountingIntegrationLog {
+  id          String            @id @default(cuid())
+  provider    String // 'siigo' | 'none' | …
+  kind        IntegrationKind
+  status      IntegrationStatus
+  periodId    String?
+  payslipId   String?
+  reference   String? // id/CUNE devuelto por el proveedor
+  message     String?
+  request     Json? // payload enviado / que se enviaría
+  response    Json? // respuesta cruda del proveedor
+  createdById String?
+  createdAt   DateTime          @default(now())
+
+  @@index([kind])
+  @@index([status])
+  @@index([periodId])
+}
+
+// ============================================================================
+//  MÓDULO ISP — Migración fiel de saves-vestel (Clientes + Facturación)
+//  Fuente: legacy CodeIgniter/MariaDB `admin_vestel`. Ver docs de migración.
+//  Convención: `legacyId` conserva el PK entero original para el ETL.
+//  Dinero: Decimal(18,2) uniforme (legacy usa int COP en invoices y decimal
+//  en transactions; se normaliza a Decimal).
+// ============================================================================
+
+/// Ciclo de vida del suscriptor. Catálogo real `estados_clientes` (13 estados).
+enum SubscriberStatus {
+  ACTIVO
+  CARTERA
+  COMPROMISO
+  CORTADO
+  DEPURADO
+  EVENTO
+  EXONERADO
+  INSTALAR
+  POR_RETIRAR
+  REPORTADO
+  RETIRADO
+  SUSPENDIDO
+  INACTIVO
+}
+
+/// Estado operativo/gestión de cartera a nivel de FACTURA (`invoices.ron`, 14 valores).
+enum InvoiceRon {
+  ACTIVO
+  INSTALAR
+  CORTADO
+  SUSPENDIDO
+  EXONERADO
+  CARTERA
+  COMPROMISO
+  DEPURADO
+  RETIRADO
+  ANULADO
+  REPORTADO
+  EVENTO
+  DADO_DE_BAJA
+  POR_RETIRAR
+}
+
+/// Tipo de servicio contratado por el suscriptor.
+enum ServiceKind {
+  INTERNET // legacy `invoices.combo`
+  TV // legacy `invoices.television`
+  PUNTOS // decos/puntos TV adicionales
+  STREAMING // add-ons OTT (streaming_*)
+}
+
+/// Estado por servicio (`invoices.estado_tv` / `estado_combo`; NULL = activo).
+enum ServiceStatus {
+  ACTIVO
+  CORTADO
+  SUSPENDIDO
+}
+
+/// Eje de PAGO de la factura (`invoices.status`).
+enum SubInvoiceStatus {
+  DUE // sin abonos (pamnt = 0)
+  PARTIAL // 0 < pamnt < total
+  PAID // pamnt >= total
+  CANCELED // reservado (legacy casi no lo usa; anulación va por transactions)
+}
+
+/// Tipo de factura (`invoices.tipo_factura`).
+enum InvoiceKind {
+  RECURRENTE
+  FIJA
+  NOTA_CREDITO
+  NOTA_DEBITO
+}
+
+/// Tecnología de instalación (`customers.tegnologia_instalacion`) — selecciona Mikrotik.
+enum InstallTech {
+  GPON
+  EPON
+  EOC
+  RADIO
+  FIBRA
+}
+
+/// Tipo de movimiento de tesorería (`transactions.type`).
+enum TxType {
+  INCOME
+  EXPENSE
+  TRANSFER
+}
+
+/// Vigencia de la transacción (`transactions.estado`: NULL = vigente, 'Anulada').
+enum TxStatus {
+  VIGENTE
+  ANULADA
+}
+
+/// Retenciones colombianas (`invoices.tipo_retencion`).
+enum RetentionType {
+  RETEFUENTE_SERVICIOS
+  COMPRAS
+  PERSONAS_NO_DECLARANTES
+  RETEIVA
+}
+
+/// Estado de una emisión de factura electrónica (`facturacion_electronica_siigo.tipo`).
+enum EInvoiceType {
+  FACTURADA
+  ERROR
+  ACTUALIZADA
+}
+
+/// Medio de pago reportado a la DIAN/Siigo.
+enum EInvoicePayMethod {
+  CREDITO
+  EFECTIVO
+}
+
+/// Sede / grupo (`customers_group`, gid). Determina Mikrotik y catálogos por ciudad.
+model Branch {
+  id          String       @id @default(cuid())
+  legacyId    Int          @unique // customers_group.id (gid)
+  name        String // title (Yopal, Villanueva, Monterrey, Mocoa, Aguazul, Tauramena, Villavicencio)
+  summary     String?
+  dir         String?
+  subscribers Subscriber[]
+  mikrotiks   Mikrotik[]
+  olts        Olt[]
+  naps        Nap[]
+  vlans       Vlan[]
+  genieacs    GenieacsConnection[]
+  createdAt   DateTime     @default(now())
+}
+
+/// Suscriptor / abonado ISP. Núcleo del legacy `customers` (65 cols) normalizado.
+/// El estado del servicio y el plan viven además en las facturas (ver SubscriberService).
+model Subscriber {
+  id       String @id @default(cuid())
+  legacyId Int?   @unique // customers.id (null = creado en el stack nuevo)
+  abonado  Int // código de abonado visible (max(abonado)+1)
+  suscripcion String? // número de suscripción/contrato
+
+  // --- Identidad ---
+  firstName   String? // name
+  secondName  String? // dosnombre
+  lastName1   String? // unoapellido
+  lastName2   String? // dosapellido
+  companyName String? // company (razón social)
+  fullName    String? // cache recompuesto (get_nombre_completo)
+  customerType String? // tipo_cliente
+  docType     String? // tipo_documento (CC, NIT, ...)
+  docNumber   String? // documento
+  birthDate   DateTime? @db.Date // nacimiento
+
+  // --- Contacto ---
+  phone1 String? // celular
+  phone2 String? // celular2
+  email  String? // email (legacy trae 'NULL' literal → limpiar en ETL)
+
+  // --- Contrato ---
+  contractDate DateTime? @db.Date // f_contrato
+  entryDate    DateTime? @db.Date // f_ingreso
+  estrato      String?
+  clausula     Int? // FK lógica a clausulas
+
+  // --- Dirección (denormalizada: guardan IDs legacy) ---
+  departmentRef String? // departamento (id legacy)
+  cityRef       String? // ciudad (id legacy)
+  localityRef   String? // localidad (id legacy)
+  neighborhood  String? // barrio (id legacy)
+  addressLine   String? // dirsuscriptor (dirección compuesta)
+  nomenclature  Json? // {nomenclatura,numero1,adicionauno,numero2,adicional2,numero3,residencia,referencia,divicion...}
+  gpsLat        String? // coor1
+  gpsLng        String? // coor2
+
+  // --- Sede ---
+  branchId String?
+  branch   Branch? @relation(fields: [branchId], references: [id])
+
+  // --- Red (PPPoE / Mikrotik) ---
+  pppUsername String? // name_s (secret PPP; vacío ⇒ sin conectividad)
+  pppPassword String? // contra
+  pppService  String? // servicio (pppoe...)
+  pppProfile  String? // perfil (plan/velocidad en el router)
+  ipLocal     String? // Iplocal
+  ipRemote    String? // Ipremota
+  netComment  String? // comentario del secret
+  macEquipo   String? // macequipo (MAC CPE)
+  macOnt      String? // mac_ont
+  installTech InstallTech? // tegnologia_instalacion
+
+  // --- Estado (cache; la verdad se recompone desde facturas) ---
+  status           SubscriberStatus? // usu_estado
+  previousStatus   SubscriberStatus? // ultimo_estado
+  statusChangedAt  DateTime? // fecha_cambio
+  statusGenDate    DateTime? @db.Date // fecha_genera_estado_user
+
+  // --- Dinero (cache recalculado desde transactions) ---
+  balance     Decimal @default(0) @db.Decimal(18, 2) // balance (saldo a favor)
+  debitCache  Decimal @default(0) @db.Decimal(18, 2) // debit
+  creditCache Decimal @default(0) @db.Decimal(18, 2) // credit
+
+  // --- Facturación electrónica (flags) ---
+  eInvoice         Boolean @default(false) // facturar_electronicamente
+  eInvoiceTv       Boolean @default(false) // f_elec_tv
+  eInvoiceInternet Boolean @default(false) // f_elec_internet
+  eInvoicePuntos   Boolean @default(false) // f_elec_puntos
+  digitalSignature Boolean @default(false) // firma_digital
+  eInvoicePayMethod EInvoicePayMethod? // metodo_pago_f_e
+
+  picture String? // picture
+
+  // --- Enlace contable (cuentas por cobrar) ---
+  partyId String?
+  party   Party?  @relation(fields: [partyId], references: [id])
+
+  // --- Relaciones ---
+  services        SubscriberService[]
+  statusHistory   SubscriberStatusHistory[]
+  invoices        SubInvoice[]
+  recurringInvoices RecurringInvoice[]
+  projects        Project[]
+  transactions    Transaction[]
+  electronicInvoices ElectronicInvoice[]
+  oltOnus         OltOnu[]
+  ports           Port[]
+  equipment       Equipment[]
+  tickets         Ticket[]
+  ticketThreads   TicketThread[]
+  files           SubscriberFile[]
+  notes           SubscriberNote[]
+  mikrotikLogs    MikrotikActionLog[]
+  oltLogs         OltActionLog[]
+  playhubSubs     PlayhubSubscription[]
+  waMessages      WhatsappMessage[]
+  paymentOrders   PaymentOrder[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([abonado])
+  @@index([docNumber])
+  @@index([phone1])
+  @@index([status])
+  @@index([branchId])
+  // Búsqueda por texto (ILIKE '%tok%'): índices GIN trigram evitan el seq scan
+  // sobre ~21k filas. Requiere la extensión pg_trgm (ya instalada).
+  @@index([firstName(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@index([secondName(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@index([lastName1(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@index([lastName2(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@index([companyName(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@index([docNumber(ops: raw("gin_trgm_ops"))], type: Gin, map: "Subscriber_docNumber_trgm_idx")
+  @@index([phone1(ops: raw("gin_trgm_ops"))], type: Gin, map: "Subscriber_phone1_trgm_idx")
+}
+
+/// Auditoría de acciones de red contra el Mikrotik (corte / reconexión / test).
+/// Cada intento —real o en dry-run— deja rastro para trazabilidad operativa.
+model MikrotikActionLog {
+  id           String   @id @default(cuid())
+  subscriberId String?
+  subscriber   Subscriber? @relation(fields: [subscriberId], references: [id], onDelete: SetNull)
+  mikrotikId   String? // Mikrotik.id resuelto
+  mikrotikName String? // nombre del router (snapshot)
+  action       String // CUT | RECONNECT | STATUS | TEST
+  ok           Boolean
+  dryRun       Boolean  @default(true)
+  detail       String? // resumen de comandos / error
+  pppUsername  String? // name_s afectado (snapshot)
+  userId       String? // quién lo ejecutó
+  userName     String?
+  createdAt    DateTime @default(now())
+
+  @@index([subscriberId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+/// Auditoría de acciones OLT/ONU por SSH (test/aprovisionar/reboot/delete/sync). Espejo de MikrotikActionLog.
+model OltActionLog {
+  id           String   @id @default(cuid())
+  subscriberId String?
+  subscriber   Subscriber? @relation(fields: [subscriberId], references: [id], onDelete: SetNull)
+  oltId        String? // Olt.id resuelto
+  oltName      String? // nombre de la OLT (snapshot)
+  action       String // TEST | BOARDS | ONUS | AUTOFIND | PROVISION | REBOOT | DELETE | SYNC | LINK | FIND | DETAIL
+  ok           Boolean
+  dryRun       Boolean  @default(true)
+  detail       String? // resumen de comandos / error
+  sn           String? // serial de ONU afectada (snapshot)
+  fsp          String? // frame/slot/port(:ontid) afectado (snapshot)
+  userId       String? // quién lo ejecutó
+  userName     String?
+  createdAt    DateTime @default(now())
+
+  @@index([subscriberId])
+  @@index([oltId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+/// PlayHub / IPTV — suscripciones de TV por streaming (playhub_suscripciones).
+model PlayhubSubscription {
+  id           String  @id @default(cuid())
+  legacyId     Int?    @unique
+  subscriberId String?
+  subscriber   Subscriber? @relation(fields: [subscriberId], references: [id], onDelete: SetNull)
+  nameS        String? // name_s
+  externalName String? // nombre_externo
+  productId    String? // product_id (S01…)
+  productName  String? // product_name
+  voucher      String?
+  syncedAt     DateTime? // fecha_sync
+
+  @@index([subscriberId])
+}
+
+/// Log de conversaciones WhatsApp (Kapso): mensajes entrantes y salientes.
+model WhatsappMessage {
+  id           String  @id @default(cuid())
+  waMessageId  String? // id del mensaje en el transporte (dedup)
+  direction    String // IN | OUT
+  phone        String // contraparte en E.164 (sin +)
+  body         String  @db.Text
+  hasAudio     Boolean @default(false)
+  subscriberId String?
+  subscriber   Subscriber? @relation(fields: [subscriberId], references: [id], onDelete: SetNull)
+  createdAt    DateTime @default(now())
+
+  @@index([phone])
+  @@index([subscriberId])
+  @@index([createdAt])
+}
+
+/// Mensajería interna / bitácora de mensajes (tabla `mensajes`).
+model InternalMessage {
+  id              String   @id @default(cuid())
+  legacyId        Int?     @unique
+  campaignName    String? // nombre_cam
+  refId           Int? // ide
+  recipientUserId Int? // iduser
+  body            String   @db.Text // sms
+  createdAt       DateTime @default(now())
+
+  @@index([recipientUserId])
+}
+
+/// Gestor documental — carpetas (folders).
+model DocFolder {
+  id        String     @id @default(cuid())
+  legacyId  Int?       @unique
+  name      String
+  createdAt DateTime   @default(now())
+  documents Document[]
+}
+
+/// Gestor documental — documentos (documents). Binarios nuevos en disco.
+model Document {
+  id         String    @id @default(cuid())
+  legacyId   Int?      @unique
+  folderId   String?
+  folder     DocFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  title      String
+  fileName   String? // filename original
+  storedName String? // uuid+ext en disco (subidos por la app)
+  docDate    DateTime? @db.Date // cdate
+  permission Int       @default(0)
+  createdAt  DateTime  @default(now())
+
+  @@index([folderId])
+}
+
+/// Auditoría de ejecuciones de cronjobs (programadas o manuales).
+model CronRun {
+  id         String    @id @default(cuid())
+  job        String // RECURRING_BILLING | CARTERA | EXCHANGE_RATE
+  ok         Boolean
+  manual     Boolean   @default(false) // disparo manual vs programado
+  detail     String?
+  count      Int       @default(0)
+  userName   String?
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  @@index([job, startedAt])
+}
+
+/// Servicio contratado (normaliza combo/television/puntos que el legacy guarda en la factura).
+model SubscriberService {
+  id           String        @id @default(cuid())
+  subscriberId String
+  subscriber   Subscriber    @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+  kind         ServiceKind
+  planName     String? // "300 Megas ST", plan TV, etc.
+  price        Decimal?      @db.Decimal(18, 2)
+  taxRate      Decimal       @default(0) @db.Decimal(9, 2) // IVA% de la mensualidad (TV=19, internet=0)
+  status       ServiceStatus @default(ACTIVO)
+  megas        Int? // parseado del plan (regex) para elegibilidad PlayHub
+  planId       String? // plan del catálogo del que se copió name+price (si aplica)
+  plan         Plan?         @relation(fields: [planId], references: [id], onDelete: SetNull)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@index([subscriberId])
+  @@index([kind])
+  @@index([planId])
+}
+
+/// Catálogo de planes de servicio (internet/TV). Es la ÚNICA fuente de precio de
+/// la mensualidad recurrente: al asignar un plan a un abonado se copian name+price
+/// al SubscriberService (snapshot) y el perfil PPP se empuja al router (Mikrotik).
+/// Cambiar el precio del catálogo NO reprecia facturas ya emitidas.
+model Plan {
+  id         String      @id @default(cuid())
+  name       String // "300 Megas ST"
+  kind       ServiceKind @default(INTERNET)
+  pppProfile String? // perfil/velocidad en el router (Mikrotik). null = no empuja al router.
+  price      Decimal     @default(0) @db.Decimal(18, 2)
+  taxRate    Decimal     @default(0) @db.Decimal(9, 2) // IVA% (TV=19, internet=0)
+  megas      Int? // velocidad Mbps (informativo / elegibilidad PlayHub)
+  active     Boolean     @default(true)
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  services SubscriberService[]
+
+  @@index([kind])
+  @@index([active])
+}
+
+/// Historial de transiciones de estado (legacy tabla `estados`).
+model SubscriberStatusHistory {
+  id             String           @id @default(cuid())
+  subscriberId   String
+  subscriber     Subscriber       @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+  status         SubscriberStatus
+  date           DateTime
+  originTicketId Int? // `col` (ticket que disparó el cambio; 2 fijo en paso_cartera)
+  note           String?
+  createdAt      DateTime         @default(now())
+
+  @@index([subscriberId])
+  @@index([date])
+  @@index([status, date]) // reportes cortes/activaciones por estado + periodo
+}
+
+/// Factura de suscriptor (legacy `invoices`). Dos ejes de estado: status (pago) y ron (servicio/cartera).
+model SubInvoice {
+  id       String @id @default(cuid())
+  legacyId Int?   @unique // invoices.id (null = creada en el stack nuevo)
+  tid      Int    @unique // número de factura (invoices.tid)
+
+  subscriberId String
+  subscriber   Subscriber @relation(fields: [subscriberId], references: [id]) // csd
+  issuerUserId Int? // eid (aauth_users)
+
+  invoiceDate DateTime @db.Date // invoicedate
+  dueDate     DateTime @db.Date // invoiceduedate
+
+  // Montos
+  subtotal   Decimal @default(0) @db.Decimal(18, 2)
+  shipping   Decimal @default(0) @db.Decimal(18, 2)
+  discount   Decimal @default(0) @db.Decimal(18, 2)
+  tax        Decimal @default(0) @db.Decimal(18, 2)
+  total      Decimal @default(0) @db.Decimal(18, 2)
+  paidAmount Decimal @default(0) @db.Decimal(18, 2) // pamnt (saldo = total - paidAmount)
+
+  status SubInvoiceStatus @default(DUE) // eje de pago
+  ron    InvoiceRon? // eje de servicio/gestión
+
+  paymentMethod  String? // pmethod (último abono)
+  itemsCount     Int      @default(0) // items
+  taxEnabled     Boolean  @default(true) // taxstatus
+  discEnabled    Boolean  @default(false) // discstatus
+  discountFormat String?  // format_discount ('%','flat','b_p','bflat')
+  branchRef      String?  // refer (sede de la factura)
+
+  // Servicios facturados (snapshot en la factura, tal como el legacy)
+  serviceTv     String? // television (plan TV; "no" = sin TV)
+  serviceCombo  String? // combo (plan internet)
+  puntos        Int? // puntos TV
+  estadoTv      ServiceStatus? // estado_tv
+  estadoCombo   ServiceStatus? // estado_combo
+  streamingStandard    Int @default(0)
+  streamingPremium     Int @default(0)
+  streamingPremiumPlus Int @default(0)
+  streamingDiamante    Int @default(0)
+
+  term          Int? // billing_terms.id
+  rec           String? // periodicidad heredada ("1 month")
+  reconnectFlag Boolean @default(false) // rec (flag reconexión pendiente '0'/'1')
+  currencyRef   Int? // multi
+  kind          InvoiceKind @default(RECURRENTE) // tipo_factura
+
+  // Promos (contadores de meses, no prorrateo)
+  promo             Int?
+  promo2            Int?
+  promoModifiedDate  DateTime? @db.Date
+  promo2ModifiedDate DateTime? @db.Date
+
+  retentionType RetentionType? // tipo_retencion
+
+  // Facturación electrónica (flags en la factura)
+  eInvoiceFlag       String? // facturacion_electronica ('Crear Factura Electronica'|'Factura Electronica Creada')
+  eInvoiceGenDate    DateTime? @db.Date // fecha_f_electronica_generada
+  eInvoiceServices   String? // servicios_facturados_electronicamente
+  eInvoicePayMethod  EInvoicePayMethod? // metodo_pago_f_e
+
+  notes String? // notes
+
+  // Relaciones
+  items              SubInvoiceItem[]
+  transactions       Transaction[]
+  additionalServices AdditionalService[]
+  receipts           PaymentReceipt[]
+  electronicInvoices ElectronicInvoice[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([subscriberId])
+  @@index([status])
+  @@index([ron])
+  @@index([invoiceDate])
+  @@index([dueDate])
+  @@index([kind])
+  @@index([subscriberId, status]) // listado clientes filtro cuenta=debe/aldia (semi-join): 1043ms -> 2ms
+  @@index([status, subscriberId]) // listado clientes filtro deuda (groupBy status): 2019ms -> 32ms
+}
+
+/// Ítem de factura (legacy `invoice_items`).
+model SubInvoiceItem {
+  id        String     @id @default(cuid())
+  legacyId  Int?       @unique // invoice_items.id (null = creado en el stack nuevo)
+  invoiceId String
+  invoice   SubInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade) // tid
+  productId Int? // pid (0 = ítem manual/retención)
+  productName String? // product (snapshot)
+  description String? // product_des
+  qty         Int      @default(0)
+  price       Decimal  @default(0) @db.Decimal(18, 2)
+  taxRate     Decimal  @default(0) @db.Decimal(9, 2) // tax (%)
+  discount    Decimal  @default(0) @db.Decimal(18, 2)
+  subtotal    Decimal  @default(0) @db.Decimal(18, 2)
+  taxTotal    Decimal  @default(0) @db.Decimal(18, 2) // totaltax
+  discountTotal Decimal @default(0) @db.Decimal(18, 2) // totaldiscount
+  taxRemoved  Int? // tax_removed
+  retentionType RetentionType? // tipo_retencion
+  createdByUserId Int? // id_usuario_crea
+  createdAt   DateTime @default(now()) // fecha_creacion
+
+  @@index([invoiceId])
+  @@index([productId])
+  @@index([productName, createdAt]) // vista Notas crédito/débito: filtra por productName + ordena por createdAt (evita seq scan sobre ~772k filas)
+}
+
+/// Servicios adicionales facturados (legacy `servicios_adicionales`, ligado a factura).
+model AdditionalService {
+  id         String      @id @default(cuid())
+  legacyId   Int         @unique
+  invoiceId  String?
+  invoice    SubInvoice? @relation(fields: [invoiceId], references: [id]) // tid_invoice
+  ticketId   Int? // idt_ticket
+  productId  Int // pid
+  valor      String // cantidad/valor solicitado ("5 repetidores")
+  subtotal   Decimal @default(0) @db.Decimal(18, 2)
+  total      Decimal @default(0) @db.Decimal(18, 2)
+  createdAt  DateTime @default(now())
+
+  @@index([invoiceId])
+}
+
+/// Catálogo de categorías de egreso (legacy `transactions_cat`).
+model TransactionCategory {
+  id       String @id @default(cuid())
+  legacyId Int    @unique
+  name     String
+}
+
+/// Movimiento de tesorería (legacy `transactions`). Pago de factura = Income/Sales.
+model Transaction {
+  id       String @id @default(cuid())
+  legacyId Int?   @unique // transactions.id (null = creada en el stack nuevo)
+
+  cashAccountId Int? // acid (accounts / caja)
+  accountName   String? // account
+  type          TxType
+  category      String // cat ('Sales' para ingresos por venta)
+  debit         Decimal @default(0) @db.Decimal(18, 2)
+  credit        Decimal @default(0) @db.Decimal(18, 2)
+
+  payerName    String? // payer
+  subscriberId String?
+  subscriber   Subscriber? @relation(fields: [subscriberId], references: [id]) // payerid
+
+  method   String? // method (Cash/Bank/Balance)
+  date     DateTime @db.Date
+
+  invoiceId String?
+  invoice   SubInvoice? @relation(fields: [invoiceId], references: [id]) // tid (0 = sin factura)
+
+  issuerUserId Int? // eid
+  note         String?
+  ext          Boolean  @default(false) // 0 venta / 1 compra-gasto
+  bankName     String? // nombre_banco
+  bankId       Int? // id_banco
+  status       TxStatus @default(VIGENTE) // estado (NULL vigente / 'Anulada')
+  noShow       Boolean  @default(false) // no_mostrar
+  payuOrderId  String? // id_orden_payu
+  attach       String? // comprobante/evidencia: nombre almacenado (uuid.ext) en uploads/treasury
+  attachName   String? // nombre original del archivo subido
+
+  receiptLinks ReceiptTransaction[]
+  voiding      Voiding?
+
+  createdAt DateTime @default(now())
+
+  @@index([subscriberId, status, ext])
+  @@index([invoiceId])
+  @@index([category])
+  @@index([date])
+  @@index([type, date])
+}
+
+/// Recibo de pago (legacy `recibos_de_pago`). Agrupa 1..N transacciones (M:N).
+model PaymentReceipt {
+  id        String     @id @default(cuid())
+  legacyId  Int?       @unique
+  date      DateTime // date
+  fileName  String // file_name
+  invoiceId String?
+  invoice   SubInvoice? @relation(fields: [invoiceId], references: [id]) // tid (factura principal)
+  transactions ReceiptTransaction[]
+  createdAt DateTime   @default(now())
+
+  @@index([invoiceId])
+  @@index([date])
+}
+
+/// Puente M:N recibo ↔ transacción (legacy `transactions_ids_recibos_de_pago`).
+model ReceiptTransaction {
+  id            String         @id @default(cuid())
+  receiptId     String
+  receipt       PaymentReceipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  transactionId String
+  transaction   Transaction    @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+
+  @@unique([receiptId, transactionId])
+  @@index([transactionId])
+}
+
+/// Anulación de una transacción (legacy `anulaciones`). Soft-delete: la tx queda 'Anulada'.
+model Voiding {
+  id            String      @id @default(cuid())
+  legacyId      Int?        @unique
+  dateTime      DateTime // fecha_hora
+  detail        String? // detalle
+  transactionId String      @unique
+  transaction   Transaction @relation(fields: [transactionId], references: [id])
+  reason        String // razon_anulacion
+  voidedBy      String // usuario_anula
+  createdAt     DateTime    @default(now())
+}
+
+/// Cierre de caja diario por cuenta (legacy `cierres_caja`; sin lógica en el repo legacy).
+model CashClose {
+  id            String   @id @default(cuid())
+  legacyId      Int?     @unique
+  cashAccountId Int // account_id
+  date          DateTime @db.Date // fecha
+  base          Decimal  @default(0) @db.Decimal(14, 2)
+  sales         Decimal  @default(0) @db.Decimal(14, 2) // ventas
+  expenses      Decimal  @default(0) @db.Decimal(14, 2) // egresos
+  deposited     Decimal  @default(0) @db.Decimal(14, 2) // consignado
+  surplus       Decimal  @default(0) @db.Decimal(14, 2) // excedente
+  userId        Int // usuario_id
+  createdAt     DateTime @default(now())
+
+  @@unique([cashAccountId, date])
+}
+
+/// Plantilla de factura recurrente ("Reciclaje de ventas", legacy `rec_invoices`).
+model RecurringInvoice {
+  id           String     @id @default(cuid())
+  legacyId     Int?       @unique
+  tid          Int        @unique
+  subscriberId String
+  subscriber   Subscriber @relation(fields: [subscriberId], references: [id])
+  invoiceDate  DateTime?  @db.Date
+  dueDate      DateTime?  @db.Date // próxima generación
+  subtotal     Decimal    @default(0) @db.Decimal(18, 2)
+  shipping     Decimal    @default(0) @db.Decimal(18, 2)
+  discount     Decimal    @default(0) @db.Decimal(18, 2)
+  tax          Decimal    @default(0) @db.Decimal(18, 2)
+  total        Decimal    @default(0) @db.Decimal(18, 2)
+  status       String? // legacy status (paid/due/...)
+  ron          String? // legacy ron ('Recurring')
+  term         Int? // billing_terms.id
+  rec          String? // periodicidad ('1 day', '1 month')
+  notes        String?
+  itemsCount   Int        @default(0)
+  branchRef    String?
+  active       Boolean    @default(true)
+  items        RecurringInvoiceItem[]
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@index([subscriberId])
+}
+
+/// Ítem de plantilla recurrente (legacy `rec_invoice_items`).
+model RecurringInvoiceItem {
+  id            String           @id @default(cuid())
+  legacyId      Int?             @unique
+  invoiceId     String
+  invoice       RecurringInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  productId     Int?
+  productName   String?
+  description   String?
+  qty           Int              @default(0)
+  price         Decimal          @default(0) @db.Decimal(18, 2)
+  taxRate       Decimal          @default(0) @db.Decimal(9, 2)
+  subtotal      Decimal          @default(0) @db.Decimal(18, 2)
+  taxTotal      Decimal          @default(0) @db.Decimal(18, 2)
+  discountTotal Decimal          @default(0) @db.Decimal(18, 2)
+  createdAt     DateTime         @default(now())
+
+  @@index([invoiceId])
+}
+
+/// Apertura de caja diaria por cuenta (base inicial). Complementa CashClose.
+model CashOpen {
+  id            String   @id @default(cuid())
+  cashAccountId Int
+  accountName   String?
+  date          DateTime @db.Date
+  base          Decimal  @default(0) @db.Decimal(14, 2) // base inicial de efectivo
+  note          String?
+  openedBy      String? // nombre del usuario que abre
+  openedAt      DateTime @default(now())
+
+  @@unique([cashAccountId, date])
+}
+
+// ===== Configuración: cajas, geografía, empresa =====
+
+/// Caja / cuenta bancaria (legacy `accounts`).
+model CashAccount {
+  id            String  @id @default(cuid())
+  legacyId      Int?    @unique
+  accountNumber String? // acn
+  holder        String // holder (nombre de la caja)
+  branchLegacy  Int? // sede (0 = banco)
+  balance       Decimal @default(0) @db.Decimal(16, 2) // lastbal
+  code          String?
+  address       String? // direccion
+  phone         String? // telefono
+  departmentRef String? // departamento
+}
+
+/// Departamento (legacy `departamentos`).
+model Department {
+  id       String @id @default(cuid())
+  legacyId Int?   @unique // idDepartamento
+  name     String
+}
+
+/// Ciudad (legacy `ciudad`).
+model City {
+  id               String @id @default(cuid())
+  legacyId         Int?   @unique // idCiudad
+  departmentLegacy Int? // idDepartamento
+  name             String
+}
+
+/// Localidad (legacy `localidad`).
+model Locality {
+  id               String @id @default(cuid())
+  legacyId         Int?   @unique // idLocalidad
+  departmentLegacy Int?
+  cityLegacy       Int?
+  name             String
+}
+
+/// Barrio (legacy `barrio`).
+model Neighborhood {
+  id               String @id @default(cuid())
+  legacyId         Int?   @unique // idBarrio
+  departmentLegacy Int?
+  cityLegacy       Int?
+  localityLegacy   Int?
+  name             String
+}
+
+/// Datos de la empresa (legacy `app_system`, fila única).
+model CompanyInfo {
+  id       String  @id @default(cuid())
+  legacyId Int?    @unique
+  name     String // cname
+  address  String?
+  city     String?
+  region   String?
+  country  String?
+  phone    String?
+  email    String?
+  taxId    String? // taxid
+  currency String?
+  prefix   String?
+  logo     String?
+}
+
+// ===== Omnicanalidad / eventos (calendario), cotizaciones =====
+
+/// Evento de calendario / agenda (legacy `events`).
+model CalendarEvent {
+  id          String    @id @default(cuid())
+  legacyId    Int?      @unique
+  orderNo     Int? // idorden (ticket.codigo)
+  taskId      Int? // id_tarea
+  title       String?
+  description String?
+  color       String?
+  start       DateTime?
+  end         DateTime?
+  allDay      Boolean   @default(false)
+  rel         Int? // 1=proyecto
+  rid         Int? // id relacionado
+  assignedBy  String? // asigno
+
+  @@index([start])
+  @@index([orderNo])
+}
+
+/// Cotización (legacy `quotes`; estructura como factura, sin datos reales).
+model Quote {
+  id           String      @id @default(cuid())
+  legacyId     Int?        @unique
+  tid          Int         @unique
+  subscriberId String?
+  subscriberLegacy Int?
+  invoiceDate  DateTime?   @db.Date
+  dueDate      DateTime?   @db.Date
+  subtotal     Decimal     @default(0) @db.Decimal(18, 2)
+  discount     Decimal     @default(0) @db.Decimal(18, 2)
+  tax          Decimal     @default(0) @db.Decimal(18, 2)
+  total        Decimal     @default(0) @db.Decimal(18, 2)
+  status       String      @default("pending")
+  notes        String?
+  proposal     String?
+  itemsCount   Int         @default(0)
+  items        QuoteItem[]
+  createdAt    DateTime    @default(now())
+
+  @@index([subscriberId])
+}
+
+model QuoteItem {
+  id             String  @id @default(cuid())
+  legacyId       Int?    @unique
+  quoteId        String
+  quote          Quote   @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  materialLegacy Int?
+  product        String?
+  qty            Int     @default(0)
+  price          Decimal @default(0) @db.Decimal(18, 2)
+  taxRate        Decimal @default(0) @db.Decimal(9, 2)
+  subtotal       Decimal @default(0) @db.Decimal(18, 2)
+  taxTotal       Decimal @default(0) @db.Decimal(18, 2)
+
+  @@index([quoteId])
+}
+
+// ===== RRHH: Empleados (legacy employee_profile + aauth_users) =====
+
+/// Área/departamento del empleado (legacy `areas`).
+model StaffArea {
+  id          String  @id @default(cuid())
+  legacyId    Int?    @unique // ida
+  name        String // nombre_area
+  description String? // descripcion
+  staff       Staff[]
+}
+
+/// Empleado / usuario del sistema (legacy `employee_profile` 1:1 con `aauth_users`).
+model Staff {
+  id          String    @id @default(cuid())
+  legacyId    Int?      @unique // employee_profile.id = aauth_users.id
+  name        String
+  docNumber   String? // dto
+  username    String? // aauth_users.username
+  email       String? // aauth_users.email
+  role        Int? // aauth_users.roleid (2..5)
+  entryDate   DateTime? @db.Date // ingreso
+  rh          String? // grupo sanguíneo
+  eps         String? // salud
+  pension     String? // pensiones
+  address     String?
+  city        String?
+  region      String?
+  country     String?
+  areaId      String?
+  area        StaffArea? @relation(fields: [areaId], references: [id])
+  areaLegacy  Int?
+  phone       String?
+  phoneAlt    String? // phonealt
+  picture     String?
+  sign        String?
+  banned      Boolean   @default(false)
+  lastLogin   DateTime?
+  sedeAccede  String? // CSV de sedes
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Promociones que este funcionario tiene autorizadas para aplicar (m2m).
+  promotions            Promotion[]              @relation("PromotionAssignees")
+  promotionApplications PromotionApplication[]
+  promotionAssignmentLogs PromotionAssignmentLog[] @relation("StaffPromotionAssignmentLogs")
+
+  @@index([role])
+  @@index([areaId])
+}
+
+// ===== Promociones de facturación (legacy tabla `promos` de settings/promociones) =====
+
+/// Campaña de descuento. El superusuario la crea y la asigna a funcionarios;
+/// esos funcionarios pueden aplicar el % a las facturas de los clientes mientras
+/// esté vigente. Reemplaza la tabla legacy `promos` (columna `colaborador` JSON).
+model Promotion {
+  id          String   @id @default(cuid())
+  name        String // pro_nombre
+  description String?
+  percentage  Int      @default(0) // porcentaje (0..100); usado cuando discountFormat es '%' o 'b_p'
+  /// Formato de descuento (fiel al legacy `format_discount`):
+  /// '%' = % después de imp. | 'flat' = monto fijo después de imp. |
+  /// 'b_p' = % antes de imp. | 'bflat' = monto fijo antes de imp.
+  discountFormat String  @default("%")
+  /// Monto fijo del descuento (cuando discountFormat es 'flat' o 'bflat').
+  flatAmount     Decimal? @db.Decimal(18, 2)
+  startDate   DateTime @db.Date // f_inicio
+  endDate     DateTime @db.Date // f_final
+  active      Boolean  @default(true)
+  /// Global = disponible para todos los funcionarios (legacy `colaborador = null`).
+  global      Boolean  @default(false)
+  /// Promo POR ESTADO DE CLIENTE (legacy `id_estado_clientes`): si está set, la
+  /// promo aplica a las facturas de los clientes en ese estado (no por funcionario).
+  subscriberStatus SubscriberStatus?
+
+  /// Funcionarios autorizados a aplicar la promo (legacy `colaborador` JSON de IDs).
+  assignees      Staff[]                  @relation("PromotionAssignees")
+  applications   PromotionApplication[]
+  assignmentLogs PromotionAssignmentLog[]
+
+  createdBy String? // nombre/email del superusuario que la creó
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([active])
+  @@index([startDate, endDate])
+  @@index([subscriberStatus])
+}
+
+/// Historial de asignaciones de una promoción a funcionarios: qué promo, a quién,
+/// quién la asignó y cuándo. Registra tanto altas (ASSIGNED) como bajas
+/// (UNASSIGNED). Guarda snapshots de nombre para que el historial sobreviva a
+/// renombres/borrados. Se escribe en cada create/update de la promoción.
+model PromotionAssignmentLog {
+  id            String    @id @default(cuid())
+  promotionId   String
+  promotion     Promotion @relation(fields: [promotionId], references: [id], onDelete: Cascade)
+  promotionName String // snapshot del nombre de la promo
+  staffId       String? // funcionario (null = entrada "global/todos")
+  staff         Staff?    @relation("StaffPromotionAssignmentLogs", fields: [staffId], references: [id])
+  staffName     String // snapshot del nombre del funcionario (o "Todos (global)")
+  action        PromotionAssignAction
+  assignedByName String? // superusuario que hizo el cambio
+  createdAt     DateTime  @default(now())
+
+  @@index([promotionId])
+  @@index([staffId])
+  @@index([createdAt])
+}
+
+enum PromotionAssignAction {
+  ASSIGNED
+  UNASSIGNED
+}
+
+/// Registro de una promoción aplicada a una factura (nota crédito). Evita
+/// aplicar dos veces la misma promo a la misma factura y deja traza del autor.
+model PromotionApplication {
+  id          String   @id @default(cuid())
+  promotionId String
+  promotion   Promotion @relation(fields: [promotionId], references: [id], onDelete: Cascade)
+  invoiceId   String // SubInvoice.id
+  staffId     String? // funcionario que la aplicó
+  staff       Staff?   @relation(fields: [staffId], references: [id])
+  appliedByName String? // snapshot del usuario logueado
+  percentage  Int // % aplicado (snapshot)
+  amount      Decimal  @db.Decimal(18, 2) // monto descontado
+  createdAt   DateTime @default(now())
+
+  @@unique([promotionId, invoiceId])
+  @@index([invoiceId])
+}
+
+// ===== Proyectos (legacy projects + milestones; tareas via TodoTask.related/rid) =====
+
+/// Proyecto (legacy `projects`).
+model Project {
+  id           String      @id @default(cuid())
+  legacyId     Int?        @unique
+  code         String? // p_id
+  name         String
+  status       String      @default("Pending") // Waiting/Pending/Progress/Finished/Terminated
+  priority     String      @default("Medium") // Low/Medium/High/Urgent
+  progress     Int         @default(0)
+  subscriberId String?
+  subscriber   Subscriber? @relation(fields: [subscriberId], references: [id]) // cid
+  subscriberLegacy Int?
+  startDate    DateTime?   @db.Date // sdate
+  endDate      DateTime?   @db.Date // edate
+  tag          String?
+  phase        String?
+  note         String?
+  worth        Decimal     @default(0) @db.Decimal(18, 2) // presupuesto
+  milestones   Milestone[]
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  @@index([subscriberId])
+  @@index([status])
+}
+
+/// Hito de proyecto (legacy `milestones`).
+model Milestone {
+  id        String   @id @default(cuid())
+  legacyId  Int?     @unique
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name      String
+  startDate DateTime? @db.Date // sdate
+  endDate   DateTime? @db.Date // edate
+  detail    String? // exp
+  color     String?
+
+  @@index([projectId])
+}
+
+// ===== Grupo "valores" (Stock): Inventario, Órdenes, Devoluciones =====
+
+/// Proveedor (legacy `supplier`). category 1=productos, 2=servicios.
+model Supplier {
+  id           String  @id @default(cuid())
+  legacyId     Int?    @unique
+  category     Int     @default(1)
+  name         String
+  nit          String?
+  phone        String?
+  email        String?
+  address      String?
+  city         String?
+  region       String?
+  payMethod    String? // pago
+  account      String? // cuenta
+  accountType  String? // typo
+  bank         String? // banco
+  company      String?
+  branchRef    Int? // gid
+  supplyOrders SupplyOrder[]
+  stockReturns StockReturn[]
+  createdAt    DateTime @default(now())
+
+  @@index([category])
+}
+
+/// Categoría de compra / gasto (legacy `purchase.idcat`, texto libre → catálogo).
+/// El nombre se guarda en `SupplyOrder.categoryRef`.
+model PurchaseCategory {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+}
+
+/// Categoría de material (legacy `product_cat`).
+model MaterialCategory {
+  id        String     @id @default(cuid())
+  legacyId  Int?       @unique
+  title     String
+  extra     String?
+  materials Material[]
+}
+
+/// Bodega de material (legacy `product_warehouse`).
+model MaterialWarehouse {
+  id            String     @id @default(cuid())
+  legacyId      Int?       @unique
+  title         String
+  extra         String?
+  technicianRef String? // id_tecnico
+  materials     Material[]
+}
+
+/// Material / producto de inventario (legacy `products`). Stock = qty por bodega (desnormalizado).
+model Material {
+  id              String             @id @default(cuid())
+  legacyId        Int?               @unique // pid
+  categoryId      String?
+  category        MaterialCategory?  @relation(fields: [categoryId], references: [id])
+  categoryLegacy  Int?
+  warehouseId     String?
+  warehouse       MaterialWarehouse? @relation(fields: [warehouseId], references: [id])
+  warehouseLegacy Int?
+  branchRef       Int? // sede
+  name            String // product_name
+  code            String? // product_code
+  price           Decimal            @default(0) @db.Decimal(18, 2) // product_price
+  cost            Decimal            @default(0) @db.Decimal(18, 2) // fproduct_price
+  taxRate         Decimal            @default(0) @db.Decimal(9, 2)
+  discRate        Decimal            @default(0) @db.Decimal(9, 2)
+  qty             Int                @default(0) // stock en esta bodega
+  description     String?
+  alert           Int? // umbral stock bajo
+  serviceType     String? // tipo_servicio
+  tvOrNet         String? // pertence_a_tv_o_net
+  orderItems      SupplyOrderItem[]
+  returnItems     StockReturnItem[]
+  actaItems       MaterialActaItem[]
+  ticketConsumed  TicketMaterial[]
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  @@index([categoryId])
+  @@index([warehouseId])
+  @@index([name])
+}
+
+/// Acta de traspaso de material entre bodegas (legacy `acta_transferencias`).
+model MaterialActa {
+  id                  String             @id @default(cuid())
+  legacyId            Int?               @unique
+  date                DateTime
+  fromWarehouseLegacy Int?
+  toWarehouseLegacy   Int?
+  fromWarehouseId     String? // flujo nuevo: bodega origen (dos pasos)
+  toWarehouseId       String? // flujo nuevo: bodega destino; su presencia marca acta con lógica en-tránsito
+  fromWarehouseName   String?
+  toWarehouseName     String?
+  observations        String?
+  userId              Int?
+  createdByName       String?
+  assignedToId        String? // flujo nuevo: usuario designado para recibir en destino
+  assignedToName      String?
+  status              String             @default("Emitida") // Emitida / En tránsito / Recibida
+  receivedBy          Int?
+  receivedByName      String?
+  receivedAt          DateTime?
+  itemsCount          Int                @default(0)
+  items               MaterialActaItem[]
+  createdAt           DateTime           @default(now())
+}
+
+/// Línea de acta de traspaso (legacy `items_acta_transferencias`).
+model MaterialActaItem {
+  id             String       @id @default(cuid())
+  legacyId       Int?         @unique
+  actaId         String
+  acta           MaterialActa @relation(fields: [actaId], references: [id], onDelete: Cascade)
+  materialId     String?
+  material       Material?    @relation(fields: [materialId], references: [id])
+  materialLegacy Int?
+  qty            Int          @default(0)
+  received       Boolean      @default(false) // checklist de recepción por ítem (flujo nuevo)
+  receivedAt     DateTime?
+
+  @@index([actaId])
+}
+
+/// Orden de compra/servicio (legacy `purchase`). kind según supplier.category.
+model SupplyOrder {
+  id             String            @id @default(cuid())
+  legacyId       Int?              @unique
+  tid            Int               @unique
+  supplierId     String?
+  supplier       Supplier?         @relation(fields: [supplierId], references: [id])
+  supplierLegacy Int?
+  orderDate      DateTime?         @db.Date
+  dueDate        DateTime?         @db.Date
+  subtotal       Decimal           @default(0) @db.Decimal(18, 2)
+  shipping       Decimal           @default(0) @db.Decimal(18, 2)
+  discount       Decimal           @default(0) @db.Decimal(18, 2)
+  tax            Decimal           @default(0) @db.Decimal(18, 2)
+  total          Decimal           @default(0) @db.Decimal(18, 2)
+  paidAmount     Decimal           @default(0) @db.Decimal(18, 2)
+  status         String            @default("pendiente")
+  categoryRef    String? // idcat
+  warehouseRef   Int? // almacen_seleccionado
+  branchRef      String? // refer (sede)
+  notes          String?
+  itemsCount     Int               @default(0)
+  receivedBy     Int?
+  receivedAt     DateTime?
+  retentionType  String?
+  retention      Decimal           @default(0) @db.Decimal(18, 2)
+  kind           String            @default("compra") // compra | servicio
+  items          SupplyOrderItem[]
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  @@index([supplierId])
+  @@index([status])
+}
+
+model SupplyOrderItem {
+  id             String      @id @default(cuid())
+  legacyId       Int?        @unique
+  orderId        String
+  order          SupplyOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  materialId     String?
+  material       Material?   @relation(fields: [materialId], references: [id])
+  materialLegacy Int? // pid (0 = nota)
+  product        String?
+  qty            Int         @default(0)
+  price          Decimal     @default(0) @db.Decimal(18, 2)
+  taxRate        Decimal     @default(0) @db.Decimal(9, 2)
+  discount       Decimal     @default(0) @db.Decimal(18, 2)
+  subtotal       Decimal     @default(0) @db.Decimal(18, 2)
+  taxTotal       Decimal     @default(0) @db.Decimal(18, 2)
+  discountTotal  Decimal     @default(0) @db.Decimal(18, 2)
+  description    String?
+  receivedQty    Int         @default(0) // qty_en_almacen
+
+  @@index([orderId])
+}
+
+/// Devolución de material a proveedor (legacy `stock_return`).
+model StockReturn {
+  id             String            @id @default(cuid())
+  legacyId       Int?              @unique
+  tid            Int               @unique
+  supplierId     String?
+  supplier       Supplier?         @relation(fields: [supplierId], references: [id])
+  supplierLegacy Int?
+  date           DateTime?         @db.Date
+  dueDate        DateTime?         @db.Date
+  subtotal       Decimal           @default(0) @db.Decimal(18, 2)
+  tax            Decimal           @default(0) @db.Decimal(18, 2)
+  discount       Decimal           @default(0) @db.Decimal(18, 2)
+  total          Decimal           @default(0) @db.Decimal(18, 2)
+  paidAmount     Decimal           @default(0) @db.Decimal(18, 2)
+  status         String            @default("pending")
+  notes          String?
+  itemsCount     Int               @default(0)
+  items          StockReturnItem[]
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  @@index([supplierId])
+}
+
+model StockReturnItem {
+  id             String      @id @default(cuid())
+  legacyId       Int?        @unique
+  returnId       String
+  stockReturn    StockReturn @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  materialId     String?
+  material       Material?   @relation(fields: [materialId], references: [id])
+  materialLegacy Int?
+  product        String?
+  qty            Int         @default(0)
+  price          Decimal     @default(0) @db.Decimal(18, 2)
+  subtotal       Decimal     @default(0) @db.Decimal(18, 2)
+  taxTotal       Decimal     @default(0) @db.Decimal(18, 2)
+
+  @@index([returnId])
+}
+
+/// Pasarela de pago (legacy `payment_gateways`).
+model PaymentGateway {
+  id        String  @id @default(cuid())
+  legacyId  Int     @unique
+  name      String
+  enabled   Boolean @default(false) // enable Yes/No
+  key1      String
+  key2      String?
+  currency  String  @default("COP")
+  devMode   Boolean @default(false)
+  ord       Int     @default(0)
+  surcharge Decimal @default(0) @db.Decimal(18, 2)
+}
+
+/// Orden de pago en línea del portal del abonado. Unifica el legacy
+/// `wompi_data_orden` + `orden_de_pago`: la referencia y la firma se calculan
+/// server-side y el webhook se verifica antes de aplicar el pago a cartera vía
+/// `treasury.collect` (cascada sobre facturas pendientes). Reemplaza el flujo
+/// del CRM legacy que confiaba en el webhook sin validar firma.
+model PaymentOrder {
+  id            String     @id @default(cuid())
+  reference     String     @unique // referencia única enviada a la pasarela
+  subscriberId  String
+  subscriber    Subscriber @relation(fields: [subscriberId], references: [id])
+  gateway       String     @default("wompi") // wompi | payu
+  method        String? // CARD | PSE | NEQUI | BANCOLOMBIA_TRANSFER | EFECTY ...
+  amount        Decimal    @db.Decimal(18, 2) // COP
+  currency      String     @default("COP")
+  status        String     @default("PENDING") // PENDING | APPROVED | DECLINED | VOIDED | ERROR
+  gatewayTxId   String? // transaction.id de la pasarela
+  appliedAt     DateTime? // cuándo se aplicó a cartera (idempotencia)
+  transactionId String? // SubTransaction (recaudo) generada al aplicar
+  rawInit       Json? // datos de checkout generados
+  rawWebhook    Json? // último evento recibido
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@index([subscriberId])
+  @@index([status])
+}
+
+// --- Facturación electrónica DIAN (vía Siigo) ---
+
+/// Cuenta Siigo / razón social (mejora el legacy `config_facturacion_electronica`:
+/// separa credenciales de parámetros de mapeo, antes hardcodeados en PHP).
+model SiigoAccount {
+  id           String  @id @default(cuid())
+  legacyId     Int?    @unique // config_facturacion_electronica.id
+  role         String // 'Tv' | 'Internet' | 'Todo'
+  companyName  String? // razón social (Vestel TV, Vestel Internet, Ottis)
+  username     String // credencial API Siigo
+  accessKey    String // access_key
+  token        String? // JWT vigente (tocken)
+  tokenExpires DateTime? // vencimiento del token (nuevo; legacy no lo tenía)
+  subscriptionKey String? // del .conf
+  apiBaseUrl   String  @default("https://api.siigo.com/v1")
+  authUrl      String  @default("https://api.siigo.com/auth")
+
+  // Parámetros de mapeo (antes hardcodeados): documento DIAN, seller, IVA, medios de pago
+  documentId       Int? // tipo comprobante DIAN en Siigo (27274, 12434, 28186...)
+  sellerId         Int?
+  ivaTaxId         Int?
+  paymentCredIt    Int? // id medio de pago crédito
+  paymentCash      Int? // id medio de pago efectivo
+  contactEmail     String?
+  costCenterByBranch Json? // {branchLegacyId: costCenterId}
+  active           Boolean @default(true)
+
+  electronicInvoices ElectronicInvoice[]
+  createdAt        DateTime @default(now())
+}
+
+/// Emisión de factura electrónica (legacy `facturacion_electronica_siigo`).
+/// CORRIGE el defecto legacy: persiste la respuesta DIAN (id Siigo, número, CUFE, PDF, XML).
+model ElectronicInvoice {
+  id       String @id @default(cuid())
+  legacyId Int?   @unique // facturacion_electronica_siigo.id
+
+  siigoAccountId String?
+  siigoAccount   SiigoAccount? @relation(fields: [siigoAccountId], references: [id])
+
+  subscriberId String?
+  subscriber   Subscriber? @relation(fields: [subscriberId], references: [id]) // customer_id
+
+  invoiceId String?
+  invoice   SubInvoice? @relation(fields: [invoiceId], references: [id]) // tid / invoice_id
+
+  date         DateTime  @db.Date // fecha
+  executedAt   DateTime? // fecha_ejecucion
+  servicesBilled String? // servicios_facturados (Combo/Television/Internet/Afiliacion)
+  createdWithMultiple Boolean @default(false) // creado_con_multiple
+  type         EInvoiceType @default(FACTURADA) // tipo
+  payMethod    EInvoicePayMethod? // metodo_pago
+
+  legacyConsecutive Int? @default(0) // consecutivo_siigo (legacy siempre 0; vestigio)
+  payloadJson  String? // json enviado (y respuesta en errores)
+
+  // --- Respuesta DIAN persistida (NUEVO — el legacy la descartaba) ---
+  siigoInvoiceId String? // uuid Siigo
+  dianNumber     String? // número DIAN con prefijo
+  cufe           String? // CUFE / stamp
+  pdfUrl         String? // public_url
+  xmlUrl         String?
+  errorMessage   String? // error estructurado (en vez de substring en json)
+
+  createdAt DateTime @default(now())
+
+  @@index([subscriberId])
+  @@index([invoiceId])
+  @@index([type])
+  @@index([date]) // listado e-factura: filtra por rango de fecha + ordena por date (evita seq scan de ~222k)
+}
+
+// ============================================================================
+//  MÓDULO ISP — RED (Mikrotik / OLT / GenieACS / NAP / Puertos / Equipos)
+//  Migración fiel de saves-vestel. `legacyId` conserva el PK entero original.
+// ============================================================================
+
+/// Router Mikrotik por sede/tecnología (legacy `mikrotiks`).
+model Mikrotik {
+  id        String  @id @default(cuid())
+  legacyId  Int     @unique
+  name      String // nombre
+  ip        String
+  port      String // puerto
+  tech      String // tegnologia
+  branchId  String?
+  branch    Branch? @relation(fields: [branchId], references: [id])
+  sedeLegacy Int // sede (gid)
+  username  String
+  password  String
+  isDefault Boolean @default(false) // defecto
+  online    Boolean @default(false) // estado_coneccion
+  createdAt DateTime @default(now())
+
+  @@index([branchId])
+}
+
+/// OLT (legacy `olts`).
+model Olt {
+  id        String  @id @default(cuid())
+  legacyId  Int?    @unique
+  name      String
+  brand     String // marca
+  ip        String
+  port      String @default("22")
+  tech      String @default("GPON")
+  branchId  String?
+  branch    Branch? @relation(fields: [branchId], references: [id])
+  sedeLegacy Int
+  username  String
+  password  String
+  isDefault Boolean @default(false)
+  online    Boolean @default(false)
+  defaultLineProfile Int?
+  defaultSrvProfile  Int?
+  defaultVlan        Int?
+  defaultGemport     Int?
+  defaultUserVlan    Int?
+  onus      OltOnu[]
+  createdAt DateTime @default(now())
+
+  @@index([branchId])
+}
+
+/// ONU/ONT registrada en una OLT (legacy `olt_onus`).
+model OltOnu {
+  id          String  @id @default(cuid())
+  legacyId    Int?    @unique
+  oltId       String
+  olt         Olt     @relation(fields: [oltId], references: [id], onDelete: Cascade)
+  frame       Int     @default(0)
+  slot        Int?
+  port        Int?
+  ontId       Int?
+  sn          String? // serial ONU
+  description String?
+  runState    String? // run_state
+  configState String? // config_state
+  matchState  String? // match_state
+  rxPower     String?
+  syncState   String  @default("presente") // estado_sync
+  subscriberId String?
+  subscriber  Subscriber? @relation(fields: [subscriberId], references: [id]) // id_cliente
+  clientName  String? // nombre_cliente
+  firstSeen   DateTime?
+  lastSync    DateTime?
+
+  @@index([oltId])
+  @@index([subscriberId])
+}
+
+/// VLAN por sede (legacy `vlans`).
+model Vlan {
+  id        String  @id @default(cuid())
+  legacyId  Int     @unique
+  branchId  String?
+  branch    Branch? @relation(fields: [branchId], references: [id])
+  sedeLegacy Int
+  vlan      Int
+  olt       String?
+  tray      Int? // bandeja
+  oltPort   Int? // puertolt
+  detail    String // det_vlan
+  naps      Nap[]
+
+  @@index([branchId])
+}
+
+/// Caja NAP (legacy `naps`).
+model Nap {
+  id        String  @id @default(cuid())
+  legacyId  Int     @unique // idn
+  branchId  String?
+  branch    Branch? @relation(fields: [branchId], references: [id])
+  sedeLegacy Int
+  vlanId    String?
+  vlan      Vlan?   @relation(fields: [vlanId], references: [id]) // idvlan
+  vlanLegacy Int
+  name      String // nap
+  portCount Int // puertos
+  address   String // dir_nap
+  gpsLat    String? // coor1
+  gpsLng    String? // coor2
+  ports     Port[]
+
+  @@index([branchId])
+  @@index([vlanId])
+}
+
+/// Puerto de una NAP (legacy `puertos`).
+model Port {
+  id        String  @id @default(cuid())
+  legacyId  Int     @unique // idp
+  sedeLegacy Int
+  vlanLegacy Int
+  napId     String?
+  nap       Nap?    @relation(fields: [napId], references: [id]) // idnap
+  napLegacy Int
+  port      Int
+  status    String // estado
+  subscriberId String?
+  subscriber Subscriber? @relation(fields: [subscriberId], references: [id]) // asignado
+  assignedLegacy Int // asignado (customer id)
+  detail    String // detalle
+
+  @@index([napId])
+  @@index([subscriberId])
+}
+
+/// Perfiles IP para Mikrotik (legacy `ips_users_mk`).
+model IpUserMk {
+  id        String @id @default(cuid())
+  legacyId  Int    @unique
+  name      String
+  ipLocal   String
+  ipRemote  String
+  tech      String
+  sedeLegacy Int
+  isDefault Boolean @default(false)
+  profiles  String // perfiles (JSON/text)
+}
+
+/// Conexión GenieACS (legacy `genieacs_conections`).
+model GenieacsConnection {
+  id        String  @id @default(cuid())
+  legacyId  Int     @unique // id_conexion
+  name      String
+  ipRemote  String
+  port      Int
+  branchId  String?
+  branch    Branch? @relation(fields: [branchId], references: [id])
+  sedeLegacy Int
+  comments  String?
+  updatedByUserId Int?
+
+  @@index([branchId])
+}
+
+/// Almacén/bodega de equipos (legacy `almacen_equipos`).
+model EquipmentWarehouse {
+  id          String  @id @default(cuid())
+  legacyId    Int     @unique
+  name        String // almacen
+  description String? // descripcion
+  equipment   Equipment[]
+}
+
+/// Equipo/CPE de inventario técnico (legacy `equipos`).
+model Equipment {
+  id          String  @id @default(cuid())
+  legacyId    Int?    @unique
+  code        Int     @unique // codigo
+  supplierLegacy Int @default(0) // proveedor
+  warehouseId String?
+  warehouse   EquipmentWarehouse? @relation(fields: [warehouseId], references: [id]) // almacen
+  warehouseLegacy Int
+  mac         String?
+  serial      String?
+  arrival     DateTime? @db.Date // llegada
+  endDate     DateTime? @db.Date // final
+  brand       String? // marca
+  installType String? // t_instalacion
+  port        Int?
+  vlan        Int?
+  nat         Int?
+  subscriberId String?
+  subscriber  Subscriber? @relation(fields: [subscriberId], references: [id]) // asignado (customer id)
+  assignedRaw String? // asignado (valor original)
+  status      String? // estado
+  observation String? // observacion
+  master      String? // master
+  image       String? // imagen
+  meters      Int? // metros
+  accessories String? // accesorios
+  genieacsId  String? // id_genieacs
+
+  transferItems EquipmentTransferItem[]
+
+  @@index([warehouseId])
+  @@index([subscriberId])
+  @@index([status])
+}
+
+/// Transferencia de equipos entre almacenes (legacy `transfer_equipos`).
+model EquipmentTransfer {
+  id          String  @id @default(cuid())
+  legacyId    Int?    @unique // teid (null = creada en el stack nuevo)
+  date        DateTime // fecha
+  fromWarehouse String // almacen_origen
+  toWarehouse String // almacen_destino
+  fromWarehouseName String? // nombre bodega origen (nuevo)
+  toWarehouseName String? // nombre bodega destino (nuevo)
+  observations String? // observaciones
+  userId      Int // id_usuario_que_transfiere (legacy)
+  status      String @default("Emitida") // Pendiente | En tránsito | Recibida | Rechazada (legacy: Emitida/Completada)
+  // Bodegas por id del stack nuevo (para mover el equipo).
+  fromWarehouseId String?
+  toWarehouseId   String?
+  // Flujo de aprobación (denormalizado, mismo patrón que *WarehouseName).
+  requestedById   String?   // solicita (técnico)
+  requestedByName String?
+  requestedAt     DateTime?
+  approvedById    String?   // aprueba/despacha (Jefe de bodega / inventario)
+  approvedByName  String?
+  approvedAt      DateTime?
+  receivedById    String?   // recibe en la sede destino (caja)
+  receivedByName  String?
+  receivedAt      DateTime?
+  rejectReason    String?
+  items       EquipmentTransferItem[]
+
+  @@index([status])
+}
+
+/// Ítem de una transferencia de equipos (legacy `item_transfer_equipos`).
+model EquipmentTransferItem {
+  id          String  @id @default(cuid())
+  legacyId    Int?    @unique
+  transferId  String
+  transfer    EquipmentTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  equipmentId String?
+  equipment   Equipment? @relation(fields: [equipmentId], references: [id])
+  equipmentLegacy Int
+
+  @@index([transferId])
+}
+
+// ============================================================================
+//  MÓDULO ISP — SOPORTE (Tickets/órdenes, llamadas, encuestas, actas, tareas)
+//  Migración fiel de saves-vestel.
+// ============================================================================
+
+enum TicketStatus {
+  REALIZANDO
+  RESUELTO
+  ANULADA
+  PENDIENTE
+}
+
+enum TodoStatus {
+  DUE
+  DONE
+  PROGRESS
+}
+
+enum TodoPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+/// Orden de trabajo / ticket (legacy `tickets`). `detalle` = tipo de orden
+/// (Instalacion, Corte, Reconexion, Traslado, etc.). Motor de estados del cliente.
+model Ticket {
+  id           String       @id @default(cuid())
+  legacyId     Int?         @unique // idt (null = creada en el stack nuevo)
+  code         Int? // codigo (nº de orden; una orden puede tener varios tickets)
+  subject      String
+  type         String // detalle (tipo de orden)
+  created      DateTime     @db.Date
+  subscriberId String?
+  subscriber   Subscriber?  @relation(fields: [subscriberId], references: [id]) // cid
+  col          String? // estado/columna
+  status       TicketStatus @default(PENDIENTE)
+  priority     String       @default("Media") // Baja / Media / Alta / Urgente
+  problem      String? // problema
+  section      String? // section (detalle largo)
+  finalDate    DateTime?    @db.Date // fecha_final
+  invoiceLegacy Int? // id_invoice
+  invoiceBillLegacy Int? // id_factura
+  assigned     String? // asignado (técnico)
+  par          Int?
+  signatureName String? // nombre_firma
+  signatureCc   String? // cc_firma
+  signatureRel  String? // parentesco_firma
+  materials    TicketMaterial[] // material consumido en la orden (descuenta stock)
+  createdAt    DateTime     @default(now())
+
+  @@index([subscriberId])
+  @@index([code])
+  @@index([status])
+  @@index([type])
+  @@index([created])
+  @@index([assigned, created]) // filtro por técnico + orden (evita scan de ~314k filas)
+  @@index([priority, created]) // filtro por prioridad + orden
+}
+
+/// Material consumido en una orden de servicio. Al registrarse descuenta stock de la
+/// bodega (Material.qty). Guarda snapshot de nombre/precio/bodega para el acta/PDF.
+model TicketMaterial {
+  id            String    @id @default(cuid())
+  ticketId      String
+  ticket        Ticket    @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  materialId    String?
+  material      Material?  @relation(fields: [materialId], references: [id])
+  materialName  String // snapshot del nombre
+  warehouseId   String? // bodega de la que se descontó
+  warehouseName String?
+  qty           Int       @default(1)
+  price         Decimal   @default(0) @db.Decimal(18, 2) // precio unitario al momento del consumo
+  employeeName  String? // técnico/usuario que registró
+  createdAt     DateTime  @default(now())
+
+  @@index([ticketId])
+  @@index([materialId])
+}
+
+/// Mensaje/seguimiento de una orden (legacy `tickets_th`).
+model TicketThread {
+  id           String   @id @default(cuid())
+  legacyId     Int?     @unique
+  ticketCode   Int // tid (nº de orden)
+  message      String?
+  subscriberId String?
+  subscriber   Subscriber? @relation(fields: [subscriberId], references: [id]) // cid
+  employeeId   Int // eid
+  date         DateTime // cdate
+  attach       String? // nombre almacenado del archivo (uuid.ext) en uploads/support
+  attachName   String? // nombre original del archivo (para mostrar/descargar)
+  geoLat       String? // coordenadas del técnico al subir (geo-etiquetado de la evidencia)
+  geoLng       String?
+
+  @@index([ticketCode])
+  @@index([subscriberId])
+}
+
+/// Acta de transferencia de productos entre almacenes (legacy `acta_transferencias`).
+model TransferActa {
+  id             String   @id @default(cuid())
+  legacyId       Int      @unique
+  date           DateTime
+  fromWarehouse  Int // almacen_origen
+  toWarehouse    Int // almacen_destino
+  observations   String?
+  userTransfers  Int // id_usuario_que_transfiere
+  status         String? // estado (Recibida)
+  userReceives   Int? // id_usuario_recibe
+  receptionDate  DateTime? // fecha_recepcion
+  items          TransferActaItem[]
+}
+
+/// Ítem de un acta de transferencia (legacy `items_acta_transferencias`).
+model TransferActaItem {
+  id                String   @id @default(cuid())
+  legacyId          Int      @unique
+  productTransferLegacy Int // id_transferencia
+  quantity          Int // cantidad
+  actaId            String
+  acta              TransferActa @relation(fields: [actaId], references: [id], onDelete: Cascade) // id_acta_transferencia
+
+  @@index([actaId])
+}
+
+/// Tarea / to-do ligada a órdenes (legacy `todolist`).
+model TodoTask {
+  id          String       @id @default(cuid())
+  legacyId    Int          @unique
+  tdate       DateTime     @db.Date
+  name        String?
+  status      TodoStatus   @default(DUE)
+  start       DateTime?    @db.Date
+  dueDate     DateTime?    @db.Date
+  description String?
+  orderId     Int // idorden
+  employeeId  Int // eid
+  assigneeId  Int // aid
+  related     Int? // related
+  priority    TodoPriority @default(MEDIUM)
+  rid         Int?
+  score       Int? // puntuacion
+
+  @@index([status])
+  @@index([orderId])
+  @@index([rid, tdate]) // tareas por proyecto + orden
+}
+
+/// Archivos adjuntos de un suscriptor (documentos, contratos, imágenes).
+/// Los binarios viven en disco (uploads/subscribers/<id>/); aquí solo va la metadata.
+model SubscriberFile {
+  id             String     @id @default(cuid())
+  subscriberId   String
+  subscriber     Subscriber @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+  originalName   String // nombre original mostrado al usuario
+  storedName     String // nombre en disco (uuid + extensión, no confiable = seguro)
+  mimeType       String
+  size           Int // bytes
+  uploadedByName String? // nombre/email de quien lo subió
+  createdAt      DateTime   @default(now())
+
+  @@index([subscriberId])
+}
+
+/// Nota/observación libre sobre un suscriptor (bitácora con autor y fecha).
+model SubscriberNote {
+  id           String     @id @default(cuid())
+  subscriberId String
+  subscriber   Subscriber @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+  body         String
+  authorName   String?
+  createdAt    DateTime   @default(now())
+
+  @@index([subscriberId])
+}
+
+// ===== Settings globales + API REST pública (paridad legacy: goals, settings, api_keys) =====
+
+/// Metas de negocio anuales (legacy `goals`, fila única id=1). Alimentan el
+/// dashboard (comparación real vs meta). Todos los valores en COP enteros.
+model BusinessGoal {
+  id           String   @id @default(cuid())
+  legacyId     Int?     @unique
+  income       BigInt   @default(0) // ingresos
+  expense      BigInt   @default(0) // egresos
+  sales        BigInt   @default(0) // ventas
+  netincome    BigInt   @default(0) // utilidad neta
+  users        BigInt   @default(0) // usuarios/abonados objetivo
+  vesagro      BigInt   @default(0)
+  servicios    BigInt   @default(0)
+  compras      BigInt   @default(0)
+  creditos     BigInt   @default(0)
+  nomina       BigInt   @default(0)
+  socios       BigInt   @default(0)
+  oficial      BigInt   @default(0)
+  internet     BigInt   @default(0)
+  programadora BigInt   @default(0)
+  impuestos    BigInt   @default(0)
+  publicos     BigInt   @default(0)
+  comisiones   BigInt   @default(0)
+  celulares    BigInt   @default(0)
+  purchase     BigInt   @default(0)
+  updatedAt    DateTime @updatedAt
+  updatedBy    String?
+}
+
+/// Ajuste global key/value (moneda, SMTP, términos de facturación, cláusula de
+/// contrato, etc). `secret=true` ⇒ el valor nunca se devuelve al frontend, solo
+/// se enmascara ("hasValue"). `group` agrupa para la UI (moneda|smtp|billing).
+model AppSetting {
+  id        String   @id @default(cuid())
+  key       String   @unique // p.ej. "smtp.host", "billing.invoiceTerms"
+  value     String? // texto plano; los secretos se enmascaran en el API
+  group     String   @default("general")
+  secret    Boolean  @default(false)
+  updatedAt DateTime @updatedAt
+  updatedBy String?
+
+  @@index([group])
+}
+
+/// Clave de API para integraciones de terceros (paridad legacy `api_keys`).
+/// Se guarda SOLO el hash (sha256 + pepper AUTH_SECRET); la clave en claro se
+/// muestra una única vez al crearla. `scopes` limita a lectura por defecto.
+model ApiKey {
+  id           String    @id @default(cuid())
+  legacyId     Int?      @unique
+  name         String
+  keyHash      String    @unique
+  keyPrefix    String // primeros chars visibles p.ej. "sv_live_a1b2…" para identificar
+  scopes       String[]  @default(["clients:read"])
+  active       Boolean   @default(true)
+  ignoreLimits Boolean   @default(false)
+  rateLimit    Int       @default(500) // peticiones/hora (0 = sin límite)
+  ipAllowlist  String[]  @default([]) // vacío = cualquier IP
+  lastUsedAt   DateTime?
+  lastUsedIp   String?
+  usageCount   Int       @default(0)
+  createdByName String?
+  createdAt    DateTime  @default(now())
+  revokedAt    DateTime?
+
+  @@index([active])
+}

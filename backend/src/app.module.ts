@@ -7,6 +7,7 @@ import { AuditModule } from './common/audit/audit.module';
 import { AuthModule } from './auth/auth.module';
 import { WhatsappModule } from './common/whatsapp/whatsapp.module';
 import { MailModule } from './common/mail/mail.module';
+import { PlayhubModule } from './playhub/playhub.module';
 import { SubscribersModule } from './subscribers/subscribers.module';
 import { BillingModule } from './billing/billing.module';
 import { TreasuryModule } from './treasury/treasury.module';
@@ -41,6 +42,7 @@ import { PromotionsModule } from './promotions/promotions.module';
     AuthModule,
     WhatsappModule,
     MailModule,
+    PlayhubModule,
     // --- Módulos Vestel (replicados de saves-vestel) ---
     SubscribersModule,
     PlansModule,

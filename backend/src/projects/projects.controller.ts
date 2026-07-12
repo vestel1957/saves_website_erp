@@ -1,5 +1,5 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
-import { ProjectsService, CreateProjectDto, UpdateProjectDto } from './projects.service';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { ProjectsService, CreateProjectDto, MilestoneDto, UpdateProjectDto } from './projects.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AreaGuard } from '../auth/area.guard';
 import { RequireArea } from '../auth/require-area.decorator';
@@ -19,4 +19,8 @@ export class ProjectsController {
   @Get(':id') detail(@Param('id') id: string) { return this.projects.detail(id); }
   @Post() create(@Body() dto: CreateProjectDto) { return this.projects.create(dto); }
   @Patch(':id') update(@Param('id') id: string, @Body() dto: UpdateProjectDto) { return this.projects.update(id, dto); }
+
+  @Post(':id/milestones') addMilestone(@Param('id') id: string, @Body() dto: MilestoneDto) { return this.projects.createMilestone(id, dto); }
+  @Patch('milestones/:mid') updateMilestone(@Param('mid') mid: string, @Body() dto: MilestoneDto) { return this.projects.updateMilestone(mid, dto); }
+  @Delete('milestones/:mid') deleteMilestone(@Param('mid') mid: string) { return this.projects.deleteMilestone(mid); }
 }

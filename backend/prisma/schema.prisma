@@ -4396,6 +4396,7 @@ model Ticket {
   signatureName     String? // nombre_firma
   signatureCc       String? // cc_firma
   signatureRel      String? // parentesco_firma
+  signatureImage    String? // ruta del PNG de la firma dibujada (uploads/signatures)
   materials         TicketMaterial[] // material consumido en la orden (descuenta stock)
   createdAt         DateTime         @default(now())
 

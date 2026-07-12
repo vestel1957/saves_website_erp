@@ -42,6 +42,14 @@ export class SupportController {
   @Post('tickets/:id/assign') assign(@Param('id') id: string, @Body() dto: AssignDto) { return this.write.assign(id, dto); }
   @Post('tickets/:id/priority') setPriority(@Param('id') id: string, @Body() dto: PriorityDto) { return this.write.setPriority(id, dto); }
   @Post('tickets/:id/signature') sign(@Param('id') id: string, @Body() dto: SignatureDto) { return this.write.saveSignature(id, dto); }
+  /** Sirve el PNG de la firma dibujada de una orden. */
+  @Get('tickets/:id/signature.png')
+  async signaturePng(@Param('id') id: string, @Res() res: Response) {
+    const file = join(process.cwd(), 'uploads', 'signatures', `${id}.png`);
+    if (!existsSync(file)) return res.status(404).send('sin firma');
+    res.setHeader('Content-Type', 'image/png');
+    return res.sendFile(file);
+  }
   @Post('tickets/:id/thread') thread(@Param('id') id: string, @Body() dto: ThreadDto, @CurrentUser() user: AuthUser) { return this.write.addThread(id, dto, user); }
 
   // --- Equipo y material de la orden ---

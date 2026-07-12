@@ -5,6 +5,11 @@ import { Prisma, TicketStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { MikrotikService } from '../network/mikrotik.service';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+/** Carpeta de firmas PNG dibujadas de las órdenes. */
+const SIGNATURE_ROOT = join(process.cwd(), 'uploads', 'signatures');
 
 export const TICKET_PRIORITIES = ['Baja', 'Media', 'Alta', 'Urgente'] as const;
 
@@ -31,6 +36,8 @@ export class SignatureDto {
   @IsString() @MinLength(1) name!: string;
   @IsOptional() @IsString() cc?: string;
   @IsOptional() @IsString() rel?: string;
+  /** Imagen de la firma dibujada (data URL base64 PNG del canvas). */
+  @IsOptional() @IsString() image?: string;
 }
 export class ThreadDto {
   @IsString() @MinLength(1) message!: string;
@@ -109,6 +116,11 @@ export class SupportWriteService {
   async updateStatus(id: string, dto: UpdateStatusDto, user?: AuthUser) {
     const t = await this.prisma.ticket.findUnique({ where: { id } });
     if (!t) throw new NotFoundException('Orden no encontrada');
+    // Bloqueo de cierre sin firma (porta Tickets.php). Desactivable con
+    // TICKET_REQUIRE_SIGNATURE=false. Solo aplica al pasar a RESUELTO.
+    if (dto.status === 'RESUELTO' && process.env.TICKET_REQUIRE_SIGNATURE !== 'false' && !t.signatureName) {
+      throw new BadRequestException('No se puede cerrar la orden sin la firma de quien recibe. Registra la firma primero.');
+    }
     const data: Prisma.TicketUpdateInput = { status: dto.status };
     if (dto.status === 'RESUELTO') data.finalDate = dto.finalDate ? dateOnly(dto.finalDate) : dateOnly();
     await this.prisma.ticket.update({ where: { id }, data });
@@ -211,8 +223,24 @@ export class SupportWriteService {
   async saveSignature(id: string, dto: SignatureDto) {
     const t = await this.prisma.ticket.findUnique({ where: { id } });
     if (!t) throw new NotFoundException('Orden no encontrada');
-    await this.prisma.ticket.update({ where: { id }, data: { signatureName: dto.name, signatureCc: dto.cc ?? null, signatureRel: dto.rel ?? null } });
-    return { id, signed: true };
+    let signatureImage: string | undefined;
+    // Guarda el PNG dibujado (data URL) en uploads/signatures/<id>.png.
+    if (dto.image && dto.image.startsWith('data:image')) {
+      const b64 = dto.image.replace(/^data:image\/\w+;base64,/, '');
+      if (b64.length > 100) {
+        try {
+          if (!existsSync(SIGNATURE_ROOT)) mkdirSync(SIGNATURE_ROOT, { recursive: true });
+          const fname = `${id}.png`;
+          writeFileSync(join(SIGNATURE_ROOT, fname), Buffer.from(b64, 'base64'));
+          signatureImage = fname;
+        } catch (e) { throw new BadRequestException(`No se pudo guardar la firma: ${(e as Error).message}`); }
+      }
+    }
+    await this.prisma.ticket.update({
+      where: { id },
+      data: { signatureName: dto.name, signatureCc: dto.cc ?? null, signatureRel: dto.rel ?? null, ...(signatureImage ? { signatureImage } : {}) },
+    });
+    return { id, signed: true, hasImage: !!signatureImage };
   }
 
   async addThread(id: string, dto: ThreadDto, user: AuthUser) {

@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Type } from 'class-transformer';
-import { IsArray, IsInt, IsNumber, IsOptional, IsString, Min, MinLength, ValidateNested } from 'class-validator';
+import { IsArray, IsIn, IsInt, IsNumber, IsOptional, IsString, Min, MinLength, ValidateNested } from 'class-validator';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
@@ -20,6 +20,28 @@ export class CreateQuoteDto {
   @IsOptional() @IsString() notes?: string;
   @IsOptional() @IsString() proposal?: string;
   @IsArray() @ValidateNested({ each: true }) @Type(() => QuoteItemDto) items!: QuoteItemDto[];
+}
+
+/** Crear/editar un evento de agenda. */
+export class EventDto {
+  @IsOptional() @IsString() title?: string;
+  @IsOptional() @IsString() description?: string;
+  @IsOptional() @IsString() color?: string;
+  @IsString() start!: string;
+  @IsOptional() @IsString() end?: string;
+  @IsOptional() allDay?: boolean;
+  @IsOptional() @IsInt() orderNo?: number;
+}
+export class UpdateEventDto {
+  @IsOptional() @IsString() title?: string;
+  @IsOptional() @IsString() description?: string;
+  @IsOptional() @IsString() color?: string;
+  @IsOptional() @IsString() start?: string;
+  @IsOptional() @IsString() end?: string;
+  @IsOptional() allDay?: boolean;
+}
+export class QuoteStatusDto {
+  @IsString() @IsIn(['draft', 'pending', 'sent', 'accepted', 'rejected', 'converted']) status!: string;
 }
 
 @Injectable()
@@ -51,6 +73,81 @@ export class OmniService {
       this.prisma.calendarEvent.findFirst({ orderBy: { start: 'desc' }, select: { start: true } }),
     ]);
     return { total, ultimo: latest?.start ?? null };
+  }
+
+  async createEvent(dto: EventDto, user: AuthUser) {
+    const e = await this.prisma.calendarEvent.create({
+      data: {
+        title: dto.title ?? null, description: dto.description ?? null, color: dto.color ?? null,
+        start: new Date(dto.start), end: dto.end ? new Date(dto.end) : null,
+        allDay: dto.allDay ?? false, orderNo: dto.orderNo ?? null, assignedBy: user?.name ?? user?.email ?? null,
+      },
+    });
+    return { id: e.id };
+  }
+
+  async updateEvent(id: string, dto: UpdateEventDto) {
+    const e = await this.prisma.calendarEvent.findUnique({ where: { id } });
+    if (!e) throw new NotFoundException('Evento no encontrado');
+    const data: Prisma.CalendarEventUpdateInput = {};
+    if (dto.title !== undefined) data.title = dto.title;
+    if (dto.description !== undefined) data.description = dto.description;
+    if (dto.color !== undefined) data.color = dto.color;
+    if (dto.start !== undefined) data.start = new Date(dto.start);
+    if (dto.end !== undefined) data.end = dto.end ? new Date(dto.end) : null;
+    if (dto.allDay !== undefined) data.allDay = dto.allDay;
+    await this.prisma.calendarEvent.update({ where: { id }, data });
+    return { id, ok: true };
+  }
+
+  async deleteEvent(id: string) {
+    await this.prisma.calendarEvent.delete({ where: { id } });
+    return { id, deleted: true };
+  }
+
+  async quoteDetail(id: string) {
+    const q = await this.prisma.quote.findUnique({ where: { id }, include: { items: { orderBy: { id: 'asc' } } } });
+    if (!q) throw new NotFoundException('Cotización no encontrada');
+    let client: string | null = null;
+    if (q.subscriberId) {
+      const s = await this.prisma.subscriber.findUnique({ where: { id: q.subscriberId }, select: { firstName: true, lastName1: true, companyName: true, fullName: true } });
+      client = s ? ((s.fullName?.trim()) || [s.firstName, s.lastName1].filter(Boolean).join(' ').trim() || s.companyName || null) : null;
+    }
+    return {
+      id: q.id, tid: q.tid, subscriberId: q.subscriberId, client, date: q.invoiceDate, status: q.status,
+      subtotal: num(q.subtotal), tax: num(q.tax), total: num(q.total), notes: q.notes, proposal: q.proposal,
+      items: q.items.map((it) => ({ id: it.id, product: it.product, qty: it.qty, price: num(it.price), taxRate: num(it.taxRate), subtotal: num(it.subtotal), taxTotal: num(it.taxTotal) })),
+    };
+  }
+
+  async updateQuoteStatus(id: string, status: string) {
+    const q = await this.prisma.quote.findUnique({ where: { id } });
+    if (!q) throw new NotFoundException('Cotización no encontrada');
+    await this.prisma.quote.update({ where: { id }, data: { status } });
+    return { id, status };
+  }
+
+  /** Convierte una cotización aceptada en factura de venta (SubInvoice). */
+  async convertQuoteToInvoice(id: string, user: AuthUser) {
+    const q = await this.prisma.quote.findUnique({ where: { id }, include: { items: true } });
+    if (!q) throw new NotFoundException('Cotización no encontrada');
+    if (!q.subscriberId) throw new BadRequestException('La cotización no tiene cliente; asígnalo antes de convertir.');
+    if (q.status === 'converted') throw new BadRequestException('La cotización ya fue convertida en factura.');
+    return this.prisma.$transaction(async (tx) => {
+      const max = await tx.subInvoice.aggregate({ _max: { tid: true } });
+      const tid = (max._max.tid ?? 1000) + 1;
+      const today = dOnly();
+      const due = new Date(today.getTime() + 30 * 24 * 3600 * 1000);
+      const inv = await tx.subInvoice.create({
+        data: {
+          tid, subscriberId: q.subscriberId!, invoiceDate: today, dueDate: due,
+          subtotal: num(q.subtotal), tax: num(q.tax), total: num(q.total), status: 'DUE',
+          items: { create: q.items.map((it) => ({ productName: it.product ?? null, qty: it.qty, price: num(it.price), taxRate: num(it.taxRate), subtotal: num(it.subtotal), taxTotal: num(it.taxTotal) })) },
+        },
+      });
+      await tx.quote.update({ where: { id }, data: { status: 'converted' } });
+      return { ok: true, invoiceId: inv.id, tid: inv.tid };
+    });
   }
 
   // --- Cotizaciones ---

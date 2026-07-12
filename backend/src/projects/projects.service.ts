@@ -24,6 +24,14 @@ export class CreateProjectDto {
 }
 export class UpdateProjectDto extends CreateProjectDto {}
 
+export class MilestoneDto {
+  @IsString() @MinLength(1) name!: string;
+  @IsOptional() @IsString() startDate?: string;
+  @IsOptional() @IsString() endDate?: string;
+  @IsOptional() @IsString() detail?: string;
+  @IsOptional() @IsString() color?: string;
+}
+
 const dOnly = (s?: string) => (s ? new Date(s) : null);
 
 @Injectable()
@@ -96,5 +104,27 @@ export class ProjectsService {
       startDate: dto.startDate ? dOnly(dto.startDate) : undefined, endDate: dto.endDate ? dOnly(dto.endDate) : undefined,
       note: dto.note, worth: dto.worth,
     } });
+  }
+
+  // --- Hitos (milestones) ---
+  async createMilestone(projectId: string, dto: MilestoneDto) {
+    const pr = await this.prisma.project.findUnique({ where: { id: projectId }, select: { id: true } });
+    if (!pr) throw new NotFoundException('Proyecto no encontrado');
+    const m = await this.prisma.milestone.create({
+      data: { projectId, name: dto.name, startDate: dOnly(dto.startDate), endDate: dOnly(dto.endDate), detail: dto.detail ?? null, color: dto.color ?? null },
+    });
+    return { id: m.id };
+  }
+  async updateMilestone(id: string, dto: MilestoneDto) {
+    const m = await this.prisma.milestone.findUnique({ where: { id } });
+    if (!m) throw new NotFoundException('Hito no encontrado');
+    await this.prisma.milestone.update({
+      where: { id }, data: { name: dto.name, startDate: dOnly(dto.startDate), endDate: dOnly(dto.endDate), detail: dto.detail ?? null, color: dto.color ?? null },
+    });
+    return { id, ok: true };
+  }
+  async deleteMilestone(id: string) {
+    await this.prisma.milestone.delete({ where: { id } });
+    return { id, deleted: true };
   }
 }

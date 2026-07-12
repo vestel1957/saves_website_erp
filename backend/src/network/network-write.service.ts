@@ -25,6 +25,29 @@ export class CreateEquipmentDto {
   @IsOptional() @IsString() status?: string;
   @IsOptional() @IsString() observation?: string;
 }
+export class CreateVlanDto {
+  @IsString() @MinLength(1) branchId!: string;
+  @Type(() => Number) @IsInt() @Min(1) @Max(4094) vlan!: number;
+  @IsString() @MinLength(1) detail!: string;
+  @IsOptional() @IsString() olt?: string;
+  @IsOptional() @Type(() => Number) @IsInt() tray?: number;
+  @IsOptional() @Type(() => Number) @IsInt() oltPort?: number;
+}
+export class UpdateNapDto {
+  @IsOptional() @IsString() name?: string;
+  @IsOptional() @IsString() vlanId?: string;
+  @IsOptional() @IsString() address?: string;
+  @IsOptional() @IsString() gpsLat?: string;
+  @IsOptional() @IsString() gpsLng?: string;
+}
+export class AssignEquipmentSubDto {
+  @IsString() @MinLength(1) subscriberId!: string;
+  @IsOptional() @IsString() installType?: string;
+  @IsOptional() @Type(() => Number) @IsInt() port?: number;
+  @IsOptional() @Type(() => Number) @IsInt() vlan?: number;
+  @IsOptional() @Type(() => Number) @IsInt() meters?: number;
+  @IsOptional() @IsString() master?: string;
+}
 export class CreateNapDto {
   @IsString() @MinLength(1) name!: string;
   @IsString() @MinLength(1) branchId!: string;
@@ -323,5 +346,85 @@ export class NetworkWriteService {
       await tx.port.createMany({ data: ports });
       return { id: nap.id, name: nap.name, ports: ports.length };
     });
+  }
+
+  // --- VLANs (CRUD) ---
+  async createVlan(dto: CreateVlanDto) {
+    const branch = await this.prisma.branch.findUnique({ where: { id: dto.branchId } });
+    if (!branch) throw new NotFoundException('Sede no encontrada');
+    const max = await this.prisma.vlan.aggregate({ _max: { legacyId: true } });
+    const v = await this.prisma.vlan.create({
+      data: {
+        legacyId: (max._max.legacyId ?? 0) + 1, branchId: branch.id, sedeLegacy: branch.legacyId ?? 0,
+        vlan: dto.vlan, detail: dto.detail.trim(), olt: dto.olt ?? null, tray: dto.tray ?? null, oltPort: dto.oltPort ?? null,
+      },
+    });
+    return { id: v.id, vlan: v.vlan, detail: v.detail };
+  }
+  async updateVlan(id: string, dto: CreateVlanDto) {
+    const v = await this.prisma.vlan.findUnique({ where: { id } });
+    if (!v) throw new NotFoundException('VLAN no encontrada');
+    const upd = await this.prisma.vlan.update({
+      where: { id }, data: { vlan: dto.vlan, detail: dto.detail.trim(), olt: dto.olt ?? null, tray: dto.tray ?? null, oltPort: dto.oltPort ?? null },
+    });
+    return { id: upd.id, vlan: upd.vlan, detail: upd.detail };
+  }
+  async deleteVlan(id: string) {
+    const naps = await this.prisma.nap.count({ where: { vlanId: id } });
+    if (naps > 0) throw new BadRequestException(`No se puede eliminar: la VLAN tiene ${naps} NAP(s) asociada(s).`);
+    await this.prisma.vlan.delete({ where: { id } });
+    return { id, deleted: true };
+  }
+
+  // --- NAP editar / eliminar ---
+  async updateNap(id: string, dto: UpdateNapDto) {
+    const nap = await this.prisma.nap.findUnique({ where: { id } });
+    if (!nap) throw new NotFoundException('NAP no encontrada');
+    let vlanLegacy = nap.vlanLegacy;
+    if (dto.vlanId !== undefined) {
+      const v = dto.vlanId ? await this.prisma.vlan.findUnique({ where: { id: dto.vlanId }, select: { legacyId: true } }) : null;
+      vlanLegacy = v?.legacyId ?? 0;
+    }
+    const upd = await this.prisma.nap.update({
+      where: { id },
+      data: {
+        name: dto.name?.trim() ?? nap.name, address: dto.address?.trim() ?? nap.address,
+        gpsLat: dto.gpsLat?.trim() ?? nap.gpsLat, gpsLng: dto.gpsLng?.trim() ?? nap.gpsLng,
+        vlanId: dto.vlanId !== undefined ? (dto.vlanId || null) : undefined, vlanLegacy,
+      },
+    });
+    return { id: upd.id, name: upd.name };
+  }
+  async deleteNap(id: string) {
+    const used = await this.prisma.port.count({ where: { napId: id, status: { not: 'Disponible' } } });
+    if (used > 0) throw new BadRequestException(`No se puede eliminar: la NAP tiene ${used} puerto(s) ocupado(s).`);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.port.deleteMany({ where: { napId: id } });
+      await tx.nap.delete({ where: { id } });
+    });
+    return { id, deleted: true };
+  }
+
+  // --- Asignar / desasignar equipo a cliente ---
+  async assignEquipmentToSubscriber(equipmentId: string, dto: AssignEquipmentSubDto) {
+    const eq = await this.prisma.equipment.findUnique({ where: { id: equipmentId } });
+    if (!eq) throw new NotFoundException('Equipo no encontrado');
+    const sub = await this.prisma.subscriber.findUnique({ where: { id: dto.subscriberId }, select: { id: true } });
+    if (!sub) throw new NotFoundException('Cliente no encontrado');
+    await this.prisma.equipment.update({
+      where: { id: equipmentId },
+      data: {
+        subscriberId: dto.subscriberId, status: 'Asignado',
+        installType: dto.installType ?? eq.installType, port: dto.port ?? eq.port,
+        vlan: dto.vlan ?? eq.vlan, meters: dto.meters ?? eq.meters, master: dto.master ?? eq.master,
+      },
+    });
+    return { id: equipmentId, subscriberId: dto.subscriberId, assigned: true };
+  }
+  async unassignEquipment(equipmentId: string) {
+    const eq = await this.prisma.equipment.findUnique({ where: { id: equipmentId } });
+    if (!eq) throw new NotFoundException('Equipo no encontrado');
+    await this.prisma.equipment.update({ where: { id: equipmentId }, data: { subscriberId: null, status: 'Disponible' } });
+    return { id: equipmentId, unassigned: true };
   }
 }

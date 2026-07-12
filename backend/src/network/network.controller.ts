@@ -1,7 +1,7 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
-import { IsArray, IsString, ArrayNotEmpty } from 'class-validator';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { IsArray, IsOptional, IsString, ArrayNotEmpty } from 'class-validator';
 import { NetworkService } from './network.service';
-import { NetworkWriteService, EquipTransferDto, AssignPortDto, CreateEquipmentDto, CreateNapDto, RejectTransferDto } from './network-write.service';
+import { NetworkWriteService, EquipTransferDto, AssignPortDto, AssignEquipmentSubDto, CreateEquipmentDto, CreateNapDto, CreateVlanDto, RejectTransferDto, UpdateNapDto } from './network-write.service';
 import { MikrotikService } from './mikrotik.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AreaGuard } from '../auth/area.guard';
@@ -17,6 +17,9 @@ class BatchIdsDto {
 class MessageBatchDto {
   @IsArray() @ArrayNotEmpty() @IsString({ each: true }) ids!: string[];
   @IsString() message!: string;
+}
+class RestoreBranchDto {
+  @IsOptional() @IsArray() @IsString({ each: true }) statuses?: string[];
 }
 
 /** Red / ISP: Mikrotik, OLT/ONU, NAP, equipos (migrado de saves-vestel). */
@@ -112,6 +115,23 @@ export class NetworkController {
   }
   @Get('naps/:id') napById(@Param('id') id: string) { return this.network.napById(id); }
   @Post('naps') createNap(@Body() dto: CreateNapDto) { return this.write.createNap(dto); }
+  @Patch('naps/:id') updateNap(@Param('id') id: string, @Body() dto: UpdateNapDto) { return this.write.updateNap(id, dto); }
+  @Delete('naps/:id') deleteNap(@Param('id') id: string) { return this.write.deleteNap(id); }
+
+  // --- VLANs (CRUD) ---
+  @Post('vlans') createVlan(@Body() dto: CreateVlanDto) { return this.write.createVlan(dto); }
+  @Patch('vlans/:id') updateVlan(@Param('id') id: string, @Body() dto: CreateVlanDto) { return this.write.updateVlan(id, dto); }
+  @Delete('vlans/:id') deleteVlan(@Param('id') id: string) { return this.write.deleteVlan(id); }
+
+  // --- Asignar / desasignar equipo a cliente ---
+  @Post('equipment/:id/assign') assignEquipment(@Param('id') id: string, @Body() dto: AssignEquipmentSubDto) { return this.write.assignEquipmentToSubscriber(id, dto); }
+  @Post('equipment/:id/unassign') unassignEquipment(@Param('id') id: string) { return this.write.unassignEquipment(id); }
+
+  // --- Restaurar / sincronizar PPP masivo de una sede (recuperación ante formateo) ---
+  @Post('mikrotik/restore-branch/:branchId')
+  restoreBranch(@Param('branchId') branchId: string, @Body() dto: RestoreBranchDto, @CurrentUser() user: AuthUser) {
+    return this.mikrotik.restoreBranch(branchId, { statuses: dto.statuses }, user);
+  }
 
   @Get('equipment')
   equipment(

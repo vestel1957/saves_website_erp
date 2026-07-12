@@ -502,7 +502,7 @@ export class MikrotikService {
       password: full.pppPassword || '',
       'remote-address': full.ipRemote || '',
       'local-address': full.ipLocal || '',
-      profile: full.pppProfile || 'default',
+      profile: (full.pppProfile || 'default').trim(),
       comment,
       service: full.pppService || 'pppoe',
     };
@@ -549,7 +549,10 @@ export class MikrotikService {
    * activa para que tome efecto de inmediato. Dry-run salvo MIKROTIK_LIVE=true.
    * No cambia el estado del abonado; solo el perfil en el /ppp/secret.
    */
-  async applyProfile(subscriberId: string, profile: string, user?: AuthUser): Promise<MikrotikActionResult> {
+  async applyProfile(subscriberId: string, profileRaw: string, user?: AuthUser): Promise<MikrotikActionResult> {
+    // Trim del perfil: un espacio inicial/final en los datos hacía que el perfil
+    // no coincidiera con el del RouterOS y el cliente no tomara plan (bug conocido).
+    const profile = (profileRaw || 'default').trim();
     const sub = await this.loadSubscriber(subscriberId);
     if (!sub.pppUsername) throw new BadRequestException('El cliente no tiene usuario PPPoE (name_s) para cambiar el perfil.');
     const router = await this.resolveRouter(sub);
@@ -696,6 +699,39 @@ export class MikrotikService {
   // ------------------------------------------------------------------
   cutBatch(ids: string[], user?: AuthUser) { return this.batchByRouter(ids, 'CUT', user); }
   reconnectBatch(ids: string[], user?: AuthUser) { return this.batchByRouter(ids, 'RECONNECT', user); }
+
+  /**
+   * Restaura / sincroniza los secrets PPP de toda una sede contra su(s) router(s):
+   * recorre los abonados con usuario PPPoE y estado activo/cortado y (re)crea su
+   * secret vía provision() — crea el que falte y actualiza el existente. Es la
+   * herramienta de recuperación tras formatear un router y el "sync CRM→Mikrotik".
+   * Respeta el gate dry-run de provision(): sin MIKROTIK_LIVE=true solo simula.
+   */
+  async restoreBranch(branchId: string, opts: { statuses?: string[]; limit?: number } = {}, user?: AuthUser) {
+    const statuses = (opts.statuses?.length ? opts.statuses : ['ACTIVO', 'CORTADO']) as any[];
+    const limit = Math.min(2000, Math.max(1, opts.limit ?? 800));
+    const subs = await this.prisma.subscriber.findMany({
+      where: { branchId, status: { in: statuses }, pppUsername: { not: null } },
+      select: { id: true }, take: limit,
+    });
+    let ok = 0, failed = 0;
+    const errors: { subscriberId: string; error: string }[] = [];
+    for (const s of subs) {
+      try {
+        const r = await this.provision(s.id, user);
+        if (r.ok) ok++; else { failed++; if (errors.length < 15) errors.push({ subscriberId: s.id, error: r.error ?? r.message }); }
+      } catch (e) {
+        failed++;
+        if (errors.length < 15) errors.push({ subscriberId: s.id, error: (e as Error).message });
+      }
+    }
+    return {
+      dryRun: !this.live, branchId, total: subs.length, ok, failed, errors,
+      message: !this.live
+        ? `DRY-RUN: se simuló la restauración de ${subs.length} secret(s) de la sede; sin cambios reales.`
+        : `Restauración de la sede: ${ok} secret(s) creados/actualizados${failed ? `, ${failed} con error` : ''}.`,
+    };
+  }
 
   /**
    * Corte/reconexión en lote agrupando por router: abre UNA sola conexión por

@@ -91,6 +91,7 @@ const cajaTesoreria: NavItem[] = [
   { icon: "plus", label: "Nueva transacción", href: "/tesoreria/nueva" },
   { icon: "arrow-left-right", label: "Transferencia entre cajas", href: "/tesoreria/transferencia" },
   { icon: "x", label: "Anulaciones", href: "/tesoreria/anulaciones" },
+  { icon: "wallet", label: "Cajas y categorías", href: "/tesoreria/cajas" },
 ];
 
 // RED / ISP — solo operación de red (los equipos se movieron a INVENTARIO).

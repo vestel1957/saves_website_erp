@@ -10,7 +10,12 @@ export type Debt = {
   balance: number; totalDebt: number; invoices: DebtInvoice[];
 };
 
-export type CashAccount = { id: number; name: string };
+export type CashAccount = {
+  id: number; name: string;
+  cuid?: string | null; balance?: number;
+  branchLegacy?: number | null; accountNumber?: string | null;
+  code?: string | null; persisted?: boolean;
+};
 
 export const PAY_METHODS: { value: string; label: string }[] = [
   { value: "Cash", label: "Efectivo" },
@@ -23,6 +28,12 @@ export const BANKS = ["Bancolombia", "BBVA colombia", "Banco de Bogota", "Davivi
 export const EXPENSE_CATEGORIES = [
   "Papeleria", "Servicios", "Nomina", "Mantenimiento", "Transporte",
   "Arriendo", "Impuestos", "Comisiones", "Otros",
+];
+
+/** Categorías sugeridas para un ingreso manual libre (no ligado a factura). */
+export const INCOME_CATEGORIES = [
+  "Reconexión", "Instalación", "Venta de equipo", "Traslado", "Reposición",
+  "Intereses", "Otros ingresos",
 ];
 
 /**

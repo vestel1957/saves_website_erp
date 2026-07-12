@@ -8,7 +8,7 @@ import { Input, Select, Textarea, Field } from "@/components/ui/Field";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
-import { type CashAccount, PAY_METHODS, BANKS, EXPENSE_CATEGORIES } from "@/lib/cobranzas";
+import { type CashAccount, PAY_METHODS, BANKS, EXPENSE_CATEGORIES, INCOME_CATEGORIES } from "@/lib/cobranzas";
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -99,6 +99,148 @@ export function EgresoModal({ open, onClose, onDone }: { open: boolean; onClose:
         <Button variant="secondary" onClick={onClose} disabled={saving}>Cancelar</Button>
         <Button onClick={submit} disabled={saving}>{saving ? "Guardando…" : "Registrar egreso"}</Button>
       </div>
+    </Modal>
+  );
+}
+
+/** Registrar un ingreso manual libre (no ligado a factura). */
+export function IngresoLibreModal({ open, onClose, onDone }: { open: boolean; onClose: () => void; onDone: () => void }) {
+  const { authFetch } = useAuth();
+  const accounts = useCashAccounts(open);
+  const [amount, setAmount] = useState("");
+  const [category, setCategory] = useState(INCOME_CATEGORIES[0]);
+  const [method, setMethod] = useState("Cash");
+  const [bank, setBank] = useState(BANKS[0]);
+  const [cashAccountId, setCashAccountId] = useState("");
+  const [payerName, setPayerName] = useState("");
+  const [date, setDate] = useState(today());
+  const [note, setNote] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => { if (open) { setAmount(""); setNote(""); setPayerName(""); setFile(null); setErr(null); } }, [open]);
+  useEffect(() => { if (accounts.length && !cashAccountId) setCashAccountId(String(accounts[0].id)); }, [accounts, cashAccountId]);
+
+  async function submit() {
+    setErr(null);
+    const amt = Number(amount) || 0;
+    if (amt <= 0) { setErr("Ingresa un monto mayor a cero."); return; }
+    setSaving(true);
+    try {
+      const res = await authFetch(`/treasury/income`, {
+        method: "POST",
+        body: JSON.stringify({
+          amount: amt, category, method,
+          cashAccountId: cashAccountId ? Number(cashAccountId) : undefined,
+          accountName: accounts.find((a) => String(a.id) === cashAccountId)?.name,
+          bankName: method === "Bank" ? bank : undefined,
+          payerName: payerName || undefined, date, note: note || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || "No se pudo registrar el ingreso");
+      if (file && data?.id) {
+        const fd = new FormData();
+        fd.append("file", file);
+        const up = await authFetch(`/treasury/transactions/${data.id}/attach`, { method: "POST", body: fd });
+        if (!up.ok) toast("Ingreso guardado, pero el comprobante no se pudo subir", "alert-triangle");
+      }
+      toast(`Ingreso registrado: ${cop(amt)}`);
+      onDone(); onClose();
+    } catch (e: any) { setErr(e.message); } finally { setSaving(false); }
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title="Registrar ingreso libre" maxWidth="max-w-xl">
+      <p className="mb-2 text-[12px] text-text-secondary">Ingreso que no se aplica a facturas (otros conceptos, ingresos sin cliente).</p>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Field label="Monto" required><Input type="number" min={0} value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" autoFocus /></Field>
+        <Field label="Categoría" required>
+          <Select value={category} onChange={(e) => setCategory(e.target.value)}>{INCOME_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}</Select>
+        </Field>
+        <Field label="Método"><Select value={method} onChange={(e) => setMethod(e.target.value)}>{PAY_METHODS.filter((m) => m.value !== "Balance").map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}</Select></Field>
+        {method === "Bank" && <Field label="Banco"><Select value={bank} onChange={(e) => setBank(e.target.value)}>{BANKS.map((b) => <option key={b} value={b}>{b}</option>)}</Select></Field>}
+        <Field label="Caja / cuenta"><Select value={cashAccountId} onChange={(e) => setCashAccountId(e.target.value)}><option value="">— Sin caja —</option>{accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</Select></Field>
+        <Field label="Pagador"><Input value={payerName} onChange={(e) => setPayerName(e.target.value)} placeholder="Quién paga (opcional)" /></Field>
+        <Field label="Fecha"><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></Field>
+        <div className="sm:col-span-2"><Field label="Nota"><Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} /></Field></div>
+        <div className="sm:col-span-2">
+          <Field label="Comprobante (opcional)" hint="Foto o PDF del soporte.">
+            <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border-subtle bg-surface-2 px-3 py-1.5 text-[12px] font-medium text-text-secondary hover:border-brand hover:text-text-primary">
+              <Icon name="upload" size={14} /> {file ? "Cambiar archivo" : "Adjuntar comprobante"}
+              <input type="file" accept="image/*,application/pdf" className="hidden" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+            </label>
+            {file && <span className="ml-2 inline-flex items-center gap-1 text-[11px] text-text-tertiary"><Icon name="file-text" size={12} /> {file.name}<button type="button" onClick={() => setFile(null)} className="text-error-text hover:underline"><Icon name="x" size={12} /></button></span>}
+          </Field>
+        </div>
+      </div>
+      {err && <p className="mt-2 text-[12px] text-error-text">{err}</p>}
+      <div className="mt-3 flex justify-end gap-2">
+        <Button variant="secondary" onClick={onClose} disabled={saving}>Cancelar</Button>
+        <Button onClick={submit} disabled={saving}>{saving ? "Guardando…" : "Registrar ingreso"}</Button>
+      </div>
+    </Modal>
+  );
+}
+
+/** Editar un movimiento (campos seguros; el monto solo en no-ventas). */
+export function EditarMovimientoModal({
+  tx, onClose, onDone,
+}: {
+  tx: { id: string; type: string; category: string; amount: number; note: string | null; method: string | null; date: string; invoiceTid: number | null } | null;
+  onClose: () => void; onDone: () => void;
+}) {
+  const { authFetch } = useAuth();
+  const isSalePayment = !!tx && !!tx.invoiceTid && tx.category === "Sales" && tx.type === "INCOME";
+  const cats = tx?.type === "EXPENSE" ? EXPENSE_CATEGORIES : INCOME_CATEGORIES;
+  const [category, setCategory] = useState("");
+  const [amount, setAmount] = useState("");
+  const [method, setMethod] = useState("Cash");
+  const [date, setDate] = useState(today());
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (tx) {
+      setCategory(tx.category); setAmount(String(tx.amount));
+      setMethod(tx.method || "Cash"); setDate((tx.date || "").slice(0, 10)); setNote(tx.note || ""); setErr(null);
+    }
+  }, [tx]);
+
+  async function submit() {
+    setErr(null);
+    setSaving(true);
+    try {
+      const body: any = { category, method, date, note };
+      if (!isSalePayment) body.amount = Number(amount) || 0;
+      const res = await authFetch(`/treasury/transactions/${tx!.id}`, { method: "PATCH", body: JSON.stringify(body) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || "No se pudo editar");
+      toast("Movimiento actualizado");
+      onDone(); onClose();
+    } catch (e: any) { setErr(e.message); } finally { setSaving(false); }
+  }
+
+  return (
+    <Modal open={!!tx} onClose={onClose} title="Editar movimiento" maxWidth="max-w-lg">
+      {tx && (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Field label="Categoría"><Select value={category} onChange={(e) => setCategory(e.target.value)}>{!cats.includes(category) && <option value={category}>{category}</option>}{cats.map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
+          <Field label="Monto" hint={isSalePayment ? "Los pagos de venta se anulan y rehacen" : undefined}>
+            <Input type="number" min={0} value={amount} disabled={isSalePayment} onChange={(e) => setAmount(e.target.value)} />
+          </Field>
+          <Field label="Método"><Select value={method} onChange={(e) => setMethod(e.target.value)}>{PAY_METHODS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}</Select></Field>
+          <Field label="Fecha"><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></Field>
+          <div className="sm:col-span-2"><Field label="Nota"><Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} /></Field></div>
+          {err && <p className="sm:col-span-2 text-[12px] text-error-text">{err}</p>}
+          <div className="sm:col-span-2 flex justify-end gap-2">
+            <Button variant="secondary" onClick={onClose} disabled={saving}>Cancelar</Button>
+            <Button onClick={submit} disabled={saving}>{saving ? "Guardando…" : "Guardar cambios"}</Button>
+          </div>
+        </div>
+      )}
     </Modal>
   );
 }

@@ -10,6 +10,7 @@ import { RegistrarPagoModal } from "@/components/cobranzas/RegistrarPagoModal";
 import dynamic from "next/dynamic";
 
 const EgresoModal = dynamic(() => import("@/components/cobranzas/TesoreriaModals").then((m) => m.EgresoModal), { ssr: false });
+const IngresoLibreModal = dynamic(() => import("@/components/cobranzas/TesoreriaModals").then((m) => m.IngresoLibreModal), { ssr: false });
 
 function OptionCard({ icon, tone, title, desc, onClick }: {
   icon: string; tone: string; title: string; desc: string; onClick: () => void;
@@ -34,18 +35,26 @@ export default function NuevaTransaccionPage() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [picked, setPicked] = useState<PickedSub | null>(null);
   const [egresoOpen, setEgresoOpen] = useState(false);
+  const [ingresoLibreOpen, setIngresoLibreOpen] = useState(false);
 
   return (
     <>
       <PageHeading icon="plus" title="Nueva transacción" subtitle="Registra un ingreso (recaudo) o un egreso de caja" />
 
-      <div className="grid max-w-3xl grid-cols-1 gap-4 sm:grid-cols-2">
+      <div className="grid max-w-4xl grid-cols-1 gap-4 sm:grid-cols-3">
         <OptionCard
           icon="trending-up"
           tone="bg-success-soft text-success-text"
           title="Ingreso / Recaudo"
           desc="Aplica un pago a la deuda de un cliente."
           onClick={() => setPickerOpen(true)}
+        />
+        <OptionCard
+          icon="hand-coins"
+          tone="bg-info-soft text-info-text"
+          title="Ingreso libre"
+          desc="Ingreso por otro concepto, sin factura."
+          onClick={() => setIngresoLibreOpen(true)}
         />
         <OptionCard
           icon="trending-down"
@@ -69,6 +78,9 @@ export default function NuevaTransaccionPage() {
           onDone={() => { setPicked(null); router.push("/tesoreria/ingresos"); }}
         />
       )}
+
+      {/* Ingreso libre */}
+      {ingresoLibreOpen && <IngresoLibreModal open={ingresoLibreOpen} onClose={() => setIngresoLibreOpen(false)} onDone={() => router.push("/tesoreria/ingresos")} />}
 
       {/* Egreso */}
       {egresoOpen && <EgresoModal open={egresoOpen} onClose={() => setEgresoOpen(false)} onDone={() => router.push("/tesoreria/egresos")} />}

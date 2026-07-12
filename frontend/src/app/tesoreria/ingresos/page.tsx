@@ -9,10 +9,13 @@ import { Modal } from "@/components/Modal";
 import { TxTable } from "@/components/cobranzas/TxTable";
 import { SubscriberPicker, type PickedSub } from "@/components/cobranzas/SubscriberPicker";
 import { RegistrarPagoModal } from "@/components/cobranzas/RegistrarPagoModal";
+import { EditarMovimientoModal } from "@/components/cobranzas/TesoreriaModals";
+import type { TxRow } from "@/lib/treasury";
 
 export default function IngresosPage() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [picked, setPicked] = useState<PickedSub | null>(null);
+  const [editing, setEditing] = useState<TxRow | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
   return (
@@ -46,7 +49,25 @@ export default function IngresosPage() {
         />
       )}
 
-      <TxTable params={{ type: "INCOME" }} refreshKey={refreshKey} empty="No hay ingresos registrados." />
+      {editing && (
+        <EditarMovimientoModal
+          tx={editing}
+          onClose={() => setEditing(null)}
+          onDone={() => { setEditing(null); setRefreshKey((k) => k + 1); }}
+        />
+      )}
+
+      <TxTable
+        params={{ type: "INCOME" }}
+        refreshKey={refreshKey}
+        empty="No hay ingresos registrados."
+        rowAction={(r) => r.status !== "ANULADA" ? (
+          <button type="button" onClick={() => setEditing(r)} title="Editar movimiento"
+            className="inline-flex items-center gap-1 text-[12px] font-medium text-text-secondary hover:text-brand">
+            <Icon name="pencil" size={13} /> Editar
+          </button>
+        ) : null}
+      />
     </>
   );
 }

@@ -42,6 +42,7 @@ export class UpdateSiigoAccountDto {
   @IsOptional() @IsBoolean() active?: boolean;
 
   @NullableInt() documentId?: number | null;
+  @NullableInt() creditNoteDocumentId?: number | null;
   @NullableInt() sellerId?: number | null;
   @NullableInt() ivaTaxId?: number | null;
   @NullableInt() paymentCash?: number | null;

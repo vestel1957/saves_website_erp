@@ -2715,6 +2715,7 @@ enum EInvoiceType {
   FACTURADA
   ERROR
   ACTUALIZADA
+  NOTA_CREDITO
 }
 
 /// Medio de pago reportado a la DIAN/Siigo.
@@ -4028,14 +4029,15 @@ model SiigoAccount {
   authUrl         String    @default("https://api.siigo.com/auth")
 
   // Parámetros de mapeo (antes hardcodeados): documento DIAN, seller, IVA, medios de pago
-  documentId         Int? // tipo comprobante DIAN en Siigo (27274, 12434, 28186...)
-  sellerId           Int?
-  ivaTaxId           Int?
-  paymentCredIt      Int? // id medio de pago crédito
-  paymentCash        Int? // id medio de pago efectivo
-  contactEmail       String?
-  costCenterByBranch Json? // {branchLegacyId: costCenterId}
-  active             Boolean @default(true)
+  documentId           Int? // tipo comprobante DIAN en Siigo (27274, 12434, 28186...)
+  creditNoteDocumentId Int? // tipo comprobante DIAN para NOTAS CRÉDITO en Siigo
+  sellerId             Int?
+  ivaTaxId             Int?
+  paymentCredIt        Int? // id medio de pago crédito
+  paymentCash          Int? // id medio de pago efectivo
+  contactEmail         String?
+  costCenterByBranch   Json? // {branchLegacyId: costCenterId}
+  active               Boolean @default(true)
 
   electronicInvoices ElectronicInvoice[]
   createdAt          DateTime            @default(now())

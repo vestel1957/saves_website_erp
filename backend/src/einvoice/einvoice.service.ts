@@ -166,6 +166,7 @@ export class EinvoiceService {
   private serializeAccount(a: {
     id: string; role: string; companyName: string | null; username: string; accessKey: string | null;
     apiBaseUrl: string; authUrl: string; subscriptionKey: string | null; documentId: number | null;
+    creditNoteDocumentId: number | null;
     sellerId: number | null; ivaTaxId: number | null; paymentCash: number | null; paymentCredIt: number | null;
     contactEmail: string | null; active: boolean; token: string | null; tokenExpires: Date | null;
   }) {
@@ -178,7 +179,8 @@ export class EinvoiceService {
     return {
       id: a.id, role: a.role, companyName: a.companyName, username: a.username,
       apiBaseUrl: a.apiBaseUrl, authUrl: a.authUrl, subscriptionKey: a.subscriptionKey,
-      documentId: a.documentId, sellerId: a.sellerId, ivaTaxId: a.ivaTaxId,
+      documentId: a.documentId, creditNoteDocumentId: a.creditNoteDocumentId,
+      sellerId: a.sellerId, ivaTaxId: a.ivaTaxId,
       paymentCash: a.paymentCash, paymentCredit: a.paymentCredIt, contactEmail: a.contactEmail,
       active: a.active, hasAccessKey: !!a.accessKey, hasToken: !!a.token, tokenExpires: a.tokenExpires,
       ready: missing.length === 0, missing,
@@ -207,6 +209,7 @@ export class EinvoiceService {
     // La access key solo se guarda si viene con contenido (no se puede leer de vuelta).
     if (typeof dto.accessKey === 'string' && dto.accessKey.trim()) data.accessKey = dto.accessKey.trim();
     if (dto.documentId !== undefined) data.documentId = dto.documentId;
+    if (dto.creditNoteDocumentId !== undefined) data.creditNoteDocumentId = dto.creditNoteDocumentId;
     if (dto.sellerId !== undefined) data.sellerId = dto.sellerId;
     if (dto.ivaTaxId !== undefined) data.ivaTaxId = dto.ivaTaxId;
     if (dto.paymentCash !== undefined) data.paymentCash = dto.paymentCash;

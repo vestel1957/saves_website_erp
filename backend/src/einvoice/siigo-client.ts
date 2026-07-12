@@ -87,4 +87,40 @@ export class SiigoClient {
         : JSON.stringify(raw).slice(0, 400);
     return { ok: false, httpCode: res.status, raw, error: errMsg };
   }
+
+  /**
+   * Crea una NOTA CRÉDITO electrónica ante la DIAN (POST /v1/credit-notes).
+   * El payload debe referenciar la factura original (invoice = uuid Siigo) y
+   * llevar el `document.id` del comprobante de nota crédito. Mismo contrato de
+   * respuesta que createInvoice (id/number/cufe/pdfUrl).
+   */
+  async createCreditNote(token: string, payload: unknown): Promise<SiigoInvoiceResult> {
+    const res = await fetch(`${this.apiBaseUrl}/credit-notes`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Partner-Id': PARTNER_ID,
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(payload),
+    });
+    const text = await res.text();
+    let raw: any;
+    try { raw = JSON.parse(text); } catch { raw = text; }
+    if (res.status >= 200 && res.status < 300) {
+      return {
+        ok: true,
+        httpCode: res.status,
+        id: raw?.id,
+        number: raw?.number != null ? String(raw.number) : raw?.name,
+        cufe: raw?.stamp?.cufe ?? raw?.metadata?.cufe,
+        pdfUrl: raw?.public_url ?? raw?.pdf_url,
+        raw,
+      };
+    }
+    const errMsg = Array.isArray(raw?.Errors)
+      ? raw.Errors.map((e: any) => e.Message ?? e.message).join(' | ')
+      : typeof raw === 'string' ? raw.slice(0, 400) : JSON.stringify(raw).slice(0, 400);
+    return { ok: false, httpCode: res.status, raw, error: errMsg };
+  }
 }

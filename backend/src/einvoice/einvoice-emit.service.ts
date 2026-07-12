@@ -66,16 +66,32 @@ export class EinvoiceEmitService {
       return item;
     });
     const total = Number(invoice.total) || items.reduce((s: number, i: any) => s + i.price * i.quantity, 0);
+    // Medio de pago: crédito si el cliente está marcado como crédito y la cuenta
+    // tiene ese medio configurado; si no, contado (efectivo). Porta get_m_pago_f_e.
+    const isCredit = subscriber?.eInvoicePayMethod === 'CREDITO' && !!account.paymentCredIt;
+    const paymentId = isCredit ? account.paymentCredIt : (account.paymentCash ?? null);
     const payload: any = {
       document: { id: account.documentId ?? null },
       date: new Date(invoice.invoiceDate).toISOString().slice(0, 10),
       customer: { identification: docId, branch_office: 0 },
       seller: account.sellerId ?? null,
       items,
-      payments: [{ id: account.paymentCash ?? null, value: total }],
+      payments: [{ id: paymentId, value: total }],
     };
     if (account.contactEmail) payload.mail = { send: false };
     return payload;
+  }
+
+  /** Construye el payload de NOTA CRÉDITO referenciando la factura Siigo original. */
+  private buildCreditNotePayload(account: any, invoice: any, subscriber: any, siigoInvoiceId: string, reason: string, causeCode: number) {
+    const base = this.buildPayload(account, invoice, subscriber);
+    return {
+      ...base,
+      document: { id: account.creditNoteDocumentId ?? account.documentId ?? null },
+      invoice: siigoInvoiceId, // uuid de la factura original en Siigo
+      cause: causeCode, // 1=Devolución, 2=Anulación, 3=Rebaja, 4=Otros (DIAN)
+      reason: reason?.slice(0, 250) || 'Anulación de factura',
+    };
   }
 
   /** Emite (o simula) la e-factura de una SubInvoice. */
@@ -155,6 +171,84 @@ export class EinvoiceEmitService {
       cufe: result.cufe,
       pdfUrl: result.pdfUrl,
       message: `Factura emitida ante la DIAN: ${result.number}`,
+    };
+  }
+
+  /**
+   * Emite (o simula) una NOTA CRÉDITO electrónica ante la DIAN para una factura
+   * que YA fue emitida. Referencia la factura Siigo original y persiste el
+   * resultado como ElectronicInvoice tipo NOTA_CREDITO. Porta get_invoice_credito.
+   */
+  async emitCreditNote(subInvoiceId: string, reason: string, causeCode = 2, user?: AuthUser) {
+    const invoice = await this.prisma.subInvoice.findUnique({
+      where: { id: subInvoiceId },
+      include: { items: true, subscriber: true },
+    });
+    if (!invoice) throw new NotFoundException('Factura no encontrada');
+
+    // La factura debe haber sido emitida ante la DIAN (tener uuid Siigo).
+    const emitted = await this.prisma.electronicInvoice.findFirst({
+      where: { invoiceId: subInvoiceId, type: 'FACTURADA', siigoInvoiceId: { not: null } },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!emitted?.siigoInvoiceId) {
+      throw new BadRequestException('La factura no ha sido emitida ante la DIAN; no se puede crear una nota crédito.');
+    }
+    // ¿ya tiene nota crédito emitida?
+    const existingNC = await this.prisma.electronicInvoice.findFirst({
+      where: { invoiceId: subInvoiceId, type: 'NOTA_CREDITO', dianNumber: { not: null } },
+    });
+    if (existingNC) throw new BadRequestException(`La factura ya tiene una nota crédito (${existingNC.dianNumber}).`);
+
+    const account = emitted.siigoAccountId
+      ? await this.prisma.siigoAccount.findUnique({ where: { id: emitted.siigoAccountId } })
+      : await this.resolveAccount(emitted.servicesBilled);
+    if (!account) throw new BadRequestException('No se pudo resolver la cuenta Siigo de la factura original.');
+
+    const payload = this.buildCreditNotePayload(account, invoice, invoice.subscriber, emitted.siigoInvoiceId, reason, causeCode);
+
+    if (!this.live) {
+      return {
+        ok: true, dryRun: true,
+        message: 'DRY-RUN: nota crédito construida, NO se envió a la DIAN. Active EINVOICE_LIVE=true para emitir.',
+        configReady: !!(account.creditNoteDocumentId && account.sellerId),
+        payload,
+      };
+    }
+
+    if (!account.creditNoteDocumentId) {
+      throw new BadRequestException('La cuenta Siigo no tiene configurado el comprobante de NOTA CRÉDITO (creditNoteDocumentId).');
+    }
+    const token = await this.ensureToken(account);
+    const client = new SiigoClient(account.authUrl, account.apiBaseUrl);
+    const result = await client.createCreditNote(token, payload);
+
+    const ei = await this.prisma.electronicInvoice.create({
+      data: {
+        siigoAccountId: account.id,
+        subscriberId: invoice.subscriberId,
+        invoiceId: invoice.id,
+        date: new Date(),
+        executedAt: new Date(),
+        servicesBilled: emitted.servicesBilled,
+        type: result.ok ? 'NOTA_CREDITO' : 'ERROR',
+        payloadJson: JSON.stringify({ payload, response: result.raw }).slice(0, 20000),
+        siigoInvoiceId: result.id ?? null,
+        dianNumber: result.number ?? null,
+        cufe: result.cufe ?? null,
+        pdfUrl: result.pdfUrl ?? null,
+        errorMessage: result.ok ? null : (result.error ?? 'Error desconocido'),
+      } as any,
+    });
+    if (!result.ok) {
+      this.logger.warn(`Nota crédito fallida factura ${invoice.tid}: ${result.error}`);
+      throw new BadRequestException(`Siigo rechazó la nota crédito: ${result.error}`);
+    }
+    this.logger.log(`Nota crédito emitida: tid ${invoice.tid} → DIAN ${result.number}`);
+    return {
+      ok: true, dryRun: false, electronicInvoiceId: ei.id,
+      dianNumber: result.number, cufe: result.cufe, pdfUrl: result.pdfUrl,
+      message: `Nota crédito emitida ante la DIAN: ${result.number}`,
     };
   }
 

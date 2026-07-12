@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { IsInt, IsOptional, IsString, Max, Min, MinLength } from 'class-validator';
 import { EinvoiceService } from './einvoice.service';
 import { EinvoiceEmitService } from './einvoice-emit.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -6,6 +7,12 @@ import { AreaGuard } from '../auth/area.guard';
 import { RequireArea } from '../auth/require-area.decorator';
 import { CurrentUser, AuthUser } from '../auth/current-user.decorator';
 import { BulkEflagsDto, SetEflagsDto, UpdateSiigoAccountDto } from './dto/einvoice.dto';
+
+/** Nota crédito electrónica: motivo + causa DIAN (1=Devolución, 2=Anulación, 3=Rebaja, 4=Otros). */
+class CreditNoteDto {
+  @IsString() @MinLength(3) reason!: string;
+  @IsOptional() @IsInt() @Min(1) @Max(4) cause?: number;
+}
 
 /** Facturación electrónica DIAN (panel + emisión Siigo). */
 @Controller('einvoice')
@@ -30,6 +37,10 @@ export class EinvoiceController {
   /** Reintenta una e-factura en ERROR (reemite su factura). */
   @Post(':id/retry') retry(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.emit.retry(id, user);
+  }
+  /** Emite (o simula) una NOTA CRÉDITO ante la DIAN para una factura ya emitida. */
+  @Post('credit-note/:invoiceId') creditNote(@Param('invoiceId') invoiceId: string, @Body() dto: CreditNoteDto, @CurrentUser() user: AuthUser) {
+    return this.emit.emitCreditNote(invoiceId, dto.reason, dto.cause ?? 2, user);
   }
   @Get()
   list(@Query('search') search?: string, @Query('type') type?: string, @Query('from') from?: string, @Query('to') to?: string, @Query('all') all?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string) {

@@ -5,11 +5,20 @@ import Link from "next/link";
 import { PageHeading } from "@/components/accounting/PageHeading";
 import { Icon } from "@/components/Icon";
 import { Button } from "@/components/ui/Button";
-import { Input, Field } from "@/components/ui/Field";
+import { Input, Textarea, Field } from "@/components/ui/Field";
 import { DataTable } from "@/components/inventory/DataTable";
 import { Pagination } from "@/components/ui/Pagination";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
+import { Modal } from "@/components/Modal";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
+
+const toLocalInput = (iso: string | null) => {
+  if (!iso) return "";
+  const d = new Date(iso); const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+};
 
 export default function AgendaPage() {
   const { authFetch } = useAuth();
@@ -53,6 +62,36 @@ export default function AgendaPage() {
     void loadStats();
   }, [loadStats]);
 
+  const [eventModal, setEventModal] = useState<any | "new" | null>(null);
+  const [ev, setEv] = useState<any>({ title: "", start: "", end: "", description: "", color: "#6366f1" });
+  const [savingEv, setSavingEv] = useState(false);
+  const [toDelete, setToDelete] = useState<any>(null);
+
+  function openNew() { setEv({ title: "", start: "", end: "", description: "", color: "#6366f1" }); setEventModal("new"); }
+  function openEdit(r: any) { setEv({ title: r.title ?? "", start: toLocalInput(r.start), end: toLocalInput(r.end), description: r.description ?? "", color: r.color ?? "#6366f1" }); setEventModal(r); }
+
+  async function submitEvent() {
+    if (!ev.start) { toast("Indica la fecha/hora de inicio", "alert-triangle"); return; }
+    setSavingEv(true);
+    try {
+      const body: any = { title: ev.title || undefined, description: ev.description || undefined, color: ev.color, start: new Date(ev.start).toISOString(), end: ev.end ? new Date(ev.end).toISOString() : undefined };
+      const editing = eventModal && eventModal !== "new";
+      const res = await authFetch(editing ? `/omni/events/${eventModal.id}` : "/omni/events", { method: editing ? "PATCH" : "POST", body: JSON.stringify(body) });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.message || "No se pudo guardar");
+      toast(editing ? "Evento actualizado" : "Evento creado", "check");
+      setEventModal(null); void loadEvents(); void loadStats();
+    } catch (e: any) { toast(e.message, "alert-triangle"); } finally { setSavingEv(false); }
+  }
+
+  async function doDeleteEvent() {
+    if (!toDelete) return;
+    try {
+      const res = await authFetch(`/omni/events/${toDelete.id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("No se pudo eliminar");
+      toast("Evento eliminado", "check"); setToDelete(null); void loadEvents(); void loadStats();
+    } catch (e: any) { toast(e.message, "alert-triangle"); setToDelete(null); }
+  }
+
   const columns = [
     {
       key: "start",
@@ -92,6 +131,12 @@ export default function AgendaPage() {
         r.orderNo ? <span className="font-mono text-[12px] text-text-secondary">#{r.orderNo}</span> : "—",
     },
     { key: "assignedBy", header: "Asignó", render: (r: any) => r.assignedBy || "—" },
+    { key: "actions", header: "", align: "right" as const, render: (r: any) => (
+      <div className="flex justify-end gap-2">
+        <button type="button" title="Editar" onClick={() => openEdit(r)} className="text-text-tertiary hover:text-brand"><Icon name="pencil" size={14} /></button>
+        <button type="button" title="Eliminar" onClick={() => setToDelete(r)} className="text-text-tertiary hover:text-error-text"><Icon name="trash" size={14} /></button>
+      </div>
+    ) },
   ];
 
   if (loading && rows.length === 0 && !stats) return <PageSkeleton />;
@@ -100,11 +145,12 @@ export default function AgendaPage() {
     <>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <PageHeading icon="calendar-clock" title="Agenda" subtitle="Eventos y programación de órdenes" />
-        <Link href="/ordenes" className="hidden sm:block">
-          <Button variant="ghost" size="sm">
-            <Icon name="arrow-left" size={14} /> Órdenes
-          </Button>
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link href="/ordenes" className="hidden sm:block">
+            <Button variant="ghost" size="sm"><Icon name="arrow-left" size={14} /> Órdenes</Button>
+          </Link>
+          <Button size="sm" onClick={openNew}><Icon name="plus" size={14} /> Nuevo evento</Button>
+        </div>
       </div>
 
       {/* stats */}
@@ -167,6 +213,29 @@ export default function AgendaPage() {
           />
         )}
       </div>
+
+      <Modal open={!!eventModal} onClose={() => setEventModal(null)} title={eventModal === "new" ? "Nuevo evento" : "Editar evento"} maxWidth="max-w-lg">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="sm:col-span-2"><Field label="Título"><Input value={ev.title} onChange={(e) => setEv({ ...ev, title: e.target.value })} placeholder="Ej: Instalación cliente X" autoFocus /></Field></div>
+          <Field label="Inicio" required><Input type="datetime-local" value={ev.start} onChange={(e) => setEv({ ...ev, start: e.target.value })} /></Field>
+          <Field label="Fin"><Input type="datetime-local" value={ev.end} onChange={(e) => setEv({ ...ev, end: e.target.value })} /></Field>
+          <Field label="Color"><Input type="color" value={ev.color} onChange={(e) => setEv({ ...ev, color: e.target.value })} /></Field>
+          <div className="sm:col-span-2"><Field label="Descripción"><Textarea rows={2} value={ev.description} onChange={(e) => setEv({ ...ev, description: e.target.value })} /></Field></div>
+        </div>
+        <div className="mt-3 flex justify-end gap-2">
+          <Button variant="secondary" onClick={() => setEventModal(null)} disabled={savingEv}>Cancelar</Button>
+          <Button onClick={submitEvent} disabled={savingEv}>{savingEv ? "Guardando…" : "Guardar"}</Button>
+        </div>
+      </Modal>
+
+      <ConfirmDialog
+        open={!!toDelete}
+        title="Eliminar evento"
+        message={<>¿Eliminar el evento <b>{toDelete?.title || "(sin título)"}</b>?</>}
+        confirmLabel="Eliminar"
+        onConfirm={doDeleteEvent}
+        onClose={() => setToDelete(null)}
+      />
     </>
   );
 }

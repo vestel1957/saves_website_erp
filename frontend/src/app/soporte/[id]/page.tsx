@@ -14,6 +14,7 @@ import { cop } from "@/lib/subscribers";
 import { TICKET_STATUS_LABEL, TICKET_STATUS_TONE, TICKET_PRIORITIES, TICKET_PRIORITY_TONE } from "@/lib/support";
 import { AsignarEquipoModal } from "@/components/soporte/AsignarEquipoModal";
 import { ConsumirMaterialModal } from "@/components/soporte/ConsumirMaterialModal";
+import { SignaturePad } from "@/components/support/SignaturePad";
 
 const fmt = (d: string | null) => (d ? new Date(d).toLocaleDateString("es-CO") : "—");
 const fmtT = (d: string | null) => (d ? new Date(d).toLocaleString("es-CO") : "—");
@@ -100,7 +101,7 @@ export default function OrdenDetallePage() {
   const [solucion, setSolucion] = useState("");
   const [photo, setPhoto] = useState<File | null>(null);
   const [assign, setAssign] = useState("");
-  const [sig, setSig] = useState({ name: "", cc: "", rel: "" });
+  const [sig, setSig] = useState<{ name: string; cc: string; rel: string; image?: string | null }>({ name: "", cc: "", rel: "", image: null });
   const [busy, setBusy] = useState(false);
   const [eqModal, setEqModal] = useState(false);
   const [matModal, setMatModal] = useState(false);
@@ -378,13 +379,21 @@ export default function OrdenDetallePage() {
       <div className="mb-6 rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
         <div className="mb-2 flex items-center gap-2 text-[13px] font-bold text-text-primary"><Icon name="user-check" size={15} className="text-brand" />Firma de quien recibe</div>
         {t.signature ? (
-          <p className="text-[12px] text-text-secondary">Firmó: <b>{t.signature.name}</b> {t.signature.cc ? `(CC ${t.signature.cc})` : ""} {t.signature.rel ? `· ${t.signature.rel}` : ""}</p>
+          <div className="flex flex-col gap-2">
+            <p className="text-[12px] text-text-secondary">Firmó: <b>{t.signature.name}</b> {t.signature.cc ? `(CC ${t.signature.cc})` : ""} {t.signature.rel ? `· ${t.signature.rel}` : ""}</p>
+            {t.signature.hasImage && <img src={`${process.env.NEXT_PUBLIC_API_URL ?? ""}/support/tickets/${id}/signature.png`} alt="Firma" className="h-24 w-auto rounded border border-border-subtle bg-white" />}
+          </div>
         ) : (
-          <div className="flex flex-wrap gap-2">
-            <Input className="min-w-[140px] flex-1" placeholder="Nombre completo quien recibe" value={sig.name} onChange={(e) => setSig({ ...sig, name: e.target.value })} />
-            <Input className="w-28" placeholder="Cédula" value={sig.cc} onChange={(e) => setSig({ ...sig, cc: e.target.value })} />
-            <Input className="w-32" placeholder="Parentesco" value={sig.rel} onChange={(e) => setSig({ ...sig, rel: e.target.value })} />
-            <Button size="sm" disabled={busy || !sig.name.trim()} onClick={() => post(`/support/tickets/${id}/signature`, sig, "Acta guardada")}>Guardar</Button>
+          <div className="flex flex-col gap-2">
+            <div className="flex flex-wrap gap-2">
+              <Input className="min-w-[140px] flex-1" placeholder="Nombre completo quien recibe" value={sig.name} onChange={(e) => setSig({ ...sig, name: e.target.value })} />
+              <Input className="w-28" placeholder="Cédula" value={sig.cc} onChange={(e) => setSig({ ...sig, cc: e.target.value })} />
+              <Input className="w-32" placeholder="Parentesco" value={sig.rel} onChange={(e) => setSig({ ...sig, rel: e.target.value })} />
+            </div>
+            <SignaturePad onChange={(img) => setSig((s) => ({ ...s, image: img }))} />
+            <div className="flex justify-end">
+              <Button size="sm" disabled={busy || !sig.name.trim()} onClick={() => post(`/support/tickets/${id}/signature`, sig, "Acta guardada")}>Guardar firma</Button>
+            </div>
           </div>
         )}
       </div>

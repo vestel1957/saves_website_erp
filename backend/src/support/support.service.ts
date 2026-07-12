@@ -132,7 +132,7 @@ export class SupportService {
     return {
       id: t.id, code: t.code, subject: t.subject, type: t.type, created: t.created, finalDate: t.finalDate,
       status: t.status, priority: t.priority, problem: t.problem, section: t.section, assigned: t.assigned,
-      signature: t.signatureName ? { name: t.signatureName, cc: t.signatureCc, rel: t.signatureRel } : null,
+      signature: t.signatureName ? { name: t.signatureName, cc: t.signatureCc, rel: t.signatureRel, hasImage: !!t.signatureImage } : null,
       subscriber: sub
         ? {
             id: sub.id, name: subName(sub), abonado: sub.abonado, doc: sub.docNumber,

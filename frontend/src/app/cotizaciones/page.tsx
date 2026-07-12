@@ -115,6 +115,26 @@ export default function CotizacionesPage() {
     }
   };
 
+  async function convertQuote(r: any) {
+    if (!r.subscriberId) { toast("La cotización no tiene cliente asignado", "alert-triangle"); return; }
+    if (!confirm(`¿Convertir la cotización #${r.tid} en factura de venta?`)) return;
+    try {
+      const res = await authFetch(`/omni/quotes/${r.id}/convert`, { method: "POST" });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d?.message || "No se pudo convertir");
+      toast(`Factura #${d.tid} creada desde la cotización`, "check");
+      void load();
+    } catch (e: any) { toast(e.message, "alert-triangle"); }
+  }
+
+  async function setQuoteStatus(r: any, status: string) {
+    try {
+      const res = await authFetch(`/omni/quotes/${r.id}/status`, { method: "PATCH", body: JSON.stringify({ status }) });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.message || "No se pudo actualizar");
+      toast("Estado actualizado", "check"); void load();
+    } catch (e: any) { toast(e.message, "alert-triangle"); }
+  }
+
   const columns = [
     {
       key: "tid",
@@ -136,6 +156,16 @@ export default function CotizacionesPage() {
       align: "center" as const,
       render: (r: any) => <span className="text-text-secondary">{r.itemsCount ?? 0}</span>,
     },
+    { key: "actions", header: "", align: "right" as const, render: (r: any) => (
+      <div className="flex justify-end gap-2">
+        {r.status !== "accepted" && r.status !== "converted" && (
+          <button type="button" title="Marcar aceptada" onClick={() => setQuoteStatus(r, "accepted")} className="text-text-tertiary hover:text-success-text"><Icon name="check" size={14} /></button>
+        )}
+        {r.status !== "converted" && (
+          <button type="button" title="Convertir a factura" onClick={() => convertQuote(r)} className="text-text-tertiary hover:text-brand"><Icon name="receipt" size={14} /></button>
+        )}
+      </div>
+    ) },
   ];
 
   if (loading && rows.length === 0) return <PageSkeleton />;

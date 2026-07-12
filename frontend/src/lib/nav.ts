@@ -168,6 +168,7 @@ const configuracion: NavItem[] = [
   { icon: "user-cog", label: "Usuarios y roles", href: "/configuracion/usuarios" },
   { icon: "key-round", label: "REST API", href: "/configuracion/api" },
   { icon: "calendar-clock", label: "Cron job", href: "/configuracion/automatizaciones" },
+  { icon: "mail", label: "Correo saliente", href: "/configuracion/correo" },
   { icon: "palette", label: "Tema", href: "/configuracion/ajustes" },
   { icon: "history", label: "Bitácora / auditoría", href: "/configuracion/actividad" },
   // Importar y exportar viven en un solo hub (/configuracion/datos).

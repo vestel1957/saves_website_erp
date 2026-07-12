@@ -146,6 +146,18 @@ export default function FacturacionPage() {
     finally { setSendingId(null); }
   }
 
+  async function sendEmail(id: string, tid: number) {
+    setSendingId(id);
+    try {
+      const res = await authFetch(`/billing/invoices/${id}/email`, { method: "POST" });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { toast(d?.message ?? "No se pudo enviar", "x"); return; }
+      if (d.sent) toast(`Factura #${tid} enviada por correo`, "check");
+      else toast(d?.error === "SMTP no configurado" ? "Correo no configurado — revisa Ajustes" : (d?.error ?? "No se pudo enviar el correo"), "send");
+    } catch (e: any) { toast(e.message ?? "Error enviando correo", "x"); }
+    finally { setSendingId(null); }
+  }
+
   async function emitEinvoice(r: InvoiceRow) {
     const live = !!eMode?.live;
     const warn = live
@@ -357,6 +369,9 @@ export default function FacturacionPage() {
                   <button type="button" onClick={() => sendWhatsapp(r.id, r.tid)} disabled={sendingId === r.id} title="Enviar por WhatsApp"
                     className="rounded-lg border border-border-default p-1.5 text-text-secondary transition-colors hover:bg-surface-2 disabled:opacity-40">
                     <Icon name={sendingId === r.id ? "loader" : "message-circle"} size={14} className={sendingId === r.id ? "animate-spin" : ""} /></button>
+                  <button type="button" onClick={() => sendEmail(r.id, r.tid)} disabled={sendingId === r.id} title="Enviar por correo"
+                    className="rounded-lg border border-border-default p-1.5 text-text-secondary transition-colors hover:bg-surface-2 disabled:opacity-40">
+                    <Icon name={sendingId === r.id ? "loader" : "mail"} size={14} className={sendingId === r.id ? "animate-spin" : ""} /></button>
                   {canEmit && (r.eInvoiceFlag === "Factura Electronica Creada"
                     ? <span title="Factura electrónica ya emitida" className="inline-flex rounded-lg border border-success/40 bg-success-soft p-1.5 text-success-text"><Icon name="file-signature" size={14} /></span>
                     : <button type="button" onClick={() => emitEinvoice(r)} disabled={emittingId === r.id} title={eMode?.live ? "Emitir e-factura (DIAN)" : "Emitir e-factura (DRY-RUN)"}

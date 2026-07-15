@@ -1,113 +1,130 @@
-# Nexus Business OS — Executive Dashboard
+# SAVES — ISP Vestel
 
-Implementación 100% funcional de la pantalla **Screen 1 · Executive Dashboard**
-(Dashboard + CRM) del diseño `untitled.pen`.
+Sistema de gestión del ISP **Vestel**: clientes, facturación (incluida la electrónica ante
+la DIAN vía Siigo), cartera y cobranza, tesorería, contabilidad, red (Mikrotik / OLT /
+GenieACS), soporte técnico, inventario y compras.
+
+Es la reescritura del sistema legacy en PHP (CodeIgniter) que hoy sigue en producción, en
+`/var/www/vhosts/saves.com.co/httpdocs/saves-vestel`. **No es una copia 1:1**: replica la
+lógica del legacy en los caminos que mueven plata, se aparta de él de forma deliberada
+donde el legacy estaba mal, y agrega capacidades que no existían (contabilidad, permisos
+granulares, auditoría).
+
+> El proyecto arrancó desde una copia de "Nexus ERP" y de ahí heredó parte del andamiaje.
+> No comparte historia de git con aquel proyecto: es un repositorio independiente.
+
+## Estado (15 jul 2026)
+
+**Esto todavía no reemplaza al legacy.** El legacy sigue siendo el sistema de verdad.
+
+| | |
+| --- | --- |
+| Brechas críticas de paridad | 13/13 cerradas |
+| P0 (plata y cumplimiento) | 8/8 cerrados, verificados contra la BD real |
+| Datos | Foto del **2 jul 2026**. Nexus **no ha creado ninguna factura ni pago real** |
+| Facturación electrónica | `EINVOICE_LIVE` apagado → arma el documento pero **no timbra** |
+| Backlog vivo | ~60 puntos entre P1 (operación) y P2 (estabilización) |
+
+Antes de cualquier corte hay que: re-migrar o sincronizar el delta de datos, correr la
+facturación en paralelo contra el legacy y comparar factura por factura, y timbrar unas
+pocas facturas reales antes de soltar el lote.
 
 ## Stack
 
-| Capa       | Tecnología                                   |
-| ---------- | -------------------------------------------- |
-| Frontend   | Next.js 15 (App Router) + Tailwind v4 + lucide-react |
-| Backend    | NestJS 10 + Prisma ORM                       |
-| Base datos | PostgreSQL 16 (Docker)                       |
+| Capa | Tecnología |
+| --- | --- |
+| Frontend | Next.js 15 (App Router) + Tailwind v4 |
+| Backend | NestJS 10 + Prisma ORM |
+| Base de datos | PostgreSQL (`localhost:5432`, base `saves_vestel`) |
+| Procesos | PM2 (`ecosystem.config.js`) |
 
-## Estructura
+## Cómo levantar
 
-```
-nexus-erp/
-├── docker-compose.yml      → PostgreSQL (puerto 5544) + pgAdmin (puerto 5050)
-├── backend/                → API NestJS  (http://localhost:4000/api)
-└── frontend/               → Dashboard Next.js (http://localhost:3000)
-```
+En este servidor ya corre bajo PM2:
 
-## Cómo levantar todo
-
-### 1. Base de datos (Docker Desktop debe estar abierto)
-
-```powershell
-cd nexus-erp
-docker compose up -d db
+```bash
+pm2 list                      # saves-backend (3061) · saves-frontend (3060)
+pm2 logs saves-backend
 ```
 
-### 2. Backend
+- Backend: http://localhost:3061/api
+- Frontend: http://localhost:3060
 
-```powershell
-cd backend
-npm install
-npm run db:setup      # genera Prisma client, crea tablas y siembra datos
-npm run start:dev     # API en http://localhost:4000/api
+Desde cero:
+
+```bash
+cd backend  && npm install && npx prisma generate && npx nest build
+cd frontend && npm install && npm run build
+pm2 start ecosystem.config.js
 ```
 
-### 3. Frontend
+### Al cambiar código del backend
 
-```powershell
-cd frontend
-npm install
-npm run dev           # Dashboard en http://localhost:3000
+PM2 ejecuta **`dist/src/main.js`**, no los fuentes. Un `pm2 reload` sin compilar **no toma
+los cambios**:
+
+```bash
+cd backend && npx nest build && ls dist/src/main.js && pm2 reload saves-backend
 ```
 
-## Endpoints de la API
+El `ls` no sobra: `nest build` puede terminar con éxito sin emitir nada (borra `dist/` y el
+`tsconfig.tsbuildinfo` incremental le hace creer que no hay nada que recompilar). Si el
+archivo no está, vuelve a correr `nest build` — la segunda vez sí emite. Recargar contra un
+`dist` inexistente deja el backend caído.
 
-| Método | Ruta                         | Descripción                          |
-| ------ | ---------------------------- | ------------------------------------ |
-| GET    | `/api/dashboard/overview`    | Payload completo del dashboard       |
-| GET    | `/api/dashboard/kpis`        | Tarjetas KPI                         |
-| GET    | `/api/dashboard/revenue`     | Revenue mensual (12 meses)           |
-| GET    | `/api/dashboard/deals`       | Top deals por cerrar                 |
-| GET    | `/api/dashboard/activity`    | Feed de actividad reciente           |
-| GET    | `/api/dashboard/leaderboard` | Ranking de ventas Q2                 |
-| GET    | `/api/dashboard/regions`     | Revenue por región                   |
+## Módulos
 
-## Módulo de Contabilidad
+| Módulo | Qué hace |
+| --- | --- |
+| `subscribers` | Clientes: alta, estados, cortes masivos, datos de conectividad |
+| `billing` | Facturación: manual, recurrente, notas crédito/débito, anulación, retenciones |
+| `einvoice` | Facturación electrónica DIAN vía Siigo (facturas y notas crédito) |
+| `treasury` | Tesorería: recaudo en cascada, cajas, arqueo, egresos |
+| `collections` | Cobranza: llamadas y acuerdos de pago |
+| `payment-imports` | Carga masiva de pagos externos (Efecty) |
+| `accounting` | Contabilidad por partida doble (PUC Colombia) |
+| `network` | Mikrotik, OLT y GenieACS/TR-069 |
+| `support` | Órdenes de trabajo, firma, materiales, evidencia |
+| `orders` · `inventory` · `returns` | Compras, bodegas, devoluciones |
+| `plans` · `promotions` | Planes de servicio y promociones |
+| `playhub` | Integración IPTV |
+| `movil` | Móviles y cuadrillas |
+| `reports` · `dashboard` | Reportes de gerencia (incluido el de IVA) e indicadores |
+| `auth` | Autenticación y permisos por rol, con excepciones por usuario |
+| `chatbot` | Agente de WhatsApp (ajeno a la migración; depende de `@s4gk/wa-agent`) |
 
-Contabilidad profesional con **partida doble** y **posteo automático dirigido por eventos**.
-Los módulos de origen (Ventas, Compras, Bancos, Inventario) solo **emiten eventos**; el módulo
-contable los escucha y genera los asientos balanceados — integración 100% desacoplada.
+### Contabilidad
 
-### Flujo automático
+Partida doble con plan de cuentas del PUC Colombia. **No es dirigida por eventos**: los
+flujos de negocio llaman a `PostingService` directamente (`postSalesInvoice`,
+`postCustomerPayment`, `postTreasuryIncome`, `postTreasuryExpense`). Cada asiento es
+idempotente por `(sourceType, sourceId)` y valida que débitos = créditos. El posteo va
+siempre fuera de la transacción del negocio y nunca rompe el flujo si falla.
 
-| Evento del sistema             | Asiento generado                                     |
-| ------------------------------ | ---------------------------------------------------- |
-| Venta realizada                | Dr Cuentas por cobrar / Cr Ingreso / Cr Impuesto     |
-| Compra registrada              | Dr Gasto\|Inventario / Dr Impuesto desc. / Cr CxP    |
-| Pago recibido                  | Mov. bancario → abono CxC → Dr Banco / Cr CxC        |
-| Pago a proveedor               | Mov. bancario → abono CxP → Dr CxP / Cr Banco        |
-| Movimiento de inventario (OUT) | Dr Costo de ventas / Cr Inventario                   |
+Cableado hoy: facturación (crear, recurrente, convertir cotización) y tesorería (recaudo,
+ingreso, egreso). **Sin cablear**: pagos a proveedor y devoluciones. Las transferencias
+entre cajas no se contabilizan (no impactan resultados).
 
-Las cuentas se resuelven desde `AccountMapping` (configurable en BD), nunca hardcodeadas.
-Cada asiento es idempotente por `(sourceType, sourceId)` y siempre valida **Débitos = Créditos**.
+## Interruptores importantes
 
-### Submódulos
+Viven en `ecosystem.config.js` y algunos tienen un ajuste equivalente en la tabla de
+configuración, que manda sobre la variable de entorno.
 
-Plan de cuentas (árbol) · Asientos (manual/automático/recurrente) · Libro diario · Libro mayor ·
-Balance de comprobación · Estados financieros (balance general, resultados, flujo de efectivo) ·
-Centros de costo · Cuentas por cobrar/pagar (derivadas, sin duplicar) · Conciliación bancaria ·
-Cierre mensual/anual · Motor de impuestos configurable (sin país específico).
+| Variable | Hoy | Efecto |
+| --- | --- | --- |
+| `MIKROTIK_LIVE` | `true` | Cortes y reconexiones **ejecutan de verdad** contra los routers |
+| `OLT_LIVE` | `true` | Autorizar/reiniciar ONU ejecuta por SSH contra las OLT |
+| `EINVOICE_LIVE` | sin definir | Sin esto **no se timbra** ante la DIAN: solo se arma el payload |
+| `CRONS_ENABLED` | `true` | Facturación recurrente y paso a cartera programados |
 
-### Endpoints principales (`/api`)
+Ajustes en base de datos que cambian comportamiento: `billing.dueDay` (día de vencimiento,
+por defecto 20, como el legacy) y `tickets.cascadeBilling` (cobrar al cerrar una orden;
+hoy **apagado**, mientras que el legacy siempre cobraba).
 
-| Método   | Ruta                                            | Descripción                      |
-| -------- | ----------------------------------------------- | -------------------------------- |
-| GET/POST | `/accounting/accounts` · `/accounts/tree`       | Plan de cuentas                  |
-| GET/POST | `/accounting/journal-entries`                   | Libro diario / asientos manuales |
-| POST     | `/accounting/journal-entries/:id/reverse`       | Reversar asiento                 |
-| GET      | `/accounting/ledger/:accountId`                 | Libro mayor por cuenta           |
-| GET      | `/accounting/reports/trial-balance`             | Balance de comprobación          |
-| GET      | `/accounting/reports/balance-sheet`             | Balance general                  |
-| GET      | `/accounting/reports/income-statement`          | Estado de resultados             |
-| GET      | `/accounting/reports/cash-flow`                 | Flujo de efectivo                |
-| GET      | `/accounting/receivables` · `/payables`         | CxC / CxP + aging                |
-| POST     | `/accounting/periods/:id/close` · `/close-year` | Cierre mensual / anual           |
-| GET/POST | `/accounting/tax-codes`                         | Motor de impuestos               |
-| POST     | `/sales/invoices` · `/sales/payments`           | Demo: dispara posteo automático  |
-| POST     | `/purchases/bills` · `/inventory/movements`     | Demo: dispara posteo automático  |
+## Relación con el legacy
 
-UI bajo `/contabilidad` (Next.js): plan de cuentas, libro diario, libro mayor, balance de
-comprobación y estados financieros conectados a la API en tiempo real.
-
-## Notas
-
-- El puerto de Postgres es **5544** (no el 5432) para evitar conflicto con un
-  PostgreSQL nativo de Windows que ya ocupa el 5432.
-- Credenciales DB: `nexus` / `nexus`, base `nexus`.
-- pgAdmin disponible en http://localhost:5050 (`admin@nexus.dev` / `admin`).
+El principio es que SAVES se parezca lo más posible al legacy: mismos defaults, mismos
+topes, misma cascada. Cuando el legacy y una auditoría discrepan, **manda el código legacy
+vivo**. Las desviaciones son decisiones tomadas a conciencia, no accidentes — y las
+importantes están documentadas en el código, junto a la referencia `archivo:línea` del
+legacy que replican.

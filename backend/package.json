@@ -1,7 +1,7 @@
 {
-  "name": "nexus-backend",
+  "name": "saves-backend",
   "version": "1.0.0",
-  "description": "Nexus Business OS - NestJS API",
+  "description": "SAVES (Vestel ISP) - NestJS API",
   "private": true,
   "scripts": {
     "build": "nest build",

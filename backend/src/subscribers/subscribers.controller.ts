@@ -13,7 +13,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AreaGuard } from '../auth/area.guard';
 import { RequireArea } from '../auth/require-area.decorator';
 import { CurrentUser, type AuthUser } from '../auth/current-user.decorator';
-import { UpdateSubscriberDto, AddNoteDto, UpdateInvoiceDto, CreateSubscriberDto } from './dto/update-subscriber.dto';
+import { UpdateSubscriberDto, AddNoteDto, UpdateInvoiceDto, CreateSubscriberDto, CheckDuplicatesDto } from './dto/update-subscriber.dto';
 import { AssignPlanDto, AssignPlansDto } from '../plans/dto/plan.dto';
 import { BulkFilterDto, BulkMessageDto } from './dto/bulk.dto';
 import { pazYSalvoPdf, statementPdf } from './subscriber-pdf';
@@ -86,6 +86,15 @@ export class SubscribersController {
   @Get('geo/neighborhoods')
   geoNeighborhoods(@Query('locality') locality?: string) {
     return this.subscribers.geoNeighborhoods(locality ? Number(locality) : undefined);
+  }
+
+  /**
+   * Chequeo de duplicados previo al alta (documento/dirección avisan, usuario PPP bloquea).
+   * La pantalla lo llama para advertir antes de guardar; `create` revalida igualmente.
+   */
+  @Post('check-duplicates')
+  checkDuplicates(@Body() dto: CheckDuplicatesDto) {
+    return this.subscribers.checkDuplicates(dto);
   }
 
   @Post()

@@ -28,19 +28,30 @@ const NOM_KEYS = [
   "residencia", "referencia", "divicion", "divnum1", "divicion2", "divnum2",
 ] as const;
 
+/** Tecnologías de instalación (enum InstallTech del backend). */
+const INSTALL_TECHS = ["GPON", "EPON", "EOC", "RADIO", "FIBRA"];
+
 const EMPTY: Record<string, any> = {
   abonado: "", firstName: "", secondName: "", lastName1: "", lastName2: "", companyName: "",
   customerType: "", docType: "CC", docNumber: "", email: "", phone1: "", phone2: "",
   birthDate: "", estrato: "", suscripcion: "", contractDate: "",
   departmentRef: "", cityRef: "", localityRef: "", neighborhood: "", addressLine: "",
   clausula: "", gpsLat: "", gpsLng: "", branchId: "",
+  pppUsername: "", pppPassword: "", pppProfile: "", ipRemote: "", installTech: "",
   ...Object.fromEntries(NOM_KEYS.map((k) => [k, ""])),
 };
 
 const dateInput = (d?: string | null) => (d ? new Date(d).toISOString().slice(0, 10) : "");
 const str = (v: any) => (v == null ? "" : String(v));
 
-const STEPS = ["Datos personales", "Ubicación / dirección", "Revisión"];
+const STEPS = ["Datos personales", "Ubicación / dirección", "Conectividad", "Revisión"];
+
+/** Resultado del chequeo de duplicados del backend. */
+type DupCheck = {
+  document?: { count: number; message: string | null } | null;
+  address?: { count: number; message: string | null } | null;
+  pppUsername?: { taken: boolean; router: string; message: string } | null;
+};
 
 export function ClienteWizardModal({
   mode, subscriberId, open, onClose, onDone,
@@ -60,8 +71,31 @@ export function ClienteWizardModal({
   const [localities, setLocalities] = useState<Geo[]>([]);
   const [neighborhoods, setNeighborhoods] = useState<Geo[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
+  const [dup, setDup] = useState<DupCheck>({});
+  const [checkingPpp, setCheckingPpp] = useState(false);
 
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setF((p) => ({ ...p, [k]: e.target.value }));
+
+  /**
+   * Chequeo de duplicados contra el servidor. Documento y dirección sólo AVISAN (igual que
+   * el legacy: el mismo titular puede tener varias cuentas y la facturación electrónica las
+   * mapea a sucursales de Siigo). El usuario PPP sí bloquea el guardado.
+   */
+  const checkDup = useCallback(
+    async (payload: Record<string, any>) => {
+      try {
+        const res = await authFetch("/subscribers/check-duplicates", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) return;
+        const d = await res.json();
+        setDup((prev) => ({ ...prev, ...d }));
+      } catch { /* el chequeo es informativo; nunca debe frenar el wizard */ }
+    },
+    [authFetch],
+  );
 
   const geo = useCallback(
     (path: string) => authFetch(path).then((r) => (r.ok ? r.json() : [])).catch(() => []),
@@ -90,6 +124,8 @@ export function ClienteWizardModal({
             contractDate: dateInput(d.contractDate), departmentRef: str(d.departmentRef), cityRef: str(d.cityRef),
             localityRef: str(d.localityRef), neighborhood: str(d.neighborhood), addressLine: str(d.addressLine),
             clausula: str(d.clausula), gpsLat: str(d.gpsLat), gpsLng: str(d.gpsLng), branchId: str(d.branchId),
+            pppUsername: str(d.pppUsername), pppPassword: str(d.pppPassword), pppProfile: str(d.pppProfile),
+            ipRemote: str(d.ipRemote), installTech: str(d.installTech),
             ...Object.fromEntries(NOM_KEYS.map((k) => [k, str(nom[k])])),
           });
           // Cargar los niveles dependientes para que los selects muestren el valor actual.
@@ -144,6 +180,11 @@ export function ClienteWizardModal({
       estrato: f.estrato, suscripcion: f.suscripcion || undefined, contractDate: f.contractDate || undefined,
       departmentRef: f.departmentRef, cityRef: f.cityRef, localityRef: f.localityRef, neighborhood: f.neighborhood,
       addressLine: f.addressLine, branchId: f.branchId || undefined, nomenclature,
+      // Conectividad (legacy `create.php`: name_s, contra, perfil, Ipremota, tegnologia).
+      // Sin pppUsername el cliente no se puede aprovisionar en el Mikrotik.
+      pppUsername: f.pppUsername || undefined, pppPassword: f.pppPassword || undefined,
+      pppProfile: f.pppProfile || undefined, ipRemote: f.ipRemote || undefined,
+      installTech: f.installTech || undefined,
     };
   }
 
@@ -274,11 +315,68 @@ export function ClienteWizardModal({
         </div>
       )}
 
-      {/* Paso 3 — revisión */}
+      {/* Paso 3 — conectividad (PPP / Mikrotik) */}
       {step === 2 && (
+        <div className="flex flex-col gap-2">
+          <Section title="Conexión PPP">
+            <p className="mb-2 text-[12px] text-text-tertiary">
+              Sin usuario PPP el cliente no se puede aprovisionar en el Mikrotik. El nombre de
+              usuario debe ser único: se valida contra la base de datos y contra el router de la sede.
+            </p>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              <Field label="Usuario PPP">
+                <Input
+                  value={f.pppUsername}
+                  onChange={set("pppUsername")}
+                  onBlur={() => {
+                    if (!f.pppUsername?.trim()) { setDup((p) => ({ ...p, pppUsername: null })); return; }
+                    setCheckingPpp(true);
+                    void checkDup({ pppUsername: f.pppUsername, branchId: f.branchId || undefined, installTech: f.installTech || undefined })
+                      .finally(() => setCheckingPpp(false));
+                  }}
+                />
+              </Field>
+              <Field label="Clave PPP"><Input value={f.pppPassword} onChange={set("pppPassword")} /></Field>
+              <Field label="Perfil / velocidad"><Input value={f.pppProfile} onChange={set("pppProfile")} /></Field>
+              <Field label="IP remota"><Input value={f.ipRemote} onChange={set("ipRemote")} /></Field>
+              <Field label="Tecnología">
+                <Select value={f.installTech} onChange={set("installTech")}>
+                  <option value="">— Seleccionar —</option>
+                  {INSTALL_TECHS.map((t) => <option key={t} value={t}>{t}</option>)}
+                </Select>
+              </Field>
+            </div>
+            {checkingPpp && <p className="mt-2 text-[12px] text-text-tertiary">Verificando disponibilidad…</p>}
+            {!checkingPpp && dup.pppUsername && (
+              <div className={`mt-2 rounded-lg px-3 py-2 text-[12px] ${
+                dup.pppUsername.taken
+                  ? "bg-error-soft text-error-text"
+                  : dup.pppUsername.router === "unreachable"
+                    ? "border border-warning-border bg-warning-soft text-text-secondary"
+                    : "bg-success-soft text-success-text"
+              }`}>
+                {dup.pppUsername.message}
+              </div>
+            )}
+          </Section>
+        </div>
+      )}
+
+      {/* Paso 4 — revisión */}
+      {step === 3 && (
         <div className="flex flex-col gap-2 text-[13px]">
           {missing.length > 0 && (
             <div className="rounded-lg bg-error-soft px-3 py-2 text-[12px] text-error-text">Faltan campos obligatorios: {missing.join(", ")}.</div>
+          )}
+          {/* Avisos NO bloqueantes (paridad legacy: el mismo titular puede tener varias cuentas). */}
+          {dup.document?.message && (
+            <div className="rounded-lg border border-warning-border bg-warning-soft px-3 py-2 text-[12px] text-text-secondary">{dup.document.message}</div>
+          )}
+          {dup.address?.message && (
+            <div className="rounded-lg border border-warning-border bg-warning-soft px-3 py-2 text-[12px] text-text-secondary">{dup.address.message}</div>
+          )}
+          {dup.pppUsername?.taken && (
+            <div className="rounded-lg bg-error-soft px-3 py-2 text-[12px] text-error-text">{dup.pppUsername.message}</div>
           )}
           <div className="grid grid-cols-2 gap-x-4 gap-y-1">
             <Rev k="Nombre" v={[f.firstName, f.secondName, f.lastName1, f.lastName2].filter(Boolean).join(" ")} />
@@ -292,6 +390,10 @@ export function ClienteWizardModal({
             <Rev k="Dirección" v={[f.nomenclatura, f.numero1, f.adicionauno, "#", f.numero2, f.adicional2, "-", f.numero3].filter(Boolean).join(" ")} />
             <Rev k="Barrio (id)" v={f.neighborhood} />
             <Rev k="Sede" v={branches.find((b) => b.id === f.branchId)?.name} />
+            <Rev k="Usuario PPP" v={f.pppUsername} />
+            <Rev k="Tecnología" v={f.installTech} />
+            <Rev k="Perfil" v={f.pppProfile} />
+            <Rev k="IP remota" v={f.ipRemote} />
           </div>
         </div>
       )}
@@ -302,7 +404,25 @@ export function ClienteWizardModal({
         <div className="flex gap-2">
           {step > 0 && <Button variant="secondary" onClick={() => setStep((s) => s - 1)} disabled={saving}><Icon name="arrow-left" size={15} /> Atrás</Button>}
           {step < STEPS.length - 1 ? (
-            <Button onClick={() => setStep((s) => s + 1)}>Siguiente <Icon name="arrow-right" size={15} /></Button>
+            <Button
+              onClick={() => {
+                const next = step + 1;
+                // Al entrar a la revisión, consultar duplicados de documento y dirección
+                // (avisan, no bloquean).
+                if (next === STEPS.length - 1) {
+                  void checkDup({
+                    docNumber: f.docNumber || undefined,
+                    addressLine: f.addressLine || undefined,
+                    departmentRef: f.departmentRef || undefined,
+                    cityRef: f.cityRef || undefined,
+                    localityRef: f.localityRef || undefined,
+                    neighborhood: f.neighborhood || undefined,
+                  });
+                }
+                setStep(next);
+              }}
+            >
+              Siguiente <Icon name="arrow-right" size={15} /></Button>
           ) : (
             <Button onClick={submit} disabled={saving}>
               <Icon name={saving ? "loader" : "check"} size={15} className={saving ? "animate-spin" : ""} />

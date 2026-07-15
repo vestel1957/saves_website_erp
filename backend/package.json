@@ -38,6 +38,7 @@
     "@nestjs/platform-express": "^10.4.15",
     "@nestjs/schedule": "^4.1.2",
     "@prisma/client": "^6.2.1",
+    "@s4gk/wa-agent": "file:../../wa-agent/s4gk-wa-agent-1.2.0.tgz",
     "@types/nodemailer": "^8.0.1",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",

@@ -2,6 +2,8 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
+import { PostingService } from '../accounting/posting.service';
+import { MikrotikService } from '../network/mikrotik.service';
 import {
   CashAccountDto, CashCloseDto, CashOpenDto, CollectDto, EditTxDto, ExpenseDto,
   IncomeDto, TransferDto, TxCategoryDto, VoidTxDto,
@@ -47,7 +49,11 @@ type Tx = Prisma.TransactionClient;
  */
 @Injectable()
 export class CobranzasService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly posting: PostingService,
+    private readonly mikrotik: MikrotikService,
+  ) {}
 
   /** Recalcula el cache de dinero del suscriptor (SUM debit/credit de tx vigentes internas). */
   private async recomputeSubscriber(tx: Tx, subscriberId: string) {
@@ -90,13 +96,14 @@ export class CobranzasService {
       const sub = await this.prisma.subscriber.findUnique({ where: { id: dto.subscriberId }, select: { id: true } });
       if (!sub) throw new NotFoundException('Cliente no encontrado');
     }
-    return this.prisma.$transaction(async (tx) => {
+    const when = dto.date ? dateOnly(dto.date) : dateOnly(new Date().toISOString());
+    const result = await this.prisma.$transaction(async (tx) => {
       const t = await tx.transaction.create({
         data: {
           type: 'INCOME', category: dto.category, credit: amount, debit: 0,
           payerName: dto.payerName ?? null, subscriberId: dto.subscriberId ?? null,
           method: dto.method,
-          date: dto.date ? dateOnly(dto.date) : dateOnly(new Date().toISOString()),
+          date: when,
           cashAccountId: dto.cashAccountId ?? null, accountName: dto.accountName ?? null,
           bankName: dto.method === 'Bank' ? (dto.bankName ?? null) : null,
           ext: false, status: 'VIGENTE', note: dto.note ?? null, issuerUserId: null,
@@ -106,6 +113,14 @@ export class CobranzasService {
       if (dto.subscriberId) await this.recomputeSubscriber(tx, dto.subscriberId);
       return { id: t.id, amount };
     });
+    // Contabilización automática (idempotente; no rompe el flujo si falla). "Balance" no mueve efectivo.
+    if (dto.method !== 'Balance') {
+      await this.posting.postTreasuryIncome({
+        sourceId: result.id, date: when, amount: result.amount, category: dto.category,
+        toBank: dto.method === 'Bank', createdBy: user?.name ?? user?.email ?? null,
+      });
+    }
+    return result;
   }
 
   /**
@@ -178,7 +193,7 @@ export class CobranzasService {
 
   /** Registrar recaudo: aplica el monto en cascada, crea transacciones + recibo. */
   async collect(dto: CollectDto, user: AuthUser) {
-    const amount = round2(Number(dto.amount));
+    let amount = round2(Number(dto.amount));
     if (!(amount > 0)) throw new BadRequestException('El monto debe ser mayor a cero');
 
     const sub = await this.prisma.subscriber.findUnique({
@@ -186,6 +201,15 @@ export class CobranzasService {
       select: { id: true, balance: true, ...SUB_NAME_SELECT },
     });
     if (!sub) throw new NotFoundException('Cliente no encontrado');
+
+    // Método "Balance": el pago se cubre con el saldo a favor del cliente y NO
+    // puede exceder ese saldo (paridad legacy Transactions.php:1334 → si el saldo
+    // no alcanza, se capa el monto aplicado al saldo disponible; nunca aplica de más).
+    if (dto.method === 'Balance') {
+      const bal = round2(num(sub.balance));
+      if (bal <= 0) throw new BadRequestException('El cliente no tiene saldo a favor para pagar con Balance.');
+      if (amount > bal) amount = bal;
+    }
 
     // Facturas a pagar: orden explícito o más antiguas primero.
     let invoices;
@@ -233,7 +257,7 @@ export class CobranzasService {
     const payDate = dto.date ? dateOnly(dto.date) : dateOnly(new Date().toISOString());
     const payer = subName(sub);
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const applied: { invoiceId: string; tid: number; amount: number; status: string }[] = [];
       const txIds: string[] = [];
       let primary: { id: string; tid: number } | null = null;
@@ -291,64 +315,90 @@ export class CobranzasService {
         applied,
       };
     });
+    // Contabilización automática del recaudo (DR banco/caja, CR cartera). "Balance"
+    // se paga con saldo a favor del cliente: no mueve efectivo → no se contabiliza aquí.
+    if (dto.method !== 'Balance' && result.totalApplied > 0) {
+      await this.posting.postCustomerPayment({
+        sourceId: result.receiptId, date: payDate, amount: result.totalApplied,
+        toBank: dto.method === 'Bank', createdBy: user?.name ?? user?.email ?? null,
+      });
+    }
+    // Reconexión automática tras el pago (paridad legacy: al pagar se reactiva).
+    // Best-effort: nunca rompe el recaudo. Solo si el cliente estaba CORTADO. Respeta
+    // el modo de red (dry-run salvo interruptor de Configuración encendido).
+    try {
+      const fresh = await this.prisma.subscriber.findUnique({ where: { id: dto.subscriberId }, select: { status: true } });
+      if (fresh?.status === 'CORTADO') {
+        await this.mikrotik.reconnect(dto.subscriberId, user);
+      }
+    } catch { /* el pago ya quedó registrado; la reconexión puede reintentarse manual */ }
+    return result;
   }
 
   /** Anular una transacción: soft-delete + Voiding + reversa del saldo de la factura. */
   async voidTransaction(id: string, dto: VoidTxDto, user: AuthUser) {
-    return this.prisma.$transaction(async (tx) => {
-      const t = await tx.transaction.findUnique({
-        where: { id },
-        include: { receiptLinks: true },
-      });
-      if (!t) throw new NotFoundException('Transacción no encontrada');
-      if (t.status === 'ANULADA') throw new BadRequestException('La transacción ya está anulada');
+    return this.prisma.$transaction((tx) => this.voidTransactionTx(tx, id, dto, user));
+  }
 
-      await tx.transaction.update({ where: { id }, data: { status: 'ANULADA' } });
-      await tx.voiding.create({
-        data: {
-          dateTime: new Date(),
-          detail: dto.detail ?? null,
-          reason: dto.reason,
-          voidedBy: user.name || user.email,
-          transactionId: id,
-        },
-      });
-
-      // Reversa sobre la factura (solo pagos de venta).
-      if (t.invoiceId && t.category === 'Sales' && t.type === 'INCOME') {
-        const inv = await tx.subInvoice.findUnique({ where: { id: t.invoiceId } });
-        if (inv) {
-          let pamnt = round2(num(inv.paidAmount) - num(t.credit));
-          let status: 'DUE' | 'PARTIAL' = 'PARTIAL';
-          if (pamnt <= 0) { pamnt = 0; status = 'DUE'; }
-          await tx.subInvoice.update({ where: { id: inv.id }, data: { paidAmount: pamnt, status } });
-        }
-      }
-
-      // El recibo se elimina (como el legacy): borra enlaces y recibos que queden huérfanos.
-      const receiptIds = [...new Set(t.receiptLinks.map((l) => l.receiptId))];
-      await tx.receiptTransaction.deleteMany({ where: { transactionId: id } });
-      for (const rid of receiptIds) {
-        const remaining = await tx.receiptTransaction.count({ where: { receiptId: rid } });
-        if (remaining === 0) await tx.paymentReceipt.delete({ where: { id: rid } });
-      }
-
-      if (t.subscriberId) await this.recomputeSubscriber(tx, t.subscriberId);
-      await this.recomputeCashBalance(tx, t.cashAccountId);
-      return { id, status: 'ANULADA' };
+  /**
+   * Igual que `voidTransaction`, pero dentro de una transacción ya abierta por quien
+   * llama. Lo usa `FacturasService.voidInvoice`, que necesita anular la factura y
+   * reversar todos sus pagos en un solo commit.
+   */
+  async voidTransactionTx(tx: Tx, id: string, dto: VoidTxDto, user: AuthUser) {
+    const t = await tx.transaction.findUnique({
+      where: { id },
+      include: { receiptLinks: true },
     });
+    if (!t) throw new NotFoundException('Transacción no encontrada');
+    if (t.status === 'ANULADA') throw new BadRequestException('La transacción ya está anulada');
+
+    await tx.transaction.update({ where: { id }, data: { status: 'ANULADA' } });
+    await tx.voiding.create({
+      data: {
+        dateTime: new Date(),
+        detail: dto.detail ?? null,
+        reason: dto.reason,
+        voidedBy: user.name || user.email,
+        transactionId: id,
+      },
+    });
+
+    // Reversa sobre la factura (solo pagos de venta).
+    if (t.invoiceId && t.category === 'Sales' && t.type === 'INCOME') {
+      const inv = await tx.subInvoice.findUnique({ where: { id: t.invoiceId } });
+      if (inv) {
+        let pamnt = round2(num(inv.paidAmount) - num(t.credit));
+        let status: 'DUE' | 'PARTIAL' = 'PARTIAL';
+        if (pamnt <= 0) { pamnt = 0; status = 'DUE'; }
+        await tx.subInvoice.update({ where: { id: inv.id }, data: { paidAmount: pamnt, status } });
+      }
+    }
+
+    // El recibo se elimina (como el legacy): borra enlaces y recibos que queden huérfanos.
+    const receiptIds = [...new Set(t.receiptLinks.map((l) => l.receiptId))];
+    await tx.receiptTransaction.deleteMany({ where: { transactionId: id } });
+    for (const rid of receiptIds) {
+      const remaining = await tx.receiptTransaction.count({ where: { receiptId: rid } });
+      if (remaining === 0) await tx.paymentReceipt.delete({ where: { id: rid } });
+    }
+
+    if (t.subscriberId) await this.recomputeSubscriber(tx, t.subscriberId);
+    await this.recomputeCashBalance(tx, t.cashAccountId);
+    return { id, status: 'ANULADA' };
   }
 
   /** Registrar un egreso/gasto de caja. */
   async createExpense(dto: ExpenseDto, user: AuthUser) {
     const amount = round2(Number(dto.amount));
-    return this.prisma.$transaction(async (tx) => {
+    const when = dto.date ? dateOnly(dto.date) : dateOnly(new Date().toISOString());
+    const result = await this.prisma.$transaction(async (tx) => {
       const t = await tx.transaction.create({
         data: {
           type: 'EXPENSE', category: dto.category, debit: amount, credit: 0,
           payerName: dto.payerName ?? null,
           method: dto.method,
-          date: dto.date ? dateOnly(dto.date) : dateOnly(new Date().toISOString()),
+          date: when,
           cashAccountId: dto.cashAccountId ?? null, accountName: dto.accountName ?? null,
           bankName: dto.method === 'Bank' ? (dto.bankName ?? null) : null,
           ext: true, status: 'VIGENTE', note: dto.note ?? null,
@@ -358,6 +408,12 @@ export class CobranzasService {
       await this.recomputeCashBalance(tx, dto.cashAccountId);
       return { id: t.id, amount };
     });
+    // Contabilización automática (DR gasto, CR banco/caja).
+    await this.posting.postTreasuryExpense({
+      sourceId: result.id, date: when, amount: result.amount, category: dto.category,
+      fromBank: dto.method === 'Bank', createdBy: user?.name ?? user?.email ?? null,
+    });
+    return result;
   }
 
   /**

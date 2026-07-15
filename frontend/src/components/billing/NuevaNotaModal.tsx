@@ -27,13 +27,14 @@ export function NuevaNotaModal({
   const [type, setType] = useState<"CREDITO" | "DEBITO">("CREDITO");
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
+  const [retentionType, setRetentionType] = useState("");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   // Reset al cerrar para que la próxima apertura arranque limpia.
   useEffect(() => {
     if (open) return;
-    setTid(""); setType("CREDITO"); setAmount(""); setDescription(""); setErr(null); setSaving(false);
+    setTid(""); setType("CREDITO"); setAmount(""); setDescription(""); setRetentionType(""); setErr(null); setSaving(false);
   }, [open]);
 
   async function submit() {
@@ -50,7 +51,10 @@ export function NuevaNotaModal({
       if (!inv) throw new Error(`No existe la factura #${n}`);
       const res = await authFetch(`/billing/invoices/${inv.id}/notes`, {
         method: "POST",
-        body: JSON.stringify({ type, amount: Number(amount), description: description || undefined }),
+        body: JSON.stringify({
+          type, amount: Number(amount), description: description || undefined,
+          retentionType: retentionType || undefined,
+        }),
       });
       const d = await res.json();
       if (!res.ok) throw new Error(d?.message || "No se pudo crear la nota");
@@ -70,6 +74,17 @@ export function NuevaNotaModal({
           <Select value={type} onChange={(e) => setType(e.target.value as any)}>
             <option value="CREDITO">Nota crédito (rebaja)</option>
             <option value="DEBITO">Nota débito (recargo)</option>
+          </Select>
+        </Field>
+        {/* Retención: paridad legacy — se captura aquí (no al facturar) y el valor lo
+            digita el usuario en "Monto"; el sistema no lo calcula. */}
+        <Field label="¿Tiene retención? ¿Qué tipo?">
+          <Select value={retentionType} onChange={(e) => setRetentionType(e.target.value)}>
+            <option value="">- Seleccionar -</option>
+            <option value="Retefuente Servicios">Retefuente Servicios</option>
+            <option value="Compras">Compras</option>
+            <option value="Personas no declarantes">Personas no declarantes</option>
+            <option value="Reteiva">Reteiva</option>
           </Select>
         </Field>
         <Field label="Monto" required>

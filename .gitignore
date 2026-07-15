@@ -8,6 +8,7 @@ dist/
 .next/
 **/.next/
 out/
+*.tsbuildinfo
 
 # env & secrets
 .env
@@ -27,6 +28,7 @@ npm-debug.log*
 Thumbs.db
 .idea/
 .vscode/
+.claude/
 
 # large binaries / assets checked in ad-hoc
 *.png.bak

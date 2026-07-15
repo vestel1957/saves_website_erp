@@ -2,11 +2,17 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
-import { CategoryNameDto, CreateOrderDto, CreateSupplierDto, OrderItemDto, PayOrderDto, ReceiveOrderDto } from './dto/orders.dto';
+import { AddNoteDto, CategoryNameDto, CreateOrderDto, CreateSupplierDto, OrderItemDto, PayOrderDto, ReceiveOrderDto } from './dto/orders.dto';
 
 const num = (d: Prisma.Decimal | number | null | undefined) => (d == null ? 0 : Number(d));
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const dateOnly = (s?: string) => { const d = s ? new Date(s) : new Date(); return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())); };
+
+// Convención legacy: purchase_items.pid = 0 marca una NOTA (no un producto). Aquí materialLegacy=0.
+const NOTE_PID = 0;
+const isNote = (it: { materialLegacy: number | null }) => it.materialLegacy === NOTE_PID;
+// Notas que restan del total (crédito y retención) vs. suman (débito). Ver Purchase::crear_nota.
+const noteSign = (type: string) => (type === 'Nota Debito' ? 1 : -1);
 
 @Injectable()
 export class OrdersService {
@@ -75,12 +81,18 @@ export class OrdersService {
   async detail(id: string) {
     const o = await this.prisma.supplyOrder.findUnique({ where: { id }, include: { supplier: true, items: { orderBy: { id: 'asc' } } } });
     if (!o) throw new NotFoundException('Orden no encontrada');
+    // El total ya está neto de notas/retención; el saldo es total - pagado.
+    const total = num(o.total);
+    const paid = num(o.paidAmount);
     return {
       id: o.id, tid: o.tid, kind: o.kind, status: o.status, date: o.orderDate, dueDate: o.dueDate,
-      subtotal: num(o.subtotal), tax: num(o.tax), discount: num(o.discount), total: num(o.total), paid: num(o.paidAmount),
+      subtotal: num(o.subtotal), tax: num(o.tax), discount: num(o.discount), total, paid, balance: round2(total - paid),
+      retentionType: o.retentionType, retention: num(o.retention),
       notes: o.notes, branchRef: o.branchRef, receivedAt: o.receivedAt,
       supplier: o.supplier ? { id: o.supplier.id, name: o.supplier.name, nit: o.supplier.nit, phone: o.supplier.phone, category: o.supplier.category } : null,
-      items: o.items.map((it) => ({ id: it.id, product: it.product, qty: it.qty, price: num(it.price), taxRate: num(it.taxRate), subtotal: num(it.subtotal), taxTotal: num(it.taxTotal), received: it.receivedQty, materialId: it.materialId })),
+      items: o.items.filter((it) => !isNote(it)).map((it) => ({ id: it.id, product: it.product, qty: it.qty, price: num(it.price), taxRate: num(it.taxRate), subtotal: num(it.subtotal), taxTotal: num(it.taxTotal), received: it.receivedQty, materialId: it.materialId })),
+      // Notas y retenciones que ajustaron el total (pid=0). amount negativo = descuento/retención.
+      noteLines: o.items.filter(isNote).map((it) => ({ id: it.id, type: it.product, description: it.description, amount: num(it.price) })),
     };
   }
 
@@ -250,7 +262,79 @@ export class OrdersService {
           items: { create: rows.map((r) => ({ materialId: r.materialId ?? null, product: r.product, qty: r.qty, price: r.price, taxRate: r.taxRate, subtotal: r.subtotal, taxTotal: r.taxTotal })) },
         },
       });
-      return { id: o.id, tid: o.tid, total, kind: o.kind };
+      // Retención capturada al crear (legacy newinvoice.php): se materializa como nota de retención que resta del total.
+      if (dto.retention && dto.retention > 0 && dto.retentionType) {
+        await this.applyNote(tx, o, { type: 'Retencion', retentionType: dto.retentionType, amount: dto.retention, description: 'Retención en la fuente' });
+      }
+      const fresh = await tx.supplyOrder.findUnique({ where: { id: o.id }, select: { total: true } });
+      return { id: o.id, tid: o.tid, total: num(fresh?.total ?? total), kind: o.kind };
+    });
+  }
+
+  // --- Notas y retenciones sobre la orden (legacy Purchase::crear_nota / eliminar_nota) ---
+  /**
+   * Aplica una nota (crédito/débito/retención) como línea pid=0 que ajusta el total de la orden.
+   * Crédito y retención restan; débito suma. La retención además acumula en el header (retention/retentionType)
+   * para reportes tributarios. El total queda SIEMPRE neto → el saldo del proveedor y el pago lo respetan.
+   */
+  private async applyNote(
+    tx: Prisma.TransactionClient,
+    order: { id: string; total: Prisma.Decimal; paidAmount: Prisma.Decimal; retention: Prisma.Decimal; retentionType: string | null },
+    input: { type: string; retentionType?: string | null; amount: number; description?: string | null },
+  ) {
+    const amount = round2(Math.abs(Number(input.amount)));
+    if (!(amount > 0)) throw new BadRequestException('El monto de la nota debe ser mayor a cero');
+    const isRet = input.type === 'Retencion';
+    if (isRet && !input.retentionType) throw new BadRequestException('La retención requiere un tipo (Retefuente Servicios, Compras, etc.)');
+    const signed = round2(noteSign(input.type) * amount);
+    const newTotal = round2(num(order.total) + signed);
+    if (newTotal < num(order.paidAmount) - 0.01) {
+      throw new BadRequestException(`La nota deja el total (${newTotal}) por debajo de lo ya pagado (${num(order.paidAmount)}).`);
+    }
+    const label = isRet ? `Retención (${input.retentionType})` : input.type;
+    const line = await tx.supplyOrderItem.create({
+      data: {
+        orderId: order.id, materialLegacy: NOTE_PID, product: label,
+        qty: 1, price: signed, taxRate: 0, discount: 0, subtotal: signed, taxTotal: 0, discountTotal: 0,
+        description: input.description ?? null,
+      },
+    });
+    const data: Prisma.SupplyOrderUpdateInput = { total: newTotal };
+    if (isRet) { data.retention = round2(num(order.retention) + amount); data.retentionType = input.retentionType!; }
+    await tx.supplyOrder.update({ where: { id: order.id }, data });
+    return { lineId: line.id, newTotal, signed };
+  }
+
+  async addNote(id: string, dto: AddNoteDto, _user: AuthUser) {
+    return this.prisma.$transaction(async (tx) => {
+      const order = await tx.supplyOrder.findUnique({ where: { id } });
+      if (!order) throw new NotFoundException('Orden no encontrada');
+      const res = await this.applyNote(tx, order, { type: dto.type, retentionType: dto.retentionType, amount: dto.amount, description: dto.description });
+      return { ok: true, noteId: res.lineId, total: res.newTotal, balance: round2(res.newTotal - num(order.paidAmount)) };
+    });
+  }
+
+  async removeNote(id: string, noteId: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const order = await tx.supplyOrder.findUnique({ where: { id } });
+      if (!order) throw new NotFoundException('Orden no encontrada');
+      const note = await tx.supplyOrderItem.findUnique({ where: { id: noteId } });
+      if (!note || note.orderId !== id || !isNote(note)) throw new NotFoundException('Nota no encontrada');
+      const signed = num(note.price); // ya viene con signo
+      const newTotal = round2(num(order.total) - signed);
+      if (newTotal < num(order.paidAmount) - 0.01) {
+        throw new BadRequestException(`Eliminar la nota deja el total (${newTotal}) por debajo de lo ya pagado (${num(order.paidAmount)}).`);
+      }
+      const data: Prisma.SupplyOrderUpdateInput = { total: newTotal };
+      const wasRetention = typeof note.product === 'string' && note.product.startsWith('Retención');
+      if (wasRetention) {
+        const others = await tx.supplyOrderItem.count({ where: { orderId: id, materialLegacy: NOTE_PID, product: { startsWith: 'Retención' }, id: { not: noteId } } });
+        data.retention = round2(Math.max(0, num(order.retention) - Math.abs(signed)));
+        if (others === 0) data.retentionType = null;
+      }
+      await tx.supplyOrderItem.delete({ where: { id: noteId } });
+      await tx.supplyOrder.update({ where: { id }, data });
+      return { ok: true, removed: noteId, total: newTotal, balance: round2(newTotal - num(order.paidAmount)) };
     });
   }
 

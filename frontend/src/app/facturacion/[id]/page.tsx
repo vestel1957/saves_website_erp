@@ -28,6 +28,9 @@ export default function FacturaDetallePage() {
   const [applyingId, setApplyingId] = useState<string | null>(null);
   const [eMode, setEMode] = useState<{ live: boolean } | null>(null);
   const [emitting, setEmitting] = useState(false);
+  const [voidOpen, setVoidOpen] = useState(false);
+  const [voidReason, setVoidReason] = useState("");
+  const [voiding, setVoiding] = useState(false);
 
   const canEmit = isSuperadmin || can(PERM.AREA_CONTABILIDAD);
 
@@ -112,6 +115,33 @@ export default function FacturaDetallePage() {
     }
   }
 
+  /**
+   * Anula la factura. El backend reversa los pagos con rastro y bloquea si la factura ya
+   * fue timbrada ante la DIAN y aún no tiene su nota crédito.
+   */
+  async function voidInvoice() {
+    const reason = voidReason.trim();
+    if (reason.length < 3) { toast("Escribe el motivo de la anulación.", "alert-circle"); return; }
+    setVoiding(true);
+    try {
+      const res = await authFetch(`/billing/invoices/${id}/void`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason }),
+      });
+      const d = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(d?.message || "No se pudo anular la factura");
+      toast(d.voidedPayments > 0 ? `Factura anulada. Se reversaron ${d.voidedPayments} pago(s).` : "Factura anulada.", "check");
+      setVoidOpen(false);
+      setVoidReason("");
+      await loadInvoice();
+    } catch (e) {
+      toast((e as Error).message, "alert-circle");
+    } finally {
+      setVoiding(false);
+    }
+  }
+
   if (authLoading || (!f && !err)) return <PageSkeleton />;
   if (err) return <div className="rounded-xl border border-border-subtle bg-surface p-6 text-[13px] text-text-secondary">Factura no encontrada. <Link href="/facturacion" className="text-brand">Volver</Link></div>;
 
@@ -136,6 +166,11 @@ export default function FacturaDetallePage() {
             <button onClick={openPromos} className="inline-flex items-center gap-1.5 rounded-lg border border-border-default px-3 py-1.5 text-[12px] font-medium text-text-secondary hover:bg-surface-2">
               <Icon name="gift" size={14} /> Aplicar promoción
             </button>
+            {canEmit && f.status !== "CANCELED" && (
+              <button onClick={() => setVoidOpen(true)} className="inline-flex items-center gap-1.5 rounded-lg border border-border-default px-3 py-1.5 text-[12px] font-medium text-error-text hover:bg-surface-2">
+                <Icon name="ban" size={14} /> Anular factura
+              </button>
+            )}
           </div>
         </div>
         <div className="rounded-xl border border-border-subtle bg-surface px-5 py-3 text-right shadow-sm">
@@ -288,6 +323,38 @@ export default function FacturaDetallePage() {
             )}
             <div className="flex justify-end">
               <Button variant="secondary" onClick={() => setPromoOpen(false)}>Cerrar</Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {voidOpen && (
+        <Modal open onClose={() => setVoidOpen(false)} title={`Anular factura #${f.tid}`}>
+          <div className="flex flex-col gap-3">
+            <p className="text-[12px] text-text-tertiary">
+              La factura quedará anulada y saldrá de la cartera del cliente. Los pagos asociados
+              se reversan, quedando registrados como anulados (no se borran).
+            </p>
+            {f.paid > 0 && (
+              <div className="rounded-lg border border-warning-border bg-warning-soft px-3 py-2 text-[12px] text-text-secondary">
+                Esta factura tiene {cop(f.paid)} pagados. Al anularla, ese dinero se reversa y saldrá del arqueo de la caja donde se recibió.
+              </div>
+            )}
+            <label className="flex flex-col gap-1">
+              <span className="text-[12px] font-medium text-text-secondary">Motivo de la anulación</span>
+              <input
+                autoFocus
+                value={voidReason}
+                onChange={(e) => setVoidReason(e.target.value)}
+                placeholder="Ej: facturada por error al cliente equivocado"
+                className="rounded-lg border border-border-default bg-surface px-3 py-2 text-[13px] text-text-primary"
+              />
+            </label>
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => setVoidOpen(false)}>Cancelar</Button>
+              <Button variant="danger" onClick={voidInvoice} disabled={voiding || voidReason.trim().length < 3}>
+                {voiding ? "Anulando…" : "Anular factura"}
+              </Button>
             </div>
           </div>
         </Modal>

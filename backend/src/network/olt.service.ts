@@ -48,7 +48,8 @@ function subName(s: any): string | null {
 @Injectable()
 export class OltService {
   private readonly logger = new Logger(OltService.name);
-  private readonly live = process.env.OLT_LIVE === 'true';
+  private live = process.env.OLT_LIVE === 'true';
+  private liveCheckedAt = 0;
 
   constructor(private readonly prisma: PrismaService) {}
 
@@ -56,7 +57,20 @@ export class OltService {
     return this.live;
   }
 
-  mode() {
+  /** Sincroniza el modo real desde el ajuste `network.oltLive` (interruptor en Configuración, cache 15s). OLT_LIVE=true lo fuerza. */
+  private async syncLive(): Promise<void> {
+    const now = Date.now();
+    if (now - this.liveCheckedAt < 15000) return;
+    this.liveCheckedAt = now;
+    const row = await this.prisma.appSetting.findUnique({ where: { key: 'network.oltLive' } });
+    // El interruptor de Configuración MANDA si está definido; si no, cae a la env.
+    this.live = row?.value === 'true' || row?.value === 'false'
+      ? row.value === 'true'
+      : process.env.OLT_LIVE === 'true';
+  }
+
+  async mode() {
+    await this.syncLive();
     return { live: this.live, mode: this.live ? 'LIVE' : 'DRY_RUN', brands: OLT_BRANDS };
   }
 
@@ -257,6 +271,7 @@ export class OltService {
 
   /** Autenticar/aprovisionar una ONU por SN. Dry-run salvo OLT_LIVE=true. */
   async provision(id: string, params: any, user?: AuthUser) {
+    await this.syncLive();
     const olt = await this.resolveOlt(id);
     if (!params.sn) throw new BadRequestException('Debe indicar el SN de la ONU.');
     if (params.slot === undefined || params.slot === '' || params.port === undefined || params.port === '') {
@@ -282,9 +297,11 @@ export class OltService {
   }
 
   async reboot(id: string, params: any, user?: AuthUser) {
+    await this.syncLive();
     return this.onuAction('REBOOT', id, params, user);
   }
   async remove(id: string, params: any, user?: AuthUser) {
+    await this.syncLive();
     return this.onuAction('DELETE', id, params, user);
   }
 

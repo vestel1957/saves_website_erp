@@ -4,6 +4,7 @@ import { IsArray, IsIn, IsInt, IsNumber, IsOptional, IsString, Min, MinLength, V
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
+import { PostingService } from '../accounting/posting.service';
 
 const num = (d: Prisma.Decimal | number | null | undefined) => (d == null ? 0 : Number(d));
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -46,7 +47,10 @@ export class QuoteStatusDto {
 
 @Injectable()
 export class OmniService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly posting: PostingService,
+  ) {}
 
   // --- Eventos / agenda ---
   async events(params: { from?: string; to?: string; page?: number; pageSize?: number }) {
@@ -133,21 +137,29 @@ export class OmniService {
     if (!q) throw new NotFoundException('Cotización no encontrada');
     if (!q.subscriberId) throw new BadRequestException('La cotización no tiene cliente; asígnalo antes de convertir.');
     if (q.status === 'converted') throw new BadRequestException('La cotización ya fue convertida en factura.');
-    return this.prisma.$transaction(async (tx) => {
+    const today = dOnly();
+    const sub = await this.prisma.subscriber.findUnique({ where: { id: q.subscriberId }, select: { eInvoice: true } });
+    const result = await this.prisma.$transaction(async (tx) => {
       const max = await tx.subInvoice.aggregate({ _max: { tid: true } });
       const tid = (max._max.tid ?? 1000) + 1;
-      const today = dOnly();
       const due = new Date(today.getTime() + 30 * 24 * 3600 * 1000);
       const inv = await tx.subInvoice.create({
         data: {
           tid, subscriberId: q.subscriberId!, invoiceDate: today, dueDate: due,
           subtotal: num(q.subtotal), tax: num(q.tax), total: num(q.total), status: 'DUE',
+          eInvoiceFlag: sub?.eInvoice ? 'Crear Factura Electronica' : null,
           items: { create: q.items.map((it) => ({ productName: it.product ?? null, qty: it.qty, price: num(it.price), taxRate: num(it.taxRate), subtotal: num(it.subtotal), taxTotal: num(it.taxTotal) })) },
         },
       });
       await tx.quote.update({ where: { id }, data: { status: 'converted' } });
       return { ok: true, invoiceId: inv.id, tid: inv.tid };
     });
+    // Contabilización automática de la factura resultante (idempotente; no rompe el flujo).
+    await this.posting.postSalesInvoice({
+      sourceId: result.invoiceId, date: today, number: result.tid,
+      subtotal: num(q.subtotal), tax: num(q.tax), createdBy: user?.name ?? user?.email ?? null,
+    });
+    return result;
   }
 
   // --- Cotizaciones ---

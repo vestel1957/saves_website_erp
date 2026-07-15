@@ -19,4 +19,12 @@ export class ReportsController {
   @Get('estadisticas-servicios') estadisticasServicios() { return this.reports.estadisticasServicios(); }
   @Get('cortes-activaciones') cortesActivaciones(@Query('from') from?: string, @Query('to') to?: string) { return this.reports.cortesActivaciones(from, to); }
   @Get('movimientos') movimientos(@Query('from') from?: string, @Query('to') to?: string) { return this.reports.movimientos(from, to); }
+
+  /**
+   * Reporte de IVA. `tipo` = ventas (por defecto) | compras.
+   * El export a PDF/Excel lo arma el frontend con la infraestructura común de reportes.
+   */
+  @Get('iva') iva(@Query('tipo') tipo?: string, @Query('from') from?: string, @Query('to') to?: string) {
+    return this.reports.iva(tipo ?? 'ventas', from, to);
+  }
 }

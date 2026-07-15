@@ -8,6 +8,9 @@ export class AddNoteDto {
   body!: string;
 }
 
+/** Tecnologías de instalación (enum Prisma `InstallTech`). */
+export const INSTALL_TECHS = ['GPON', 'EPON', 'EOC', 'RADIO', 'FIBRA'] as const;
+
 const KINDS = ['RECURRENTE', 'FIJA', 'NOTA_CREDITO', 'NOTA_DEBITO'];
 const RONS = [
   'ACTIVO', 'INSTALAR', 'CORTADO', 'SUSPENDIDO', 'EXONERADO', 'CARTERA', 'COMPROMISO',
@@ -121,6 +124,23 @@ export class UpdateSubscriberDto {
 
   @IsOptional() @IsString()
   branchId?: string;
+
+  // --- Conectividad (legacy `create.php`: name_s, contra, perfil, Ipremota, tegnologia).
+  // El secret PPP se valida contra duplicados en el servidor (ver SubscribersService).
+  @IsOptional() @IsString() @MaxLength(80)
+  pppUsername?: string;
+
+  @IsOptional() @IsString() @MaxLength(80)
+  pppPassword?: string;
+
+  @IsOptional() @IsString() @MaxLength(60)
+  pppProfile?: string;
+
+  @IsOptional() @IsString() @MaxLength(40)
+  ipRemote?: string;
+
+  @IsOptional() @IsIn(INSTALL_TECHS as unknown as string[])
+  installTech?: string;
 }
 
 /**
@@ -140,4 +160,17 @@ export class CreateSubscriberDto extends UpdateSubscriberDto {
 
   @IsDateString()
   declare birthDate: string;
+}
+
+/** Campos que la pantalla de alta manda para el chequeo previo de duplicados. */
+export class CheckDuplicatesDto {
+  @IsOptional() @IsString() docNumber?: string;
+  @IsOptional() @IsString() branchId?: string;
+  @IsOptional() @IsString() pppUsername?: string;
+  @IsOptional() @IsString() installTech?: string;
+  @IsOptional() @IsString() departmentRef?: string;
+  @IsOptional() @IsString() cityRef?: string;
+  @IsOptional() @IsString() localityRef?: string;
+  @IsOptional() @IsString() neighborhood?: string;
+  @IsOptional() @IsString() addressLine?: string;
 }

@@ -30,7 +30,8 @@ export type MkAdminAction =
 @Injectable()
 export class MikrotikAdminService {
   private readonly logger = new Logger(MikrotikAdminService.name);
-  private readonly live = process.env.MIKROTIK_LIVE === 'true';
+  private live = process.env.MIKROTIK_LIVE === 'true';
+  private liveCheckedAt = 0;
 
   constructor(private readonly prisma: PrismaService) {}
 
@@ -38,7 +39,20 @@ export class MikrotikAdminService {
     return this.live;
   }
 
-  mode() {
+  /** Sincroniza el modo real desde el ajuste `network.mikrotikLive` (interruptor en Configuración, cache 15s). MIKROTIK_LIVE=true lo fuerza. */
+  private async syncLive(): Promise<void> {
+    const now = Date.now();
+    if (now - this.liveCheckedAt < 15000) return;
+    this.liveCheckedAt = now;
+    const row = await this.prisma.appSetting.findUnique({ where: { key: 'network.mikrotikLive' } });
+    // El interruptor de Configuración MANDA si está definido; si no, cae a la env.
+    this.live = row?.value === 'true' || row?.value === 'false'
+      ? row.value === 'true'
+      : process.env.MIKROTIK_LIVE === 'true';
+  }
+
+  async mode() {
+    await this.syncLive();
     return { live: this.live, mode: this.live ? 'LIVE' : 'DRY_RUN' };
   }
 
@@ -393,6 +407,7 @@ export class MikrotikAdminService {
 
   /** Habilita / deshabilita un secret PPPoE por nombre. */
   async toggleSecret(id: string, name: string, disabled: boolean, user?: AuthUser) {
+    await this.syncLive();
     const mk = await this.resolve(id);
     if (!name) throw new BadRequestException('Debe indicar el nombre del secret.');
     const verb = disabled ? 'deshabilitar' : 'habilitar';
@@ -416,6 +431,7 @@ export class MikrotikAdminService {
 
   /** Cierra (reinicia) una sesión PPP activa por nombre. */
   async kickActive(id: string, name: string, user?: AuthUser) {
+    await this.syncLive();
     const mk = await this.resolve(id);
     if (!name) throw new BadRequestException('Debe indicar el nombre de la sesión.');
 

@@ -1582,6 +1582,8 @@ model Employee {
   bloodType String? // RH
   status    EmployeeStatus  @default(ACTIVE)
 
+  movilMemberships MovilMember[]
+
   // ---- datos laborales / RRHH ----
   address               String? // dirección de residencia
   city                  String?
@@ -2802,6 +2804,7 @@ model Subscriber {
   previousStatus  SubscriberStatus? // ultimo_estado
   statusChangedAt DateTime? // fecha_cambio
   statusGenDate   DateTime?         @db.Date // fecha_genera_estado_user
+  promiseExpiry   DateTime?         @db.Date // fecha límite del compromiso de pago (protege del corte masivo)
 
   // --- Dinero (cache recalculado desde transactions) ---
   balance     Decimal @default(0) @db.Decimal(18, 2) // balance (saldo a favor)
@@ -2825,6 +2828,7 @@ model Subscriber {
   // --- Relaciones ---
   services            SubscriberService[]
   statusHistory       SubscriberStatusHistory[]
+  callLogs            CallLog[]
   invoices            SubInvoice[]
   recurringInvoices   RecurringInvoice[]
   projects            Project[]
@@ -2905,6 +2909,27 @@ model OltActionLog {
 
   @@index([subscriberId])
   @@index([oltId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+/// Auditoría de acciones GenieACS/TR-069 (test/tag/corte-tv/provision). Espejo de OltActionLog.
+model GenieacsActionLog {
+  id           String   @id @default(cuid())
+  serverId     String? // GenieacsServer.id resuelto
+  serverName   String? // nombre del ACS (snapshot)
+  action       String // TEST | LIST | TAG_CUT | TAG_RESTORE | REFRESH | SET_PARAM | INSTALL_PROVISION | LINK | DELETE
+  ok           Boolean
+  dryRun       Boolean  @default(true)
+  detail       String? // resumen del plan / error
+  deviceId     String? // _id del CPE afectado (snapshot, individual)
+  subscriberId String? // vínculo opcional (sin FK: preserva el log si se borra el abonado)
+  count        Int? // nº de dispositivos afectados en operaciones masivas
+  userId       String? // quién lo ejecutó
+  userName     String?
+  createdAt    DateTime @default(now())
+
+  @@index([serverId])
   @@index([action])
   @@index([createdAt])
 }
@@ -3028,6 +3053,34 @@ model WhatsappSend {
   @@index([subscriberId])
 }
 
+/// Móvil / cuadrilla: agrupa técnicos para asignar órdenes y eventos (tabla `moviles`).
+model Movil {
+  id            String        @id @default(cuid())
+  legacyId      Int?          @unique // id_movil
+  name          String?
+  status        String        @default("Activa") // Activa | Inactiva
+  createdByName String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  members       MovilMember[]
+
+  @@index([status])
+}
+
+/// Técnico asignado a una móvil (tabla `empleados_moviles`).
+model MovilMember {
+  id         String   @id @default(cuid())
+  legacyId   Int?     @unique // id_empleados_moviles
+  movilId    String
+  movil      Movil    @relation(fields: [movilId], references: [id], onDelete: Cascade)
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id])
+  role       String? // rol
+
+  @@unique([movilId, employeeId])
+  @@index([employeeId])
+}
+
 /// Mensajería interna / bitácora de mensajes (tabla `mensajes`).
 model InternalMessage {
   id              String   @id @default(cuid())
@@ -3138,6 +3191,31 @@ model SubscriberStatusHistory {
   @@index([subscriberId])
   @@index([date])
   @@index([status, date]) // reportes cortes/activaciones por estado + periodo
+}
+
+/// Bitácora de llamadas de cobranza + acuerdos de pago (legacy `llamadas`).
+/// Un registro con `responseDetail = 'Acuerdo de Pago'` es un compromiso: su
+/// `dueDate` alimenta `Subscriber.promiseExpiry` y protege del corte masivo.
+model CallLog {
+  id             String     @id @default(cuid())
+  legacyId       Int?       @unique // llamadas.id
+  subscriberId   String // iduser
+  subscriber     Subscriber @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+  callType       String? // tllamada (tipo/canal de la llamada)
+  responseType   String? // trespuesta (catálogo libre de respuestas)
+  responseDetail String? // drespuesta ('Acuerdo de Pago' | 'Solicitud de descuento' | ...)
+  responsible    String? // responsable (cobrador que registró)
+  date           DateTime   @db.Date // fcha
+  time           String? // hra (HH:mm)
+  dueDate        DateTime?  @db.Date // fecha_vence (solo en Acuerdo de Pago)
+  notes          String? // notes
+  createdAt      DateTime   @default(now())
+
+  @@index([subscriberId])
+  @@index([responseDetail])
+  @@index([dueDate])
+  @@index([responsible])
+  @@index([date])
 }
 
 /// Factura de suscriptor (legacy `invoices`). Dos ejes de estado: status (pago) y ron (servicio/cartera).
@@ -4019,6 +4097,49 @@ model PaymentOrder {
   @@index([status])
 }
 
+/// Cargue masivo de pagos externos (Efecty y otros recaudadores).
+/// Reemplaza el legacy `files_carga_transaccional` + `datos_archivo_excel_cargue`.
+/// Flujo en dos fases: subir (staging) → procesar (aplica a cartera vía collect).
+model PaymentImportBatch {
+  id            String             @id @default(cuid())
+  fileName      String?
+  uploadedById  String?
+  status        String             @default("Cargado") // Cargado | Procesado
+  totalRows     Int                @default(0)
+  appliedRows   Int                @default(0)
+  errorRows     Int                @default(0)
+  notFoundRows  Int                @default(0)
+  duplicateRows Int                @default(0)
+  totalAmount   Decimal            @default(0) @db.Decimal(18, 2)
+  appliedAmount Decimal            @default(0) @db.Decimal(18, 2)
+  rows          PaymentImportRow[]
+  createdAt     DateTime           @default(now())
+
+  @@index([status])
+}
+
+/// Fila del cargue (una por pago). estado: Inicial | Cargado | Error | Usuario No Existe | Duplicado.
+model PaymentImportRow {
+  id            String             @id @default(cuid())
+  batchId       String
+  batch         PaymentImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  rowNumber     Int // fila en el archivo
+  documento     String // columna B (id/abonado/documento del cliente)
+  amount        Decimal            @db.Decimal(18, 2) // columna C (monto)
+  method        String             @default("EFECTY") // columna D (medio de pago)
+  reference     String? // ref_efecty, columna E (idempotencia)
+  date          DateTime?          @db.Date // columna A (fecha del pago)
+  status        String             @default("Inicial")
+  subscriberId  String? // cliente emparejado
+  message       String? // detalle del resultado
+  transactionId String? // primera transacción de recaudo generada
+  createdAt     DateTime           @default(now())
+
+  @@index([batchId])
+  @@index([reference])
+  @@index([status])
+}
+
 // --- Facturación electrónica DIAN (vía Siigo) ---
 
 /// Cuenta Siigo / razón social (mejora el legacy `config_facturacion_electronica`:
@@ -4142,6 +4263,20 @@ model Olt {
   createdAt          DateTime @default(now())
 
   @@index([branchId])
+}
+
+/// Servidor GenieACS (ACS TR-069). El sistema habla con su NBI (API REST, puerto 7557).
+/// A diferencia de Mikrotik/OLT (socket/SSH), aquí GenieACS es quien habla TR-069 con los CPEs.
+model GenieacsServer {
+  id         String   @id @default(cuid())
+  name       String
+  nbiUrl     String // URL del NBI, ej: http://host:7557
+  username   String   @default("") // basic-auth opcional del NBI (hoy el NBI va sin auth)
+  password   String   @default("")
+  sedeLegacy Int      @default(0)
+  isDefault  Boolean  @default(false)
+  online     Boolean  @default(false)
+  createdAt  DateTime @default(now())
 }
 
 /// ONU/ONT registrada en una OLT (legacy `olt_onus`).

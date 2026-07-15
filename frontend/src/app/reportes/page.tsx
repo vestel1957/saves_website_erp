@@ -39,6 +39,7 @@ const REPORTS: { key: string; label: string; icon: string; dated: boolean; endpo
   { key: "estadisticas-servicios", label: "Estado de clientes", icon: "users", dated: false },
   { key: "cortes-activaciones", label: "Cortes y activaciones", icon: "activity", dated: true },
   { key: "movimientos", label: "Altas y retiros", icon: "trending-up", dated: true },
+  { key: "iva", label: "Reporte de IVA", icon: "calculator", dated: true },
 ];
 
 /** Marco de sección con un título discreto sobre una grilla de tarjetas. */
@@ -176,6 +177,49 @@ function buildExportDoc(rep: string, label: string, data: any, from: string, to:
         rows: (data.items ?? []).map((r: any) => ({ cells: [r.abonado, r.name, r.facturas, r.balance] })),
       });
       break;
+    case "iva": {
+      const t = data.totales ?? {};
+      doc.subtitle = `${periodo} · ${data.tipo === "compras" ? "Compras" : "Ventas"}`;
+      doc.tables.push({
+        heading: "Resumen por tarifa",
+        columns: [
+          { label: "Tarifa" },
+          { label: "Documentos", align: "right" },
+          { label: "Base", align: "right", money: true },
+          { label: "IVA", align: "right", money: true },
+        ],
+        rows: (data.porTarifa ?? []).map((r: any) => ({
+          cells: [r.tarifa === 0 ? "Exento (0%)" : `${r.tarifa}%`, r.documentos, r.base, r.iva],
+        })),
+      });
+      doc.tables.push({
+        heading: "Detalle por documento",
+        columns: [
+          { label: "Fecha" },
+          { label: "Documento" },
+          { label: "Tercero" },
+          { label: "NIT / Documento" },
+          { label: "Base gravable", align: "right", money: true },
+          { label: "Base exenta", align: "right", money: true },
+          { label: "Notas/ajustes", align: "right", money: true },
+          { label: "IVA", align: "right", money: true },
+          { label: "Total", align: "right", money: true },
+        ],
+        rows: [
+          ...(data.items ?? []).map((r: any) => ({
+            cells: [
+              new Date(r.fecha).toLocaleDateString("es-CO"), r.numero, r.tercero, r.documento ?? "—",
+              r.baseGravable, r.baseExenta, r.ajustes, r.iva, r.total,
+            ],
+          })),
+          {
+            cells: ["", "", "TOTALES", "", t.baseGravable ?? 0, t.baseExenta ?? 0, t.ajustes ?? 0, t.iva ?? 0, t.total ?? 0],
+            bold: true,
+          },
+        ],
+      });
+      break;
+    }
     default:
       return null;
   }
@@ -222,6 +266,8 @@ export default function ReportesPage() {
   const [to, setTo] = useState("");
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  // El reporte de IVA es el único con un eje extra (ventas / compras).
+  const [ivaTipo, setIvaTipo] = useState<"ventas" | "compras">("ventas");
 
   const meta = REPORTS.find((r) => r.key === rep)!;
 
@@ -229,10 +275,11 @@ export default function ReportesPage() {
     setLoading(true);
     const qs = new URLSearchParams();
     if (meta.dated) { if (from) qs.set("from", from); if (to) qs.set("to", to); }
+    if (rep === "iva") qs.set("tipo", ivaTipo);
     const path = meta.endpoint ?? `/reports/${rep}`;
     try { setData(await (await authFetch(`${path}?${qs}`)).json()); }
     finally { setLoading(false); }
-  }, [authFetch, rep, from, to, meta.dated, meta.endpoint]);
+  }, [authFetch, rep, from, to, ivaTipo, meta.dated, meta.endpoint]);
 
   useEffect(() => { if (!authLoading) void load(); }, [authLoading, load]);
 
@@ -258,6 +305,18 @@ export default function ReportesPage() {
       {/* Filtros de fecha + presets */}
       {meta.dated && (
         <div className="flex flex-wrap items-end gap-2">
+          {rep === "iva" && (
+            <Field label="Tipo">
+              <div className="flex gap-1.5">
+                {(["ventas", "compras"] as const).map((t) => (
+                  <button key={t} onClick={() => setIvaTipo(t)}
+                    className={`rounded-lg border px-3 py-2 text-[12px] font-semibold capitalize transition-colors ${ivaTipo === t ? "border-brand bg-brand-soft text-brand" : "border-border-subtle bg-surface text-text-secondary hover:bg-surface-2"}`}>
+                    {t}
+                  </button>
+                ))}
+              </div>
+            </Field>
+          )}
           <Field label="Desde"><Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></Field>
           <Field label="Hasta"><Input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></Field>
           <div className="flex flex-wrap gap-1.5 pb-0.5">
@@ -283,8 +342,59 @@ export default function ReportesPage() {
           {rep === "cortes-activaciones" && <CortesActivaciones data={data} />}
           {rep === "movimientos" && <Movimientos data={data} />}
           {rep === "top-deudores" && <TopDeudores data={data} />}
+          {rep === "iva" && <ReporteIva data={data} />}
         </div>
       )}
+    </>
+  );
+}
+
+/**
+ * Reporte de IVA. A diferencia del legacy, discrimina base gravable / exenta / IVA por
+ * tarifa, aísla las notas y excluye los documentos anulados (el legacy los sumaba).
+ */
+function ReporteIva({ data }: { data: any }) {
+  const t = data.totales ?? {};
+  return (
+    <>
+      <Section>
+        <TrendStat icon="calculator" label="Base gravable" value={cop(t.baseGravable ?? 0)} />
+        <TrendStat icon="receipt" label="IVA" value={cop(t.iva ?? 0)} />
+        <TrendStat icon="file-text" label="Base exenta" value={cop(t.baseExenta ?? 0)} />
+        <TrendStat icon="boxes" label="Documentos" value={nfmt(t.documentos ?? 0)} />
+      </Section>
+
+      <ChartCard title="Base e IVA por tarifa" subtitle="Los exentos (0%) se muestran aparte, no mezclados con los gravados">
+        <DataTable
+          rows={data.porTarifa ?? []}
+          empty="Sin documentos en el periodo."
+          columns={[
+            { key: "tarifa", header: "Tarifa", render: (r: any) => (r.tarifa === 0 ? "Exento (0%)" : `${r.tarifa}%`) },
+            { key: "documentos", header: "Documentos", render: (r: any) => nfmt(r.documentos) },
+            { key: "base", header: "Base", render: (r: any) => cop(r.base) },
+            { key: "iva", header: "IVA", render: (r: any) => cop(r.iva) },
+          ]}
+        />
+      </ChartCard>
+
+      <ChartCard title="Detalle por documento" subtitle="No incluye documentos anulados">
+        <DataTable
+          rows={data.items ?? []}
+          empty="Sin documentos en el periodo."
+          columns={[
+            { key: "fecha", header: "Fecha", render: (r: any) => new Date(r.fecha).toLocaleDateString("es-CO") },
+            { key: "numero", header: "Documento", render: (r: any) => `#${r.numero}` },
+            { key: "tercero", header: "Tercero", render: (r: any) => r.tercero },
+            { key: "documento", header: "NIT / Documento", render: (r: any) => r.documento ?? "—" },
+            { key: "baseGravable", header: "Base gravable", render: (r: any) => cop(r.baseGravable) },
+            { key: "baseExenta", header: "Base exenta", render: (r: any) => cop(r.baseExenta) },
+            { key: "ajustes", header: "Notas/ajustes", render: (r: any) => (r.ajustes ? cop(r.ajustes) : "—") },
+            { key: "iva", header: "IVA", render: (r: any) => cop(r.iva) },
+            { key: "total", header: "Total", render: (r: any) => cop(r.total) },
+            { key: "retencionTipo", header: "Retención", render: (r: any) => r.retencionTipo ?? "—" },
+          ]}
+        />
+      </ChartCard>
     </>
   );
 }

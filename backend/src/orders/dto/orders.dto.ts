@@ -1,5 +1,10 @@
 import { Type } from 'class-transformer';
-import { IsArray, IsInt, IsNumber, IsOptional, IsString, Min, MinLength, ValidateNested } from 'class-validator';
+import { IsArray, IsIn, IsInt, IsNumber, IsOptional, IsString, Min, MinLength, ValidateNested } from 'class-validator';
+
+/** Tipos de retención colombianos (legacy `purchase.tipo_retencion`). */
+export const RETENTION_TYPES = ['Retefuente Servicios', 'Compras', 'Personas no declarantes', 'Reteiva'] as const;
+/** Tipos de nota sobre una orden de compra (legacy `Purchase::crear_nota`). */
+export const NOTE_TYPES = ['Nota Credito', 'Nota Debito', 'Retencion'] as const;
 
 export class OrderItemDto {
   @IsOptional() @IsString() materialId?: string;
@@ -17,6 +22,17 @@ export class CreateOrderDto {
   @IsOptional() @IsString() categoryRef?: string; // categoría de compra (PurchaseCategory.name)
   @IsOptional() @IsString() notes?: string;
   @IsArray() @ValidateNested({ each: true }) @Type(() => OrderItemDto) items!: OrderItemDto[];
+  // Retención capturada al crear la orden (legacy newinvoice.php). Se materializa como nota de retención.
+  @IsOptional() @IsString() @IsIn(RETENTION_TYPES as unknown as string[]) retentionType?: string;
+  @IsOptional() @IsNumber() @Min(0) retention?: number;
+}
+
+/** Nota (crédito/débito/retención) sobre una orden de compra ya creada. */
+export class AddNoteDto {
+  @IsString() @IsIn(NOTE_TYPES as unknown as string[]) type!: string; // Nota Credito | Nota Debito | Retencion
+  @IsOptional() @IsString() @IsIn(RETENTION_TYPES as unknown as string[]) retentionType?: string; // requerido si type=Retencion
+  @IsNumber() @Min(0.01) amount!: number; // monto absoluto (el signo lo pone el tipo)
+  @IsOptional() @IsString() description?: string;
 }
 
 export class CategoryNameDto {

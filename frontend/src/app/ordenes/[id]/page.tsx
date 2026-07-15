@@ -41,6 +41,13 @@ export default function OrdenDetallePage() {
   const [payCash, setPayCash] = useState("");
   const [cashAccounts, setCashAccounts] = useState<{ id: number; name: string }[]>([]);
   const [paying, setPaying] = useState(false);
+  // Notas / retenciones
+  const [noteOpen, setNoteOpen] = useState(false);
+  const [noteType, setNoteType] = useState("Retencion");
+  const [noteRetType, setNoteRetType] = useState("Retefuente Servicios");
+  const [noteAmount, setNoteAmount] = useState("");
+  const [noteDesc, setNoteDesc] = useState("");
+  const [notesaving, setNotesaving] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -82,6 +89,37 @@ export default function OrdenDetallePage() {
       toast(`Pago registrado · saldo ${cop(d.balance)}`, "check");
       setPayOpen(false); void load();
     } catch (e: any) { toast(e.message, "alert-triangle"); } finally { setPaying(false); }
+  }
+
+  function openNote() {
+    setNoteType("Retencion"); setNoteRetType("Retefuente Servicios"); setNoteAmount(""); setNoteDesc("");
+    setNoteOpen(true);
+  }
+
+  async function submitNote() {
+    const amount = Number(noteAmount) || 0;
+    if (amount <= 0) { toast("Ingresa un monto mayor a cero", "alert-triangle"); return; }
+    setNotesaving(true);
+    try {
+      const body: any = { type: noteType, amount, description: noteDesc || undefined };
+      if (noteType === "Retencion") body.retentionType = noteRetType;
+      const res = await authFetch(`/orders/${id}/notes`, { method: "POST", body: JSON.stringify(body) });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d?.message || "No se pudo agregar la nota");
+      toast(`Nota aplicada · nuevo total ${cop(d.total)}`, "check");
+      setNoteOpen(false); void load();
+    } catch (e: any) { toast(e.message, "alert-triangle"); } finally { setNotesaving(false); }
+  }
+
+  async function removeNote(noteId: string) {
+    if (!confirm("¿Eliminar esta nota? El total de la orden se ajustará.")) return;
+    try {
+      const res = await authFetch(`/orders/${id}/notes/${noteId}`, { method: "DELETE" });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d?.message || "No se pudo eliminar la nota");
+      toast(`Nota eliminada · nuevo total ${cop(d.total)}`, "check");
+      void load();
+    } catch (e: any) { toast(e.message, "alert-triangle"); }
   }
 
   const submitReceive = async () => {
@@ -145,7 +183,11 @@ export default function OrdenDetallePage() {
           <div className="flex justify-between text-[13px]"><span className="text-text-tertiary">Subtotal</span><span className="text-text-secondary">{cop(order.subtotal ?? 0)}</span></div>
           <div className="flex justify-between text-[13px]"><span className="text-text-tertiary">IVA</span><span className="text-text-secondary">{cop(order.tax ?? 0)}</span></div>
           {order.discount ? <div className="flex justify-between text-[13px]"><span className="text-text-tertiary">Descuento</span><span className="text-text-secondary">-{cop(order.discount)}</span></div> : null}
-          <div className="mt-1 flex justify-between border-t border-border-subtle pt-1 text-[14px] font-bold text-text-primary"><span>Total</span><span>{cop(order.total ?? 0)}</span></div>
+          {(order.noteLines ?? []).filter((n: any) => !String(n.type).startsWith("Retención")).map((n: any) => (
+            <div key={n.id} className="flex justify-between text-[13px]"><span className="text-text-tertiary">{n.type}</span><span className="text-text-secondary">{n.amount < 0 ? "-" : "+"}{cop(Math.abs(n.amount))}</span></div>
+          ))}
+          {order.retention > 0 ? <div className="flex justify-between text-[13px]"><span className="text-text-tertiary">Retención ({order.retentionType})</span><span className="text-warning-text">-{cop(order.retention)}</span></div> : null}
+          <div className="mt-1 flex justify-between border-t border-border-subtle pt-1 text-[14px] font-bold text-text-primary"><span>Total neto</span><span>{cop(order.total ?? 0)}</span></div>
           <div className="mt-1 flex justify-between text-[13px]"><span className="text-text-tertiary">Pagado</span><span className="text-success-text">{cop(order.paid ?? 0)}</span></div>
           <div className="flex justify-between text-[13px]"><span className="text-text-tertiary">Saldo</span><span className={saldo > 0 ? "font-semibold text-error-text" : "text-text-tertiary"}>{cop(saldo)}</span></div>
           {saldo > 0 && <Button variant="secondary" size="sm" className="mt-2 w-full" onClick={openPay}><Icon name="hand-coins" size={14} /> Registrar pago</Button>}
@@ -172,6 +214,29 @@ export default function OrdenDetallePage() {
             { key: "received", header: "Recibido", align: "right", render: (r: any) => <span className="text-text-secondary">{r.received ?? 0} / {r.qty}</span> },
           ]}
         />
+      </div>
+
+      <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="flex items-center gap-1.5 text-[13px] font-bold text-text-primary"><Icon name="file-text" size={16} /> Notas y retenciones</h2>
+          <Button variant="secondary" size="sm" onClick={openNote}><Icon name="plus" size={14} /> Agregar nota</Button>
+        </div>
+        {(order.noteLines ?? []).length === 0 ? (
+          <p className="text-[12px] text-text-tertiary">Sin notas ni retenciones. Usa «Agregar nota» para registrar una nota crédito/débito o una retención (ReteFuente/ReteICA).</p>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {(order.noteLines ?? []).map((n: any) => (
+              <div key={n.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border-subtle px-3 py-2">
+                <div className="min-w-0 flex-1">
+                  <span className="text-[13px] font-medium text-text-primary">{n.type}</span>
+                  {n.description ? <span className="ml-2 text-[12px] text-text-tertiary">{n.description}</span> : null}
+                </div>
+                <span className={`text-[13px] font-semibold ${n.amount < 0 ? "text-warning-text" : "text-text-secondary"}`}>{n.amount < 0 ? "-" : "+"}{cop(Math.abs(n.amount))}</span>
+                <button onClick={() => removeNote(n.id)} className="text-text-tertiary hover:text-error-text" title="Eliminar nota"><Icon name="trash" size={15} /></button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {canReceive && (
@@ -212,6 +277,35 @@ export default function OrdenDetallePage() {
         <div className="mt-3 flex justify-end gap-2">
           <Button variant="secondary" onClick={() => setPayOpen(false)} disabled={paying}>Cancelar</Button>
           <Button variant="primary" onClick={submitPay} disabled={paying}>{paying ? "Guardando…" : "Registrar pago"}</Button>
+        </div>
+      </Modal>
+
+      <Modal open={noteOpen} onClose={() => setNoteOpen(false)} title="Agregar nota / retención" maxWidth="max-w-md">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Field label="Tipo" required>
+            <Select value={noteType} onChange={(e) => setNoteType(e.target.value)}>
+              <option value="Nota Credito">Nota Crédito (descuento)</option>
+              <option value="Nota Debito">Nota Débito (aumento)</option>
+              <option value="Retencion">Retención</option>
+            </Select>
+          </Field>
+          {noteType === "Retencion" && (
+            <Field label="Tipo de retención" required>
+              <Select value={noteRetType} onChange={(e) => setNoteRetType(e.target.value)}>
+                <option value="Retefuente Servicios">Retefuente Servicios</option>
+                <option value="Compras">Compras</option>
+                <option value="Personas no declarantes">Personas no declarantes</option>
+                <option value="Reteiva">Reteiva</option>
+              </Select>
+            </Field>
+          )}
+          <Field label="Monto" required><Input type="number" min={0} value={noteAmount} onChange={(e) => setNoteAmount(e.target.value)} autoFocus /></Field>
+          <div className="sm:col-span-2"><Field label="Descripción"><Input value={noteDesc} onChange={(e) => setNoteDesc(e.target.value)} placeholder="Opcional" /></Field></div>
+        </div>
+        <p className="mt-2 text-[12px] text-text-tertiary">Crédito y retención <strong>restan</strong> del total; débito <strong>suma</strong>. El total no puede quedar por debajo de lo ya pagado.</p>
+        <div className="mt-3 flex justify-end gap-2">
+          <Button variant="secondary" onClick={() => setNoteOpen(false)} disabled={notesaving}>Cancelar</Button>
+          <Button variant="primary" onClick={submitNote} disabled={notesaving}>{notesaving ? "Guardando…" : "Aplicar nota"}</Button>
         </div>
       </Modal>
     </>

@@ -3,6 +3,16 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 const num = (d: Prisma.Decimal | number | null | undefined) => (d == null ? 0 : Number(d));
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/** Fila cruda del reporte de IVA (una por documento). */
+type IvaRow = {
+  numero: number; fecha: Date; tercero: string; documento: string | null;
+  base_gravable: number; base_exenta: number; ajustes: number; iva: number; total: number;
+  retencion_tipo: string | null; retencion: number;
+};
+/** Fila cruda del resumen por tarifa. */
+type TarifaRow = { tarifa: number; base: number; iva: number; documentos: number };
 function range(from?: string, to?: string): { gte?: Date; lte?: Date } | undefined {
   if (!from && !to) return undefined;
   const r: { gte?: Date; lte?: Date } = {};
@@ -116,6 +126,123 @@ export class ReportsService {
       this.prisma.subscriberStatusHistory.count({ where: retiroWhere }),
     ]);
     return { altas, retiros, neto: altas - retiros };
+  }
+
+  /**
+   * Reporte de IVA (ventas o compras).
+   *
+   * NO replica el legacy (`Export::taxstatement_o` / `Reports::taxviewstatements_load`), que
+   * era un listado plano inservible como reporte fiscal: no filtraba por estado (sumaba el
+   * IVA de facturas ANULADAS), publicaba `total` con el IVA incluido y como texto
+   * (`concat('COP ', total)`), no discriminaba base gravable, no separaba exentos, ignoraba
+   * las retenciones y no tenía `ORDER BY` (su acumulado era no determinista).
+   *
+   * Aquí: se excluyen los documentos anulados, se discrimina base gravable / IVA / tarifa,
+   * se separan los exentos, se expone la retención y el orden es estable.
+   *
+   * Las notas crédito/débito se aíslan en `ajustes` en vez de contaminar las bases: en
+   * ventas se reconocen por `productName` (ojo: en `SubInvoiceItem` TODOS los ítems llevan
+   * `productId = 0`, no sólo las notas) y en compras por `materialLegacy = 0`.
+   */
+  async iva(type: string, from?: string, to?: string) {
+    const isPurchase = String(type).toLowerCase().startsWith('compra');
+    const dr = range(from, to);
+    const gte = dr?.gte ?? new Date('1900-01-01');
+    const lte = dr?.lte ?? new Date('2999-12-31');
+
+    const rows = isPurchase
+      ? await this.prisma.$queryRaw<IvaRow[]>`
+          SELECT o.tid::int AS numero, o."orderDate" AS fecha,
+                 COALESCE(p.name, 'Sin proveedor') AS tercero, p.nit AS documento,
+                 COALESCE(SUM(CASE WHEN it."taxRate" > 0 AND COALESCE(it."materialLegacy", -1) <> 0 THEN it.subtotal ELSE 0 END), 0)::float AS base_gravable,
+                 COALESCE(SUM(CASE WHEN it."taxRate" = 0 AND COALESCE(it."materialLegacy", -1) <> 0 THEN it.subtotal ELSE 0 END), 0)::float AS base_exenta,
+                 COALESCE(SUM(CASE WHEN it."materialLegacy" = 0 THEN it.subtotal ELSE 0 END), 0)::float AS ajustes,
+                 COALESCE(SUM(it."taxTotal"), 0)::float AS iva,
+                 o.total::float AS total,
+                 o."retentionType" AS retencion_tipo, o.retention::float AS retencion
+          FROM "SupplyOrder" o
+          LEFT JOIN "Supplier" p ON p.id = o."supplierId"
+          LEFT JOIN "SupplyOrderItem" it ON it."orderId" = o.id
+          WHERE LOWER(o.status) NOT IN ('canceled', 'cancelada', 'anulada')
+            AND o."orderDate" >= ${gte} AND o."orderDate" <= ${lte}
+          GROUP BY o.id, p.name, p.nit
+          ORDER BY o."orderDate", o.tid`
+      : await this.prisma.$queryRaw<IvaRow[]>`
+          SELECT i.tid::int AS numero, i."invoiceDate" AS fecha,
+                 COALESCE(s."companyName", s."fullName", 'Sin cliente') AS tercero, s."docNumber" AS documento,
+                 COALESCE(SUM(CASE WHEN it."taxRate" > 0 AND COALESCE(it."productName", '') NOT IN ('Nota Credito', 'Nota Debito') THEN it.subtotal ELSE 0 END), 0)::float AS base_gravable,
+                 COALESCE(SUM(CASE WHEN it."taxRate" = 0 AND COALESCE(it."productName", '') NOT IN ('Nota Credito', 'Nota Debito') THEN it.subtotal ELSE 0 END), 0)::float AS base_exenta,
+                 COALESCE(SUM(CASE WHEN it."productName" IN ('Nota Credito', 'Nota Debito') THEN it.subtotal ELSE 0 END), 0)::float AS ajustes,
+                 COALESCE(SUM(it."taxTotal"), 0)::float AS iva,
+                 i.total::float AS total,
+                 i."retentionType"::text AS retencion_tipo, 0::float AS retencion
+          FROM "SubInvoice" i
+          LEFT JOIN "Subscriber" s ON s.id = i."subscriberId"
+          LEFT JOIN "SubInvoiceItem" it ON it."invoiceId" = i.id
+          WHERE i.status <> 'CANCELED'
+            AND i."invoiceDate" >= ${gte} AND i."invoiceDate" <= ${lte}
+          GROUP BY i.id, s."companyName", s."fullName", s."docNumber"
+          ORDER BY i."invoiceDate", i.tid`;
+
+    // Resumen por tarifa: la tarifa se deriva del IVA sobre la base (una factura puede
+    // mezclar líneas al 19% y exentas, así que se reparte por línea, no por documento).
+    const porTarifa = isPurchase
+      ? await this.prisma.$queryRaw<TarifaRow[]>`
+          SELECT it."taxRate"::float AS tarifa,
+                 COALESCE(SUM(it.subtotal), 0)::float AS base,
+                 COALESCE(SUM(it."taxTotal"), 0)::float AS iva,
+                 COUNT(DISTINCT o.id)::int AS documentos
+          FROM "SupplyOrder" o
+          JOIN "SupplyOrderItem" it ON it."orderId" = o.id
+          WHERE LOWER(o.status) NOT IN ('canceled', 'cancelada', 'anulada')
+            AND COALESCE(it."materialLegacy", -1) <> 0
+            AND o."orderDate" >= ${gte} AND o."orderDate" <= ${lte}
+          GROUP BY it."taxRate" ORDER BY it."taxRate" DESC`
+      : await this.prisma.$queryRaw<TarifaRow[]>`
+          SELECT it."taxRate"::float AS tarifa,
+                 COALESCE(SUM(it.subtotal), 0)::float AS base,
+                 COALESCE(SUM(it."taxTotal"), 0)::float AS iva,
+                 COUNT(DISTINCT i.id)::int AS documentos
+          FROM "SubInvoice" i
+          JOIN "SubInvoiceItem" it ON it."invoiceId" = i.id
+          WHERE i.status <> 'CANCELED'
+            AND COALESCE(it."productName", '') NOT IN ('Nota Credito', 'Nota Debito')
+            AND i."invoiceDate" >= ${gte} AND i."invoiceDate" <= ${lte}
+          GROUP BY it."taxRate" ORDER BY it."taxRate" DESC`;
+
+    const items = rows.map((r) => ({
+      numero: Number(r.numero),
+      fecha: r.fecha,
+      tercero: r.tercero,
+      documento: r.documento ?? null,
+      baseGravable: Number(r.base_gravable),
+      baseExenta: Number(r.base_exenta),
+      ajustes: Number(r.ajustes),
+      iva: Number(r.iva),
+      total: Number(r.total),
+      retencionTipo: r.retencion_tipo ?? null,
+      retencion: Number(r.retencion),
+    }));
+    const sum = (k: keyof (typeof items)[number]) => items.reduce((a, b) => a + (Number(b[k]) || 0), 0);
+
+    return {
+      tipo: isPurchase ? 'compras' : 'ventas',
+      desde: dr?.gte ?? null,
+      hasta: dr?.lte ?? null,
+      items,
+      porTarifa: porTarifa.map((t) => ({
+        tarifa: Number(t.tarifa), base: Number(t.base), iva: Number(t.iva), documentos: Number(t.documentos),
+      })),
+      totales: {
+        documentos: items.length,
+        baseGravable: round2(sum('baseGravable')),
+        baseExenta: round2(sum('baseExenta')),
+        ajustes: round2(sum('ajustes')),
+        iva: round2(sum('iva')),
+        total: round2(sum('total')),
+        retencion: round2(sum('retencion')),
+      },
+    };
   }
 
   /** Top clientes deudores. */

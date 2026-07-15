@@ -61,7 +61,8 @@ type SubForNet = {
 export class MikrotikService {
   private readonly logger = new Logger('MikrotikService');
   /** true ⇒ ejecuta de verdad contra los routers. false ⇒ dry-run (simulación segura). */
-  private readonly live = process.env.MIKROTIK_LIVE === 'true';
+  private live = process.env.MIKROTIK_LIVE === 'true';
+  private liveCheckedAt = 0;
 
   constructor(
     private prisma: PrismaService,
@@ -70,6 +71,23 @@ export class MikrotikService {
 
   get isLive(): boolean {
     return this.live;
+  }
+
+  /**
+   * Sincroniza el modo real desde el ajuste `network.mikrotikLive` (interruptor en
+   * Configuración), con cache de 15s. La variable de entorno MIKROTIK_LIVE=true lo
+   * fuerza a vivo (compatibilidad). Se llama al inicio de cada operación de red.
+   */
+  private async syncLive(): Promise<void> {
+    const now = Date.now();
+    if (now - this.liveCheckedAt < 15000) return;
+    this.liveCheckedAt = now;
+    const row = await this.prisma.appSetting.findUnique({ where: { key: 'network.mikrotikLive' } });
+    // El interruptor de Configuración MANDA si está definido (true/false). Si no
+    // existe, se usa la variable de entorno MIKROTIK_LIVE como valor por defecto.
+    this.live = row?.value === 'true' || row?.value === 'false'
+      ? row.value === 'true'
+      : process.env.MIKROTIK_LIVE === 'true';
   }
 
   // ------------------------------------------------------------------
@@ -339,6 +357,7 @@ export class MikrotikService {
   // CORTE
   // ------------------------------------------------------------------
   async cut(subscriberId: string, user?: AuthUser): Promise<MikrotikActionResult> {
+    await this.syncLive();
     const sub = await this.loadSubscriber(subscriberId);
     if (!sub.pppUsername) {
       throw new BadRequestException('El cliente no tiene usuario PPPoE (name_s); no hay conexión que cortar.');
@@ -408,6 +427,7 @@ export class MikrotikService {
   // RECONEXIÓN
   // ------------------------------------------------------------------
   async reconnect(subscriberId: string, user?: AuthUser): Promise<MikrotikActionResult> {
+    await this.syncLive();
     const sub = await this.loadSubscriber(subscriberId);
     if (!sub.pppUsername) {
       throw new BadRequestException('El cliente no tiene usuario PPPoE (name_s); no hay conexión que reactivar.');
@@ -476,6 +496,7 @@ export class MikrotikService {
   // ALTA / PROVISIÓN (crear el secret PPPoE en el router)
   // ------------------------------------------------------------------
   async provision(subscriberId: string, user?: AuthUser): Promise<MikrotikActionResult> {
+    await this.syncLive();
     const full = await this.prisma.subscriber.findUnique({
       where: { id: subscriberId },
       select: {
@@ -550,6 +571,7 @@ export class MikrotikService {
    * No cambia el estado del abonado; solo el perfil en el /ppp/secret.
    */
   async applyProfile(subscriberId: string, profileRaw: string, user?: AuthUser): Promise<MikrotikActionResult> {
+    await this.syncLive();
     // Trim del perfil: un espacio inicial/final en los datos hacía que el perfil
     // no coincidiera con el del RouterOS y el cliente no tomara plan (bug conocido).
     const profile = (profileRaw || 'default').trim();
@@ -604,6 +626,7 @@ export class MikrotikService {
   // ESTADO EN VIVO
   // ------------------------------------------------------------------
   async liveStatus(subscriberId: string): Promise<MikrotikActionResult> {
+    await this.syncLive();
     const sub = await this.loadSubscriber(subscriberId);
     if (!sub.pppUsername) {
       throw new BadRequestException('El cliente no tiene usuario PPPoE (name_s).');
@@ -660,6 +683,7 @@ export class MikrotikService {
   // TEST de conexión a un router
   // ------------------------------------------------------------------
   async testRouter(mikrotikId: string): Promise<MikrotikActionResult> {
+    await this.syncLive();
     const router = await this.prisma.mikrotik.findUnique({ where: { id: mikrotikId } });
     if (!router) throw new NotFoundException('Mikrotik no encontrado');
     const routerInfo = { id: router.id, name: router.name, host: `${router.ip}:${router.port}`, tech: router.tech };
@@ -744,6 +768,7 @@ export class MikrotikService {
     action: 'CUT' | 'RECONNECT',
     user?: AuthUser,
   ): Promise<{ total: number; ok: number; results: MikrotikActionResult[] }> {
+    await this.syncLive();
     const results: MikrotikActionResult[] = [];
     const targetStatus = action === 'CUT' ? 'CORTADO' : 'ACTIVO';
     const verb = action === 'CUT' ? 'Corte' : 'Reconexión';

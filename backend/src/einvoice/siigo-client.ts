@@ -49,6 +49,42 @@ export class SiigoClient {
     return json;
   }
 
+  /**
+   * ¿Existe el tercero en Siigo? (GET /v1/customers?identification=…). Porta
+   * `SiigoAPI::getCustomer1`. `found=null` ⇒ no se pudo consultar (no afirmar que falta).
+   */
+  async findCustomer(token: string, identification: string): Promise<{ ok: boolean; found: boolean | null; id?: string; error?: string }> {
+    const res = await fetch(`${this.apiBaseUrl}/customers?identification=${encodeURIComponent(identification)}`, {
+      headers: { 'Partner-Id': PARTNER_ID, Authorization: `Bearer ${token}` },
+    });
+    const text = await res.text();
+    let raw: any;
+    try { raw = JSON.parse(text); } catch { raw = text; }
+    if (res.status < 200 || res.status >= 300) {
+      return { ok: false, found: null, error: typeof raw === 'string' ? raw.slice(0, 300) : JSON.stringify(raw).slice(0, 300) };
+    }
+    const total = raw?.pagination?.total_results;
+    const first = raw?.results?.[0];
+    return { ok: true, found: Number(total) > 0, id: first?.id };
+  }
+
+  /** Crea el tercero en Siigo (POST /v1/customers). Porta `SiigoAPI::saveCustomer1`. */
+  async createCustomer(token: string, payload: unknown): Promise<{ ok: boolean; id?: string; raw: any; error?: string }> {
+    const res = await fetch(`${this.apiBaseUrl}/customers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Partner-Id': PARTNER_ID, Authorization: `Bearer ${token}` },
+      body: JSON.stringify(payload),
+    });
+    const text = await res.text();
+    let raw: any;
+    try { raw = JSON.parse(text); } catch { raw = text; }
+    if (res.status >= 200 && res.status < 300) return { ok: true, id: raw?.id, raw };
+    const errMsg = Array.isArray(raw?.Errors)
+      ? raw.Errors.map((e: any) => e.Message ?? e.message).join(' | ')
+      : typeof raw === 'string' ? raw.slice(0, 300) : JSON.stringify(raw).slice(0, 300);
+    return { ok: false, raw, error: errMsg };
+  }
+
   /** Crea la factura electrónica. `token` = Bearer vigente; `payload` = cuerpo Siigo. */
   async createInvoice(token: string, payload: unknown): Promise<SiigoInvoiceResult> {
     const res = await fetch(`${this.apiBaseUrl}/invoices`, {

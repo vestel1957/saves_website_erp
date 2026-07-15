@@ -70,16 +70,97 @@ export class EinvoiceEmitService {
     // tiene ese medio configurado; si no, contado (efectivo). Porta get_m_pago_f_e.
     const isCredit = subscriber?.eInvoicePayMethod === 'CREDITO' && !!account.paymentCredIt;
     const paymentId = isCredit ? account.paymentCredIt : (account.paymentCash ?? null);
+    const date = new Date(invoice.invoiceDate);
     const payload: any = {
       document: { id: account.documentId ?? null },
-      date: new Date(invoice.invoiceDate).toISOString().slice(0, 10),
+      date: date.toISOString().slice(0, 10),
       customer: { identification: docId, branch_office: 0 },
       seller: account.sellerId ?? null,
       items,
-      payments: [{ id: paymentId, value: total }],
+      payments: [{
+        id: paymentId,
+        value: total,
+        // Vencimiento del medio de pago (el legacy lo mandaba siempre).
+        due_date: new Date(invoice.dueDate ?? invoice.invoiceDate).toISOString().slice(0, 10),
+      }],
     };
+    // Centro de costo por sede. El legacy lo ramificaba con ifs por `gid`
+    // (Yopal 1074/69, Villanueva 1072/167, Monterrey 1070/165); aquí sale del mapa
+    // configurable `SiigoAccount.costCenterByBranch` = {branchLegacyId: costCenterId}.
+    const costCenter = this.resolveCostCenter(account, subscriber);
+    if (costCenter != null) payload.cost_center = costCenter;
+    // Observaciones: el legacy mandaba "Estrato : X".
+    if (subscriber?.estrato) payload.observations = `Estrato : ${subscriber.estrato}`;
     if (account.contactEmail) payload.mail = { send: false };
     return payload;
+  }
+
+  /**
+   * Centro de costo de la sede del cliente. `costCenterByBranch` mapea el id legacy de la
+   * sede (`customers.gid`) al centro de costo de Siigo; si la sede no está en el mapa se usa
+   * la clave `default` (el legacy hacía lo mismo por omisión: Mocoa caía al default).
+   */
+  private resolveCostCenter(account: any, subscriber: any): number | null {
+    const map = account?.costCenterByBranch;
+    if (!map || typeof map !== 'object') return null;
+    const gid = subscriber?.branch?.legacyId;
+    const raw = (gid != null ? map[String(gid)] : undefined) ?? map.default;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  /**
+   * Garantiza que el tercero exista en Siigo antes de facturar (patrón get-or-create del
+   * legacy: `GET /customers?identification=` y, si `total_results == 0`, `POST /customers`).
+   * Igual que el legacy, NO actualiza los datos de un tercero ya existente (allí el update
+   * estaba comentado). Nunca rompe la emisión: si la consulta falla se sigue adelante y que
+   * sea Siigo quien rechace, con su mensaje real.
+   */
+  private async ensureCustomer(account: any, token: string, subscriber: any, client: SiigoClient) {
+    const identification = subscriber?.docNumber || subscriber?.legacyId?.toString();
+    if (!identification) return { skipped: 'sin documento' };
+    const found = await client.findCustomer(token, identification);
+    if (!found.ok || found.found !== false) return { existed: found.found === true, checked: found.ok };
+    const created = await client.createCustomer(token, this.buildCustomerPayload(account, subscriber, identification));
+    return { existed: false, created: created.ok, error: created.ok ? undefined : created.error };
+  }
+
+  /** Cuerpo del tercero para Siigo (porta `Facturas_electronicas_model` líneas 137-198). */
+  private buildCustomerPayload(account: any, subscriber: any, identification: string) {
+    const isCompany = String(subscriber?.docType ?? '').toUpperCase() === 'NIT';
+    const up = (s: any) => String(s ?? '').trim().toUpperCase();
+    const first = [up(subscriber?.firstName), up(subscriber?.secondName)].filter(Boolean).join(' ');
+    const last = [up(subscriber?.lastName1), up(subscriber?.lastName2)].filter(Boolean).join(' ');
+    // Persona natural: name = [nombres, apellidos]. Jurídica: un solo elemento (legacy).
+    const name = isCompany
+      ? [up(subscriber?.companyName) || [first, last].filter(Boolean).join(' ')]
+      : [first || up(subscriber?.fullName), last].filter(Boolean);
+    // Celular: el legacy manda "0" si no es un número de hasta 10 dígitos.
+    const phone = /^\d{1,10}$/.test(String(subscriber?.phone1 ?? '')) ? String(subscriber.phone1) : '0';
+    return {
+      type: 'Customer',
+      person_type: isCompany ? 'Company' : 'Person',
+      id_type: isCompany ? '31' : '13',
+      identification,
+      name,
+      active: true,
+      vat_responsible: false,
+      fiscal_responsibilities: [{ code: 'R-99-PN' }],
+      address: {
+        address: subscriber?.addressLine || 'SIN DIRECCION',
+        city: { country_code: 'Co', state_code: '85', city_code: '85001' },
+      },
+      phones: [{ number: phone }],
+      contacts: [{
+        first_name: first || 'CLIENTE',
+        last_name: last || 'VESTEL',
+        // El legacy hardcodeaba el correo de la empresa; aquí es configurable por cuenta y
+        // sólo cae al del cliente si la cuenta no define uno.
+        email: account?.contactEmail || subscriber?.email || undefined,
+        phone: { number: phone },
+      }],
+      related_users: account?.sellerId ? { seller_id: account.sellerId, collector_id: account.sellerId } : undefined,
+    };
   }
 
   /** Construye el payload de NOTA CRÉDITO referenciando la factura Siigo original. */
@@ -94,83 +175,135 @@ export class EinvoiceEmitService {
     };
   }
 
-  /** Emite (o simula) la e-factura de una SubInvoice. */
-  async emit(subInvoiceId: string, user?: AuthUser) {
-    const invoice = await this.prisma.subInvoice.findUnique({
-      where: { id: subInvoiceId },
-      include: { items: true, subscriber: true },
-    });
-    if (!invoice) throw new NotFoundException('Factura no encontrada');
+  /** ¿La línea es de TV? (Vestel: la TV lleva IVA 19%; el Internet 0%). */
+  private isTvItem(it: any): boolean {
+    return Number(it.taxRate) > 0 || /televi|punto/i.test(String(it.description || it.productName || ''));
+  }
 
-    // ¿ya emitida?
-    const existing = await this.prisma.electronicInvoice.findFirst({
-      where: { invoiceId: subInvoiceId, dianNumber: { not: null } },
-    });
-    if (existing) {
-      throw new BadRequestException(`La factura ya fue emitida ante la DIAN (${existing.dianNumber}).`);
-    }
+  /** Total (con IVA) de un subconjunto de ítems. */
+  private legTotal(items: any[]): number {
+    const t = items.reduce((s, it) => {
+      const base = (Number(it.price) || 0) * (Number(it.qty) || 1);
+      return s + base * (1 + (Number(it.taxRate) || 0) / 100);
+    }, 0);
+    return Math.round(t * 100) / 100;
+  }
 
-    const servicesBilled = invoice.serviceCombo ? 'Internet' : invoice.serviceTv ? 'Television' : null;
+  /**
+   * Emite (o simula) UNA pieza de e-factura contra una cuenta Siigo (un servicio).
+   * NO cambia la bandera de la SubInvoice — eso lo decide el orquestador `emit`,
+   * tras confirmar que todas las piezas del combo salieron bien.
+   */
+  private async emitLeg(invoice: any, subscriber: any, servicesBilled: string, items: any[]) {
+    // Idempotencia POR FACTURA: una sola e-factura DIAN por SubInvoice.
+    const dup = await this.prisma.electronicInvoice.findFirst({
+      where: { invoiceId: invoice.id, type: 'FACTURADA', dianNumber: { not: null } },
+    });
+    if (dup) throw new BadRequestException(`Esta factura ya fue emitida ante la DIAN (${dup.dianNumber}).`);
+
     const account = await this.resolveAccount(servicesBilled);
-    const payload = this.buildPayload(account, invoice, invoice.subscriber);
+    const legInvoice = { ...invoice, items, total: this.legTotal(items) };
+    const payload = this.buildPayload(account, legInvoice, subscriber);
 
     if (!this.live) {
       return {
-        ok: true,
-        dryRun: true,
+        ok: true, dryRun: true, servicesBilled,
         account: { role: account.role, username: account.username },
-        message: 'DRY-RUN: payload construido, NO se envió a la DIAN. Active EINVOICE_LIVE=true para emitir.',
         configReady: !!(account.documentId && account.sellerId && account.ivaTaxId && account.paymentCash),
         payload,
       };
     }
-
-    // --- LIVE ---
     if (!(account.documentId && account.sellerId && account.paymentCash)) {
-      throw new BadRequestException(
-        'La cuenta Siigo no está configurada para emitir (faltan documentId / sellerId / medio de pago). Configúrela primero.',
-      );
+      throw new BadRequestException(`La cuenta Siigo de ${servicesBilled} no está configurada para emitir (faltan documentId / sellerId / medio de pago).`);
     }
     const token = await this.ensureToken(account);
     const client = new SiigoClient(account.authUrl, account.apiBaseUrl);
+    // El tercero debe existir en Siigo antes de facturar (get-or-create, como el legacy).
+    const customer = await this.ensureCustomer(account, token, subscriber, client);
     const result = await client.createInvoice(token, payload);
-
-    // Persistir el resultado en ElectronicInvoice
     const ei = await this.prisma.electronicInvoice.create({
       data: {
-        siigoAccountId: account.id,
-        subscriberId: invoice.subscriberId,
-        invoiceId: invoice.id,
-        date: new Date(invoice.invoiceDate),
-        executedAt: new Date(),
-        servicesBilled,
+        siigoAccountId: account.id, subscriberId: invoice.subscriberId, invoiceId: invoice.id,
+        date: new Date(invoice.invoiceDate), executedAt: new Date(), servicesBilled,
         type: result.ok ? 'FACTURADA' : 'ERROR',
-        payloadJson: JSON.stringify({ payload, response: result.raw }).slice(0, 20000),
-        siigoInvoiceId: result.id ?? null,
-        dianNumber: result.number ?? null,
-        cufe: result.cufe ?? null,
-        pdfUrl: result.pdfUrl ?? null,
+        // Se guarda también el resultado del get-or-create del tercero: cuando Siigo
+        // rechaza, casi siempre es por el cliente y es lo primero que hay que mirar.
+        payloadJson: JSON.stringify({ payload, customer, response: result.raw }).slice(0, 20000),
+        siigoInvoiceId: result.id ?? null, dianNumber: result.number ?? null,
+        cufe: result.cufe ?? null, pdfUrl: result.pdfUrl ?? null,
         errorMessage: result.ok ? null : (result.error ?? 'Error desconocido'),
       } as any,
     });
     if (!result.ok) {
-      this.logger.warn(`Emisión fallida factura ${invoice.tid}: ${result.error}`);
-      throw new BadRequestException(`Siigo rechazó la factura: ${result.error}`);
+      this.logger.warn(`Emisión fallida factura ${invoice.tid} (${servicesBilled}): ${result.error}`);
+      throw new BadRequestException(`Siigo rechazó la factura (${servicesBilled}): ${result.error}`);
     }
-    // Marcar la factura como timbrada para que su estado no siga diciendo "pendiente".
-    await this.prisma.subInvoice.update({
-      where: { id: invoice.id },
-      data: { eInvoiceFlag: 'Factura Electronica Creada', eInvoiceGenDate: new Date(), eInvoiceServices: servicesBilled },
-    });
-    this.logger.log(`E-factura emitida: tid ${invoice.tid} → DIAN ${result.number}`);
+    this.logger.log(`E-factura emitida: tid ${invoice.tid} (${servicesBilled}) → DIAN ${result.number}`);
     return {
-      ok: true,
-      dryRun: false,
-      electronicInvoiceId: ei.id,
-      dianNumber: result.number,
-      cufe: result.cufe,
-      pdfUrl: result.pdfUrl,
-      message: `Factura emitida ante la DIAN: ${result.number}`,
+      ok: true, dryRun: false, servicesBilled, electronicInvoiceId: ei.id,
+      dianNumber: result.number, cufe: result.cufe, pdfUrl: result.pdfUrl,
+    };
+  }
+
+  /**
+   * Emite la e-factura de una SubInvoice como UN SOLO documento DIAN (como Vestel
+   * en producción: la TV va fusionada dentro del documento de Internet, una única
+   * empresa Siigo). Qué servicios entran a la factura lo decide la SELECCIÓN del
+   * cliente (`Subscriber.eInvoiceTv` / `eInvoiceInternet`, legacy f_elec_tv /
+   * f_elec_internet, marcada en la pantalla "emitir"):
+   *   - ambos marcados  → un documento con TV + Internet
+   *   - solo uno marcado → un documento con ese servicio
+   *   - ninguno marcado → se timbra la factura completa (todo lo que traiga)
+   */
+  async emit(subInvoiceId: string, user?: AuthUser) {
+    const invoice = await this.prisma.subInvoice.findUnique({
+      where: { id: subInvoiceId },
+      // `branch.legacyId` (= `customers.gid` del legacy) resuelve el centro de costo Siigo.
+      include: { items: true, subscriber: { include: { branch: { select: { legacyId: true } } } } },
+    });
+    if (!invoice) throw new NotFoundException('Factura no encontrada');
+
+    const sub = invoice.subscriber;
+    const wantTv = !!sub?.eInvoiceTv;
+    const wantNet = !!sub?.eInvoiceInternet;
+    const selective = wantTv || wantNet; // hay una selección explícita de servicios
+
+    // Filtra los ítems por la selección del cliente. Sin selección → todo.
+    let items = invoice.items ?? [];
+    if (selective) {
+      items = items.filter((it) => (this.isTvItem(it) ? wantTv : wantNet));
+    }
+    if (!items.length) {
+      throw new BadRequestException(
+        'No hay ítems para timbrar según la selección de servicios (TV / Internet) del cliente.',
+      );
+    }
+
+    // Etiqueta de servicios incluidos (para el registro y para resolver la cuenta).
+    const hasTv = items.some((it) => this.isTvItem(it));
+    const hasNet = items.some((it) => !this.isTvItem(it));
+    const isCombo = hasTv && hasNet;
+    const servicesBilled = isCombo ? 'Combo' : hasTv ? 'Television' : 'Internet';
+
+    // UN SOLO documento DIAN con todos los ítems seleccionados.
+    const doc = await this.emitLeg(invoice, sub, servicesBilled, items);
+
+    if (doc.ok && this.live) {
+      await this.prisma.subInvoice.update({
+        where: { id: invoice.id },
+        data: {
+          eInvoiceFlag: 'Factura Electronica Creada',
+          eInvoiceGenDate: new Date(),
+          eInvoiceServices: servicesBilled,
+        },
+      });
+    }
+
+    return {
+      ...doc, combo: isCombo, servicesBilled,
+      message: doc.dryRun
+        ? `DRY-RUN: payload construido (${servicesBilled}), NO se envió a la DIAN. Active EINVOICE_LIVE=true para emitir.`
+        : `Factura emitida ante la DIAN: ${doc.dianNumber}`,
     };
   }
 
@@ -182,7 +315,8 @@ export class EinvoiceEmitService {
   async emitCreditNote(subInvoiceId: string, reason: string, causeCode = 2, user?: AuthUser) {
     const invoice = await this.prisma.subInvoice.findUnique({
       where: { id: subInvoiceId },
-      include: { items: true, subscriber: true },
+      // La nota crédito reusa `buildPayload`, que necesita la sede para el centro de costo.
+      include: { items: true, subscriber: { include: { branch: { select: { legacyId: true } } } } },
     });
     if (!invoice) throw new NotFoundException('Factura no encontrada');
 

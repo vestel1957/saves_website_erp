@@ -4,7 +4,7 @@ import { BillingService } from './billing.service';
 import { invoicePdf } from './billing-pdf';
 import { FacturasService } from './facturas.service';
 import { RecurringService } from './recurring.service';
-import { CreateInvoiceDto, CreateNoteDto, GenerateInvoicesDto } from './dto/facturas.dto';
+import { CreateInvoiceDto, CreateNoteDto, GenerateInvoicesDto, VoidInvoiceDto } from './dto/facturas.dto';
 import { CreateRecurringDto } from './dto/recurring.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AreaGuard } from '../auth/area.guard';
@@ -109,6 +109,12 @@ export class BillingController {
   @Post('invoices/:id/notes')
   createNote(@Param('id') id: string, @Body() dto: CreateNoteDto, @CurrentUser() user: AuthUser) {
     return this.facturas.createNote(id, dto, user);
+  }
+
+  /** Anular una factura de venta (motivo obligatorio). */
+  @Post('invoices/:id/void')
+  voidInvoice(@Param('id') id: string, @Body() dto: VoidInvoiceDto, @CurrentUser() user: AuthUser) {
+    return this.facturas.voidInvoice(id, dto, user);
   }
 
   // --- Reciclaje de ventas (plantillas recurrentes) ---

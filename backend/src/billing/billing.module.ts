@@ -5,9 +5,14 @@ import { FacturasService } from './facturas.service';
 import { RecurringService } from './recurring.service';
 import { WhatsappModule } from '../common/whatsapp/whatsapp.module';
 import { MailModule } from '../common/mail/mail.module';
+import { AccountingModule } from '../accounting/accounting.module';
+import { TreasuryModule } from '../treasury/treasury.module';
 
 @Module({
-  imports: [WhatsappModule, MailModule],
+  // TreasuryModule aporta CobranzasService: la anulación de factura reversa sus pagos
+  // con el mismo mecanismo de Voiding que usa tesorería. No hay ciclo (Treasury no
+  // importa Billing).
+  imports: [WhatsappModule, MailModule, AccountingModule, TreasuryModule],
   controllers: [BillingController],
   providers: [BillingService, FacturasService, RecurringService],
   exports: [BillingService, FacturasService, RecurringService],

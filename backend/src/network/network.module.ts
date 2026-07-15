@@ -7,12 +7,14 @@ import { MikrotikAdminService } from './mikrotik-admin.service';
 import { MikrotikController } from './mikrotik.controller';
 import { OltController } from './olt.controller';
 import { OltService } from './olt.service';
+import { GenieacsController } from './genieacs.controller';
+import { GenieacsService } from './genieacs.service';
 import { WhatsappModule } from '../common/whatsapp/whatsapp.module';
 
 @Module({
   imports: [WhatsappModule], // aporta WhatsappService para la mensajería masiva
-  controllers: [NetworkController, OltController, MikrotikController],
-  providers: [NetworkService, NetworkWriteService, MikrotikService, MikrotikAdminService, OltService],
-  exports: [NetworkService, NetworkWriteService, MikrotikService, MikrotikAdminService, OltService],
+  controllers: [NetworkController, OltController, MikrotikController, GenieacsController],
+  providers: [NetworkService, NetworkWriteService, MikrotikService, MikrotikAdminService, OltService, GenieacsService],
+  exports: [NetworkService, NetworkWriteService, MikrotikService, MikrotikAdminService, OltService, GenieacsService],
 })
 export class NetworkModule {}

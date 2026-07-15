@@ -125,35 +125,69 @@ export class SupportWriteService {
     if (dto.status === 'RESUELTO') data.finalDate = dto.finalDate ? dateOnly(dto.finalDate) : dateOnly();
     await this.prisma.ticket.update({ where: { id }, data });
 
-    // --- Cascada al resolver (porta la lógica de Tickets.php al cerrar "Resuelto") ---
-    // Segura por diseño: la reconexión Mikrotik respeta su propio gate dry-run.
-    const cascade: { reconnect?: any; statusSet?: string; note?: string } = {};
+    // --- Cascada al resolver: ajusta el estado del cliente + Mikrotik según el tipo
+    // de orden (porta Tickets.php). Las operaciones Mikrotik respetan su gate dry-run.
+    let cascade: any = {};
     if (dto.status === 'RESUELTO' && t.subscriberId) {
-      const kind = (t.type || '').toLowerCase();
-      const isReconnect = kind.includes('reconex') || kind.includes('activ');
-      const isInstall = kind.includes('instalac');
-      if (isReconnect) {
-        try {
-          cascade.reconnect = await this.mikrotik.reconnect(t.subscriberId, user);
-          cascade.statusSet = 'ACTIVO'; // reconnect() ya deja el cliente ACTIVO
-        } catch (e) {
-          cascade.note = `No se pudo reconectar: ${(e as Error).message}`;
-        }
-        // Cargo de reconexión en la factura del mes corriente (gated).
-        if (process.env.TICKET_CASCADE_BILLING === 'true') {
-          (cascade as any).charge = await this.applyReconnectionCharge(t.subscriberId, kind);
-        }
-      } else if (isInstall) {
-        // Instalación resuelta → cliente ACTIVO. (La 1ª factura se genera aparte
-        // desde Facturación; no se auto-crea aquí para no inyectar cargos sin control.)
-        await this.prisma.subscriber
-          .update({ where: { id: t.subscriberId }, data: { status: 'ACTIVO', statusChangedAt: new Date() } })
-          .catch(() => undefined);
-        cascade.statusSet = 'ACTIVO';
-        cascade.note = 'Instalación resuelta: cliente activado. Genera la primera factura desde Facturación.';
-      }
+      cascade = await this.applyCloseCascade({ subscriberId: t.subscriberId, type: t.type }, user);
     }
     return { id, status: dto.status, cascade };
+  }
+
+  /** ¿Auto-cobrar en la cascada de cierre? Ajuste `tickets.cascadeBilling` (o env TICKET_CASCADE_BILLING). */
+  private async cascadeBillingEnabled(): Promise<boolean> {
+    if (process.env.TICKET_CASCADE_BILLING === 'true') return true;
+    const row = await this.prisma.appSetting.findUnique({ where: { key: 'tickets.cascadeBilling' } });
+    return row?.value === 'true';
+  }
+
+  /**
+   * Cascada al cerrar una orden ("Resuelto"), según el tipo (porta Tickets.php):
+   *   corte → CORTADO+cut · suspensión → SUSPENDIDO+cut · retiro → RETIRADO+cut ·
+   *   reconexión/activación → ACTIVO+reconnect · instalación → ACTIVO+reconnect ·
+   *   plan/megas y traslado → nota (la orden no porta el destino; se hace aparte).
+   * Los cargos (reconexión/instalación) solo se aplican si `cascadeBilling` está activo.
+   */
+  private async applyCloseCascade(t: { subscriberId: string; type: string | null }, user?: AuthUser) {
+    const cascade: any = {};
+    const kind = (t.type || '').toLowerCase();
+    const sid = t.subscriberId;
+    const setStatus = async (status: string) => {
+      await this.prisma.subscriber
+        .update({ where: { id: sid }, data: { status: status as any, statusChangedAt: new Date() } })
+        .catch(() => undefined);
+      cascade.statusSet = status;
+    };
+    const tryCut = async () => {
+      try { cascade.mikrotik = await this.mikrotik.cut(sid, user); }
+      catch (e) { cascade.note = `Corte Mikrotik: ${(e as Error).message}`; }
+    };
+
+    if (kind.includes('retiro')) {
+      await tryCut();
+      await setStatus('RETIRADO');
+    } else if (kind.includes('suspens')) {
+      await tryCut();
+      await setStatus('SUSPENDIDO');
+    } else if (kind.includes('corte')) {
+      await tryCut(); // cut() ya deja el cliente CORTADO
+      cascade.statusSet = cascade.statusSet ?? 'CORTADO';
+    } else if (kind.includes('instalac')) {
+      try { cascade.mikrotik = await this.mikrotik.reconnect(sid, user); }
+      catch (e) { cascade.note = `Reconexión Mikrotik: ${(e as Error).message}`; }
+      await setStatus('ACTIVO');
+      if (await this.cascadeBillingEnabled()) cascade.charge = await this.applyReconnectionCharge(sid, kind);
+      cascade.note = (cascade.note ? cascade.note + ' · ' : '') + 'Instalación resuelta: cliente activado.';
+    } else if (kind.includes('reconex') || kind.includes('activ')) {
+      try { cascade.mikrotik = await this.mikrotik.reconnect(sid, user); cascade.statusSet = 'ACTIVO'; }
+      catch (e) { cascade.note = `Reconexión Mikrotik: ${(e as Error).message}`; }
+      if (await this.cascadeBillingEnabled()) cascade.charge = await this.applyReconnectionCharge(sid, kind);
+    } else if (kind.includes('megas') || kind.includes('plan') || kind.includes('perfil')) {
+      cascade.note = 'Cambio de plan/megas: aplica el nuevo plan al cliente desde su ficha (Cambiar plan); la orden no porta el plan destino.';
+    } else if (kind.includes('traslado')) {
+      cascade.note = 'Traslado resuelto: actualiza la dirección del cliente en su ficha (la orden no porta la nueva dirección).';
+    }
+    return cascade;
   }
 
   /**

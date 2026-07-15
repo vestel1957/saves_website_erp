@@ -399,8 +399,16 @@ export const SCREENS: ScreenDef[] = [
   { href: '/tesoreria', label: 'Movimientos de caja', module: 'Caja / Cobranza', areas: ['contabilidad', 'caja'] },
   { href: '/tesoreria/apertura', label: 'Apertura de caja', module: 'Caja / Cobranza', areas: ['contabilidad', 'caja'] },
   { href: '/tesoreria/cierres', label: 'Cierre de caja', module: 'Caja / Cobranza', areas: ['contabilidad', 'caja'] },
+  { href: '/tesoreria/importar-pagos', label: 'Importar pagos (Efecty)', module: 'Caja / Cobranza', areas: ['administracion', 'caja'] },
+
+  { href: '/contabilidad', label: 'Resumen contable', module: 'Contabilidad', areas: ['contabilidad'] },
+  { href: '/contabilidad/plan-de-cuentas', label: 'Plan de cuentas', module: 'Contabilidad', areas: ['contabilidad'] },
+  { href: '/contabilidad/libros', label: 'Libro diario y mayor', module: 'Contabilidad', areas: ['contabilidad'] },
+  { href: '/contabilidad/informes', label: 'Balance y estados financieros', module: 'Contabilidad', areas: ['contabilidad'] },
+  { href: '/contabilidad/mapeo-cuentas', label: 'Mapeo de cuentas', module: 'Contabilidad', areas: ['contabilidad'] },
 
   { href: '/clientes', label: 'Clientes', module: 'Clientes', areas: ['administracion', 'caja'] },
+  { href: '/cobranza', label: 'Cobranza / Acuerdos de pago', module: 'Clientes', areas: ['administracion', 'caja'] },
   { href: '/playhub', label: 'PlayHub / IPTV', module: 'Clientes', areas: ['administracion'] },
 
   { href: '/soporte', label: 'Tickets / Órdenes de trabajo', module: 'Soporte', areas: ['tecnicos', 'caja'] },

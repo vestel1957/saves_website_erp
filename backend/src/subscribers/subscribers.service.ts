@@ -3,6 +3,7 @@ import { InvoiceKind, InvoiceRon, Prisma, SubscriberStatus, SubInvoiceStatus } f
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateSubscriberDto, UpdateInvoiceDto, UpdateSubscriberDto } from './dto/update-subscriber.dto';
 import { MikrotikService } from '../network/mikrotik.service';
+import { MikrotikAdminService } from '../network/mikrotik-admin.service';
 import type { AuthUser } from '../auth/current-user.decorator';
 
 const num = (d: Prisma.Decimal | null | undefined) => (d == null ? 0 : Number(d));
@@ -75,6 +76,10 @@ const PROFILE_STR_FIELDS = [
   'firstName', 'secondName', 'lastName1', 'lastName2', 'companyName', 'customerType',
   'docType', 'docNumber', 'email', 'phone1', 'phone2', 'estrato', 'suscripcion',
   'departmentRef', 'cityRef', 'localityRef', 'neighborhood', 'addressLine', 'gpsLat', 'gpsLng',
+  // Datos de conectividad. El legacy los capturaba en el alta (`create.php`: name_s, contra,
+  // perfil, Ipremota, tegnologia); en Nexus el DTO no los aceptaba y NADA escribía
+  // `pppUsername`, así que un cliente creado aquí nunca podía aprovisionarse en el router.
+  'pppUsername', 'pppPassword', 'pppProfile', 'ipRemote', 'installTech',
 ] as const;
 
 /** Traduce el DTO del wizard (pasos 1-2) a data de Prisma (sin branch ni fullName). */
@@ -94,6 +99,7 @@ export class SubscribersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly mikrotik: MikrotikService,
+    private readonly mikrotikAdmin: MikrotikAdminService,
   ) {}
 
   /** Tarjetas de resumen: totales por estado + cartera global. */
@@ -397,10 +403,35 @@ export class SubscribersService {
     return ids;
   }
 
+  /**
+   * Excluye del corte a los clientes con COMPROMISO de pago vigente (paridad legacy
+   * `_compromiso_vencido`): un COMPROMISO solo se corta si su `promiseExpiry` ya pasó.
+   * Sin fecha de promesa = protegido (mismo criterio conservador del legacy).
+   */
+  private async filterCuttable(ids: string[]): Promise<{ ids: string[]; protegidos: number }> {
+    const rows = await this.prisma.subscriber.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, status: true, promiseExpiry: true },
+    });
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    const protectedIds = new Set(
+      rows
+        .filter((r) => r.status === 'COMPROMISO' && (!r.promiseExpiry || r.promiseExpiry >= today))
+        .map((r) => r.id),
+    );
+    return { ids: ids.filter((id) => !protectedIds.has(id)), protegidos: protectedIds.size };
+  }
+
   /** Corte masivo de TODOS los que cumplen el filtro (no depende de lo cargado en pantalla). */
   async cutByFilter(filter: ListFilter, user: AuthUser) {
-    const ids = await this.resolveBulkIds(filter);
-    return this.mikrotik.cutBatch(ids, user);
+    const all = await this.resolveBulkIds(filter);
+    const { ids, protegidos } = await this.filterCuttable(all);
+    if (ids.length === 0) {
+      throw new BadRequestException('Todos los clientes del filtro tienen compromiso de pago vigente; no se cortó ninguno.');
+    }
+    const res = await this.mikrotik.cutBatch(ids, user);
+    return { ...res, compromisosProtegidos: protegidos };
   }
 
   /** Reconexión masiva de TODOS los que cumplen el filtro. */
@@ -470,6 +501,9 @@ export class SubscribersService {
         phone1: true, phone2: true, birthDate: true, estrato: true, suscripcion: true, contractDate: true,
         departmentRef: true, cityRef: true, localityRef: true, neighborhood: true, addressLine: true,
         nomenclature: true, clausula: true, gpsLat: true, gpsLng: true, branchId: true,
+        // Conectividad: sin esto el wizard mostraría los campos PPP vacíos al editar y
+        // parecería que el cliente no los tiene.
+        pppUsername: true, pppPassword: true, pppProfile: true, ipRemote: true, installTech: true,
       },
     });
     if (!s) throw new NotFoundException('Suscriptor no encontrado');
@@ -480,9 +514,28 @@ export class SubscribersService {
   async update(id: string, dto: UpdateSubscriberDto) {
     const s = await this.prisma.subscriber.findUnique({
       where: { id },
-      select: { id: true, firstName: true, secondName: true, lastName1: true, lastName2: true },
+      select: { id: true, firstName: true, secondName: true, lastName1: true, lastName2: true, pppUsername: true },
     });
     if (!s) throw new NotFoundException('Suscriptor no encontrado');
+
+    // Mismo guard de colisión que en `create`: el usuario PPP también se puede cambiar
+    // editando, y un duplicado rompe el secret en el router. Sólo se valida si el nombre
+    // CAMBIA — si no, el chequeo contra el router encontraría su propio secret y bloquearía
+    // cualquier edición del cliente.
+    const newPpp = dto.pppUsername?.trim();
+    if (newPpp && newPpp.toLowerCase() !== (s.pppUsername ?? '').trim().toLowerCase()) {
+      const { db, router } = await this.pppUsernameTaken(newPpp, dto.branchId, dto.installTech, id);
+      if (db) {
+        throw new BadRequestException(
+          `El nombre de usuario PPP "${newPpp}" ya lo usa el abonado ${db.abonado} (${db.fullName ?? 'sin nombre'}).`,
+        );
+      }
+      if (router === 'taken') {
+        throw new BadRequestException(
+          `El nombre de usuario PPP "${newPpp}" ya existe como secret en el Mikrotik de la sede.`,
+        );
+      }
+    }
 
     const data = buildProfileData(dto);
     if (dto.branchId !== undefined) {
@@ -579,8 +632,127 @@ export class SubscribersService {
     return { ok: true, results };
   }
 
+  /**
+   * ¿El usuario PPP ya está tomado? Se consulta la BD (autoritativa) y, si se puede, el
+   * router de la sede.
+   *
+   * El legacy (`Customers_model::validar_user_name`) consultaba SÓLO el Mikrotik y tenía el
+   * `else` vacío: si el router no respondía devolvía null y el controller lo interpretaba
+   * como "disponible" — fail-open en su única validación bloqueante, que es justo la causa
+   * de las colisiones de secret. Aquí el router que no responde NUNCA se reporta como libre:
+   * se devuelve `router: 'unreachable'` y la BD sigue mandando.
+   */
+  private async pppUsernameTaken(username: string, branchId?: string, installTech?: string | null, excludeId?: string) {
+    const name = username.trim();
+    const inDb = await this.prisma.subscriber.findFirst({
+      // `excludeId`: al editar, el cliente no colisiona consigo mismo.
+      where: { pppUsername: { equals: name, mode: 'insensitive' }, ...(excludeId ? { id: { not: excludeId } } : {}) },
+      select: { id: true, abonado: true, fullName: true },
+    });
+
+    let router: 'free' | 'taken' | 'unreachable' | 'unknown' = 'unknown';
+    if (branchId) {
+      try {
+        const branch = await this.prisma.branch.findUnique({ where: { id: branchId }, select: { legacyId: true } });
+        if (branch) {
+          const mk = await this.mikrotik.resolveRouter({
+            id: '', legacyId: null, pppUsername: null, ipRemote: null,
+            installTech: installTech ?? null, status: null, branch: { legacyId: branch.legacyId },
+          } as any);
+          const res = await this.mikrotikAdmin.secrets(mk.id, { search: name, pageSize: 200 });
+          if (!res.ok) router = 'unreachable';
+          else router = res.items.some((s: { name: string }) => s.name.toLowerCase() === name.toLowerCase()) ? 'taken' : 'free';
+        }
+      } catch {
+        // Sin router para la sede / sede sin resolver: no podemos afirmar nada.
+        router = 'unreachable';
+      }
+    }
+    return { db: inDb, router };
+  }
+
+  /**
+   * Chequeos de duplicados del alta, para que la pantalla avise antes de guardar.
+   *
+   * Paridad legacy: documento y dirección son ADVERTENCIA, no bloqueo. Las cédulas
+   * repetidas son INTENCIONALES en este negocio — el flujo de facturación electrónica las
+   * mapea a sucursales de Siigo (`sucursal_siigo` / `branch_office`), así que bloquearlas
+   * rompería la emisión. El usuario PPP sí bloquea (ver `pppUsernameTaken`).
+   */
+  async checkDuplicates(dto: {
+    docNumber?: string; branchId?: string; pppUsername?: string; installTech?: string;
+    departmentRef?: string; cityRef?: string; localityRef?: string; neighborhood?: string; addressLine?: string;
+  }) {
+    const out: any = { document: null, address: null, pppUsername: null };
+
+    if (dto.docNumber?.trim()) {
+      const items = await this.prisma.subscriber.findMany({
+        where: { docNumber: dto.docNumber.trim() },
+        select: { id: true, abonado: true, fullName: true, status: true },
+        take: 20,
+      });
+      out.document = {
+        count: items.length, items, blocking: false,
+        message: items.length
+          ? `Ya existen ${items.length} cliente(s) con este documento. Se permite continuar: el mismo titular puede tener varias cuentas.`
+          : null,
+      };
+    }
+
+    // Dirección: igualdad exacta de los componentes, como el legacy.
+    if (dto.addressLine?.trim() || dto.neighborhood) {
+      const count = await this.prisma.subscriber.count({
+        where: {
+          departmentRef: dto.departmentRef ?? undefined,
+          cityRef: dto.cityRef ?? undefined,
+          localityRef: dto.localityRef ?? undefined,
+          neighborhood: dto.neighborhood ?? undefined,
+          addressLine: dto.addressLine?.trim() ?? undefined,
+        },
+      });
+      out.address = {
+        count, blocking: false,
+        message: count ? `Ya hay ${count} cliente(s) registrado(s) en esta misma dirección.` : null,
+      };
+    }
+
+    if (dto.pppUsername?.trim()) {
+      const { db, router } = await this.pppUsernameTaken(dto.pppUsername, dto.branchId, dto.installTech);
+      const taken = !!db || router === 'taken';
+      out.pppUsername = {
+        taken, blocking: true, router,
+        message: db
+          ? `Este nombre de usuario ya lo usa el abonado ${db.abonado} (${db.fullName ?? 'sin nombre'}).`
+          : router === 'taken'
+            ? 'Este nombre de usuario ya existe como secret en el Mikrotik de la sede.'
+            : router === 'unreachable'
+              ? 'Disponible en la base de datos, pero NO se pudo verificar contra el Mikrotik (router sin responder).'
+              : 'Disponible.',
+      };
+    }
+    return out;
+  }
+
   /** Crear un cliente nuevo (abonado autogenerado max+1, estado INSTALAR). */
   async create(dto: CreateSubscriberDto) {
+    // Guard de colisión de secret PPP. El legacy NO tenía validación de servidor en el alta
+    // (`Customers::addcustomer` insertaba directo); la única comprobación vivía en el JS de
+    // la vista y se saltaba con un POST directo. Documento y dirección siguen SIN bloquear
+    // (ver `checkDuplicates`).
+    if (dto.pppUsername?.trim()) {
+      const { db, router } = await this.pppUsernameTaken(dto.pppUsername, dto.branchId, dto.installTech);
+      if (db) {
+        throw new BadRequestException(
+          `El nombre de usuario PPP "${dto.pppUsername.trim()}" ya lo usa el abonado ${db.abonado} (${db.fullName ?? 'sin nombre'}).`,
+        );
+      }
+      if (router === 'taken') {
+        throw new BadRequestException(
+          `El nombre de usuario PPP "${dto.pppUsername.trim()}" ya existe como secret en el Mikrotik de la sede.`,
+        );
+      }
+    }
+
     const data: any = buildProfileData(dto);
     if (data.abonado == null) {
       const max = await this.prisma.subscriber.aggregate({ _max: { abonado: true } });

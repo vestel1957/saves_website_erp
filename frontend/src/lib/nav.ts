@@ -94,9 +94,18 @@ const cajaTesoreria: NavItem[] = [
   { icon: "arrow-left-right", label: "Transferencia entre cajas", href: "/tesoreria/transferencia" },
   { icon: "x", label: "Anulaciones", href: "/tesoreria/anulaciones" },
   { icon: "wallet", label: "Cajas y categorías", href: "/tesoreria/cajas" },
+  { icon: "upload", label: "Importar pagos (Efecty)", href: "/tesoreria/importar-pagos" },
 ];
 
 // RED / ISP — solo operación de red (los equipos se movieron a INVENTARIO).
+const contabilidad: NavItem[] = [
+  { icon: "calculator", label: "Resumen contable", href: "/contabilidad" },
+  { icon: "list-tree", label: "Plan de cuentas", href: "/contabilidad/plan-de-cuentas" },
+  { icon: "book-open", label: "Libro diario y mayor", href: "/contabilidad/libros" },
+  { icon: "bar-chart-3", label: "Balance y estados", href: "/contabilidad/informes" },
+  { icon: "settings", label: "Mapeo de cuentas", href: "/contabilidad/mapeo-cuentas" },
+];
+
 const red: NavItem[] = [
   { icon: "activity", label: "Conexiones", href: "/red/conexiones" },
   { icon: "git-branch", label: "Cajas NAP", href: "/red/naps" },
@@ -104,6 +113,7 @@ const red: NavItem[] = [
   { icon: "network", label: "IPs de usuarios", href: "/red/ips" },
   { icon: "router", label: "Gestión Mikrotik", href: "/red/mikrotik" },
   { icon: "radio-tower", label: "Gestión OLT", href: "/red/olt" },
+  { icon: "tv", label: "GenieACS · TR-069", href: "/red/genieacs" },
 ];
 
 // INVENTARIO — todo el inventario físico: equipos (CPE), material, compras,
@@ -149,12 +159,14 @@ const inventario: NavItem[] = [
 const crm: NavItem[] = [
   { icon: "users", label: "Administrar clientes", href: "/clientes" },
   { icon: "users-round", label: "Grupos de clientes", href: "/clientes/grupos" },
+  { icon: "hand-coins", label: "Cobranza / Acuerdos", href: "/cobranza" },
   { icon: "headphones", label: "Soporte técnico", href: "/soporte" },
 ];
 
 // PERSONAS / PROYECTOS — equipo interno, proyectos y tareas.
 const personas: NavItem[] = [
   { icon: "contact", label: "Empleados", href: "/empleados" },
+  { icon: "truck", label: "Móviles / cuadrillas", href: "/empleados/moviles" },
   { icon: "layers", label: "Proyectos", href: "/proyectos" },
   { icon: "list-checks", label: "Listado de tareas", href: "/agenda" },
 ];
@@ -193,6 +205,7 @@ export const navSections: NavSection[] = [
   { title: "CLIENTES / CRM", items: crm },
   { title: "FACTURACIÓN", items: facturacion },
   { title: "CAJA / TESORERÍA", items: cajaTesoreria },
+  { title: "CONTABILIDAD", items: contabilidad },
   { title: "RED / ISP", items: red },
   { title: "INVENTARIO", items: inventario },
   { title: "PERSONAS / PROYECTOS", items: personas },

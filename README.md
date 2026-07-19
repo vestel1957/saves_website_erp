@@ -72,6 +72,26 @@ El `ls` no sobra: `nest build` puede terminar con éxito sin emitir nada (borra 
 archivo no está, vuelve a correr `nest build` — la segunda vez sí emite. Recargar contra un
 `dist` inexistente deja el backend caído.
 
+## Desarrollo y calidad de código
+
+Ambos paquetes comparten el mismo tooling (ESLint 9 flat config + Prettier 3):
+
+```bash
+# backend/ o frontend/
+npm run lint          # ESLint (0 errores; warnings = deuda progresiva)
+npm run lint:fix      # autofix
+npm run format        # Prettier --write
+npm run format:check  # Prettier --check
+npm run typecheck     # tsc --noEmit
+npm test              # Jest (solo backend, por ahora)
+```
+
+- El backend compila en **TypeScript `strict`**.
+- Las reglas ruidosas del linter (`any`, react-hooks del compiler) están como **warning**
+  a propósito, para ir saldándolas sin bloquear el build. No añadas código con **errores**.
+- **CI** (`.github/workflows/ci.yml`) corre lint + typecheck + test en cada push/PR.
+- El plan de refactor incremental y su backlog están en [`REFACTOR.md`](./REFACTOR.md).
+
 ## Módulos
 
 | Módulo | Qué hace |

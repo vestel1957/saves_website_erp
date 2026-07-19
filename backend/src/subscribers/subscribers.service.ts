@@ -471,26 +471,6 @@ export class SubscribersService {
     });
   }
 
-  // ── Catálogos de dirección (selects en cascada del wizard) ─────
-  geoDepartments() {
-    return this.prisma.department.findMany({ orderBy: { name: 'asc' }, select: { legacyId: true, name: true } });
-  }
-  geoCities(departmentLegacy?: number) {
-    return this.prisma.city.findMany({
-      where: departmentLegacy ? { departmentLegacy } : {}, orderBy: { name: 'asc' }, select: { legacyId: true, name: true },
-    });
-  }
-  geoLocalities(cityLegacy?: number) {
-    return this.prisma.locality.findMany({
-      where: cityLegacy ? { cityLegacy } : {}, orderBy: { name: 'asc' }, select: { legacyId: true, name: true },
-    });
-  }
-  geoNeighborhoods(localityLegacy?: number) {
-    return this.prisma.neighborhood.findMany({
-      where: localityLegacy ? { localityLegacy } : {}, orderBy: { name: 'asc' }, select: { legacyId: true, name: true },
-    });
-  }
-
   /** Campos crudos editables (para precargar el wizard en modo edición). */
   async editForm(id: string) {
     const s = await this.prisma.subscriber.findUnique({
@@ -766,64 +746,6 @@ export class SubscribersService {
     return { id: created.id, abonado: created.abonado };
   }
 
-  /** Lista de archivos adjuntos del cliente (metadata). */
-  async listFiles(id: string) {
-    const files = await this.prisma.subscriberFile.findMany({
-      where: { subscriberId: id },
-      orderBy: { createdAt: 'desc' },
-    });
-    return files.map((f) => ({
-      id: f.id, name: f.originalName, mimeType: f.mimeType, size: f.size,
-      uploadedBy: f.uploadedByName, createdAt: f.createdAt,
-    }));
-  }
-
-  /** Registra la metadata de un archivo ya guardado en disco por multer. */
-  async addFile(id: string, file: { originalname: string; filename: string; mimetype: string; size: number }, uploadedByName?: string) {
-    const row = await this.prisma.subscriberFile.create({
-      data: {
-        subscriberId: id,
-        originalName: Buffer.from(file.originalname, 'latin1').toString('utf8'),
-        storedName: file.filename,
-        mimeType: file.mimetype,
-        size: file.size,
-        uploadedByName: uploadedByName ?? null,
-      },
-    });
-    return { id: row.id, name: row.originalName, mimeType: row.mimeType, size: row.size, createdAt: row.createdAt };
-  }
-
-  /** Metadata de un archivo (para descargar/servir). Valida que pertenezca al cliente. */
-  async fileMeta(subscriberId: string, fileId: string) {
-    const f = await this.prisma.subscriberFile.findFirst({ where: { id: fileId, subscriberId } });
-    if (!f) throw new NotFoundException('Archivo no encontrado');
-    return f;
-  }
-
-  /** Elimina el registro del archivo. Devuelve el nombre en disco para que el controller lo borre. */
-  async deleteFile(subscriberId: string, fileId: string) {
-    const f = await this.fileMeta(subscriberId, fileId);
-    await this.prisma.subscriberFile.delete({ where: { id: f.id } });
-    return f.storedName;
-  }
-
-  // ── Notas ─────────────────────────────────────────────────────
-
-  async addNote(id: string, body: string, authorName?: string) {
-    const exists = await this.prisma.subscriber.findUnique({ where: { id }, select: { id: true } });
-    if (!exists) throw new NotFoundException('Suscriptor no encontrado');
-    const n = await this.prisma.subscriberNote.create({
-      data: { subscriberId: id, body: body.trim(), authorName: authorName ?? null },
-    });
-    return { id: n.id, body: n.body, author: n.authorName, createdAt: n.createdAt };
-  }
-
-  async deleteNote(id: string, noteId: string) {
-    const n = await this.prisma.subscriberNote.findFirst({ where: { id: noteId, subscriberId: id } });
-    if (!n) throw new NotFoundException('Nota no encontrada');
-    await this.prisma.subscriberNote.delete({ where: { id: n.id } });
-    return { ok: true };
-  }
 
   // ── Facturas ──────────────────────────────────────────────────
 

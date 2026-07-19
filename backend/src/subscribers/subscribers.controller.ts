@@ -9,6 +9,9 @@ import { existsSync, mkdirSync, unlinkSync } from 'node:fs';
 import { extname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { SubscribersService } from './subscribers.service';
+import { SubscriberGeoService } from './subscriber-geo.service';
+import { SubscriberFilesService } from './subscriber-files.service';
+import { SubscriberNotesService } from './subscriber-notes.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AreaGuard } from '../auth/area.guard';
 import { RequireArea } from '../auth/require-area.decorator';
@@ -34,7 +37,12 @@ const ALLOWED_EXT = new Set([
 @UseGuards(JwtAuthGuard, AreaGuard)
 @RequireArea('administracion', 'contabilidad', 'tecnicos', 'caja')
 export class SubscribersController {
-  constructor(private readonly subscribers: SubscribersService) {}
+  constructor(
+    private readonly subscribers: SubscribersService,
+    private readonly geo: SubscriberGeoService,
+    private readonly files: SubscriberFilesService,
+    private readonly notes: SubscriberNotesService,
+  ) {}
 
   @Get('stats')
   stats() {
@@ -70,22 +78,22 @@ export class SubscribersController {
   // ── Catálogos de dirección (cascada) ─────────────────────────
   @Get('geo/departments')
   geoDepartments() {
-    return this.subscribers.geoDepartments();
+    return this.geo.geoDepartments();
   }
 
   @Get('geo/cities')
   geoCities(@Query('department') department?: string) {
-    return this.subscribers.geoCities(department ? Number(department) : undefined);
+    return this.geo.geoCities(department ? Number(department) : undefined);
   }
 
   @Get('geo/localities')
   geoLocalities(@Query('city') city?: string) {
-    return this.subscribers.geoLocalities(city ? Number(city) : undefined);
+    return this.geo.geoLocalities(city ? Number(city) : undefined);
   }
 
   @Get('geo/neighborhoods')
   geoNeighborhoods(@Query('locality') locality?: string) {
-    return this.subscribers.geoNeighborhoods(locality ? Number(locality) : undefined);
+    return this.geo.geoNeighborhoods(locality ? Number(locality) : undefined);
   }
 
   /**
@@ -149,7 +157,7 @@ export class SubscribersController {
 
   @Get(':id/files')
   listFiles(@Param('id') id: string) {
-    return this.subscribers.listFiles(id);
+    return this.files.listFiles(id);
   }
 
   @Post(':id/files')
@@ -174,7 +182,7 @@ export class SubscribersController {
     if (!file) throw new BadRequestException('No se recibió ningún archivo');
     // El archivo ya se escribió en disco; si el cliente no existe, lo limpiamos.
     try {
-      return await this.subscribers.addFile(id, file, user?.name ?? user?.email);
+      return await this.files.addFile(id, file, user?.name ?? user?.email);
     } catch (e) {
       try { unlinkSync(file.path); } catch { /* noop */ }
       throw e;
@@ -183,7 +191,7 @@ export class SubscribersController {
 
   @Get(':id/files/:fileId/download')
   async download(@Param('id') id: string, @Param('fileId') fileId: string, @Res() res: Response) {
-    const f = await this.subscribers.fileMeta(id, fileId);
+    const f = await this.files.fileMeta(id, fileId);
     const abs = join(UPLOAD_ROOT, id, f.storedName);
     if (!existsSync(abs)) throw new NotFoundException('El archivo no está en el servidor');
     res.setHeader('Content-Type', f.mimeType || 'application/octet-stream');
@@ -192,7 +200,7 @@ export class SubscribersController {
 
   @Delete(':id/files/:fileId')
   async deleteFile(@Param('id') id: string, @Param('fileId') fileId: string) {
-    const storedName = await this.subscribers.deleteFile(id, fileId);
+    const storedName = await this.files.deleteFile(id, fileId);
     try { unlinkSync(join(UPLOAD_ROOT, id, storedName)); } catch { /* archivo ya no existe */ }
     return { ok: true };
   }
@@ -201,12 +209,12 @@ export class SubscribersController {
 
   @Post(':id/notes')
   addNote(@Param('id') id: string, @Body() dto: AddNoteDto, @CurrentUser() user: AuthUser) {
-    return this.subscribers.addNote(id, dto.body, user?.name ?? user?.email);
+    return this.notes.addNote(id, dto.body, user?.name ?? user?.email);
   }
 
   @Delete(':id/notes/:noteId')
   deleteNote(@Param('id') id: string, @Param('noteId') noteId: string) {
-    return this.subscribers.deleteNote(id, noteId);
+    return this.notes.deleteNote(id, noteId);
   }
 
   // ── Facturas ─────────────────────────────────────────────────

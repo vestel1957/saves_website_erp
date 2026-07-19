@@ -33,7 +33,7 @@ pocas facturas reales antes de soltar el lote.
 
 | Capa | Tecnología |
 | --- | --- |
-| Frontend | Next.js 15 (App Router) + Tailwind v4 |
+| Frontend | Next.js 16 (App Router) + Tailwind v4 |
 | Backend | NestJS 10 + Prisma ORM |
 | Base de datos | PostgreSQL (`localhost:5432`, base `saves_vestel`) |
 | Procesos | PM2 (`ecosystem.config.js`) |

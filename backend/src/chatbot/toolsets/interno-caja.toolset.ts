@@ -105,7 +105,7 @@ export class InternoCajaToolset implements Toolset {
       case 'caja_del_dia':
         return safe(() => this.resumen(input));
       case 'movimientos_caja':
-        return safe(() => this.movimientos(input));
+        return safe(() => this.movimientos(input, ctx));
       case 'cierres_caja':
         return safe(() => this.cierres(ctx));
       case 'cuentas_caja':
@@ -129,14 +129,16 @@ export class InternoCajaToolset implements Toolset {
     ].join('\n');
   }
 
-  private async movimientos(input: Record<string, unknown>): Promise<string> {
+  private async movimientos(input: Record<string, unknown>, ctx: ToolContext): Promise<string> {
+    // Va con el usuario del chat, igual que `cierres`: si es cajera, sólo ve los
+    // movimientos de SU caja. Antes iba sin usuario y listaba los de todas las sedes.
     const res: any = await this.treasury.list({
       search: input.search ? String(input.search) : undefined,
       type: input.tipo ? String(input.tipo) : undefined,
       from: input.desde ? String(input.desde) : hoy(),
       to: input.hasta ? String(input.hasta) : hoy(),
       pageSize: 8,
-    } as any);
+    } as any, authUserOf(ctx.user));
     if (!res.items?.length) return 'No hay movimientos con esos criterios.';
     const lineas = res.items.map(
       (t: any) => `• ${fecha(t.date)} ${t.type === 'INCOME' ? '↑' : '↓'} ${cop(t.credit || t.debit)} · ${t.category ?? '—'}` +

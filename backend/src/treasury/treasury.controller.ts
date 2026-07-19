@@ -141,17 +141,18 @@ export class TreasuryController {
     @Query('cashAccountId') cashAccountId?: string,
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
+    @CurrentUser() user?: AuthUser,
   ) {
     return this.treasury.list({
       search, type, category, status, from, to, all,
       cashAccountId: cashAccountId ? Number(cashAccountId) : undefined,
       page: Number(page), pageSize: Number(pageSize),
-    });
+    }, user as AuthUser);
   }
 
   @Get('transactions/:id')
-  detail(@Param('id') id: string) {
-    return this.treasury.detail(id);
+  detail(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.treasury.detail(id, user);
   }
 
   /** Adjuntar el comprobante/evidencia de un movimiento (imagen o PDF). */
@@ -166,15 +167,15 @@ export class TreasuryController {
       fileFilter: (_req, file, cb) => cb(null, file.mimetype.startsWith('image/') || file.mimetype === 'application/pdf'),
     }),
   )
-  attach(@Param('id') id: string, @UploadedFile() file: MulterFile) {
+  attach(@Param('id') id: string, @UploadedFile() file: MulterFile, @CurrentUser() user: AuthUser) {
     if (!file) throw new BadRequestException('Sube una imagen o PDF en el campo "file".');
-    return this.treasury.attachTransaction(id, file);
+    return this.treasury.attachTransaction(id, file, user);
   }
 
   /** Sirve el comprobante adjunto de un movimiento (inline, para preview autenticado). */
   @Get('transactions/:id/attachment')
-  async attachment(@Param('id') id: string, @Res() res: Response) {
-    const a = await this.treasury.getTransactionAttachment(id);
+  async attachment(@Param('id') id: string, @Res() res: Response, @CurrentUser() user: AuthUser) {
+    const a = await this.treasury.getTransactionAttachment(id, user);
     return res.sendFile(join(TREASURY_ROOT, a.storedName));
   }
 

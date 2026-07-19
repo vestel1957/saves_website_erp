@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { scopeDate } from '../common/date-scope';
@@ -46,8 +46,32 @@ export class TreasuryService {
     };
   }
 
+  /**
+   * Exige que el usuario pueda ver la caja de ESTE movimiento, o 403.
+   * Puerta común de `detail`/`attachTransaction`/`getTransactionAttachment`: todos
+   * reciben un id del cliente y antes lo servían sin comprobar nada, así que una
+   * cajera podía leer (y adjuntar comprobantes a) movimientos de otra sede.
+   */
+  private async exigirAccesoAlMovimiento(id: string, user: AuthUser): Promise<void> {
+    const t = await this.prisma.transaction.findUnique({
+      where: { id },
+      select: { cashAccountId: true },
+    });
+    if (!t) throw new NotFoundException('Movimiento no encontrado');
+    if (t.cashAccountId != null) {
+      await exigirAcceso(this.prisma, user, t.cashAccountId);
+      return;
+    }
+    // Sin caja no hay nada contra lo que contrastar: se lo negamos a quien esté
+    // acotado y se lo permitimos a quien ve todas. Hoy no hay filas así, pero el
+    // schema lo permite y el lado seguro es no enseñar dinero ajeno.
+    if ((await cajasPermitidas(this.prisma, user)) !== null) {
+      throw new ForbiddenException('No tienes acceso a este movimiento.');
+    }
+  }
+
   /** Listado paginado de movimientos. Por defecto AÑO ACTUAL (override con from/to o all=1). */
-  async list(params: { search?: string; type?: string; category?: string; status?: string; from?: string; to?: string; all?: string; cashAccountId?: number; page?: number; pageSize?: number }) {
+  async list(params: { search?: string; type?: string; category?: string; status?: string; from?: string; to?: string; all?: string; cashAccountId?: number; page?: number; pageSize?: number }, user: AuthUser) {
     const page = Math.max(1, Number(params.page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(params.pageSize) || 25));
     const search = (params.search || '').trim();
@@ -58,7 +82,16 @@ export class TreasuryService {
     if (params.status) where.status = params.status as any;
     // Movimientos de UNA caja: sin esto solo se podían ver dentro del detalle de un
     // cierre, y solo del día de ese cierre — un día sin cerrar era invisible por caja.
-    if (params.cashAccountId) where.cashAccountId = Number(params.cashAccountId);
+    if (params.cashAccountId) {
+      // Pedir una caja concreta es un 403 si no es tuya, no un listado vacío: así el
+      // cliente distingue "no hay movimientos" de "no te toca".
+      await exigirAcceso(this.prisma, user, Number(params.cashAccountId));
+      where.cashAccountId = Number(params.cashAccountId);
+    } else {
+      // Sin caja explícita, acotar a las que puede ver (null = sin límite).
+      const permitidas = await cajasPermitidas(this.prisma, user);
+      if (permitidas) where.cashAccountId = { in: permitidas };
+    }
     // Por defecto AÑO ACTUAL (aplica también al buscar; usar all=1 para histórico).
     const period = scopeDate(params.from, params.to, params.all);
     if (period) where.date = period;
@@ -94,22 +127,23 @@ export class TreasuryService {
   }
 
   /** Adjunta (o reemplaza) el comprobante/evidencia de un movimiento. */
-  async attachTransaction(id: string, file: { filename: string; originalname: string }) {
-    const t = await this.prisma.transaction.findUnique({ where: { id }, select: { id: true } });
-    if (!t) throw new NotFoundException('Movimiento no encontrado');
+  async attachTransaction(id: string, file: { filename: string; originalname: string }, user: AuthUser) {
+    await this.exigirAccesoAlMovimiento(id, user);
     await this.prisma.transaction.update({ where: { id }, data: { attach: file.filename, attachName: file.originalname } });
     return { ok: true, attachName: file.originalname };
   }
 
   /** Datos del comprobante adjunto de un movimiento (para descargar/previsualizar). */
-  async getTransactionAttachment(id: string) {
+  async getTransactionAttachment(id: string, user: AuthUser) {
+    await this.exigirAccesoAlMovimiento(id, user);
     const t = await this.prisma.transaction.findUnique({ where: { id }, select: { attach: true, attachName: true } });
     if (!t?.attach) throw new NotFoundException('Comprobante no encontrado');
     return { storedName: t.attach, originalName: t.attachName ?? t.attach };
   }
 
   /** Detalle de un movimiento (con anulación y recibos ligados). */
-  async detail(id: string) {
+  async detail(id: string, user: AuthUser) {
+    await this.exigirAccesoAlMovimiento(id, user);
     const t = await this.prisma.transaction.findUnique({
       where: { id },
       include: {

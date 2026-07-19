@@ -142,12 +142,17 @@ export class WhatsappService {
    * modos de Kapso (mismo HMAC-SHA256 del cuerpo crudo, distinto header/formato):
    *   - Webhook estructurado de Kapso → header `X-Webhook-Signature` = hex crudo.
    *   - Reenvío formato Meta          → header `X-Hub-Signature-256` = `sha256=`+hex.
-   * Sin secreto configurado NO valida (solo dev) y lo advierte.
+   * Sin secreto configurado RECHAZA (fail-closed): este controller es el único sin
+   * JwtAuthGuard, así que la firma es la única barrera. Aceptar sin verificar dejaría
+   * el endpoint abierto a inyección de mensajes falsos si el arranque pierde el .env.
    */
   verifySignature(rawBody: Buffer | undefined, sig: { hub?: string; kapso?: string }): boolean {
     if (!this.appSecret) {
-      this.logger.warn('WHATSAPP_WEBHOOK_APP_SECRET no configurado: firma de webhook NO verificada.');
-      return true;
+      this.logger.error(
+        'WHATSAPP_WEBHOOK_APP_SECRET no configurado: webhook rechazado. ' +
+          'Definir la variable para poder recibir mensajes entrantes.',
+      );
+      return false;
     }
     if (!rawBody) return false;
     const hex = createHmac('sha256', this.appSecret).update(rawBody).digest('hex');

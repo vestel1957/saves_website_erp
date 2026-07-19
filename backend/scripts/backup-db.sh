@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 #
-# Backup de la base de datos PostgreSQL de Nexus.
+# Backup de la base de datos PostgreSQL de SAVES.
 # - Formato custom comprimido (pg_dump -Fc) → restaurable con pg_restore.
 # - Rota backups más viejos que RETENTION_DAYS.
 #
-# Uso:        ./scripts/backup-db.sh
-# Cron (3am): 0 3 * * *  cd /home/dev/nexus-erp/backend && ./scripts/backup-db.sh >> backups/backup.log 2>&1
+# Uso:          ./scripts/backup-db.sh
+# Cron (3:30am, instalado): 30 3 * * * cd /home/dev/saves/backend && ./scripts/backup-db.sh >> backups/backup.log 2>&1
+#   (3:00 lo ocupa el backup de otro proyecto en este mismo servidor)
 #
 # Variables (opcionales):
 #   BACKUP_DIR       carpeta destino (default: ./backups)

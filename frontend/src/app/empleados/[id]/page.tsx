@@ -13,6 +13,7 @@ import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { TabBar } from "@/components/accounting/TabBar";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
+import { SedesAccedeField } from "@/components/usuarios/SedesAccedeField";
 
 type TabKey = "datos" | "permisos";
 
@@ -73,6 +74,10 @@ type PermData = {
   hasEmail: boolean;
   account: PermAccount | null;
   roles: { key: string; name: string }[];
+  /** Sedes de la cuenta vinculada. Vacío = sin restricción (ve todas). */
+  sedesAccede: number[];
+  /** Las mismas, con nombre resuelto por el backend (para modo lectura). */
+  sedesAccedeDetalle: { legacyId: number; name: string }[];
   groups: PermGroup[];
 };
 
@@ -236,6 +241,7 @@ function PermisosCard({ staffId }: { staffId: string }) {
   const [busyAcct, setBusyAcct] = useState(false);
   const [audit, setAudit] = useState<any[] | null>(null);
   const [auditOpen, setAuditOpen] = useState(false);
+  const [sedesDraft, setSedesDraft] = useState<number[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -248,6 +254,7 @@ function PermisosCard({ staffId }: { staffId: string }) {
   }, [authFetch, staffId]);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => { setSedesDraft(data?.sedesAccede ?? []); }, [data]);
 
   const effectiveKeys = useMemo(() => {
     const s = new Set<string>();
@@ -374,6 +381,18 @@ function PermisosCard({ staffId }: { staffId: string }) {
         const rd = await rr.json();
         if (!rr.ok) throw new Error(rd?.message || "Error al guardar los roles");
       }
+      // Las sedes viven en la cuenta (User), no en el empleado (Staff), así que van
+      // por el endpoint de usuarios. Sólo se envían si cambiaron.
+      const sedesCambiaron =
+        JSON.stringify([...sedesDraft].sort((a, b) => a - b)) !==
+        JSON.stringify([...(data?.sedesAccede ?? [])].sort((a, b) => a - b));
+      if (sedesCambiaron && data?.userId) {
+        const sr = await authFetch(`/auth/users/${data.userId}`, { method: "PATCH", body: JSON.stringify({ sedesAccede: sedesDraft }) });
+        if (!sr.ok) {
+          const sd = await sr.json().catch(() => null);
+          throw new Error(sd?.message || "Error al guardar las sedes");
+        }
+      }
       const res = await authFetch(`/staff/${staffId}/permissions`, { method: "PATCH", body: JSON.stringify({ granted: [...draft] }) });
       const d = await res.json();
       if (!res.ok) throw new Error(d?.message || "Error");
@@ -386,7 +405,7 @@ function PermisosCard({ staffId }: { staffId: string }) {
     } finally {
       setSaving(false);
     }
-  }, [authFetch, staffId, draft, roleDraft, rolesDirty]);
+  }, [authFetch, staffId, draft, roleDraft, rolesDirty, sedesDraft, data]);
 
   const noop = useCallback(() => {}, []);
 
@@ -590,6 +609,32 @@ function PermisosCard({ staffId }: { staffId: string }) {
               <span className="text-[12px] text-text-tertiary">Sin roles asignados</span>
             )}
           </div>
+
+          {/* Sedes a las que accede (viven en la cuenta vinculada) */}
+          {data.linked && (
+            <div className="mb-3">
+              {editing ? (
+                <SedesAccedeField value={sedesDraft} onChange={setSedesDraft} />
+              ) : (
+                <>
+                  <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-text-tertiary">
+                    Sedes a las que accede
+                  </div>
+                  {data.sedesAccedeDetalle.length ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {data.sedesAccedeDetalle.map((s) => (
+                        <Badge key={s.legacyId} label={s.name} tone="info" />
+                      ))}
+                    </div>
+                  ) : (
+                    <span className="text-[12px] text-text-tertiary">
+                      Todas las sedes (sin restricción)
+                    </span>
+                  )}
+                </>
+              )}
+            </div>
+          )}
 
           {editing ? (
             /* ── Modo edición: árbol de permisos + buscador ── */

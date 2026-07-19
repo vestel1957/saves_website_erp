@@ -63,6 +63,18 @@ export class AuthController {
     return this.auth.listUserOptions();
   }
 
+  /**
+   * Sedes disponibles para el selector de "acceso por sede" al crear/editar un
+   * usuario. Va aquí y no en `/config/branches` porque aquél exige área `sistemas`,
+   * mientras que esta pantalla la usa quien administra usuarios.
+   */
+  @Get('branches')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions(APP_PERMISSIONS.USERS_MANAGE)
+  listBranches() {
+    return this.auth.listBranches();
+  }
+
   @Post('users')
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions(APP_PERMISSIONS.USERS_MANAGE)

@@ -60,7 +60,7 @@ export class AuthService {
     return { token, user: resolved };
   }
 
-  async createUser(input: { email: string; name: string; password: string; roleKeys?: string[] }) {
+  async createUser(input: { email: string; name: string; password: string; roleKeys?: string[]; sedesAccede?: number[] }) {
     const exists = await this.prisma.user.findUnique({ where: { email: input.email } });
     if (exists) throw new BadRequestException('Ya existe un usuario con ese correo.');
 
@@ -73,9 +73,44 @@ export class AuthService {
         email: input.email,
         name: input.name,
         passwordHash: hashPassword(input.password),
+        sedesAccede: await this.validarSedes(input.sedesAccede),
         roles: { create: roles.map((r) => ({ roleId: r.id })) },
       },
       select: { id: true, email: true, name: true, isActive: true, createdAt: true },
+    });
+  }
+
+  /**
+   * Sedes a las que el usuario tiene acceso, validadas contra `Branch.legacyId`.
+   *
+   * Semántica (la misma que aplica `caja-scope.ts`): **lista vacía = SIN restricción**,
+   * o sea ve todas las sedes. No es "ninguna sede". Es importante que la UI lo diga,
+   * porque lo intuitivo sería lo contrario.
+   *
+   * Se validan los ids para no guardar sedes inexistentes: un número que no
+   * corresponde a ninguna sede dejaría al usuario sin acceso a nada y sin pista de
+   * por qué.
+   */
+  private async validarSedes(sedes: number[] | undefined): Promise<number[]> {
+    if (!sedes?.length) return [];
+    const unicas = [...new Set(sedes)];
+    const existen = await this.prisma.branch.findMany({
+      where: { legacyId: { in: unicas } },
+      select: { legacyId: true },
+    });
+    const validas = new Set(existen.map((b) => b.legacyId));
+    const desconocidas = unicas.filter((s) => !validas.has(s));
+    if (desconocidas.length) {
+      throw new BadRequestException(`No existe la sede: ${desconocidas.join(', ')}.`);
+    }
+    return unicas.sort((a, b) => a - b);
+  }
+
+  /** Sedes disponibles, para el selector de acceso por sede. */
+  listBranches() {
+    return this.prisma.branch.findMany({
+      select: { legacyId: true, name: true },
+      orderBy: { name: 'asc' },
     });
   }
 
@@ -87,6 +122,7 @@ export class AuthService {
         name: true,
         isActive: true,
         createdAt: true,
+        sedesAccede: true,
         roles: { include: { role: { select: { key: true, name: true } } } },
       },
       orderBy: { name: 'asc' },
@@ -393,7 +429,7 @@ export class AuthService {
   }
 
   /** Edita los datos básicos del usuario (nombre y/o correo), validando unicidad. */
-  async updateUser(userId: string, input: { name?: string; email?: string }) {
+  async updateUser(userId: string, input: { name?: string; email?: string; sedesAccede?: number[] }) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new NotFoundException('Usuario no encontrado.');
 
@@ -408,6 +444,8 @@ export class AuthService {
       data: {
         name: input.name?.trim() || undefined,
         email: email || undefined,
+        // `undefined` = no tocar; `[]` = quitar la restricción (ve todas las sedes).
+        sedesAccede: input.sedesAccede === undefined ? undefined : await this.validarSedes(input.sedesAccede),
       },
     });
     return this.listUsers();

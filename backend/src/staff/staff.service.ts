@@ -205,6 +205,18 @@ export class StaffService {
   // superusuario (ver StaffController).
 
   /** Usuario del sistema vinculado al empleado (por correo), con roles y overrides. */
+  /** Resuelve `legacyId -> nombre` de las sedes indicadas, conservando el orden. */
+  private async nombresDeSedes(legacyIds: number[]): Promise<{ legacyId: number; name: string }[]> {
+    if (!legacyIds.length) return [];
+    const filas = await this.prisma.branch.findMany({
+      where: { legacyId: { in: legacyIds } },
+      select: { legacyId: true, name: true },
+    });
+    const porId = new Map(filas.map((b) => [b.legacyId, b.name]));
+    // Si una sede se hubiera borrado, se muestra el id en vez de desaparecer sin más.
+    return legacyIds.map((id) => ({ legacyId: id, name: porId.get(id) ?? `Sede ${id}` }));
+  }
+
   private async linkedUser(staffId: string) {
     const e = await this.prisma.staff.findUnique({ where: { id: staffId } });
     if (!e) throw new NotFoundException('Empleado no encontrado');
@@ -254,6 +266,12 @@ export class StaffService {
       userActive: user?.isActive ?? null,
       isSuperadmin: roleKeys.has(SUPERADMIN_PERMISSION),
       hasEmail: !!staff.email,
+      // Sedes a las que accede la cuenta vinculada. Lista vacía = sin restricción
+      // (ve todas), que es la semántica que aplica `treasury/caja-scope.ts`.
+      sedesAccede: user?.sedesAccede ?? [],
+      // Los nombres viajan resueltos: la ficha en modo lectura la abre gente sin
+      // permiso para administrar usuarios, que no podría consultar /auth/branches.
+      sedesAccedeDetalle: await this.nombresDeSedes(user?.sedesAccede ?? []),
       account: user
         ? { email: user.email, name: user.name, isActive: user.isActive, createdAt: user.createdAt, lastLogin: staff.lastLogin ?? null }
         : null,

@@ -11,6 +11,7 @@ import { toast } from "@/components/ui/Toast";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Field, Input } from "@/components/ui/Field";
+import { SedesAccedeField } from "@/components/usuarios/SedesAccedeField";
 
 type RoleRef = { role: { key: string; name: string } };
 type User = {
@@ -19,6 +20,7 @@ type User = {
   name: string;
   isActive: boolean;
   createdAt: string;
+  sedesAccede: number[];
   roles: RoleRef[];
 };
 type Role = {
@@ -552,6 +554,7 @@ function CreateUserModal({
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [roleKeys, setRoleKeys] = useState<string[]>([]);
+  const [sedesAccede, setSedesAccede] = useState<number[]>([]);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -567,7 +570,7 @@ function CreateUserModal({
     setError("");
     const res = await authFetch("/auth/users", {
       method: "POST",
-      body: JSON.stringify({ name, email, password, roleKeys }),
+      body: JSON.stringify({ name, email, password, roleKeys, sedesAccede }),
     });
     if (res.ok) {
       onCreated();
@@ -633,6 +636,7 @@ function CreateUserModal({
             })}
           </div>
         </div>
+        <SedesAccedeField value={sedesAccede} onChange={setSedesAccede} />
         {error && <p className="text-[12px] text-error-text">{error}</p>}
         <div className="mt-1 flex justify-end gap-2">
           <Button type="button" variant="ghost" onClick={onClose}>
@@ -807,6 +811,7 @@ function EditUserModal({
   const { authFetch } = useAuth();
   const [name, setName] = useState(user.name);
   const [email, setEmail] = useState(user.email);
+  const [sedesAccede, setSedesAccede] = useState<number[]>(user.sedesAccede ?? []);
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -817,7 +822,7 @@ function EditUserModal({
     setError("");
     const res = await authFetch(`/auth/users/${user.id}`, {
       method: "PATCH",
-      body: JSON.stringify({ name, email }),
+      body: JSON.stringify({ name, email, sedesAccede }),
     });
     setSaving(false);
     if (res.ok) {
@@ -859,6 +864,7 @@ function EditUserModal({
         <Field label="Correo">
           <Input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
         </Field>
+        <SedesAccedeField value={sedesAccede} onChange={setSedesAccede} />
         <div className="flex justify-end">
           <Button type="submit" size="sm" disabled={saving}>
             {saving ? "Guardando…" : "Guardar datos"}

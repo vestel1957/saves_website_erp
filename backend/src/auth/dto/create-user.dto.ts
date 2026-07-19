@@ -1,4 +1,4 @@
-import { IsArray, IsEmail, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsArray, IsEmail, IsInt, IsOptional, IsString, MinLength } from 'class-validator';
 
 export class CreateUserDto {
   @IsEmail()
@@ -16,4 +16,13 @@ export class CreateUserDto {
   @IsArray()
   @IsString({ each: true })
   roleKeys?: string[];
+
+  /**
+   * Sedes a las que accede (`Branch.legacyId`).
+   * Lista vacía u omitida = SIN restricción: ve todas las sedes.
+   */
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  sedesAccede?: number[];
 }

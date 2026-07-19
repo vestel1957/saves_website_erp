@@ -101,7 +101,6 @@ export class RouterosClient {
 
   /** Procesa el buffer acumulado extrayendo todos los words completos. */
   private drainBuffer() {
-    // eslint-disable-next-line no-constant-condition
     while (true) {
       const decoded = this.decodeLength(this.buf, 0);
       if (!decoded) break;
@@ -154,7 +153,6 @@ export class RouterosClient {
   /** Lee una sentence completa (words hasta el word vacío). */
   private async readSentence(timeoutMs: number): Promise<string[]> {
     const words: string[] = [];
-    // eslint-disable-next-line no-constant-condition
     while (true) {
       const w = await this.nextWord(timeoutMs);
       if (w === '') break;
@@ -170,7 +168,6 @@ export class RouterosClient {
   private async readReply(timeoutMs: number): Promise<RosRow[]> {
     const rows: RosRow[] = [];
     let trap: string | null = null;
-    // eslint-disable-next-line no-constant-condition
     while (true) {
       const sentence = await this.readSentence(timeoutMs);
       if (sentence.length === 0) continue;
@@ -269,7 +266,6 @@ export class RouterosClient {
   ): Promise<{ done: boolean; ret?: string }> {
     let done = false;
     let ret: string | undefined;
-    // eslint-disable-next-line no-constant-condition
     while (true) {
       const sentence = await this.readSentence(timeoutMs);
       if (sentence.length === 0) continue;

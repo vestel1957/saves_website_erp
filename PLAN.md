@@ -43,8 +43,14 @@ que falle antes y pase después. Ya se hizo así con `collect()`
 | `2f5b130` | Baseline de migraciones `0_init` (192 tablas); `db push` retirado |
 | `f365524` | IDOR de tesorería cerrado + `caja-scope.spec.ts` (17 casos) |
 | `18ac02d` | Carrera de `collect()` cerrada con `FOR UPDATE` + smoke de regresión |
+| `6392c45` | **1.1** Consecutivos con secuencias de Postgres (4 servicios) + smoke |
+| `7586371` | **1.2** Pendientes contables visibles y reintentables (`PendingPosting`) |
+| `2cecd14` | **1.3** Saldo de caja bajo concurrencia + ORDEN DE BLOQUEO + smoke de deadlock |
+| `9dcbe9b` | **1.4** Misma carrera en abonos de órdenes y devoluciones |
+| `d8dc03d` | **5.1** `scripts/verify.sh` — la única verificación real hasta que haya remoto |
+| `24c6923` | **3.1** Filtro global de excepciones con traducción de Prisma |
 
-Tests: 14 → 31. Cobertura: sigue siendo ínfima fuera de estos módulos.
+Tests: 14 → 48 (5 suites). Cobertura: sigue siendo ínfima fuera de estos módulos.
 
 ---
 
@@ -52,7 +58,7 @@ Tests: 14 → 31. Cobertura: sigue siendo ínfima fuera de estos módulos.
 
 Lo que puede descuadrar plata o perder documentos. Cada punto necesita prueba propia.
 
-- [ ] **1.1 `nextTid()` → secuencia de Postgres.** `billing/facturas.service.ts:68-71`
+- [x] **1.1 `nextTid()` → secuencia de Postgres.** `billing/facturas.service.ts:68-71`
   genera el consecutivo con `MAX(tid)+1`. `tid` es `@unique`, así que no duplica:
   revienta. En `generate()` (cron mensual sobre ~21k abonados) eso se convierte en
   `failed++` con `reason:'ERROR'` y **ese abonado no se factura ese mes**, sin
@@ -61,7 +67,7 @@ Lo que puede descuadrar plata o perder documentos. Cada punto necesita prueba pr
   pasa a `nextval`. *Prueba*: smoke de N facturas concurrentes, cero colisiones.
   *Riesgo*: bajo, pero toca facturación — hacerlo con el cron parado.
 
-- [ ] **1.2 Fallos de contabilización visibles.** `accounting/posting.service.ts:28-34`
+- [x] **1.2 Fallos de contabilización visibles.** `accounting/posting.service.ts:28-34`
   (`safePost`) traga cualquier error, loguea un warn y devuelve `null`. Puede quedar
   factura emitida o recaudo cobrado **sin asiento**, sin marca en la respuesta y sin
   forma de saber cuáles. Llamadas afectadas: `facturas.service.ts:147` y `:317`,
@@ -70,7 +76,7 @@ Lo que puede descuadrar plata o perder documentos. Cada punto necesita prueba pr
   para listarlos y reprocesarlos. No cambiar el comportamiento best-effort: el
   documento debe seguir guardándose aunque el asiento falle.
 
-- [ ] **1.3 `recomputeCashBalance` bajo concurrencia.** `cobranzas.service.ts:106-116`
+- [x] **1.3 `recomputeCashBalance` bajo concurrencia.** `cobranzas.service.ts:106-116`
   recalcula el saldo con un `aggregate` completo dentro de la transacción, pero en
   READ COMMITTED no ve las transacciones concurrentes sin commitear → el `balance`
   de la caja puede quedar corto. *Atenuante*: es un recálculo desde las filas
@@ -78,7 +84,7 @@ Lo que puede descuadrar plata o perder documentos. Cada punto necesita prueba pr
   pérdida. *Cómo*: bloquear la fila `CashAccount` antes de recalcular, igual que
   se hizo con `Subscriber` en `lockSubscriber`.
 
-- [ ] **1.4 Auditar el resto de read-modify-write sobre dinero.** `collect` y
+- [x] **1.4 Auditar el resto de read-modify-write sobre dinero.** `collect` y
   `voidTransactionTx` ya están. Revisar `createIncome`, `createExpense`,
   `createTransfer`, `editTransaction` y los cierres de caja con el mismo criterio:
   ¿se lee fuera de la transacción algo que luego se escribe sumando?
@@ -171,7 +177,7 @@ Lo que puede descuadrar plata o perder documentos. Cada punto necesita prueba pr
 
 ## Bloque 3 — Robustez del backend
 
-- [ ] **3.1 Filtros de excepción.** `@Catch`/`APP_FILTER`: **0 en todo el proyecto**.
+- [x] **3.1 Filtros de excepción.** `@Catch`/`APP_FILTER`: **0 en todo el proyecto**.
   Los errores de Prisma salen como **500 con stack** en vez de 409/404/400: el cliente
   no distingue "consecutivo duplicado" de "la base se cayó".
   *Cómo*: `AllExceptionsFilter` + `PrismaExceptionFilter` (P2002→409, P2025→404,
@@ -245,7 +251,7 @@ Lo que puede descuadrar plata o perder documentos. Cada punto necesita prueba pr
 Va después del Bloque 1 solo porque el dinero no espera; en cuanto a valor, es lo que
 hace sostenible el resto.
 
-- [ ] **5.1 Script `verify` local.** `lint && typecheck && test && build` en un comando,
+- [x] **5.1 Script `verify` local.** `lint && typecheck && test && build` en un comando,
   para correr antes de cada despliegue. **Es la única verificación real hoy**, porque
   el CI no se ejecuta. Coste: minutos.
 

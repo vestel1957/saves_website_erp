@@ -6,6 +6,8 @@ import { WhatsappService } from '../common/whatsapp/whatsapp.service';
 import { MailService } from '../common/mail/mail.service';
 import { invoicePdfBuffer } from './billing-pdf';
 import { num } from '../common/money';
+import { sedesDe, whereSedePorSuscriptor, exigirSedeSuscriptor } from '../common/sede-scope';
+import { AuthUser } from '../auth/current-user.decorator';
 
 const cop = (n: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(n || 0);
 
@@ -110,15 +112,21 @@ export class BillingService {
     search?: string; status?: string; ron?: string; branchId?: string;
     from?: string; to?: string; all?: string; overdue?: string;
     page?: number; pageSize?: number;
-  }) {
+  }, user?: AuthUser) {
     const page = Math.max(1, Number(params.page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(params.pageSize) || 25));
     const search = (params.search || '').trim();
 
     const where: Prisma.SubInvoiceWhereInput = {};
+    // Acceso por sede: la factura hereda la sede de su suscriptor.
+    Object.assign(where, whereSedePorSuscriptor(await sedesDe(this.prisma, user)));
     if (params.status) where.status = params.status as any;
     if (params.ron) where.ron = params.ron as any;
-    if (params.branchId) where.subscriber = { branchId: params.branchId };
+    if (params.branchId) {
+      // Mezclar, no reemplazar: si se sobrescribiera `where.subscriber` se perdería
+      // el acotado por sede de arriba y el filtro sería puenteable desde la URL.
+      where.subscriber = { ...(where.subscriber as object ?? {}), branchId: params.branchId };
+    }
     // Vencidas / con saldo: facturas sin pagar del todo (DUE o PARTIAL) cuya
     // fecha de vencimiento ya pasó. Herramienta directa para cobranza.
     if (params.overdue === '1' || params.overdue === 'true') {
@@ -175,7 +183,9 @@ export class BillingService {
   }
 
   /** Detalle de una factura: ítems, cliente y pagos aplicados. */
-  async detail(id: string) {
+  async detail(id: string, user?: AuthUser) {
+    const dueno = await this.prisma.subInvoice.findUnique({ where: { id }, select: { subscriberId: true } });
+    if (dueno) await exigirSedeSuscriptor(this.prisma, user, dueno.subscriberId);
     const i = await this.prisma.subInvoice.findUnique({
       where: { id },
       include: {

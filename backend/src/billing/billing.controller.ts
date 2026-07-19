@@ -24,8 +24,10 @@ export class BillingController {
 
   /** PDF de la factura (impresión estándar Vestel). */
   @Get('invoices/:id/pdf')
-  async invoicePdf(@Param('id') id: string, @Res() res: Response) {
-    const inv = await this.billing.detail(id);
+  async invoicePdf(@Param('id') id: string, @Res() res: Response, @CurrentUser() user?: AuthUser) {
+    // El PDF va por el mismo `detail`, así que hereda el acotado por sede: sin pasar
+    // el usuario, descargar el PDF sería la puerta trasera del filtro.
+    const inv = await this.billing.detail(id, user);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="factura-${inv.tid}.pdf"`);
     invoicePdf(res, inv as any);
@@ -53,8 +55,9 @@ export class BillingController {
     @Query('overdue') overdue?: string,
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
+    @CurrentUser() user?: AuthUser,
   ) {
-    return this.billing.list({ search, status, ron, branchId, from, to, all, overdue, page: Number(page), pageSize: Number(pageSize) });
+    return this.billing.list({ search, status, ron, branchId, from, to, all, overdue, page: Number(page), pageSize: Number(pageSize) }, user);
   }
 
   /** Envía la factura por WhatsApp (PDF adjunto) al cliente. */
@@ -70,8 +73,8 @@ export class BillingController {
   }
 
   @Get('invoices/:id')
-  detail(@Param('id') id: string) {
-    return this.billing.detail(id);
+  detail(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.billing.detail(id, user);
   }
 
   // --- Escritura (Cobranza) ---

@@ -106,8 +106,8 @@ export class SearchService {
     try {
       const hits =
         intent.modulo === 'facturas'
-          ? await this.searchFacturas(intent)
-          : await this.searchAbonados(intent);
+          ? await this.searchFacturas(intent, user)
+          : await this.searchAbonados(intent, user);
       return { ok: true, interpreted: intent.interpretacion ?? null, module: intent.modulo, hits };
     } catch (err) {
       this.logger.warn(`Fallo despachando búsqueda: ${(err as Error).message}`);
@@ -185,7 +185,7 @@ export class SearchService {
 
   // ---- Despacho a los servicios existentes ------------------------------
 
-  private async searchAbonados(intent: Intent): Promise<SearchHit[]> {
+  private async searchAbonados(intent: Intent, user: AuthUser): Promise<SearchHit[]> {
     const f = intent.abonados ?? {};
     const { items } = await this.subscribers.list({
       search: intent.termino ?? undefined,
@@ -194,7 +194,7 @@ export class SearchService {
       tecnologia: f.tecnologia ?? undefined,
       cuenta: f.cuenta ?? undefined,
       pageSize: 6,
-    });
+    }, user);
     return (items ?? []).map((s: any) => ({
       module: 'abonados',
       id: s.id,
@@ -211,7 +211,7 @@ export class SearchService {
     }));
   }
 
-  private async searchFacturas(intent: Intent): Promise<SearchHit[]> {
+  private async searchFacturas(intent: Intent, user: AuthUser): Promise<SearchHit[]> {
     const f = intent.facturas ?? {};
     const { items } = await this.billing.list({
       search: intent.termino ?? undefined,
@@ -221,7 +221,7 @@ export class SearchService {
       to: f.hasta ?? undefined,
       all: f.desde || f.hasta ? undefined : '1', // sin rango: histórico completo
       pageSize: 6,
-    });
+    }, user);
     return (items ?? []).map((i: any) => ({
       module: 'facturas',
       id: i.id,

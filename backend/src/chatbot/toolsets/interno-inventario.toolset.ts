@@ -117,7 +117,7 @@ export class InternoInventarioToolset implements Toolset {
     if ((m as any).qty < cantidad) {
       return `No alcanza el stock: hay ${(m as any).qty} und de ${(m as any).name} y pides ${cantidad}.`;
     }
-    const t: any = await this.support.ticketDetail(ticketId);
+    const t: any = await this.support.ticketDetail(ticketId, authUserOf(ctx.user));
     return ctx.preparePending({
       summary: `Descontar ${cantidad} und de ${(m as any).name} y cargarlas al ticket #${t.code} (${t.client ?? 'sin cliente'}).`,
       permission: P.AREA_TECNICOS,

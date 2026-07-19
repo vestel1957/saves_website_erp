@@ -113,9 +113,9 @@ export class InternoTicketsToolset implements Toolset {
       case 'mis_tickets':
         return safe(() => this.misTickets(ctx));
       case 'buscar_tickets':
-        return safe(() => this.buscar(input));
+        return safe(() => this.buscar(input, ctx));
       case 'detalle_ticket':
-        return safe(() => this.detalle(String(input.id ?? '')));
+        return safe(() => this.detalle(String(input.id ?? ''), ctx));
       case 'crear_ticket':
         return safe(() => this.crear(input, ctx));
       case 'agregar_nota_ticket':
@@ -143,14 +143,16 @@ export class InternoTicketsToolset implements Toolset {
     return `${cab}\n${lineas.join('\n')}`;
   }
 
-  private async buscar(input: Record<string, unknown>): Promise<string> {
+  private async buscar(input: Record<string, unknown>, ctx: ToolContext): Promise<string> {
+    // Con el usuario del chat, igual que el resto: si no, consultar por WhatsApp
+    // sería la puerta trasera del acotado por sede.
     const res: any = await this.support.tickets({
       search: input.search ? String(input.search) : undefined,
       status: input.status ? String(input.status) : undefined,
       priority: input.priority ? String(input.priority) : undefined,
       tec: input.tec ? String(input.tec) : undefined,
       pageSize: 8,
-    });
+    }, authUserOf(ctx.user));
     if (!res.items?.length) return 'No encontré tickets con esos criterios.';
     const lineas = res.items.map(
       (t: any) => `• #${t.code} [${t.status}] ${t.subject} — ${t.client ?? '—'} · ${fecha(t.created)}\n  id: ${t.id}`,
@@ -159,8 +161,8 @@ export class InternoTicketsToolset implements Toolset {
     return `${res.total} ticket(s):\n${lineas.join('\n')}${extra}`;
   }
 
-  private async detalle(id: string): Promise<string> {
-    const t: any = await this.support.ticketDetail(id);
+  private async detalle(id: string, ctx: ToolContext): Promise<string> {
+    const t: any = await this.support.ticketDetail(id, authUserOf(ctx.user));
     const hilo = (t.threads ?? []).slice(-3)
       .map((h: any) => `  – ${fecha(h.date ?? h.created)} ${h.col ?? ''}: ${h.message ?? ''}`)
       .join('\n');
@@ -211,7 +213,7 @@ export class InternoTicketsToolset implements Toolset {
       return 'Nota agregada al ticket.';
     }
     if (!id || !mensaje) return 'Necesito el id del ticket y el texto de la nota.';
-    const t: any = await this.support.ticketDetail(id);
+    const t: any = await this.support.ticketDetail(id, authUserOf(ctx.user));
     return ctx.preparePending({
       summary: `Agregar al ticket #${t.code} la nota: "${mensaje}"`,
       permission: P.AREA_TECNICOS,
@@ -233,7 +235,7 @@ export class InternoTicketsToolset implements Toolset {
     if (!ESTADOS.includes(status as (typeof ESTADOS)[number])) {
       return `Estado inválido. Debe ser uno de: ${ESTADOS.join(', ')}.`;
     }
-    const t: any = await this.support.ticketDetail(id);
+    const t: any = await this.support.ticketDetail(id, authUserOf(ctx.user));
     // El aviso de la cascada va en el resumen: es lo que el usuario confirma.
     const aviso = status === 'RESUELTO'
       ? ' Si la cascada está activa, esto reconecta el servicio y le cobra la reconexión al cliente.'

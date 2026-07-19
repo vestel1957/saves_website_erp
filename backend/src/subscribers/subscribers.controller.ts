@@ -71,8 +71,8 @@ export class SubscribersController {
   }
 
   @Post('bulk/message')
-  bulkMessage(@Body() dto: BulkMessageDto) {
-    return this.subscribers.messageByFilter(dto, dto.message);
+  bulkMessage(@Body() dto: BulkMessageDto, @CurrentUser() user: AuthUser) {
+    return this.subscribers.messageByFilter(dto, dto.message, user);
   }
 
   // ── Catálogos de dirección (cascada) ─────────────────────────
@@ -122,13 +122,14 @@ export class SubscribersController {
     @Query('tecnologia') tecnologia?: string,
     @Query('cuenta') cuenta?: string,
     @Query('deuda') deuda?: string,
+    @CurrentUser() user?: AuthUser,
   ) {
-    return this.subscribers.list({ search, status, branchId, page: Number(page), pageSize: Number(pageSize), withPlan, servicio, tecnologia, cuenta, deuda });
+    return this.subscribers.list({ search, status, branchId, page: Number(page), pageSize: Number(pageSize), withPlan, servicio, tecnologia, cuenta, deuda }, user);
   }
 
   @Get(':id')
-  detail(@Param('id') id: string) {
-    return this.subscribers.detail(id);
+  detail(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.subscribers.detail(id, user);
   }
 
   @Get(':id/form')

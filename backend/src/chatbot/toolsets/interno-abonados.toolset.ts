@@ -5,6 +5,7 @@ import { APP_PERMISSIONS as P } from '../../auth/permissions.catalog';
 import { SubscribersService } from '../../subscribers/subscribers.service';
 import { CobranzasService } from '../../treasury/cobranzas.service';
 import { canAny, cop, fecha, gated, safe } from './toolset.util';
+import { authUserOf } from '../chatbot.identity';
 
 /** Mismo gate que el controller de clientes: cualquier área operativa consulta. */
 const VER_ABONADOS = [P.AREA_ADMINISTRACION, P.AREA_CONTABILIDAD, P.AREA_TECNICOS, P.AREA_CAJA];
@@ -74,9 +75,9 @@ export class InternoAbonadosToolset implements Toolset {
 
     switch (name) {
       case 'buscar_abonado':
-        return safe(() => this.buscar(String(input.q ?? '')));
+        return safe(() => this.buscar(String(input.q ?? ''), ctx));
       case 'ficha_abonado':
-        return safe(() => this.ficha(String(input.subscriberId ?? '')));
+        return safe(() => this.ficha(String(input.subscriberId ?? ''), ctx));
       case 'estado_cuenta_abonado':
         return safe(() => this.estadoCuenta(String(input.subscriberId ?? '')));
       case 'facturas_abonado':
@@ -86,9 +87,9 @@ export class InternoAbonadosToolset implements Toolset {
     }
   }
 
-  private async buscar(q: string): Promise<string> {
+  private async buscar(q: string, ctx: ToolContext): Promise<string> {
     if (!q.trim()) return 'Indica un nombre, número de abonado, documento o teléfono para buscar.';
-    const res = await this.subscribers.list({ search: q, pageSize: 5, withPlan: '1' });
+    const res = await this.subscribers.list({ search: q, pageSize: 5, withPlan: '1' }, authUserOf(ctx.user));
     if (!res.items.length) return `No encontré abonados que coincidan con "${q}".`;
     const lineas = res.items.map((s: any) =>
       `• ${s.name} — abonado ${s.abonado} · ${s.status ?? 'sin estado'}` +
@@ -100,8 +101,8 @@ export class InternoAbonadosToolset implements Toolset {
     return `${res.total} resultado(s):\n${lineas.join('\n')}${extra}`;
   }
 
-  private async ficha(id: string): Promise<string> {
-    const s: any = await this.subscribers.detail(id);
+  private async ficha(id: string, ctx: ToolContext): Promise<string> {
+    const s: any = await this.subscribers.detail(id, authUserOf(ctx.user));
     const servicios = (s.services ?? [])
       .map((sv: any) => `${sv.kind}: ${sv.planName ?? '—'} (${sv.status ?? '—'}, ${cop(sv.price)})`)
       .join(' · ') || 'sin servicios';

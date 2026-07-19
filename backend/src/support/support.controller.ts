@@ -92,13 +92,13 @@ export class SupportController {
   }
 
   @Get('tickets')
-  tickets(@Query('search') search?: string, @Query('status') status?: string, @Query('type') type?: string, @Query('tec') tec?: string, @Query('priority') priority?: string, @Query('sede') sede?: string, @Query('from') from?: string, @Query('to') to?: string, @Query('all') all?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string) {
-    return this.support.tickets({ search, status, type, tec, priority, sede, from, to, all, page: Number(page), pageSize: Number(pageSize) });
+  tickets(@Query('search') search?: string, @Query('status') status?: string, @Query('type') type?: string, @Query('tec') tec?: string, @Query('priority') priority?: string, @Query('sede') sede?: string, @Query('from') from?: string, @Query('to') to?: string, @Query('all') all?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string, @CurrentUser() user?: AuthUser) {
+    return this.support.tickets({ search, status, type, tec, priority, sede, from, to, all, page: Number(page), pageSize: Number(pageSize) }, user);
   }
 
   /** "Mi jornada": órdenes y contadores del técnico logueado (para el workspace /inicio). */
   @Get('my-work') myWork(@CurrentUser() user: AuthUser) { return this.support.myWork(user); }
 
-  @Get('tickets/:id') ticketDetail(@Param('id') id: string) { return this.support.ticketDetail(id); }
+  @Get('tickets/:id') ticketDetail(@Param('id') id: string, @CurrentUser() user?: AuthUser) { return this.support.ticketDetail(id, user); }
 
 }

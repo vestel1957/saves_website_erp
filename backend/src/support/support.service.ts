@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { scopeDate } from '../common/date-scope';
 import { AuthUser } from '../auth/current-user.decorator';
+import { sedesDe, whereSedePorSuscriptor, exigirSedeSuscriptor } from '../common/sede-scope';
 
 function subName(s: {
   firstName: string | null; secondName: string | null; lastName1: string | null;
@@ -51,10 +52,14 @@ export class SupportService {
     return { sedes, types: byType.map((t) => t.type).filter((t) => t && t.trim()) };
   }
 
-  async tickets(params: { search?: string; status?: string; type?: string; tec?: string; priority?: string; sede?: string; from?: string; to?: string; all?: string; page?: number; pageSize?: number }) {
+  async tickets(params: { search?: string; status?: string; type?: string; tec?: string; priority?: string; sede?: string; from?: string; to?: string; all?: string; page?: number; pageSize?: number }, user?: AuthUser) {
     const page = Math.max(1, Number(params.page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(params.pageSize) || 25));
     const where: Prisma.TicketWhereInput = {};
+    // Acceso por sede: el ticket la hereda de su suscriptor. Un ticket SIN suscriptor
+    // (interno) no lo ve un usuario acotado, por el mismo criterio conservador que
+    // aplica el resto del alcance.
+    Object.assign(where, whereSedePorSuscriptor(await sedesDe(this.prisma, user)));
     if (params.status) where.status = params.status as any;
     if (params.type) where.type = params.type;
     if (params.priority?.trim()) where.priority = params.priority.trim();
@@ -100,7 +105,9 @@ export class SupportService {
     return nb?.name ?? null;
   }
 
-  async ticketDetail(id: string) {
+  async ticketDetail(id: string, user?: AuthUser) {
+    const dueno = await this.prisma.ticket.findUnique({ where: { id }, select: { subscriberId: true } });
+    if (dueno?.subscriberId) await exigirSedeSuscriptor(this.prisma, user, dueno.subscriberId);
     const t = await this.prisma.ticket.findUnique({
       where: { id },
       include: {

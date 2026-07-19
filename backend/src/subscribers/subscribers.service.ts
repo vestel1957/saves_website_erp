@@ -6,6 +6,7 @@ import { MikrotikService } from '../network/mikrotik.service';
 import { MikrotikAdminService } from '../network/mikrotik-admin.service';
 import type { AuthUser } from '../auth/current-user.decorator';
 import { num } from '../common/money';
+import { sedesDe, whereSedeSuscriptor, exigirSedeSuscriptor } from '../common/sede-scope';
 
 
 /** Estados de factura que cuentan como deuda. */
@@ -126,13 +127,13 @@ export class SubscribersService {
   }
 
   /** Listado paginado con búsqueda y filtros. */
-  async list(params: ListFilter) {
+  async list(params: ListFilter, user?: AuthUser) {
     const page = Math.max(1, Number(params.page) || 1);
     // Con plan permitimos páginas más grandes (la vista de grupo carga muchos a la vez).
     const withPlan = params.withPlan === '1' || params.withPlan === 'true';
     const pageSize = Math.min(withPlan ? 500 : 100, Math.max(1, Number(params.pageSize) || 25));
 
-    const where = await this.computeWhere(params);
+    const where = await this.computeWhere(params, user);
 
     const [rows, total] = await Promise.all([
       this.prisma.subscriber.findMany({
@@ -211,7 +212,8 @@ export class SubscribersService {
     };
   }
 
-  async detail(id: string) {
+  async detail(id: string, user?: AuthUser) {
+    await exigirSedeSuscriptor(this.prisma, user, id);
     const s = await this.prisma.subscriber.findUnique({
       where: { id },
       include: {
@@ -371,8 +373,13 @@ export class SubscribersService {
   }
 
   /** WHERE final: base + filtro por nº de facturas (deuda) resuelto vía SQL. */
-  private async computeWhere(params: ListFilter): Promise<Prisma.SubscriberWhereInput> {
+  private async computeWhere(params: ListFilter, user?: AuthUser): Promise<Prisma.SubscriberWhereInput> {
     const where = this.buildListWhere(params);
+    // Acceso por sede. Va AQUÍ y no en cada método porque `computeWhere` es el embudo
+    // único de `list`, `matchingIds` y, por tanto, de las operaciones masivas: filtrar
+    // en un solo sitio evita que una masiva se salte el alcance que sí respeta el listado.
+    const sede = whereSedeSuscriptor(await sedesDe(this.prisma, user));
+    if (Object.keys(sede).length) Object.assign(where, sede);
     if (params.deuda === '1' || params.deuda === 'gt2') {
       const ids = await this.debtCountIds(params.deuda);
       const and = Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : [];
@@ -386,16 +393,18 @@ export class SubscribersService {
   private static readonly MAX_BULK = 2000;
 
   /** IDs de todos los abonados que cumplen el filtro (sin paginar). */
-  async matchingIds(filter: ListFilter): Promise<string[]> {
+  async matchingIds(filter: ListFilter, user?: AuthUser): Promise<string[]> {
     const rows = await this.prisma.subscriber.findMany({
-      where: await this.computeWhere(filter),
+      where: await this.computeWhere(filter, user),
       select: { id: true },
     });
     return rows.map((r) => r.id);
   }
 
-  private async resolveBulkIds(filter: ListFilter): Promise<string[]> {
-    const ids = await this.matchingIds(filter);
+  private async resolveBulkIds(filter: ListFilter, user?: AuthUser): Promise<string[]> {
+    // Con el usuario, para que una masiva NO pueda alcanzar sedes que el listado
+    // no le deja ni ver. Sin esto, el filtro de sede sería puramente cosmético.
+    const ids = await this.matchingIds(filter, user);
     if (ids.length === 0) throw new BadRequestException('No hay clientes que cumplan el filtro.');
     if (ids.length > SubscribersService.MAX_BULK) {
       throw new BadRequestException(`${ids.length} clientes exceden el máximo de ${SubscribersService.MAX_BULK} por operación. Afina el filtro (sede / estado).`);
@@ -425,7 +434,7 @@ export class SubscribersService {
 
   /** Corte masivo de TODOS los que cumplen el filtro (no depende de lo cargado en pantalla). */
   async cutByFilter(filter: ListFilter, user: AuthUser) {
-    const all = await this.resolveBulkIds(filter);
+    const all = await this.resolveBulkIds(filter, user);
     const { ids, protegidos } = await this.filterCuttable(all);
     if (ids.length === 0) {
       throw new BadRequestException('Todos los clientes del filtro tienen compromiso de pago vigente; no se cortó ninguno.');
@@ -436,13 +445,13 @@ export class SubscribersService {
 
   /** Reconexión masiva de TODOS los que cumplen el filtro. */
   async reconnectByFilter(filter: ListFilter, user: AuthUser) {
-    const ids = await this.resolveBulkIds(filter);
+    const ids = await this.resolveBulkIds(filter, user);
     return this.mikrotik.reconnectBatch(ids, user);
   }
 
   /** WhatsApp masivo a TODOS los que cumplen el filtro. */
-  async messageByFilter(filter: ListFilter, message: string) {
-    const ids = await this.resolveBulkIds(filter);
+  async messageByFilter(filter: ListFilter, message: string, user?: AuthUser) {
+    const ids = await this.resolveBulkIds(filter, user);
     return this.mikrotik.messageBatch(ids, message);
   }
 

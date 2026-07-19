@@ -85,6 +85,25 @@ export class CobranzasService {
     private readonly mikrotik: MikrotikService,
   ) {}
 
+  /**
+   * Serializa las operaciones de dinero de UN cliente bloqueando su fila hasta el
+   * commit (`SELECT ... FOR UPDATE`).
+   *
+   * Hace falta porque el reparto de un pago es un read-modify-write sobre
+   * `SubInvoice.paidAmount`: se lee el saldo, se calcula cuánto aplicar y se escribe
+   * el nuevo pagado. Prisma corre en READ COMMITTED, así que dos recaudos simultáneos
+   * del mismo cliente leían ambos `paidAmount = X`, escribían ambos `X + importe` y
+   * uno de los dos abonos se perdía — pero las DOS filas INCOME quedaban creadas.
+   * Resultado: la caja cuadraba el doble que la cartera, sin ninguna traza.
+   *
+   * Se bloquea el suscriptor y no las facturas: es UNA fila, siempre la misma, así que
+   * dos transacciones concurrentes no pueden cogerse recursos en orden distinto y no
+   * hay interbloqueo posible. Todas las facturas de un pago son de ese cliente.
+   */
+  private async lockSubscriber(tx: Tx, subscriberId: string): Promise<void> {
+    await tx.$queryRaw`SELECT id FROM "Subscriber" WHERE id = ${subscriberId} FOR UPDATE`;
+  }
+
   /** Recalcula el cache de dinero del suscriptor (SUM debit/credit de tx vigentes internas). */
   private async recomputeSubscriber(tx: Tx, subscriberId: string) {
     const agg = await tx.transaction.aggregate({
@@ -223,71 +242,78 @@ export class CobranzasService {
 
   /** Registrar recaudo: aplica el monto en cascada, crea transacciones + recibo. */
   async collect(dto: CollectDto, user: AuthUser) {
-    let amount = round2(Number(dto.amount));
-    if (!(amount > 0)) throw new BadRequestException('El monto debe ser mayor a cero');
-
-    const sub = await this.prisma.subscriber.findUnique({
-      where: { id: dto.subscriberId },
-      select: { id: true, balance: true, ...SUB_NAME_SELECT },
-    });
-    if (!sub) throw new NotFoundException('Cliente no encontrado');
-
-    // Método "Balance": el pago se cubre con el saldo a favor del cliente y NO
-    // puede exceder ese saldo (paridad legacy Transactions.php:1334 → si el saldo
-    // no alcanza, se capa el monto aplicado al saldo disponible; nunca aplica de más).
-    if (dto.method === 'Balance') {
-      const bal = round2(num(sub.balance));
-      if (bal <= 0) throw new BadRequestException('El cliente no tiene saldo a favor para pagar con Balance.');
-      if (amount > bal) amount = bal;
-    }
-
-    // Facturas a pagar: orden explícito o más antiguas primero.
-    let invoices;
-    if (dto.invoiceIds?.length) {
-      const found = await this.prisma.subInvoice.findMany({
-        where: { id: { in: dto.invoiceIds }, subscriberId: dto.subscriberId, status: { in: ['DUE', 'PARTIAL'] } },
-      });
-      const byId = new Map(found.map((i) => [i.id, i]));
-      invoices = dto.invoiceIds.map((id) => byId.get(id)).filter((i): i is NonNullable<typeof i> => !!i);
-    } else {
-      invoices = await this.prisma.subInvoice.findMany({
-        where: { subscriberId: dto.subscriberId, status: { in: ['DUE', 'PARTIAL'] } },
-        orderBy: [{ invoiceDate: 'asc' }, { tid: 'asc' }],
-      });
-    }
-    if (!invoices.length) throw new BadRequestException('El cliente no tiene facturas pendientes');
-
-    // --- Fase 1: reparto en cascada (saldo = total - paidAmount) ---
-    let monto = amount;
-    const montos = new Map<string, number>();
-    let lastId: string | null = null;
-    for (const inv of invoices) {
-      if (monto <= 0) break;
-      const saldo = round2(num(inv.total) - num(inv.paidAmount));
-      if (saldo <= 0) continue;
-      if (monto >= saldo) {
-        montos.set(inv.id, saldo);
-        monto = round2(monto - saldo);
-        lastId = inv.id;
-      } else {
-        // El dinero se agota aquí → pago parcial de esta factura.
-        montos.set(inv.id, monto);
-        lastId = inv.id;
-        monto = 0;
-        break;
-      }
-    }
-    // Excedente (sobrepago): se carga a la última factura procesada (queda como saldo a favor/adelanto).
-    if (monto > 0 && lastId) {
-      montos.set(lastId, round2((montos.get(lastId) ?? 0) + monto));
-      monto = 0;
-    }
-    if (!montos.size) throw new BadRequestException('No hay saldo pendiente que cubrir');
+    const montoPedido = round2(Number(dto.amount));
+    if (!(montoPedido > 0)) throw new BadRequestException('El monto debe ser mayor a cero');
 
     const payDate = dto.date ? dateOnly(dto.date) : dateOnly(new Date().toISOString());
-    const payer = subName(sub);
 
     const result = await this.prisma.$transaction(async (tx) => {
+      // Todo lo que sigue —leer saldos, repartir y escribir— va DENTRO de la
+      // transacción y detrás del bloqueo del cliente. Antes las facturas se leían
+      // fuera y el reparto se calculaba sobre esa foto vieja, así que dos recaudos
+      // simultáneos perdían un abono. Ver `lockSubscriber`.
+      await this.lockSubscriber(tx, dto.subscriberId);
+
+      const sub = await tx.subscriber.findUnique({
+        where: { id: dto.subscriberId },
+        select: { id: true, balance: true, ...SUB_NAME_SELECT },
+      });
+      if (!sub) throw new NotFoundException('Cliente no encontrado');
+
+      let amount = montoPedido;
+      // Método "Balance": el pago se cubre con el saldo a favor del cliente y NO
+      // puede exceder ese saldo (paridad legacy Transactions.php:1334 → si el saldo
+      // no alcanza, se capa el monto aplicado al saldo disponible; nunca aplica de más).
+      if (dto.method === 'Balance') {
+        const bal = round2(num(sub.balance));
+        if (bal <= 0) throw new BadRequestException('El cliente no tiene saldo a favor para pagar con Balance.');
+        if (amount > bal) amount = bal;
+      }
+
+      // Facturas a pagar: orden explícito o más antiguas primero.
+      let invoices;
+      if (dto.invoiceIds?.length) {
+        const found = await tx.subInvoice.findMany({
+          where: { id: { in: dto.invoiceIds }, subscriberId: dto.subscriberId, status: { in: ['DUE', 'PARTIAL'] } },
+        });
+        const byId = new Map(found.map((i) => [i.id, i]));
+        invoices = dto.invoiceIds.map((id) => byId.get(id)).filter((i): i is NonNullable<typeof i> => !!i);
+      } else {
+        invoices = await tx.subInvoice.findMany({
+          where: { subscriberId: dto.subscriberId, status: { in: ['DUE', 'PARTIAL'] } },
+          orderBy: [{ invoiceDate: 'asc' }, { tid: 'asc' }],
+        });
+      }
+      if (!invoices.length) throw new BadRequestException('El cliente no tiene facturas pendientes');
+
+      // --- Fase 1: reparto en cascada (saldo = total - paidAmount) ---
+      let monto = amount;
+      const montos = new Map<string, number>();
+      let lastId: string | null = null;
+      for (const inv of invoices) {
+        if (monto <= 0) break;
+        const saldo = round2(num(inv.total) - num(inv.paidAmount));
+        if (saldo <= 0) continue;
+        if (monto >= saldo) {
+          montos.set(inv.id, saldo);
+          monto = round2(monto - saldo);
+          lastId = inv.id;
+        } else {
+          // El dinero se agota aquí → pago parcial de esta factura.
+          montos.set(inv.id, monto);
+          lastId = inv.id;
+          monto = 0;
+          break;
+        }
+      }
+      // Excedente (sobrepago): se carga a la última factura procesada (queda como saldo a favor/adelanto).
+      if (monto > 0 && lastId) {
+        montos.set(lastId, round2((montos.get(lastId) ?? 0) + monto));
+        monto = 0;
+      }
+      if (!montos.size) throw new BadRequestException('No hay saldo pendiente que cubrir');
+
+      const payer = subName(sub);
       const applied: { invoiceId: string; tid: number; amount: number; status: string }[] = [];
       const txIds: string[] = [];
       let primary: { id: string; tid: number } | null = null;
@@ -382,6 +408,14 @@ export class CobranzasService {
     });
     if (!t) throw new NotFoundException('Transacción no encontrada');
     if (t.status === 'ANULADA') throw new BadRequestException('La transacción ya está anulada');
+
+    // La reversa de abajo es el mismo read-modify-write sobre `paidAmount` que hace
+    // `collect`, así que necesita el mismo bloqueo: sin él, anular un pago a la vez
+    // que se registra otro se pisan y la factura queda con un saldo que no cuadra.
+    // Se coge ANTES de tocar nada, y `FacturasService.voidInvoice` llama aquí antes
+    // de actualizar la factura, así que el orden es siempre Subscriber -> SubInvoice
+    // en los dos caminos: no hay ciclo de bloqueos.
+    if (t.subscriberId) await this.lockSubscriber(tx, t.subscriberId);
 
     await tx.transaction.update({ where: { id }, data: { status: 'ANULADA' } });
     await tx.voiding.create({

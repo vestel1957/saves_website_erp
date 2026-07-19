@@ -359,7 +359,7 @@ export class MikrotikAdminService {
     const liveByUser = new Map<string, string>();
     for (const a of r.data.active) if (a['name']) liveByUser.set(a['name'], a['address'] ?? '');
 
-    let rows = r.data.secrets
+    const rows = r.data.secrets
       .map((s) => {
         const user = s['name'] ?? '';
         const ip = s['remote-address'] || liveByUser.get(user) || '';

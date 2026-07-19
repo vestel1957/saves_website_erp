@@ -26,7 +26,6 @@ async function bootstrap() {
 
   const port = process.env.PORT ? Number(process.env.PORT) : 4000;
   await app.listen(port);
-  // eslint-disable-next-line no-console
   console.log(`🚀 Nexus API running on http://localhost:${port}/api`);
 }
 

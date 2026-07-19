@@ -296,7 +296,7 @@ export abstract class OltDriver {
    * ("`;) que permitirían inyectar comandos.
    */
   protected sanitize(v: unknown, pattern = /[^\x20-\x7E]/g): string {
-    let s = String(v ?? '').replace(pattern, '');
+    const s = String(v ?? '').replace(pattern, '');
     return s.replace(/["`;]/g, '');
   }
 

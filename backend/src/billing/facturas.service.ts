@@ -25,7 +25,7 @@ const addDays = (d: Date, days: number) => new Date(d.getTime() + days * 8640000
  */
 function dueOnDay(base: Date, day: number): Date {
   const d = Math.min(28, Math.max(1, Math.round(day) || 20));
-  let year = base.getUTCFullYear();
+  const year = base.getUTCFullYear();
   let month = base.getUTCMonth();
   if (base.getUTCDate() > d) month += 1; // el día ya pasó → mes siguiente
   return new Date(Date.UTC(year, month, d));

@@ -83,6 +83,16 @@ Lo que puede descuadrar plata o perder documentos. Cada punto necesita prueba pr
   `createTransfer`, `editTransaction` y los cierres de caja con el mismo criterio:
   ¿se lee fuera de la transacción algo que luego se escribe sumando?
 
+- [ ] **1.6 Pagos de compras/devoluciones no actualizan el saldo de caja.**
+  `orders.service.ts paySupplyOrder` y `returns.service.ts pay` crean un movimiento
+  con `cashAccountId` pero **nunca llaman a `recomputeCashBalance`** (es privado de
+  `CobranzasService`), así que el `balance` materializado de esa caja queda desfasado
+  hasta que otra operación de tesorería la toque. Se autocorrige, pero mientras tanto
+  un arqueo de esa caja miente. *Cómo*: extraer `recomputeSubscriber`/
+  `recomputeCashBalance` a un `TreasuryBalanceService` compartido — que es justo lo
+  que `REFACTOR.md` ya proponía— y usarlo desde los tres módulos. Respetar el ORDEN
+  DE BLOQUEO. Encontrado al auditar 1.4.
+
 - [ ] **1.5 Precisión decimal.** Los importes son `Decimal(18,2)` en la BD (bien),
   pero todo el cálculo pasa por `number` de JS vía `num()` (156 usos). Con IVA 19 %
   sobre líneas grandes el error es acumulable. *Cómo*: mantener `Prisma.Decimal`

@@ -162,13 +162,21 @@ export class OrdersService {
 
   /** Pago/abono a una orden de compra: crea el egreso en tesorería y actualiza el saldo. */
   async paySupplyOrder(id: string, dto: PayOrderDto, user: AuthUser) {
-    const order = await this.prisma.supplyOrder.findUnique({ where: { id } });
-    if (!order) throw new NotFoundException('Orden no encontrada');
     const amount = round2(Number(dto.amount));
     if (amount <= 0) throw new BadRequestException('El monto debe ser mayor a cero');
-    const balance = round2(num(order.total) - num(order.paidAmount));
-    if (amount > balance + 0.01) throw new BadRequestException(`El abono (${amount}) supera el saldo de la orden (${balance}).`);
+
     return this.prisma.$transaction(async (tx) => {
+      // La orden se lee DENTRO de la transacción y con la fila bloqueada. Leerla fuera
+      // y sumar sobre esa foto es la misma carrera que tenía `collect`: dos abonos
+      // simultáneos escribían el mismo `paidAmount` y uno se perdía, pero los DOS
+      // egresos quedaban creados. La validación del saldo también va aquí: si no, dos
+      // abonos que por separado caben pueden sobrepasar el total entre los dos.
+      await tx.$queryRaw`SELECT id FROM "SupplyOrder" WHERE id = ${id} FOR UPDATE`;
+      const order = await tx.supplyOrder.findUnique({ where: { id } });
+      if (!order) throw new NotFoundException('Orden no encontrada');
+      const balance = round2(num(order.total) - num(order.paidAmount));
+      if (amount > balance + 0.01) throw new BadRequestException(`El abono (${amount}) supera el saldo de la orden (${balance}).`);
+
       const t = await tx.transaction.create({
         data: {
           type: 'EXPENSE', category: 'Compras', debit: amount, credit: 0,

@@ -130,13 +130,19 @@ export class ReturnsService {
 
   /** Registra el pago/crédito de una devolución: ingreso en tesorería + saldo. */
   async pay(id: string, dto: PayReturnDto, user: AuthUser) {
-    const r = await this.prisma.stockReturn.findUnique({ where: { id } });
-    if (!r) throw new NotFoundException('Devolución no encontrada');
     const amount = round2(Number(dto.amount));
     if (amount <= 0) throw new BadRequestException('El monto debe ser mayor a cero');
-    const balance = round2(num(r.total) - num(r.paidAmount));
-    if (amount > balance + 0.01) throw new BadRequestException(`El abono (${amount}) supera el saldo de la devolución (${balance}).`);
+
     return this.prisma.$transaction(async (tx) => {
+      // Igual que en el abono a orden de compra: leer dentro de la transacción y con
+      // la fila bloqueada, o dos créditos simultáneos pierden uno de los dos abonos
+      // dejando los dos ingresos creados. La validación del saldo va dentro también.
+      await tx.$queryRaw`SELECT id FROM "StockReturn" WHERE id = ${id} FOR UPDATE`;
+      const r = await tx.stockReturn.findUnique({ where: { id } });
+      if (!r) throw new NotFoundException('Devolución no encontrada');
+      const balance = round2(num(r.total) - num(r.paidAmount));
+      if (amount > balance + 0.01) throw new BadRequestException(`El abono (${amount}) supera el saldo de la devolución (${balance}).`);
+
       const t = await tx.transaction.create({
         data: {
           type: 'INCOME', category: 'Devolución proveedor', credit: amount, debit: 0,

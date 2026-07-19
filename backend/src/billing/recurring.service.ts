@@ -5,6 +5,7 @@ import { AuthUser } from '../auth/current-user.decorator';
 import { FacturasService } from './facturas.service';
 import { CreateRecurringDto } from './dto/recurring.dto';
 import { num, round2 } from '../common/money';
+import { nextTid, TID_SEQ } from '../common/tid';
 
 
 function subName(s: {
@@ -110,9 +111,9 @@ export class RecurringService {
     };
   }
 
-  private async nextTid(): Promise<number> {
-    const max = await this.prisma.recurringInvoice.aggregate({ _max: { tid: true } });
-    return (max._max.tid ?? 1000) + 1;
+  /** Consecutivo de plantilla recurrente. Secuencia de Postgres. Ver common/tid.ts. */
+  private nextTid(): Promise<number> {
+    return nextTid(this.prisma, TID_SEQ.recurringInvoice);
   }
 
   /** Crear una plantilla recurrente. */

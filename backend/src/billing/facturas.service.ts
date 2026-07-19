@@ -9,6 +9,7 @@ import {
   RETENTION_LABEL_TO_ENUM, VoidInvoiceDto,
 } from './dto/facturas.dto';
 import { num, round2 } from '../common/money';
+import { nextTid, TID_SEQ } from '../common/tid';
 
 
 function dateOnly(s?: string): Date {
@@ -65,9 +66,9 @@ export class FacturasService {
     private readonly cobranzas: CobranzasService,
   ) {}
 
-  private async nextTid(tx: Tx): Promise<number> {
-    const max = await tx.subInvoice.aggregate({ _max: { tid: true } });
-    return (max._max.tid ?? 0) + 1;
+  /** Consecutivo de factura. Secuencia de Postgres: atómica, sin carrera. Ver common/tid.ts. */
+  private nextTid(tx: Tx): Promise<number> {
+    return nextTid(tx, TID_SEQ.subInvoice);
   }
 
   /** Día de vencimiento configurado (ajuste `billing.dueDay`, por defecto 20). */

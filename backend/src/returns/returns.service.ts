@@ -5,6 +5,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { num, round2 } from '../common/money';
+import { nextTid, TID_SEQ } from '../common/tid';
 
 const dateOnly = (s?: string) => { const d = s ? new Date(s) : new Date(); return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())); };
 
@@ -74,9 +75,9 @@ export class ReturnsService {
     };
   }
 
-  private async nextTid(tx: Prisma.TransactionClient) {
-    const max = await tx.stockReturn.aggregate({ _max: { tid: true } });
-    return (max._max.tid ?? 1000) + 1;
+  /** Consecutivo de devolución. Secuencia de Postgres. Ver common/tid.ts. */
+  private nextTid(tx: Prisma.TransactionClient) {
+    return nextTid(tx, TID_SEQ.stockReturn);
   }
 
   /** Crear devolución: resta stock del material (si updateStock). */

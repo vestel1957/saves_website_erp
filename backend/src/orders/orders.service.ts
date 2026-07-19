@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { AddNoteDto, CategoryNameDto, CreateOrderDto, CreateSupplierDto, OrderItemDto, PayOrderDto, ReceiveOrderDto } from './dto/orders.dto';
 import { num, round2 } from '../common/money';
+import { nextTid, TID_SEQ } from '../common/tid';
 
 const dateOnly = (s?: string) => { const d = s ? new Date(s) : new Date(); return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())); };
 
@@ -238,9 +239,9 @@ export class OrdersService {
     });
     return { rows, subtotal: round2(rows.reduce((s, r) => s + r.subtotal, 0)), tax: round2(rows.reduce((s, r) => s + r.taxTotal, 0)), total: round2(rows.reduce((s, r) => s + r.subtotal + r.taxTotal, 0)) };
   }
-  private async nextTid(tx: Prisma.TransactionClient) {
-    const max = await tx.supplyOrder.aggregate({ _max: { tid: true } });
-    return (max._max.tid ?? 1000) + 1;
+  /** Consecutivo de orden. Secuencia de Postgres. Ver common/tid.ts. */
+  private nextTid(tx: Prisma.TransactionClient) {
+    return nextTid(tx, TID_SEQ.supplyOrder);
   }
 
   async create(dto: CreateOrderDto, user: AuthUser) {

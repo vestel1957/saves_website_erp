@@ -9,6 +9,7 @@ import { PeriodsService } from './periods.service';
 import { MappingsService } from './mappings.service';
 import { ReportsService } from './reports.service';
 import { CostCentersService } from './cost-centers.service';
+import { PostingService } from './posting.service';
 import {
   CreateAccountDto, UpdateAccountDto, CreateJournalEntryDto, CreatePeriodDto, UpsertMappingDto,
 } from './dto/accounting.dto';
@@ -25,7 +26,25 @@ export class AccountingController {
     private readonly mappings: MappingsService,
     private readonly reports: ReportsService,
     private readonly costCenters: CostCentersService,
+    private readonly posting: PostingService,
   ) {}
+
+  // ---- Pendientes contables ----
+  /**
+   * Documentos que se emitieron pero cuyo asiento automático falló (típicamente por
+   * un mapeo de cuentas ausente). Antes esto sólo dejaba un warn en el log y no había
+   * forma de saber qué había quedado sin contabilizar.
+   */
+  @Get('pending')
+  listPending(@Query('all') all?: string) {
+    return this.posting.listPending({ incluirResueltos: all === '1' });
+  }
+
+  @Post('pending/:id/retry')
+  @RequireArea('administracion', 'contabilidad')
+  retryPending(@Param('id') id: string) {
+    return this.posting.retryPending(id);
+  }
 
   // ---- Centros de costo ----
   @Get('cost-centers') listCostCenters(@Query('all') all?: string) { return this.costCenters.list(all === '1'); }

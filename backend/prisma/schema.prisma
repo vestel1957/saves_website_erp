@@ -349,6 +349,27 @@ model JournalEntry {
   @@index([status])
 }
 
+/// Contabilización automática que FALLÓ, para poder verla y reintentarla.
+///
+/// La contabilización es best-effort a propósito: si falta un mapeo de cuentas, el
+/// documento (factura, recaudo, egreso) debe guardarse igual. Pero antes el fallo sólo
+/// dejaba un `log.warn` y se devolvía null, así que podía haber facturas sin asiento y
+/// nadie sabía CUÁLES. Aquí queda el rastro y el `payload` necesario para reintentar.
+model PendingPosting {
+  id         String   @id @default(cuid())
+  sourceType String // SALES_INVOICE | CUSTOMER_PAYMENT | PURCHASE_BILL | ...
+  sourceId   String
+  payload    Json // argumentos originales del post*, para reintentar sin el documento
+  error      String
+  attempts   Int      @default(1)
+  resolvedAt DateTime? // no se borra al resolverse: queda la traza de que falló
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([sourceType, sourceId]) // un pendiente por documento; reintentar suma intentos
+  @@index([resolvedAt])
+}
+
 /// Journal line — exactly one of debit/credit is > 0
 model JournalLine {
   id           String       @id @default(cuid())

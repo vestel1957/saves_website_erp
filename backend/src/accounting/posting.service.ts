@@ -1,8 +1,30 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { JournalService } from './journal.service';
 import { MappingsService } from './mappings.service';
+import { PrismaService } from '../prisma/prisma.service';
 import { round2 } from '../common/money';
 
+type SalesInvoiceArgs = {
+  sourceId: string; date: Date; number: string | number; subtotal: number; tax?: number;
+  costCenterId?: string | null; createdBy?: string | null;
+};
+type CustomerPaymentArgs = {
+  sourceId: string; date: Date; amount: number; toBank?: boolean; createdBy?: string | null;
+};
+type PurchaseBillArgs = {
+  sourceId: string; date: Date; number: string | number; subtotal: number; tax?: number;
+  costCenterId?: string | null; createdBy?: string | null;
+};
+type SupplierPaymentArgs = {
+  sourceId: string; date: Date; amount: number; fromBank?: boolean; createdBy?: string | null;
+};
+type TreasuryExpenseArgs = {
+  sourceId: string; date: Date; amount: number; category?: string | null; fromBank?: boolean; createdBy?: string | null;
+};
+type TreasuryIncomeArgs = {
+  sourceId: string; date: Date; amount: number; category?: string | null; toBank?: boolean; createdBy?: string | null;
+};
 
 /**
  * Contabilización automática de documentos origen (integraciones básicas).
@@ -11,9 +33,11 @@ import { round2 } from '../common/money';
  * al método correspondiente cuando emiten/pagan un documento. Cada asiento es
  * idempotente por (sourceType, sourceId): reintentar no duplica.
  *
- * Diseñado para NO romper el flujo de negocio: si falta un mapeo o algo falla,
- * se registra el error y se devuelve null (el documento se emite igual; el asiento
- * puede regenerarse luego desde Contabilidad).
+ * Diseñado para NO romper el flujo de negocio: si falta un mapeo o algo falla, el
+ * documento se emite igual y aquí se devuelve null. La diferencia con antes es que
+ * el fallo **deja rastro**: se registra en `PendingPosting` con los argumentos
+ * originales, así que se puede listar qué quedó sin contabilizar y reintentarlo.
+ * Antes sólo había un `log.warn` y no había forma de saber cuáles eran.
  */
 @Injectable()
 export class PostingService {
@@ -22,16 +46,107 @@ export class PostingService {
   constructor(
     private readonly journal: JournalService,
     private readonly mappings: MappingsService,
+    private readonly prisma: PrismaService,
   ) {}
 
-  private async safePost(fn: () => Promise<any>): Promise<any | null> {
+  /**
+   * Ejecuta la contabilización sin dejar que su fallo rompa el flujo de negocio,
+   * pero registrando el pendiente.
+   *
+   * El registro del pendiente va en su propio try/catch: si hasta eso falla, se
+   * loguea y se sigue. Nunca puede tumbar la emisión de una factura.
+   */
+  private async safePost<T>(
+    sourceType: string,
+    sourceId: string,
+    payload: unknown,
+    fn: () => Promise<T>,
+  ): Promise<T | null> {
     try {
-      return await fn();
+      const res = await fn();
+      await this.marcarResuelto(sourceType, sourceId);
+      return res;
     } catch (e) {
-      this.log.warn(`No se pudo contabilizar automáticamente: ${(e as Error).message}`);
+      const msg = (e as Error).message;
+      this.log.warn(`No se pudo contabilizar ${sourceType}/${sourceId}: ${msg}`);
+      try {
+        await this.prisma.pendingPosting.upsert({
+          where: { sourceType_sourceId: { sourceType, sourceId } },
+          create: {
+            sourceType, sourceId,
+            payload: payload as Prisma.InputJsonValue,
+            error: msg,
+          },
+          update: {
+            error: msg,
+            attempts: { increment: 1 },
+            resolvedAt: null,
+            payload: payload as Prisma.InputJsonValue,
+          },
+        });
+      } catch (e2) {
+        this.log.error(`Tampoco se pudo registrar el pendiente contable: ${(e2 as Error).message}`);
+      }
       return null;
     }
   }
+
+  /** Si el documento tenía un pendiente, marcarlo resuelto (se conserva la traza). */
+  private async marcarResuelto(sourceType: string, sourceId: string) {
+    try {
+      await this.prisma.pendingPosting.updateMany({
+        where: { sourceType, sourceId, resolvedAt: null },
+        data: { resolvedAt: new Date() },
+      });
+    } catch {
+      /* no es crítico: el asiento ya quedó hecho */
+    }
+  }
+
+  // --- Consulta y reintento de pendientes ---
+
+  /** Documentos que quedaron sin asiento. Por defecto sólo los no resueltos. */
+  async listPending(params: { incluirResueltos?: boolean } = {}) {
+    return this.prisma.pendingPosting.findMany({
+      where: params.incluirResueltos ? {} : { resolvedAt: null },
+      orderBy: { updatedAt: 'desc' },
+      take: 200,
+    });
+  }
+
+  /**
+   * Reintenta un pendiente con los argumentos guardados. `date` vuelve de JSON como
+   * cadena ISO, así que hay que revivirla antes de reenviar.
+   */
+  async retryPending(id: string) {
+    const p = await this.prisma.pendingPosting.findUnique({ where: { id } });
+    if (!p) throw new NotFoundException('Pendiente contable no encontrado');
+
+    const args = { ...(p.payload as Record<string, unknown>) } as { date?: unknown };
+    if (typeof args.date === 'string') args.date = new Date(args.date);
+
+    const post = this.despachador(p.sourceType);
+    if (!post) {
+      return { id, ok: false, error: `No sé reintentar un ${p.sourceType}` };
+    }
+    const res = await post(args as never);
+    return { id, ok: res !== null };
+  }
+
+  /** Mapa sourceType -> método, para el reintento. */
+  private despachador(sourceType: string): ((a: never) => Promise<unknown>) | null {
+    const mapa: Record<string, (a: never) => Promise<unknown>> = {
+      SALES_INVOICE: (a) => this.postSalesInvoice(a),
+      CUSTOMER_PAYMENT: (a) => this.postCustomerPayment(a),
+      PURCHASE_BILL: (a) => this.postPurchaseBill(a),
+      SUPPLIER_PAYMENT: (a) => this.postSupplierPayment(a),
+      TREASURY_EXPENSE: (a) => this.postTreasuryExpense(a),
+      TREASURY_INCOME: (a) => this.postTreasuryIncome(a),
+    };
+    return mapa[sourceType] ?? null;
+  }
+
+  // --- Asientos ---
 
   /**
    * Factura de venta: CxC a débito; ingreso e IVA generado a crédito.
@@ -39,11 +154,8 @@ export class PostingService {
    *   CR SALES_REVENUE (subtotal)
    *   CR SALES_TAX (iva)
    */
-  async postSalesInvoice(p: {
-    sourceId: string; date: Date; number: string | number; subtotal: number; tax?: number;
-    costCenterId?: string | null; createdBy?: string | null;
-  }) {
-    return this.safePost(async () => {
+  async postSalesInvoice(p: SalesInvoiceArgs) {
+    return this.safePost('SALES_INVOICE', p.sourceId, p, async () => {
       const subtotal = round2(p.subtotal);
       const tax = round2(p.tax ?? 0);
       const total = round2(subtotal + tax);
@@ -64,10 +176,8 @@ export class PostingService {
   /**
    * Recaudo de factura (cliente paga): banco/caja a débito; CxC a crédito.
    */
-  async postCustomerPayment(p: {
-    sourceId: string; date: Date; amount: number; toBank?: boolean; createdBy?: string | null;
-  }) {
-    return this.safePost(async () => {
+  async postCustomerPayment(p: CustomerPaymentArgs) {
+    return this.safePost('CUSTOMER_PAYMENT', p.sourceId, p, async () => {
       const amount = round2(p.amount);
       if (amount <= 0) return null;
       const cashKey = p.toBank === false ? 'CASH_DEFAULT' : 'BANK_DEFAULT';
@@ -86,11 +196,8 @@ export class PostingService {
   /**
    * Factura de proveedor: gasto/compra e IVA descontable a débito; CxP a crédito.
    */
-  async postPurchaseBill(p: {
-    sourceId: string; date: Date; number: string | number; subtotal: number; tax?: number;
-    costCenterId?: string | null; createdBy?: string | null;
-  }) {
-    return this.safePost(async () => {
+  async postPurchaseBill(p: PurchaseBillArgs) {
+    return this.safePost('PURCHASE_BILL', p.sourceId, p, async () => {
       const subtotal = round2(p.subtotal);
       const tax = round2(p.tax ?? 0);
       const total = round2(subtotal + tax);
@@ -111,10 +218,8 @@ export class PostingService {
   /**
    * Pago a proveedor: CxP a débito; banco/caja a crédito.
    */
-  async postSupplierPayment(p: {
-    sourceId: string; date: Date; amount: number; fromBank?: boolean; createdBy?: string | null;
-  }) {
-    return this.safePost(async () => {
+  async postSupplierPayment(p: SupplierPaymentArgs) {
+    return this.safePost('SUPPLIER_PAYMENT', p.sourceId, p, async () => {
       const amount = round2(p.amount);
       if (amount <= 0) return null;
       const cashKey = p.fromBank === false ? 'CASH_DEFAULT' : 'BANK_DEFAULT';
@@ -135,10 +240,8 @@ export class PostingService {
    *   DR PURCHASE_EXPENSE (gasto por defecto)
    *   CR banco/caja
    */
-  async postTreasuryExpense(p: {
-    sourceId: string; date: Date; amount: number; category?: string | null; fromBank?: boolean; createdBy?: string | null;
-  }) {
-    return this.safePost(async () => {
+  async postTreasuryExpense(p: TreasuryExpenseArgs) {
+    return this.safePost('TREASURY_EXPENSE', p.sourceId, p, async () => {
       const amount = round2(p.amount);
       if (amount <= 0) return null;
       const cashKey = p.fromBank === false ? 'CASH_DEFAULT' : 'BANK_DEFAULT';
@@ -159,10 +262,8 @@ export class PostingService {
    *   DR banco/caja
    *   CR SALES_REVENUE (ingreso por defecto)
    */
-  async postTreasuryIncome(p: {
-    sourceId: string; date: Date; amount: number; category?: string | null; toBank?: boolean; createdBy?: string | null;
-  }) {
-    return this.safePost(async () => {
+  async postTreasuryIncome(p: TreasuryIncomeArgs) {
+    return this.safePost('TREASURY_INCOME', p.sourceId, p, async () => {
       const amount = round2(p.amount);
       if (amount <= 0) return null;
       const cashKey = p.toBank === false ? 'CASH_DEFAULT' : 'BANK_DEFAULT';

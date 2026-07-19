@@ -100,6 +100,18 @@ export class CobranzasService {
    * dos transacciones concurrentes no pueden cogerse recursos en orden distinto y no
    * hay interbloqueo posible. Todas las facturas de un pago son de ese cliente.
    */
+  /**
+   * ORDEN DE BLOQUEO — respetarlo en todo método que toque los dos recursos:
+   *
+   *   1) Subscriber   (`lockSubscriber` / `recomputeSubscriber`)
+   *   2) CashAccount  (`recomputeCashBalance`), y entre varias cajas, por id ASCENDENTE
+   *
+   * Con un solo recurso no había interbloqueo posible. Al bloquear también la caja
+   * sí lo hay: si un camino coge Subscriber→CashAccount y otro CashAccount→Subscriber,
+   * pueden quedarse esperándose y Postgres aborta uno. Lo mismo entre dos cajas: una
+   * transferencia A→B y otra B→A simultáneas se cruzarían si cada una bloquea en el
+   * orden en que le llegan los parámetros.
+   */
   private async lockSubscriber(tx: Tx, subscriberId: string): Promise<void> {
     await tx.$queryRaw`SELECT id FROM "Subscriber" WHERE id = ${subscriberId} FOR UPDATE`;
   }
@@ -126,6 +138,14 @@ export class CobranzasService {
     if (cashAccountId == null) return;
     const acc = await tx.cashAccount.findFirst({ where: { legacyId: cashAccountId }, select: { id: true } });
     if (!acc) return; // caja derivada sin fila propia: nada que materializar
+    // Bloquear la caja antes de recalcular: el `aggregate` de abajo no ve las
+    // transacciones concurrentes sin commitear (READ COMMITTED), así que dos
+    // movimientos simultáneos sobre la misma caja podían dejar el saldo corto.
+    // Atenuante: como se recalcula desde las filas origen, la siguiente escritura
+    // lo corregía — era divergencia temporal, no pérdida. Aun así el saldo mostrado
+    // podía no cuadrar con sus propios movimientos, que es justo lo que un arqueo
+    // no puede permitirse.
+    await tx.$queryRaw`SELECT id FROM "CashAccount" WHERE id = ${acc.id} FOR UPDATE`;
     const agg = await tx.transaction.aggregate({
       _sum: { credit: true, debit: true },
       where: { cashAccountId, status: 'VIGENTE' },
@@ -158,8 +178,9 @@ export class CobranzasService {
           ext: false, status: 'VIGENTE', note: dto.note ?? null, issuerUserId: null,
         },
       });
-      await this.recomputeCashBalance(tx, dto.cashAccountId);
+      // Subscriber antes que CashAccount (ver ORDEN DE BLOQUEO).
       if (dto.subscriberId) await this.recomputeSubscriber(tx, dto.subscriberId);
+      await this.recomputeCashBalance(tx, dto.cashAccountId);
       return { id: t.id, amount };
     });
     // Contabilización automática (idempotente; no rompe el flujo si falla). "Balance" no mueve efectivo.
@@ -207,8 +228,12 @@ export class CobranzasService {
       const affected = new Set<number>();
       if (t.cashAccountId != null) affected.add(t.cashAccountId);
       if (dto.cashAccountId != null) affected.add(dto.cashAccountId);
-      for (const acid of affected) await this.recomputeCashBalance(tx, acid);
+      // Subscriber primero y las cajas en orden ascendente (ver ORDEN DE BLOQUEO):
+      // este método puede tocar DOS cajas si el movimiento cambia de caja.
       if (t.subscriberId) await this.recomputeSubscriber(tx, t.subscriberId);
+      for (const acid of [...affected].sort((a, b) => a - b)) {
+        await this.recomputeCashBalance(tx, acid);
+      }
       return { id, ok: true };
     });
   }
@@ -528,8 +553,11 @@ export class CobranzasService {
           note: `Transferencia desde ${fromName}${baseNote ? ` — ${baseNote}` : ''}`,
         },
       });
-      await this.recomputeCashBalance(tx, dto.fromCashAccountId);
-      await this.recomputeCashBalance(tx, dto.toCashAccountId);
+      // En orden ascendente, NO en orden origen→destino: si no, una transferencia
+      // A→B y otra B→A simultáneas se bloquearían cruzadas (ver ORDEN DE BLOQUEO).
+      for (const acid of [dto.fromCashAccountId, dto.toCashAccountId].sort((a, b) => a - b)) {
+        await this.recomputeCashBalance(tx, acid);
+      }
       return {
         amount, date,
         from: { cashAccountId: dto.fromCashAccountId, name: fromName, transactionId: out.id },

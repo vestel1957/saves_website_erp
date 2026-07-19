@@ -5,10 +5,10 @@ import { scopeDate, currentYear } from '../common/date-scope';
 import { WhatsappService } from '../common/whatsapp/whatsapp.service';
 import { MailService } from '../common/mail/mail.service';
 import { invoicePdfBuffer } from './billing-pdf';
+import { num } from '../common/money';
 
 const cop = (n: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(n || 0);
 
-const num = (d: Prisma.Decimal | null | undefined) => (d == null ? 0 : Number(d));
 
 function subName(s: {
   firstName: string | null; secondName: string | null;

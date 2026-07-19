@@ -1,6 +1,6 @@
-import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { rangoDia } from './cierre-legacy';
+import { num } from '../common/money';
 
 /**
  * Informe del cierre de caja — port de `views/reports/statement_list.php` del legacy.
@@ -22,7 +22,6 @@ import { rangoDia } from './cierre-legacy';
  * pisado (que tira la cuenta 8) ni el `$cuenta4` indefinido de `statements_para_pdf()`.
  */
 
-const num = (d: Prisma.Decimal | number | null | undefined) => (d == null ? 0 : Number(d));
 
 /** Cuentas de banco que se consolidan en la caja (legacy: ids fijos). */
 export const BANCOS = [

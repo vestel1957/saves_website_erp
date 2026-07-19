@@ -5,8 +5,8 @@ import { CreateSubscriberDto, UpdateInvoiceDto, UpdateSubscriberDto } from './dt
 import { MikrotikService } from '../network/mikrotik.service';
 import { MikrotikAdminService } from '../network/mikrotik-admin.service';
 import type { AuthUser } from '../auth/current-user.decorator';
+import { num } from '../common/money';
 
-const num = (d: Prisma.Decimal | null | undefined) => (d == null ? 0 : Number(d));
 
 /** Estados de factura que cuentan como deuda. */
 const UNPAID_STATUSES: SubInvoiceStatus[] = ['DUE', 'PARTIAL'];

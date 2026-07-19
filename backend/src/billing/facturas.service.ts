@@ -8,9 +8,8 @@ import {
   CreateInvoiceDto, CreateNoteDto, GenerateInvoicesDto, InvoiceItemDto,
   RETENTION_LABEL_TO_ENUM, VoidInvoiceDto,
 } from './dto/facturas.dto';
+import { num, round2 } from '../common/money';
 
-const num = (d: Prisma.Decimal | number | null | undefined) => (d == null ? 0 : Number(d));
-const round2 = (n: number) => Math.round(n * 100) / 100;
 
 function dateOnly(s?: string): Date {
   const d = s ? new Date(s) : new Date();

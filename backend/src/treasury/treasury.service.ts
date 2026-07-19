@@ -8,9 +8,8 @@ import {
 import { informeCierre } from './cierre-informe';
 import { cajasPermitidas, exigirAcceso } from './caja-scope';
 import { AuthUser } from '../auth/current-user.decorator';
+import { num, round2 } from '../common/money';
 
-const num = (d: Prisma.Decimal | null | undefined) => (d == null ? 0 : Number(d));
-const round2 = (n: number) => Math.round(n * 100) / 100;
 
 function subName(s: {
   firstName: string | null; secondName: string | null; lastName1: string | null;

@@ -1,8 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { JournalService } from './journal.service';
 import { MappingsService } from './mappings.service';
+import { round2 } from '../common/money';
 
-const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
 
 /**
  * Contabilización automática de documentos origen (integraciones básicas).

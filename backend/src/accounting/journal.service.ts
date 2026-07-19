@@ -3,9 +3,8 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PeriodsService } from './periods.service';
 import { CreateJournalEntryDto } from './dto/accounting.dto';
+import { num, round2 } from '../common/money';
 
-const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
-const num = (d: Prisma.Decimal | null | undefined) => (d == null ? 0 : Number(d));
 
 /** Línea de asiento para contabilización (usada por asientos manuales y automáticos). */
 export interface PostLine {

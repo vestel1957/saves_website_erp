@@ -4,9 +4,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { FacturasService } from './facturas.service';
 import { CreateRecurringDto } from './dto/recurring.dto';
+import { num, round2 } from '../common/money';
 
-const num = (d: Prisma.Decimal | number | null | undefined) => (d == null ? 0 : Number(d));
-const round2 = (n: number) => Math.round(n * 100) / 100;
 
 function subName(s: {
   firstName: string | null; secondName: string | null; lastName1: string | null;

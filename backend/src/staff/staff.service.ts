@@ -8,8 +8,8 @@ import { ALL_PERMISSIONS, SUPERADMIN_PERMISSION } from '../auth/permissions.cata
 import { AuthService } from '../auth/auth.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { AuditService } from '../common/audit/audit.service';
+import { num } from '../common/money';
 
-const num = (d: Prisma.Decimal | number | null | undefined) => (d == null ? 0 : Number(d));
 const ROLE_LABEL: Record<number, string> = { 2: 'Cajero', 3: 'Técnico', 4: 'Administrativo', 5: 'Administrador' };
 
 export class CreateStaffDto {

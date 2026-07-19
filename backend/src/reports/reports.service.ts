@@ -1,9 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { num, round2 } from '../common/money';
 
-const num = (d: Prisma.Decimal | number | null | undefined) => (d == null ? 0 : Number(d));
-const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /** Fila cruda del reporte de IVA (una por documento). */
 type IvaRow = {

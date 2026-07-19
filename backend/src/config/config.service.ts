@@ -1,10 +1,9 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Type } from 'class-transformer';
 import { IsOptional, IsString, MinLength } from 'class-validator';
-import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { num } from '../common/money';
 
-const num = (d: Prisma.Decimal | number | null | undefined) => (d == null ? 0 : Number(d));
 
 export class UpdateBranchDto {
   @IsOptional() @IsString() name?: string;

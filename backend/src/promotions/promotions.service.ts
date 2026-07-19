@@ -13,10 +13,8 @@ import {
   CreatePromotionDto,
   UpdatePromotionDto,
 } from './dto/promotions.dto';
+import { num, round2 } from '../common/money';
 
-const num = (d: Prisma.Decimal | number | null | undefined) =>
-  d == null ? 0 : Number(d);
-const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /** Fecha de hoy sin hora (UTC), para comparar contra los campos @db.Date. */
 function today(): Date {

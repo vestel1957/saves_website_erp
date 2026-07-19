@@ -13,9 +13,8 @@ import {
   sinElBarridoDelDia, whereArrastre, whereEfectivo,
 } from './cierre-legacy';
 import { alcanceDe, exigirAcceso, puedeVer } from './caja-scope';
+import { num, round2 } from '../common/money';
 
-const num = (d: Prisma.Decimal | number | null | undefined) => (d == null ? 0 : Number(d));
-const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /**
  * ¿El método mueve dinero por banco (y no por el cajón de efectivo)?

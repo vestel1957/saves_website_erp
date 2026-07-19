@@ -1,8 +1,8 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { signSubscriberToken } from '../auth/crypto.util';
+import { num } from '../common/money';
 
-const num = (d: unknown) => Number(d ?? 0);
 /** Normaliza un documento para comparar (quita puntos/espacios/guiones). */
 const normDoc = (s: string) => s.replace(/[.\s-]/g, '').toLowerCase();
 

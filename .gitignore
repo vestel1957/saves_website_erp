@@ -33,3 +33,7 @@ Thumbs.db
 # large binaries / assets checked in ad-hoc
 *.png.bak
 *.xlsx
+
+# cobertura de tests
+coverage/
+**/coverage/

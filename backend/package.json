@@ -16,8 +16,9 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate dev --name init",
-    "prisma:push": "prisma db push",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
+    "prisma:status": "prisma migrate status",
     "prisma:seed": "ts-node prisma/seed.ts",
     "prisma:seed:sst": "ts-node prisma/seed-sst.ts",
     "prisma:seed:payroll": "ts-node prisma/seed-payroll.ts",
@@ -30,7 +31,7 @@
     "smoke:crud-guards": "ts-node prisma/smoke-crud-guards.ts",
     "db:reset-inventory": "ts-node prisma/reset-inventory-data.ts",
     "db:backup": "bash scripts/backup-db.sh",
-    "db:setup": "prisma generate && prisma db push && ts-node prisma/seed.ts && ts-node prisma/seed-inventory.ts && ts-node prisma/seed-sst.ts && ts-node prisma/seed-payroll.ts"
+    "db:setup": "prisma generate && prisma migrate deploy && ts-node prisma/seed.ts && ts-node prisma/seed-inventory.ts && ts-node prisma/seed-sst.ts && ts-node prisma/seed-payroll.ts"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"

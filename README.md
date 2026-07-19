@@ -92,6 +92,27 @@ npm test              # Jest (solo backend, por ahora)
 - **CI** (`.github/workflows/ci.yml`) corre lint + typecheck + test en cada push/PR.
 - El plan de refactor incremental y su backlog están en [`REFACTOR.md`](./REFACTOR.md).
 
+## Migraciones de base de datos
+
+El esquema se versiona con **migraciones Prisma**. La base de producción está
+baselineada en `0_init` (192 tablas), verificado aplicándolo sobre una base vacía.
+
+```bash
+# backend/
+npm run prisma:status    # ¿está la BD al día con las migraciones?
+npm run prisma:migrate   # crear una migración tras editar schema.prisma (pide nombre)
+npm run prisma:deploy    # aplicar migraciones pendientes (producción)
+```
+
+> ⚠️ **No uses `prisma db push`.** Sincroniza el esquema sin dejar rastro: no hay
+> historial, ni rollback, ni forma de revisar el cambio en un PR, y provoca drift
+> respecto a las migraciones. Por eso se retiró el script `prisma:push`.
+
+- `0_init/migration.sql` empieza con `CREATE EXTENSION IF NOT EXISTS pg_trgm`,
+  que Prisma no emite solo y sin el cual fallan los índices GIN de `Subscriber`.
+- **Backup**: `npm run db:backup` (`pg_dump -Fc`, rotación a 14 días). Programado
+  a diario a las 3:30 en el crontab del servidor; restaurar con `pg_restore`.
+
 ## Módulos
 
 | Módulo | Qué hace |

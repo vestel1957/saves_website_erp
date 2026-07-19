@@ -86,6 +86,21 @@ npm run typecheck     # tsc --noEmit
 npm test              # Jest (solo backend, por ahora)
 ```
 
+**Antes de desplegar, correr la verificación completa:**
+
+```bash
+./scripts/verify.sh            # backend (lint+typecheck+test+build) y frontend (lint+typecheck)
+./scripts/verify.sh backend    # sólo uno
+```
+
+> El CI de GitHub Actions **nunca se ha ejecutado**: el repo no tiene remoto. Hasta que
+> lo tenga, `verify.sh` es la única verificación real del proyecto.
+>
+> Incluye el build del backend a propósito: `tsc --noEmit` ha dado verde sobre errores
+> que `nest build` sí detecta. **No** compila el frontend, también a propósito: hacerlo
+> mientras `next start` sirve corrompe `.next`. Ese build va en el despliegue, con el
+> proceso parado.
+
 - El backend compila en **TypeScript `strict`**.
 - Las reglas ruidosas del linter (`any`, react-hooks del compiler) están como **warning**
   a propósito, para ir saldándolas sin bloquear el build. No añadas código con **errores**.

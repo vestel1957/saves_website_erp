@@ -7,23 +7,50 @@ import { PageHeading } from "@/components/accounting/PageHeading";
 import { Icon } from "@/components/Icon";
 import { DataTable } from "@/components/inventory/DataTable";
 import { Badge } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
 import { Input, Select } from "@/components/ui/Field";
 import { Pagination } from "@/components/ui/Pagination";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
+import { BulkWhatsappModal } from "@/components/subscribers/BulkWhatsappModal";
+import { SubscriberFilters } from "@/components/subscribers/SubscriberFilters";
 import { useAuth } from "@/context/AuthProvider";
-import { type SubscriberList, SUB_STATUS_LABEL, SUB_STATUS_TONE, cop } from "@/lib/subscribers";
+import { PERM } from "@/lib/auth";
+import { type SubscriberList, SUB_STATUS_LABEL, SUB_STATUS_TONE, cop, cuentaParams } from "@/lib/subscribers";
 
 export default function SedeClientesPage() {
   const { id } = useParams<{ id: string }>();
-  const { loading: authLoading, authFetch } = useAuth();
+  const { loading: authLoading, authFetch, can } = useAuth();
+  const canWhatsapp = can(PERM.WHATSAPP_MANAGE);
 
   const [sedeName, setSedeName] = useState<string>("");
   const [data, setData] = useState<SubscriberList | null>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
+  const [servicio, setServicio] = useState("");
+  const [tecnologia, setTecnologia] = useState("");
+  const [cuenta, setCuenta] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
+
+  // Selección de abonados para envío masivo (persiste entre páginas de la sede).
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [waOpen, setWaOpen] = useState(false);
+  const toggle = (sid: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(sid) ? next.delete(sid) : next.add(sid);
+      return next;
+    });
+  const toggleAll = () =>
+    setSelected((prev) => {
+      const items = data?.items ?? [];
+      const allChecked = items.length > 0 && items.every((r) => prev.has(r.id));
+      const next = new Set(prev);
+      if (allChecked) items.forEach((r) => next.delete(r.id));
+      else items.forEach((r) => next.add(r.id));
+      return next;
+    });
 
   // Nombre de la sede (desde branches-stats, que ya trae el total).
   useEffect(() => {
@@ -39,19 +66,24 @@ export default function SedeClientesPage() {
     const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize), branchId: String(id) });
     if (search.trim()) qs.set("search", search.trim());
     if (status) qs.set("status", status);
+    if (servicio) qs.set("servicio", servicio);
+    if (tecnologia) qs.set("tecnologia", tecnologia);
+    const cp = cuentaParams(cuenta);
+    if (cp.cuenta) qs.set("cuenta", cp.cuenta);
+    if (cp.deuda) qs.set("deuda", cp.deuda);
     try {
       setData(await (await authFetch(`/subscribers?${qs.toString()}`)).json());
     } finally {
       setLoading(false);
     }
-  }, [authFetch, id, page, pageSize, search, status]);
+  }, [authFetch, id, page, pageSize, search, status, servicio, tecnologia, cuenta]);
 
   useEffect(() => {
     if (authLoading) return;
     const t = setTimeout(load, search ? 350 : 0);
     return () => clearTimeout(t);
   }, [authLoading, load]);
-  useEffect(() => { setPage(1); }, [search, status, pageSize]);
+  useEffect(() => { setPage(1); }, [search, status, servicio, tecnologia, cuenta, pageSize]);
 
   if (authLoading) return <PageSkeleton />;
 
@@ -75,7 +107,32 @@ export default function SedeClientesPage() {
           <option value="">Todos los estados</option>
           {Object.entries(SUB_STATUS_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </Select>
+        <SubscriberFilters
+          servicio={servicio} tecnologia={tecnologia} cuenta={cuenta}
+          onServicio={setServicio} onTecnologia={setTecnologia} onCuenta={setCuenta}
+        />
       </div>
+
+      {canWhatsapp && selected.size > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-brand/40 bg-brand-soft px-4 py-2.5">
+          <span className="text-[13px] font-semibold text-text-primary">
+            {selected.size.toLocaleString("es-CO")} abonado{selected.size === 1 ? "" : "s"} seleccionado{selected.size === 1 ? "" : "s"}
+          </span>
+          <button type="button" onClick={() => setSelected(new Set())} className="text-[12px] font-medium text-text-secondary hover:underline">
+            Limpiar selección
+          </button>
+          <Button className="ml-auto" size="sm" onClick={() => setWaOpen(true)}>
+            <Icon name="send" size={14} /> Enviar WhatsApp
+          </Button>
+        </div>
+      )}
+
+      <BulkWhatsappModal
+        open={waOpen}
+        onClose={() => setWaOpen(false)}
+        subscriberIds={[...selected]}
+        onSent={() => setSelected(new Set())}
+      />
 
       {loading && !data ? (
         <PageSkeleton />
@@ -85,6 +142,25 @@ export default function SedeClientesPage() {
             rows={data?.items ?? []}
             empty="No se encontraron clientes en esta sede con esos criterios."
             columns={[
+              ...(canWhatsapp ? [{
+                key: "sel",
+                header: (
+                  <input
+                    type="checkbox"
+                    aria-label="Seleccionar toda la página"
+                    checked={!!data?.items.length && (data?.items ?? []).every((r) => selected.has(r.id))}
+                    onChange={toggleAll}
+                  />
+                ),
+                render: (r: SubscriberList["items"][number]) => (
+                  <input
+                    type="checkbox"
+                    aria-label={`Seleccionar ${r.name}`}
+                    checked={selected.has(r.id)}
+                    onChange={() => toggle(r.id)}
+                  />
+                ),
+              }] : []),
               { key: "abonado", header: "Abonado", render: (r) => <span className="font-mono text-text-secondary">{r.abonado}</span> },
               { key: "name", header: "Nombre", render: (r) => <span className="font-medium text-text-primary">{r.name}</span> },
               { key: "doc", header: "Documento", render: (r) => <span className="text-text-secondary">{r.docNumber ?? "—"}</span> },

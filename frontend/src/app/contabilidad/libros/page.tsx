@@ -70,7 +70,7 @@ export default function LibrosPage() {
   if (loading) return <PageSkeleton />;
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <div className="flex flex-col gap-4">
       <div className="flex items-start justify-between gap-3">
         <PageHeading icon="book-open" title="Libro diario y mayor" subtitle="Asientos contables y movimientos por cuenta" />
         {tab === "diario" && <Button onClick={() => setModal(true)}>Nuevo asiento</Button>}

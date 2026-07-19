@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/Button";
 import { toast } from "@/components/ui/Toast";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { useAuth } from "@/context/AuthProvider";
+import { OltEditModal } from "@/components/network/OltEditModal";
 import type { OltRow, OltDashboard, OltMode } from "@/lib/olt";
 
 function Kpi({ label, value, tone }: { label: string; value: number; tone?: string }) {
@@ -30,6 +31,7 @@ export default function OltPanelPage() {
   const [olts, setOlts] = useState<OltRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [testing, setTesting] = useState<string | null>(null);
+  const [editOlt, setEditOlt] = useState<OltRow | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -111,11 +113,21 @@ export default function OltPanelPage() {
                 className="rounded p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-brand disabled:opacity-50">
                 <Icon name={testing === o.id ? "loader" : "zap"} size={15} className={testing === o.id ? "animate-spin" : ""} />
               </button>
+              <button title="Editar / configurar defaults" onClick={() => setEditOlt(o)}
+                className="rounded p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-brand"><Icon name="pencil" size={15} /></button>
               <button title="Operar" onClick={() => nav.push(`/red/olt/${o.id}`)}
                 className="rounded p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-brand"><Icon name="play" size={15} /></button>
             </div>
           ) },
         ]}
+      />
+
+      <OltEditModal
+        open={!!editOlt}
+        onClose={() => setEditOlt(null)}
+        onSaved={load}
+        olt={editOlt}
+        brands={mode?.brands ?? ["Huawei", "ZTE", "Fiberhome", "V-SOL", "BDCOM", "Otra"]}
       />
     </>
   );

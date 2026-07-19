@@ -65,6 +65,7 @@ const principal: NavItem[] = [
     label: "WhatsApp",
     children: [
       { icon: "message-square", label: "Inbox", href: "/configuracion/mensajes" },
+      { icon: "sparkles", label: "Agente (bot)", href: "/configuracion/chatbot" },
       { icon: "file-text", label: "Plantillas", href: "/configuracion/whatsapp/plantillas" },
       { icon: "send", label: "Envío masivo", href: "/configuracion/whatsapp/masivo" },
       { icon: "settings", label: "Configurar API", href: "/configuracion/whatsapp" },
@@ -97,7 +98,7 @@ const cajaTesoreria: NavItem[] = [
   { icon: "upload", label: "Importar pagos (Efecty)", href: "/tesoreria/importar-pagos" },
 ];
 
-// RED / ISP — solo operación de red (los equipos se movieron a INVENTARIO).
+// CONTABILIDAD — plan de cuentas, libros e informes.
 const contabilidad: NavItem[] = [
   { icon: "calculator", label: "Resumen contable", href: "/contabilidad" },
   { icon: "list-tree", label: "Plan de cuentas", href: "/contabilidad/plan-de-cuentas" },
@@ -106,14 +107,24 @@ const contabilidad: NavItem[] = [
   { icon: "settings", label: "Mapeo de cuentas", href: "/contabilidad/mapeo-cuentas" },
 ];
 
+// RED / ISP — operación de red que NO es Mikrotik (ese tiene módulo propio).
 const red: NavItem[] = [
   { icon: "activity", label: "Conexiones", href: "/red/conexiones" },
   { icon: "git-branch", label: "Cajas NAP", href: "/red/naps" },
-  { icon: "zap", label: "Operaciones masivas", href: "/red/masivo" },
-  { icon: "network", label: "IPs de usuarios", href: "/red/ips" },
-  { icon: "router", label: "Gestión Mikrotik", href: "/red/mikrotik" },
   { icon: "radio-tower", label: "Gestión OLT", href: "/red/olt" },
   { icon: "tv", label: "GenieACS · TR-069", href: "/red/genieacs" },
+];
+
+// MIKROTIK — módulo propio (2026-07-15). Todo lo que opera routers RouterOS vive
+// aquí, con rutas /mikrotik/* de verdad (no /red/* renombradas: eso deja el menú
+// diciendo una cosa y el gate por área del middleware otra, como pasa con
+// Equipos). Lo que NO se mueve: el MikrotikModal de corte/reconexión sigue
+// colgando de la ficha del abonado (/clientes/[id]) y de /inicio, porque ahí es
+// donde se opera un cliente concreto; y el cambio de plan sigue en su modal.
+const mikrotik: NavItem[] = [
+  { icon: "router", label: "Gestión de routers", href: "/mikrotik" },
+  { icon: "zap", label: "Operaciones masivas", href: "/mikrotik/masivo" },
+  { icon: "network", label: "IPs de usuarios", href: "/mikrotik/ips" },
 ];
 
 // INVENTARIO — todo el inventario físico: equipos (CPE), material, compras,
@@ -168,7 +179,10 @@ const personas: NavItem[] = [
   { icon: "contact", label: "Empleados", href: "/empleados" },
   { icon: "truck", label: "Móviles / cuadrillas", href: "/empleados/moviles" },
   { icon: "layers", label: "Proyectos", href: "/proyectos" },
-  { icon: "list-checks", label: "Listado de tareas", href: "/agenda" },
+  { icon: "list-checks", label: "Tareas / Pendientes", href: "/tareas" },
+  // /agenda es el calendario de eventos (omni/events), no un listado de tareas:
+  // se renombró al añadir /tareas, que sí es el to-do heredado del legacy.
+  { icon: "calendar", label: "Agenda / Eventos", href: "/agenda" },
 ];
 
 // CONFIGURACIÓN — ajustes del sistema (ya sin operación de red ni reportes).
@@ -176,12 +190,9 @@ const configuracion: NavItem[] = [
   { icon: "briefcase", label: "Empresa", href: "/configuracion" },
   { icon: "gauge", label: "Planes de servicio", href: "/configuracion/planes" },
   { icon: "folder", label: "Categorías de transacción", href: "/configuracion/categorias" },
-  { icon: "target", label: "Metas", href: "/configuracion/metas" },
   { icon: "user-cog", label: "Usuarios y roles", href: "/configuracion/usuarios" },
   { icon: "key-round", label: "REST API", href: "/configuracion/api" },
   { icon: "calendar-clock", label: "Cron job", href: "/configuracion/automatizaciones" },
-  { icon: "mail", label: "Correo saliente", href: "/configuracion/correo" },
-  { icon: "palette", label: "Tema", href: "/configuracion/ajustes" },
   { icon: "history", label: "Bitácora / auditoría", href: "/configuracion/actividad" },
   // Importar y exportar viven en un solo hub (/configuracion/datos).
   { icon: "file-spreadsheet", label: "Importar / Exportar", href: "/configuracion/datos" },
@@ -207,6 +218,7 @@ export const navSections: NavSection[] = [
   { title: "CAJA / TESORERÍA", items: cajaTesoreria },
   { title: "CONTABILIDAD", items: contabilidad },
   { title: "RED / ISP", items: red },
+  { title: "MIKROTIK", items: mikrotik },
   { title: "INVENTARIO", items: inventario },
   { title: "PERSONAS / PROYECTOS", items: personas },
   { title: "CONFIGURACIÓN", items: configuracion },
@@ -263,6 +275,17 @@ export function activeNavHref(pathname: string): string {
     }
   }
   return best;
+}
+
+/**
+ * ¿La ruta actual ES una hoja del sidebar (una sección propia del menú)?
+ * Sirve para decidir si mostrar el botón "Volver": en una sección del menú no
+ * hace falta (se navega por el sidebar); solo se muestra en subpáginas que no
+ * están en el menú (fichas de detalle como /clientes/123, /soporte/45). Compara
+ * por igualdad exacta: /clientes es hoja, pero /clientes/123 no lo es.
+ */
+export function isNavLeaf(pathname: string): boolean {
+  return navSections.some((s) => leaves(s.items).some((i) => i.href === pathname));
 }
 
 /** Devuelve [sección, etiqueta] del módulo que corresponde a la ruta actual. */

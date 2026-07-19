@@ -8,6 +8,7 @@ import { SupportWriteService } from '../../support/support-write.service';
 import { invoicePdfBuffer } from '../../billing/billing-pdf';
 import type { AuthUser } from '../../auth/current-user.decorator';
 import { CHAT_CLIENTE_PERMISSION, subscriberIdOf } from '../chatbot.identity';
+import { ChatbotSessionStore } from '../chatbot-session.store';
 import { cop, fecha, safe } from './toolset.util';
 
 /**
@@ -39,6 +40,7 @@ export class ClienteToolset implements Toolset {
     private readonly cobranzas: CobranzasService,
     private readonly billing: BillingService,
     private readonly write: SupportWriteService,
+    private readonly store: ChatbotSessionStore,
   ) {}
 
   definitions(_ctx: ToolContext): ToolDef[] {
@@ -92,6 +94,25 @@ export class ClienteToolset implements Toolset {
         description: 'Estado de los reportes/tickets de soporte abiertos del cliente que escribe.',
         input_schema: { type: 'object', properties: {} },
       },
+      {
+        name: 'hablar_con_humano',
+        description:
+          'Pasa la conversación a una persona del equipo. Úsala cuando el cliente lo pida, cuando se queje ' +
+          'de la atención, cuando esté molesto, o cuando necesite algo que no puedes resolver con tus otras ' +
+          'herramientas (negociar un acuerdo de pago, reclamar un cobro, cancelar el servicio). ' +
+          'A partir de ese momento dejas de responder en este chat: contesta una persona. No la uses para ' +
+          'preguntas que sí puedes resolver.',
+        input_schema: {
+          type: 'object',
+          properties: {
+            motivo: {
+              type: 'string',
+              description: 'Qué necesita el cliente, en pocas palabras, para que quien lo atienda no empiece de cero',
+            },
+          },
+          required: ['motivo'],
+        },
+      },
     ];
   }
 
@@ -116,6 +137,8 @@ export class ClienteToolset implements Toolset {
         return safe(() => this.reportarFalla(id, input, ctx));
       case 'mis_tickets_soporte':
         return safe(() => this.tickets(id));
+      case 'hablar_con_humano':
+        return safe(() => this.escalar(input, ctx));
       default:
         return `Herramienta no disponible: ${name}`;
     }
@@ -191,6 +214,32 @@ export class ClienteToolset implements Toolset {
     return abonos.slice(0, 5)
       .map((m: any) => `• ${fecha(m.date)} · ${cop(m.credit ?? m.amount)}${m.note ? ` — ${m.note}` : ''}`)
       .join('\n');
+  }
+
+  /**
+   * Pasa la conversación a una persona: marca el handoff y el bot deja de responder
+   * aquí (lo corta el gate en el transporte, antes del motor). El mensaje entrante se
+   * sigue registrando, así que el equipo lo atiende desde el visor de conversaciones,
+   * igual que antes de que el bot existiera.
+   *
+   * NO pide confirmación, a diferencia de las escrituras: lo pidió el cliente, y
+   * repreguntarle "¿seguro que quieres un humano?" a alguien que ya está molesto es
+   * exactamente lo que no hay que hacer. Además falla del lado bueno — si el modelo la
+   * invoca de más, el resultado es que atiende una persona; se devuelve al bot desde
+   * Configuración con un clic.
+   */
+  private async escalar(input: Record<string, unknown>, ctx: ToolContext): Promise<string> {
+    const motivo = String(input.motivo ?? '').trim() || 'El cliente pidió hablar con una persona';
+    await this.store.setHandoff(ctx.convKey, motivo);
+    await ctx.audit({
+      userId: ctx.user.id,
+      action: 'chatbot.handoff',
+      summary: `El cliente pidió hablar con una persona — ${motivo}`,
+      detail: { convKey: ctx.convKey, motivo },
+    });
+    this.logger.log(`Handoff pedido en ${ctx.convKey}: ${motivo}`);
+    return 'Listo: le avisé al equipo y una persona le va a escribir por este mismo chat. '
+      + 'Despídete y NO sigas respondiendo consultas en este chat.';
   }
 
   private async reportarFalla(id: string, input: Record<string, unknown>, ctx: ToolContext): Promise<string> {

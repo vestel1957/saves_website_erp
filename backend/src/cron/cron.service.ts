@@ -10,7 +10,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Automatizaciones programadas — porta `Cronjob.php` del legacy saves-vestel:
- *   · RECURRING_BILLING → genera las facturas recurrentes del mes (clona la última).
+ *   · RECURRING_BILLING → genera las facturas recurrentes del mes (desde el plan).
  *   · CARTERA           → pasa a "Cartera" los clientes Cortados hace ≥ 2 meses.
  *   · EXCHANGE_RATE      → actualización de tasa (stub; la operación es en COP).
  *
@@ -84,17 +84,25 @@ export class CronService {
     try {
       const today = new Date();
       const invoiceDate = today.toISOString().slice(0, 10);
+      // Sin `limit`: la corrida del mes debe cubrir a TODOS los facturables. Antes
+      // pasaba 2000 fijo y `generate` además capaba en 2000, así que el mes quedaba
+      // a medias (~2000 de ~4800) y el CronRun lo reportaba como éxito.
       const res = await this.facturas.generate(
-        { invoiceDate, limit: opts.limit ?? 2000, branchId: opts.branchId } as any,
+        { invoiceDate, limit: opts.limit, branchId: opts.branchId } as any,
         opts.user ?? this.systemUser(),
       );
-      const detail = `objetivo ${res.targeted} · generadas ${res.generated} · omitidas ${res.skipped}`;
+      const detail = `objetivo ${res.targeted} · generadas ${res.generated} · omitidas ${res.skipped}`
+        + (res.failed ? ` · FALLIDAS ${res.failed}` : '');
+      // Con facturas fallidas el mes quedó incompleto: no se marca ok, o el fallo
+      // pasa inadvertido hasta el cuadre de fin de mes.
+      const ok = res.failed === 0;
       await this.prisma.cronRun.update({
         where: { id: run.id },
-        data: { ok: true, count: res.generated, detail, finishedAt: new Date() },
+        data: { ok, count: res.generated, detail, finishedAt: new Date() },
       });
-      this.logger.log(`[recurring-billing] ${detail}`);
-      return { ok: true, ...res };
+      if (ok) this.logger.log(`[recurring-billing] ${detail}`);
+      else this.logger.error(`[recurring-billing] ${detail}`);
+      return { ok, ...res };
     } catch (e) {
       const msg = (e as Error).message;
       await this.prisma.cronRun.update({

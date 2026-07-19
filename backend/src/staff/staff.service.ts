@@ -1,6 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Type } from 'class-transformer';
-import { IsArray, IsBoolean, IsInt, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsArray, IsBoolean, IsDateString, IsInt, IsOptional, IsString, MinLength } from 'class-validator';
 import { randomBytes } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -26,7 +26,30 @@ export class CreateStaffDto {
   @IsOptional() @IsString() address?: string;
   @IsOptional() @IsString() city?: string;
 }
-export class UpdateStaffDto extends CreateStaffDto {}
+/**
+ * Edición parcial del empleado: todos los campos son opcionales (semántica PATCH).
+ * No hereda de CreateStaffDto porque allí `name` es obligatorio y forzaría a
+ * reenviar el objeto completo en cada edición.
+ */
+export class UpdateStaffDto {
+  @IsOptional() @IsString() @MinLength(1) name?: string;
+  @IsOptional() @IsString() docNumber?: string;
+  @IsOptional() @IsString() username?: string;
+  @IsOptional() @IsString() email?: string;
+  // `null` explícito = borrar el dato. `undefined` (campo ausente) = no tocarlo.
+  @IsOptional() @IsInt() role?: number | null;
+  @IsOptional() @IsString() areaId?: string;
+  @IsOptional() @IsString() phone?: string;
+  @IsOptional() @IsString() phoneAlt?: string;
+  @IsOptional() @IsString() eps?: string;
+  @IsOptional() @IsString() pension?: string;
+  @IsOptional() @IsString() rh?: string;
+  @IsOptional() @IsString() address?: string;
+  @IsOptional() @IsString() city?: string;
+  @IsOptional() @IsString() region?: string;
+  @IsOptional() @IsDateString() entryDate?: string | null;
+  @IsOptional() @IsString() sedeAccede?: string;
+}
 
 /** Conjunto de permisos que el empleado debe tener (solo el superusuario lo fija). */
 export class SetStaffPermissionsDto {
@@ -123,7 +146,7 @@ export class StaffService {
     }
     return {
       id: e.id, legacyId: e.legacyId, name: e.name, docNumber: e.docNumber, username: e.username, email: e.email,
-      role: e.role, roleLabel: ROLE_LABEL[e.role ?? 0] ?? null, area: e.area?.name ?? null,
+      role: e.role, roleLabel: ROLE_LABEL[e.role ?? 0] ?? null, area: e.area?.name ?? null, areaId: e.areaId,
       entryDate: e.entryDate, rh: e.rh, eps: e.eps, pension: e.pension,
       address: e.address, city: e.city, region: e.region, phone: e.phone, phoneAlt: e.phoneAlt,
       banned: e.banned, lastLogin: e.lastLogin, sedeAccede: e.sedeAccede, picture: e.picture, activity,
@@ -139,13 +162,40 @@ export class StaffService {
       rh: dto.rh ?? null, address: dto.address ?? null, city: dto.city ?? null,
     } });
   }
-  async update(id: string, dto: UpdateStaffDto) {
-    const e = await this.prisma.staff.findUnique({ where: { id } });
-    if (!e) throw new NotFoundException('Empleado no encontrado');
-    return this.prisma.staff.update({ where: { id }, data: {
-      name: dto.name, docNumber: dto.docNumber, username: dto.username, email: dto.email, role: dto.role,
-      areaId: dto.areaId, phone: dto.phone, eps: dto.eps, pension: dto.pension, rh: dto.rh, address: dto.address, city: dto.city,
-    } });
+  /**
+   * Edición parcial del empleado. Los campos ausentes en el DTO llegan como
+   * `undefined` y Prisma los deja intactos; para borrar un dato se envía cadena
+   * vacía, que se normaliza a NULL.
+   */
+  async update(id: string, dto: UpdateStaffDto, actor?: AuthUser) {
+    const before = await this.prisma.staff.findUnique({ where: { id } });
+    if (!before) throw new NotFoundException('Empleado no encontrado');
+
+    // Cadena vacía = el usuario borró el campo → NULL. `undefined` = no se tocó.
+    const str = (v: string | undefined) => (v === undefined ? undefined : v.trim() === '' ? null : v.trim());
+
+    const data: Prisma.StaffUpdateInput = {
+      docNumber: str(dto.docNumber), username: str(dto.username), email: str(dto.email),
+      phone: str(dto.phone), phoneAlt: str(dto.phoneAlt), eps: str(dto.eps), pension: str(dto.pension),
+      rh: str(dto.rh), address: str(dto.address), city: str(dto.city), region: str(dto.region),
+      sedeAccede: str(dto.sedeAccede), role: dto.role,
+    };
+    if (dto.name !== undefined) {
+      const name = dto.name.trim();
+      if (!name) throw new BadRequestException('El nombre no puede quedar vacío');
+      data.name = name;
+    }
+    if (dto.entryDate !== undefined) data.entryDate = dto.entryDate ? new Date(dto.entryDate) : null;
+    // `areaId` es relación en Prisma: hay que conectarla o desconectarla, no asignarla.
+    if (dto.areaId !== undefined) data.area = dto.areaId ? { connect: { id: dto.areaId } } : { disconnect: true };
+
+    const after = await this.prisma.staff.update({ where: { id }, data });
+    void this.audit.record({
+      userId: actor?.id, action: 'staff.update', entity: 'staff', entityId: id,
+      before: { name: before.name, docNumber: before.docNumber, email: before.email, role: before.role, areaId: before.areaId },
+      after: { name: after.name, docNumber: after.docNumber, email: after.email, role: after.role, areaId: after.areaId },
+    });
+    return after;
   }
 
   // ── Permisos del empleado ────────────────────────────────────────────────

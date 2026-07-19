@@ -18,6 +18,7 @@ import { SupportModule } from './support/support.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { OrdersModule } from './orders/orders.module';
 import { CollectionsModule } from './collections/collections.module';
+import { TasksModule } from './tasks/tasks.module';
 import { PaymentImportsModule } from './payment-imports/payment-imports.module';
 import { ReturnsModule } from './returns/returns.module';
 import { StaffModule } from './staff/staff.module';
@@ -36,6 +37,7 @@ import { PlansModule } from './plans/plans.module';
 import { PortalModule } from './portal/portal.module';
 import { PromotionsModule } from './promotions/promotions.module';
 import { AccountingModule } from './accounting/accounting.module';
+import { SearchModule } from './search/search.module';
 
 @Module({
   imports: [
@@ -63,6 +65,7 @@ import { AccountingModule } from './accounting/accounting.module';
     InventoryModule,
     OrdersModule,
     CollectionsModule,
+    TasksModule,
     PaymentImportsModule,
     ReturnsModule,
     StaffModule,
@@ -77,6 +80,7 @@ import { AccountingModule } from './accounting/accounting.module';
     ExtrasModule,
     SettingsModule,
     PublicApiModule,
+    SearchModule,
   ],
 })
 export class AppModule {}

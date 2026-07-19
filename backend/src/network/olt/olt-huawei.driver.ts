@@ -141,6 +141,13 @@ export class OltHuawei extends OltDriver {
         sn_full: sn,
         password: this.kv(b, 'Password'),
         loid: this.kv(b, 'Loid'),
+        // Datos extra que la OLT expone por ONU no autorizada. `kv()` ya convierte
+        // "-" en '' (no todos los modelos los reportan: los xPON genéricos suelen
+        // traer MAC vacía; los ONT Huawei sí la reportan).
+        mac: this.kv(b, 'Ont MAC'),
+        model: this.kv(b, 'Ont EquipmentID'),
+        vendor: this.kv(b, 'VendorID'),
+        version: this.kv(b, 'Ont Version'),
       });
     }
     return found;

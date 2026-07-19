@@ -2,7 +2,8 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
-import { GenieacsNbi, NbiDevice } from './genieacs/genieacs-nbi.client';
+import { GenieacsNbi, NbiDevice, NbiError, nbiHttpMessage } from './genieacs/genieacs-nbi.client';
+import { encryptSecret, decryptSecret, isEncrypted } from '../common/secret-box';
 
 /**
  * GenieacsService — integración con GenieACS (ACS TR-069) vía su NBI (API REST).
@@ -57,6 +58,21 @@ interface AuditMeta {
 const ACTIVE_DAYS = 1;    // "vivo" = informó en el último día
 const STALE_DAYS = 180;   // "muerto" = >180 días sin informar
 
+/** Fila del inventario tal como la consume el front (`/network/genieacs/inventory`). */
+export interface CpeRow {
+  id: string;
+  manufacturer: string | null;
+  model: string | null;
+  serial: string | null;
+  pppUser: string | null;
+  wanIp: string | null;
+  lastInform: string | null;
+  daysSince: number | null;
+  alive: boolean;
+  tvSuspended: boolean;
+  tags: string[];
+}
+
 @Injectable()
 export class GenieacsService {
   private readonly logger = new Logger(GenieacsService.name);
@@ -102,7 +118,19 @@ export class GenieacsService {
   }
 
   private nbi(s: { nbiUrl: string; username: string; password: string }) {
-    return new GenieacsNbi(s.nbiUrl, s.username, s.password);
+    // La clave se guarda cifrada (secret-box); las filas legacy en texto plano
+    // pasan intactas por decryptSecret. Se descifra sólo aquí, al construir el cliente.
+    return new GenieacsNbi(s.nbiUrl, s.username, decryptSecret(s.password));
+  }
+
+  /** Lista dispositivos traduciendo un rechazo de auth del NBI en un error accionable. */
+  private async devicesOf(s: { nbiUrl: string; username: string; password: string }): Promise<NbiDevice[]> {
+    try {
+      return await this.nbi(s).listDevices(null);
+    } catch (e) {
+      if (e instanceof NbiError) throw new BadRequestException(nbiHttpMessage(e.status));
+      throw e;
+    }
   }
 
   private async audit(action: GenieacsAction, server: { id: string; name: string } | null, ok: boolean, dryRun: boolean, detail: string, meta: AuditMeta = {}) {
@@ -134,6 +162,10 @@ export class GenieacsService {
     return rows.map((s) => ({
       id: s.id, name: s.name, nbiUrl: s.nbiUrl, username: s.username,
       sedeLegacy: s.sedeLegacy, isDefault: s.isDefault, online: s.online,
+      // ¿tiene basic-auth configurado? (usuario + clave). No exponemos la clave.
+      hasAuth: !!(s.username && s.password),
+      // ¿la clave ya quedó cifrada en reposo, o es una fila legacy en texto plano?
+      secretEncrypted: isEncrypted(s.password),
     }));
   }
 
@@ -144,7 +176,7 @@ export class GenieacsService {
     const s = await this.prisma.genieacsServer.create({
       data: {
         name: dto.name, nbiUrl: String(dto.nbiUrl).trim(),
-        username: dto.username || '', password: dto.password || '',
+        username: dto.username || '', password: encryptSecret(dto.password || ''),
         sedeLegacy, isDefault: already === 0,
       },
     });
@@ -158,7 +190,7 @@ export class GenieacsService {
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.nbiUrl !== undefined) data.nbiUrl = String(dto.nbiUrl).trim();
     if (dto.username !== undefined) data.username = dto.username;
-    if (dto.password && !/^\*+$/.test(dto.password)) data.password = dto.password;
+    if (dto.password && !/^\*+$/.test(dto.password)) data.password = encryptSecret(dto.password);
     if (dto.sedeLegacy !== undefined) data.sedeLegacy = Number(dto.sedeLegacy) || 0;
     await this.prisma.genieacsServer.update({ where: { id }, data });
     await this.audit('LINK', s, true, false, `Actualizar servidor GenieACS ${s.name}`, { user });
@@ -181,7 +213,10 @@ export class GenieacsService {
 
   async testConnection(id: string, user?: AuthUser) {
     const s = await this.resolveServer(id);
+    const auth = s.username ? `basic-auth como "${s.username}"` : 'SIN auth';
+    this.logger.log(`TEST NBI "${s.name}" → ${s.nbiUrl} (${auth})${user?.name ? ` — pedido por ${user.name}` : ''}`);
     const r = await this.nbi(s).ping();
+    this.logger.log(`TEST NBI "${s.name}" resultado: ${r.ok ? 'OK (200)' : 'FALLÓ — ' + r.error}`);
     await this.prisma.genieacsServer.update({ where: { id }, data: { online: r.ok } });
     await this.audit('TEST', s, r.ok, false, r.ok ? 'NBI OK' : `ERROR: ${r.error}`, { user });
     return r;
@@ -201,7 +236,7 @@ export class GenieacsService {
   /** KPIs del parque: total, vivos, muertos, por marca/modelo. */
   async dashboard(serverId?: string) {
     const s = await this.resolveServer(serverId);
-    const devices = await this.nbi(s).listDevices(null);
+    const devices = await this.devicesOf(s);
     let active = 0, stale = 0, mid = 0, suspended = 0;
     const byManufacturer: Record<string, number> = {};
     const byModel: Record<string, number> = {};
@@ -223,16 +258,22 @@ export class GenieacsService {
     };
   }
 
-  /** Inventario de CPEs con filtros (búsqueda/modelo/actividad/suspendidos) y paginación. */
-  async inventory(params: { serverId?: string; search?: string; model?: string; estado?: string; page?: number; pageSize?: number }) {
+  /** Inventario de CPEs con filtros (búsqueda/marca/modelo/actividad/suspendidos), orden y paginación. */
+  async inventory(params: {
+    serverId?: string; search?: string; model?: string; manufacturer?: string; estado?: string;
+    sortBy?: string; sortDir?: string; page?: number; pageSize?: number;
+  }) {
     const s = await this.resolveServer(params.serverId);
-    const all = await this.nbi(s).listDevices(null);
+    const all = await this.devicesOf(s);
     const search = (params.search || '').trim().toLowerCase();
     let items = all;
-    if (params.model) items = items.filter((d) => d.productClass === params.model);
+    if (params.model) items = items.filter((d) => (d.productClass || '?') === params.model);
+    if (params.manufacturer) items = items.filter((d) => (d.manufacturer || '?') === params.manufacturer);
     if (params.estado === 'vivos') items = items.filter((d) => { const x = this.daysSince(d.lastInform); return x !== null && x <= ACTIVE_DAYS; });
+    if (params.estado === 'recientes') items = items.filter((d) => { const x = this.daysSince(d.lastInform); return x !== null && x > ACTIVE_DAYS && x <= STALE_DAYS; });
     if (params.estado === 'muertos') items = items.filter((d) => { const x = this.daysSince(d.lastInform); return x === null || x > STALE_DAYS; });
     if (params.estado === 'suspendidos') items = items.filter((d) => d.tags.includes(TV_TAG));
+    if (params.estado === 'activos') items = items.filter((d) => !d.tags.includes(TV_TAG));
     if (search) {
       items = items.filter((d) =>
         [d.pppUser, d.serial, d.productClass, d.manufacturer, d.wanIp, d.id]
@@ -241,16 +282,60 @@ export class GenieacsService {
     const total = items.length;
     const page = Math.max(1, Number(params.page) || 1);
     const pageSize = Math.min(200, Math.max(1, Number(params.pageSize) || 50));
-    const slice = items
-      .sort((a, b) => (b.lastInform || '').localeCompare(a.lastInform || ''))
-      .slice((page - 1) * pageSize, page * pageSize);
+    const rows = items.map((d) => this.toRow(d));
+    rows.sort(this.rowComparator(params.sortBy, params.sortDir));
     return {
-      items: slice.map((d) => this.toRow(d)),
+      items: rows.slice((page - 1) * pageSize, page * pageSize),
       total, page, pageSize, pages: Math.ceil(total / pageSize),
     };
   }
 
-  private toRow(d: NbiDevice) {
+  /** IPv4 a entero para ordenar por IP como número y no como texto ("10." < "9."). */
+  private ipKey(ip: string | null): number {
+    const p = (ip || '').split('.');
+    if (p.length !== 4) return -1;
+    return p.reduce((acc, o) => {
+      const n = Number(o);
+      return acc < 0 || !Number.isInteger(n) || n < 0 || n > 255 ? -1 : acc * 256 + n;
+    }, 0);
+  }
+
+  /**
+   * Comparador de filas para el orden del inventario. Por defecto (y ante una
+   * `sortBy` desconocida) mantiene el orden histórico: último inform, el más
+   * reciente primero.
+   */
+  private rowComparator(sortBy?: string, sortDir?: string) {
+    const by = sortBy || 'lastInform';
+    const dir = sortDir === 'asc' ? 1 : -1;
+    const txt = (v: string | null) => (v || '').trim().toLowerCase();
+
+    /** Clave de orden de la fila. `null` = dato desconocido. */
+    const key = (r: CpeRow): string | number | null => {
+      switch (by) {
+        case 'pppUser': return txt(r.pppUser) || null;
+        case 'model': return `${txt(r.manufacturer)} ${txt(r.model)}`.trim() || null;
+        case 'serial': return txt(r.serial) || null;
+        case 'wanIp': { const n = this.ipKey(r.wanIp); return n < 0 ? null : n; }
+        case 'tv': return Number(r.tvSuspended);
+        case 'inform':
+        case 'lastInform':
+        default: return r.lastInform || null;
+      }
+    };
+
+    return (a: CpeRow, b: CpeRow): number => {
+      const ka = key(a), kb = key(b);
+      // Un CPE sin abonado / sin IP / sin inform es un dato que falta, no "el
+      // menor de la lista": va al fondo en ambas direcciones, para que invertir
+      // el orden no llene la primera página de guiones.
+      if (ka === null || kb === null) return Number(kb !== null) - Number(ka !== null);
+      if (typeof ka === 'number' && typeof kb === 'number') return dir * (ka - kb);
+      return dir * String(ka).localeCompare(String(kb), 'es');
+    };
+  }
+
+  private toRow(d: NbiDevice): CpeRow {
     const days = this.daysSince(d.lastInform);
     return {
       id: d.id, manufacturer: d.manufacturer, model: d.productClass, serial: d.serial,

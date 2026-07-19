@@ -40,6 +40,10 @@ const ctx = (user, over = {}) => ({
   const identity = app.get(ChatbotIdentityService);
   const links = app.get(ChatbotLinkService);
 
+  // Fuera del try: el vínculo de prueba se hace sobre un funcionario REAL, así que
+  // deshacerlo NO puede depender de que el resto del script no lance. Ver el finally.
+  let linkedUserId = null;
+
   try {
     // ── 1. Identidad: número desconocido → público ──────────────────
     console.log('\n1) Identidad');
@@ -70,10 +74,9 @@ const ctx = (user, over = {}) => ({
       select: { id: true, name: true },
     });
     const TEL = '573001234567';
-    let linked = false;
     if (user) {
       await links.link(user.id, TEL);
-      linked = true;
+      linkedUserId = user.id;
       const it = await identity.resolveUser(TEL);
       const kind = it?.meta?.identity?.kind;
       kind === 'interno'
@@ -130,12 +133,20 @@ const ctx = (user, over = {}) => ({
       ? ok('reportar_falla PREPARA y espera confirmación (no crea el ticket solo)')
       : bad(`reportar_falla no pidió confirmación: ${falla}`);
 
-    // Limpieza del vínculo de prueba.
-    if (linked) {
-      await links.unlink(user.id);
-      ok('vínculo de prueba deshecho');
-    }
   } finally {
+    // Deshacer el vínculo SIEMPRE, pase lo que pase. Si esto se queda a medias, un
+    // funcionario real queda atado al número de prueba y quien lo tenga en su WhatsApp
+    // sería atendido como interno, con el RBAC completo de esa persona. Por eso va en
+    // el finally y con su propio try: ni un fallo aquí puede saltárselo.
+    if (linkedUserId) {
+      try {
+        await links.unlink(linkedUserId);
+        ok('vínculo de prueba deshecho');
+      } catch (e) {
+        bad(`NO SE PUDO DESHACER EL VÍNCULO de ${linkedUserId} con 573001234567 — `
+          + `deshazlo A MANO ya mismo (Configuración → vínculos): ${e.message}`);
+      }
+    }
     await app.close();
   }
   console.log(process.exitCode ? '\n\x1b[31mHUBO FALLOS\x1b[0m\n' : '\n\x1b[32mTODO OK\x1b[0m\n');

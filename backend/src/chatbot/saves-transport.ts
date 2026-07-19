@@ -1,11 +1,15 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { BaseTransport } from '@s4gk/wa-agent';
 import { WhatsappService } from '../common/whatsapp/whatsapp.service';
 import { WHATSAPP_INBOUND_EVENT, type InboundWhatsappMessage } from '../common/whatsapp/whatsapp.types';
+import { ChatbotGateService } from './chatbot-gate.service';
 
-/** Nombre del transporte. Compone la clave de conversación: `kapso:573001112233`. */
-export const SAVES_TRANSPORT_NAME = 'kapso';
+// El nombre vive en `chatbot.identity` (módulo sin dependencias) porque el gate
+// también lo necesita y este archivo ya depende del gate. Se re-exporta para no
+// cambiarles el import a quienes ya lo traían de aquí.
+export { SAVES_TRANSPORT_NAME } from './chatbot.identity';
+import { SAVES_TRANSPORT_NAME } from './chatbot.identity';
 
 /**
  * Puente entre el transporte de WhatsApp que ya existe en el ERP (WhatsappService,
@@ -23,8 +27,12 @@ export const SAVES_TRANSPORT_NAME = 'kapso';
 @Injectable()
 export class SavesTransport extends BaseTransport {
   readonly name = SAVES_TRANSPORT_NAME;
+  private readonly logger = new Logger('SavesTransport');
 
-  constructor(private readonly whatsapp: WhatsappService) {
+  constructor(
+    private readonly whatsapp: WhatsappService,
+    private readonly gate: ChatbotGateService,
+  ) {
     super();
   }
 
@@ -36,9 +44,23 @@ export class SavesTransport extends BaseTransport {
   /** No-op: el webhook lo sirve el WhatsappWebhookController, no el transporte. */
   async start(): Promise<void> {}
 
-  /** Entrada: reemite hacia el motor lo que el transporte del ERP ya normalizó. */
+  /**
+   * Entrada: reemite hacia el motor lo que el transporte del ERP ya normalizó.
+   *
+   * Este es el único punto de corte del bot: si el interruptor está apagado o el
+   * número no está en la lista blanca del piloto, el mensaje NO llega al motor (cero
+   * LLM, cero respuesta) pero el WhatsappLogService sí lo registra igual — es un
+   * listener aparte del mismo evento. Así, apagar el bot deja el canal exactamente
+   * como estaba antes de que existiera: el mensaje queda guardado y lo atiende una
+   * persona.
+   */
   @OnEvent(WHATSAPP_INBOUND_EVENT)
-  onWhatsappInbound(msg: InboundWhatsappMessage): void {
+  async onWhatsappInbound(msg: InboundWhatsappMessage): Promise<void> {
+    const { ok, reason } = await this.gate.shouldHandle(msg.from);
+    if (!ok) {
+      this.logger.log(`Mensaje de ${msg.from} no atendido por el bot (${reason}).`);
+      return;
+    }
     this.emit({
       transport: this.name,
       from: msg.from,
@@ -48,17 +70,27 @@ export class SavesTransport extends BaseTransport {
     });
   }
 
-  sendText(to: string, text: string): Promise<boolean> {
-    return this.whatsapp.sendText(to, text);
+  /**
+   * Salida. `sendText` del ERP degrada a log y devuelve false cuando Kapso no está
+   * bien configurado; el motor ignora ese booleano. Sin este error explícito, el bot
+   * pensaría el mensaje, gastaría tokens y el cliente no vería NADA, con solo un
+   * warning perdido en el log. Si esto aparece, revisa `probe()`.
+   */
+  async sendText(to: string, text: string): Promise<boolean> {
+    const ok = await this.whatsapp.sendText(to, text);
+    if (!ok) this.logger.error(`RESPUESTA NO ENTREGADA a ${to} (${text.length} car.). Revisa el diagnóstico de Kapso.`);
+    return ok;
   }
 
-  sendDocument(
+  async sendDocument(
     to: string,
     buffer: Buffer,
     fileName: string,
     caption?: string,
     mimetype?: string,
   ): Promise<boolean> {
-    return this.whatsapp.sendDocument(to, buffer, fileName, caption, mimetype);
+    const ok = await this.whatsapp.sendDocument(to, buffer, fileName, caption, mimetype);
+    if (!ok) this.logger.error(`DOCUMENTO NO ENTREGADO a ${to} (${fileName}). Revisa el diagnóstico de Kapso.`);
+    return ok;
   }
 }

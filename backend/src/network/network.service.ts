@@ -142,12 +142,19 @@ export class NetworkService {
       ];
     }
     const rows = await this.prisma.ipUserMk.findMany({ where, orderBy: [{ isDefault: 'desc' }, { name: 'asc' }] });
-    const branches = await this.prisma.branch.findMany({ select: { legacyId: true, name: true } });
-    const branchByLegacy = new Map(branches.map((b) => [b.legacyId, b.name]));
-    return rows.map((r) => ({
-      id: r.id, name: r.name, ipLocal: r.ipLocal, ipRemote: r.ipRemote,
-      tech: r.tech, isDefault: r.isDefault, profiles: r.profiles,
-      branch: branchByLegacy.get(r.sedeLegacy) ?? null,
-    }));
+    const branches = await this.prisma.branch.findMany({ select: { id: true, legacyId: true, name: true } });
+    const branchByLegacy = new Map(branches.map((b) => [b.legacyId, b]));
+    return rows.map((r) => {
+      const b = branchByLegacy.get(r.sedeLegacy);
+      return {
+        id: r.id, name: r.name, ipLocal: r.ipLocal, ipRemote: r.ipRemote,
+        tech: r.tech, isDefault: r.isDefault, profiles: r.profiles,
+        branch: b?.name ?? null,
+        // El id de la sede además del nombre: sin él, el formulario de edición no
+        // puede preseleccionarla (el nombre no es una llave).
+        branchId: b?.id ?? null,
+        sedeLegacy: r.sedeLegacy,
+      };
+    });
   }
 }

@@ -36,6 +36,29 @@ export const LIST_PROJECTION = [
   'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ExternalIPAddress',
 ];
 
+/**
+ * Error de una llamada al NBI que llegó con estado HTTP no-2xx. Lleva el `status`
+ * para que el servicio distinga un 401/403 (auth) de un 5xx/timeout y devuelva un
+ * mensaje accionable al operador.
+ */
+export class NbiError extends Error {
+  constructor(readonly status: number, readonly path: string) {
+    super(`NBI ${path} → HTTP ${status}`);
+    this.name = 'NbiError';
+  }
+  /** true si el NBI rechazó por autenticación (falta basic-auth o credenciales inválidas). */
+  get isAuth(): boolean {
+    return this.status === 401 || this.status === 403;
+  }
+}
+
+/** Mensaje legible para el operador según el estado del NBI. */
+export function nbiHttpMessage(status: number): string {
+  if (status === 401) return 'El NBI exige autenticación y las credenciales faltan o son inválidas (401).';
+  if (status === 403) return 'El NBI rechazó el acceso (403). Revisa las credenciales del servidor.';
+  return `El NBI respondió HTTP ${status}.`;
+}
+
 /** Navega un path punteado del árbol TR-069 y devuelve el `_value` de la hoja. Exportado
  *  para que el servicio pueda leer parámetros puntuales (SSID/clave/TV) del CPE. */
 export function leaf(obj: any, path: string): any {
@@ -79,7 +102,7 @@ export class GenieacsNbi {
   async ping(): Promise<{ ok: boolean; error?: string }> {
     try {
       const r = await this.req('/devices/?projection=_id&limit=1', { headers: this.headers(false) }, 15000);
-      return r.ok ? { ok: true } : { ok: false, error: `HTTP ${r.status}` };
+      return r.ok ? { ok: true } : { ok: false, error: nbiHttpMessage(r.status) };
     } catch (e) {
       return { ok: false, error: (e as Error).message };
     }
@@ -92,7 +115,7 @@ export class GenieacsNbi {
     if (projection?.length) p.set('projection', projection.join(','));
     if (limit) p.set('limit', String(limit));
     const r = await this.req('/devices/?' + p.toString(), { headers: this.headers(false) });
-    if (!r.ok) throw new Error(`NBI /devices ${r.status}`);
+    if (!r.ok) throw new NbiError(r.status, '/devices');
     return (await r.json()) as any[];
   }
 
@@ -163,7 +186,7 @@ export class GenieacsNbi {
 
   async listPresets(): Promise<any[]> {
     const r = await this.req('/presets/', { headers: this.headers(false) });
-    if (!r.ok) throw new Error(`NBI /presets ${r.status}`);
+    if (!r.ok) throw new NbiError(r.status, '/presets');
     return (await r.json()) as any[];
   }
 }

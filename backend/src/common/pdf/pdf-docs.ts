@@ -22,30 +22,94 @@ function kv(doc: PDFKit.PDFDocument, l: string, v: string) {
 }
 
 // ---------------------------------------------------------------------------
+const fmtLargo = (d: Date | string | null) =>
+  d ? new Date(d).toLocaleDateString('es-CO', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' }) : '—';
+
+type Bucket = { cantidad: number; monto: number };
+
+/** Los bloques de resumen del informe legacy (ver `treasury/cierre-informe.ts`). */
+export type CashCloseInforme = {
+  cobranza: { excento: Bucket; base: Bucket; iva: Bucket; total: Bucket };
+  porBanco: { nombre: string; cantidad: number; monto: number }[];
+  cajaVirtual: { nombre: string; cantidad: number; monto: number };
+  formaPago: { saldoAnterior: Bucket; efectivo: Bucket; transferencia: Bucket; wompi: Bucket };
+  servicios: {
+    planes: { clave: string; megas: number; cantidad: number; monto: number }[];
+    television: Bucket;
+    mensualidades: Bucket;
+    reconexiones: Bucket;
+    afiliaciones: { producto: string; cantidad: number; monto: number }[];
+    ventas: Bucket;
+    materiales: Bucket;
+    otros: Bucket;
+    total: Bucket;
+  };
+  tipoServicio: { Internet: Bucket; Television: Bucket };
+  meses: Record<'actual' | 'anterior' | 'anteriores', { cantidad: number; monto: number; Internet: Bucket; Television: Bucket }>;
+  anulaciones: {
+    anuladoDeCierre: Bucket; anuladoDeOtrosCierres: Bucket;
+    cobranzaEfectiva: { monto: number }; cobradoNeto: number;
+  };
+  egresos: { ordenes: Bucket; traslados: Bucket; transacciones: Bucket; total: Bucket };
+};
+
 export type CashCloseData = {
+  informe: CashCloseInforme;
   cashAccountName: string;
   date: Date | string;
   userName: string;
-  base: number; sales: number; expenses: number; deposited: number; surplus: number;
+  proximoDiaHabil: Date | string;
+  arrastre: number;
+  ventas: number;
+  egresos: number;
+  transferencias: number;
+  noEfectivo: number;
+  excedente: number;
+  descuadrado: boolean;
+  efectivoHoy: number;
+  porCategoria: { category: string; type: string; n: number; total: number }[];
+  movimientos: {
+    date: Date | string; note: string | null; payer: string; category: string;
+    method: string | null; type: string; amount: number; firma: number;
+  }[];
 };
 
-/** Comprobante de cierre de caja (arqueo). */
+/**
+ * Comprobante de cierre de caja — réplica del legacy.
+ *
+ * No lleva base ni consignado: allá la base es cero y el cierre barre el efectivo entero
+ * del cajón, que se arrastra al próximo día hábil (ver `treasury/cierre-legacy.ts`).
+ */
 export function cashClosePdf(res: Response, d: CashCloseData) {
   const doc = new PDFDocument({ size: 'A4', margin: 40 });
   doc.pipe(res);
   brandHeader(doc, 'Cierre de caja');
 
   kv(doc, 'Caja:', d.cashAccountName);
-  kv(doc, 'Fecha:', fmt(d.date));
-  kv(doc, 'Responsable:', d.userName || '—');
-  doc.moveDown(1);
+  kv(doc, 'Fecha:', fmtLargo(d.date));
+  kv(doc, 'Cajero:', d.userName || '—');
+  kv(doc, 'Arrastra a:', `${fmtLargo(d.proximoDiaHabil)} (próximo día hábil)`);
+  doc.moveDown(0.8);
 
+  if (d.descuadrado) {
+    const y = doc.y;
+    doc.rect(40, y, 515, 30).fill('#fff4e5');
+    doc.fillColor('#8a5300').fontSize(9).font('Helvetica-Bold')
+      .text('Este cierre ya no cuadra con el libro.', 46, y + 6);
+    doc.font('Helvetica').text(
+      `Se barrieron ${cop(d.excedente)}, pero con los movimientos vigentes hoy el cajón daría ${cop(d.efectivoHoy)}.`,
+      46, y + 17, { width: 500 },
+    );
+    doc.y = y + 38;
+  }
+
+  sectionTitle(doc, 'Arqueo del cajón');
   const rows: [string, number, boolean?][] = [
-    ['Base inicial', d.base],
-    ['(+) Ventas / recaudo', d.sales],
-    ['(−) Egresos', d.expenses],
-    ['(−) Consignado', d.deposited],
-    ['(=) Excedente en caja', d.surplus, true],
+    ['Arrastre que entró del cierre anterior', d.arrastre],
+    ['(+) Recaudo en efectivo del día', d.ventas],
+    ['(-) Egresos en efectivo', d.egresos],
+    ...(d.transferencias !== 0 ? ([['(±) Traslados entre cajas', d.transferencias]] as [string, number][]) : []),
+    ['(=) Excedente barrido', d.excedente, true],
   ];
   const x0 = 40, x1 = 380, w = 175;
   for (const [label, val, bold] of rows) {
@@ -57,8 +121,149 @@ export function cashClosePdf(res: Response, d: CashCloseData) {
     doc.y = y + 24;
     doc.moveTo(x0, doc.y - 3).lineTo(555, doc.y - 3).strokeColor('#eee').stroke();
   }
+  doc.font('Helvetica').fontSize(8).fillColor(GRAY).text(
+    'La base es cero: al cerrar se lleva el efectivo entero del cajón.' +
+      (d.noEfectivo > 0 ? ` El recaudo por banco/tarjeta (${cop(d.noEfectivo)}) no está en el cajón y no se barre.` : ''),
+    40, doc.y + 4, { width: 515 },
+  );
+  doc.moveDown(1.2);
 
-  doc.moveDown(4);
+  // ── Los bloques de resumen del informe legacy ──────────────────────────────
+  const inf = d.informe;
+  const tabla = (titulo: string, filas: [string, number | string, number][], total?: [string, number | string, number]) => {
+    if (doc.y > 690) { doc.addPage(); doc.y = 50; }
+    sectionTitle(doc, titulo);
+    let y = doc.y;
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(GRAY);
+    doc.text('DESCRIPCIÓN', 46, y); doc.text('CANT', 330, y, { width: 60, align: 'right' });
+    doc.text('MONTO', 420, y, { width: 130, align: 'right' });
+    doc.y = y + 12;
+    for (const [label, cant, monto] of filas) {
+      if (doc.y > 770) { doc.addPage(); doc.y = 50; }
+      y = doc.y;
+      doc.font('Helvetica').fontSize(9).fillColor('#333');
+      doc.text(label, 46, y, { width: 280, ellipsis: true });
+      doc.text(String(cant), 330, y, { width: 60, align: 'right' });
+      doc.text(cop(monto), 420, y, { width: 130, align: 'right' });
+      doc.y = y + 13;
+    }
+    if (total) {
+      y = doc.y;
+      doc.rect(40, y - 2, 515, 17).fill('#f1f5ff');
+      doc.font('Helvetica-Bold').fontSize(9).fillColor(BRAND);
+      doc.text(total[0], 46, y + 2, { width: 280 });
+      doc.text(String(total[1]), 330, y + 2, { width: 60, align: 'right' });
+      doc.text(cop(total[2]), 420, y + 2, { width: 130, align: 'right' });
+      doc.y = y + 22;
+    }
+    doc.moveDown(0.5);
+  };
+
+  tabla('Resumen Cobranza', [
+    ['Excento', inf.cobranza.excento.cantidad, inf.cobranza.excento.monto],
+    ['Base', inf.cobranza.base.cantidad, inf.cobranza.base.monto],
+    ['iva', '', inf.cobranza.iva.monto],
+  ], ['TOTAL COBRANZA', inf.cobranza.total.cantidad, inf.cobranza.total.monto]);
+
+  tabla('Resumen por Banco',
+    inf.porBanco.map((b) => [b.nombre, b.cantidad, b.monto] as [string, number, number]),
+    ['TOTAL COBRANZA', inf.porBanco.reduce((s, b) => s + b.cantidad, 0), inf.porBanco.reduce((s, b) => s + b.monto, 0)],
+  );
+
+  tabla('Resumen por Forma de pago', [
+    ['Saldo Anterior', inf.formaPago.saldoAnterior.cantidad, inf.formaPago.saldoAnterior.monto],
+    ['Efectivo', inf.formaPago.efectivo.cantidad, inf.formaPago.efectivo.monto],
+    ['Transferencia', inf.formaPago.transferencia.cantidad, inf.formaPago.transferencia.monto],
+    ['WOMPI', inf.formaPago.wompi.cantidad, inf.formaPago.wompi.monto],
+  ], ['TOTAL FORMA PAGO',
+    inf.formaPago.saldoAnterior.cantidad + inf.formaPago.efectivo.cantidad + inf.formaPago.transferencia.cantidad + inf.formaPago.wompi.cantidad,
+    inf.formaPago.saldoAnterior.monto + inf.formaPago.efectivo.monto + inf.formaPago.transferencia.monto + inf.formaPago.wompi.monto,
+  ]);
+
+  tabla('Resumen por Servicios', [
+    ...inf.servicios.planes.map((p) => [`Internet ${p.megas}MG`, p.cantidad, p.monto] as [string, number, number]),
+    ...(inf.servicios.television.cantidad ? ([['Television', inf.servicios.television.cantidad, inf.servicios.television.monto]] as [string, number, number][]) : []),
+    ...inf.servicios.afiliaciones.map((a) => [a.producto, a.cantidad, a.monto] as [string, number, number]),
+    ['Total Ventas', inf.servicios.ventas.cantidad, inf.servicios.ventas.monto],
+    ['Total Reconexiones', inf.servicios.reconexiones.cantidad, inf.servicios.reconexiones.monto],
+    ['Total Materiales', inf.servicios.materiales.cantidad, inf.servicios.materiales.monto],
+    ['Total Otros', inf.servicios.otros.cantidad, inf.servicios.otros.monto],
+  ], ['TOTAL', inf.servicios.total.cantidad, inf.servicios.total.monto]);
+
+  tabla('Resumen por tipo de servicio', [
+    ['Internet', inf.tipoServicio.Internet.cantidad, inf.tipoServicio.Internet.monto],
+    ['Television', inf.tipoServicio.Television.cantidad, inf.tipoServicio.Television.monto],
+  ], ['TOTAL TIPO DE SERVICIOS',
+    inf.tipoServicio.Internet.cantidad + inf.tipoServicio.Television.cantidad,
+    inf.tipoServicio.Internet.monto + inf.tipoServicio.Television.monto,
+  ]);
+
+  const mesLabel = (base: Date | string, delta: number) => {
+    const dd = new Date(base);
+    const x = new Date(Date.UTC(dd.getUTCFullYear(), dd.getUTCMonth() + delta, 1));
+    return x.toLocaleDateString('es-CO', { month: 'long', year: 'numeric' });
+  };
+  tabla('Resumen de cargos cobrados por meses', [
+    [mesLabel(d.date, 0), inf.meses.actual.cantidad, inf.meses.actual.monto],
+    [mesLabel(d.date, -1), inf.meses.anterior.cantidad, inf.meses.anterior.monto],
+    ['Meses anteriores', inf.meses.anteriores.cantidad, inf.meses.anteriores.monto],
+  ], ['TOTAL COBRANZA POR MESES',
+    inf.meses.actual.cantidad + inf.meses.anterior.cantidad + inf.meses.anteriores.cantidad,
+    inf.meses.actual.monto + inf.meses.anterior.monto + inf.meses.anteriores.monto,
+  ]);
+
+  tabla('Resumen Anulaciones', [
+    ['Anulado de cierre', inf.anulaciones.anuladoDeCierre.cantidad, inf.anulaciones.anuladoDeCierre.monto],
+    ['Anulado de otros cierres', inf.anulaciones.anuladoDeOtrosCierres.cantidad, inf.anulaciones.anuladoDeOtrosCierres.monto],
+    ['Cobranza efectiva', '', inf.anulaciones.cobranzaEfectiva.monto],
+  ], ['COBRADO - ANULADO DE OTRAS FECHAS', '', inf.anulaciones.cobradoNeto]);
+
+  tabla('Resumen Egresos', [
+    ['Pago Orden de Compra', inf.egresos.ordenes.cantidad, inf.egresos.ordenes.monto],
+    ...(inf.egresos.traslados.cantidad ? ([['Transferencias', inf.egresos.traslados.cantidad, inf.egresos.traslados.monto]] as [string, number, number][]) : []),
+    ...(inf.egresos.transacciones.cantidad ? ([['Transacciones', inf.egresos.transacciones.cantidad, inf.egresos.transacciones.monto]] as [string, number, number][]) : []),
+  ], ['TOTAL EGRESOS', inf.egresos.total.cantidad, inf.egresos.total.monto]);
+
+  if (d.porCategoria.length) {
+    if (doc.y > 690) { doc.addPage(); doc.y = 50; }
+    sectionTitle(doc, 'De dónde salió');
+    for (const c of d.porCategoria) {
+      const y = doc.y;
+      doc.font('Helvetica').fontSize(9).fillColor('#333');
+      doc.text(`${c.type === 'INCOME' ? '(+)' : c.type === 'EXPENSE' ? '(-)' : '(±)'} ${c.category}  (${c.n})`, 46, y);
+      doc.text(cop(c.total), x1, y, { width: w, align: 'right' });
+      doc.y = y + 14;
+    }
+    doc.moveDown(0.8);
+  }
+
+  if (d.movimientos.length) {
+    sectionTitle(doc, `Movimientos del día (${d.movimientos.length})`);
+    const cols = [46, 190, 330, 420, 480];
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(GRAY);
+    let y = doc.y;
+    doc.text('Quién', cols[0], y); doc.text('Concepto', cols[1], y);
+    doc.text('Medio', cols[2], y); doc.text('Valor', cols[3], y, { width: 70, align: 'right' });
+    doc.text('Saldo', cols[4], y, { width: 70, align: 'right' });
+    doc.y = y + 12;
+
+    let saldo = 0;
+    for (const m of d.movimientos) {
+      if (doc.y > 760) { doc.addPage(); doc.y = 50; }
+      saldo += m.firma;
+      y = doc.y;
+      doc.font('Helvetica').fontSize(8).fillColor('#333');
+      doc.text((m.payer || '—').slice(0, 32), cols[0], y, { width: 140, ellipsis: true });
+      doc.text((m.note || m.category || '—').slice(0, 34), cols[1], y, { width: 135, ellipsis: true });
+      doc.text(m.method || '—', cols[2], y, { width: 85, ellipsis: true });
+      doc.fillColor(m.type === 'EXPENSE' ? '#b42318' : '#067647');
+      doc.text(`${m.type === 'EXPENSE' ? '-' : '+'}${cop(m.amount)}`, cols[3], y, { width: 70, align: 'right' });
+      doc.fillColor('#333').text(cop(saldo), cols[4], y, { width: 70, align: 'right' });
+      doc.y = y + 12;
+    }
+  }
+
+  doc.moveDown(3);
   doc.fontSize(9).fillColor(GRAY);
   doc.text('_______________________________', 40, doc.y);
   doc.text('Firma responsable de caja', 40, doc.y + 4);
@@ -266,7 +471,10 @@ export function serviceOrderPdf(res: Response, d: ServiceOrderData) {
 
 function sectionTitle(doc: PDFKit.PDFDocument, title: string) {
   doc.moveDown(0.2);
-  doc.fillColor(BRAND).fontSize(11).font('Helvetica-Bold').text(title.toUpperCase());
+  // La x va explícita: si no, el título arranca donde lo dejó el último `text()` (por
+  // ejemplo una celda alineada a la derecha) y sale corrido y partido en dos líneas.
+  doc.fillColor(BRAND).fontSize(11).font('Helvetica-Bold')
+    .text(title.toUpperCase(), 40, doc.y, { width: 515 });
   doc.moveTo(40, doc.y + 1).lineTo(555, doc.y + 1).strokeColor('#ccd').stroke();
   doc.moveDown(0.4);
 }

@@ -15,26 +15,30 @@ export type CashAccount = {
   cuid?: string | null; balance?: number;
   branchLegacy?: number | null; accountNumber?: string | null;
   code?: string | null; persisted?: boolean;
+  /** Fondo fijo de la caja: no entra en el excedente del arqueo. */
+  fixedFund?: number;
 };
 
 export const PAY_METHODS: { value: string; label: string }[] = [
   { value: "Cash", label: "Efectivo" },
   { value: "Bank", label: "Consignación / Transferencia" },
+  { value: "Cheque", label: "Cheque" },
   { value: "Balance", label: "Saldo a favor del cliente" },
 ];
 
+/**
+ * ¿El método mueve dinero por banco? Debe coincidir con `isBankMethod` del backend
+ * (`cobranzas.service.ts`), que con esto decide el asiento contable y guarda el
+ * nombre del banco. El cheque se consigna, así que cuenta como banco.
+ */
+export const isBankMethod = (method: string) => method === "Bank" || method === "Cheque";
+
 export const BANKS = ["Bancolombia", "BBVA colombia", "Banco de Bogota", "Davivienda"];
 
-export const EXPENSE_CATEGORIES = [
-  "Papeleria", "Servicios", "Nomina", "Mantenimiento", "Transporte",
-  "Arriendo", "Impuestos", "Comisiones", "Otros",
-];
-
-/** Categorías sugeridas para un ingreso manual libre (no ligado a factura). */
-export const INCOME_CATEGORIES = [
-  "Reconexión", "Instalación", "Venta de equipo", "Traslado", "Reposición",
-  "Intereses", "Otros ingresos",
-];
+// Las categorías de movimiento NO se listan aquí: son datos, no código. Viven en
+// TransactionCategory (migradas de `transactions_cat` del legacy), se administran
+// en /tesoreria/cajas y se piden a GET /treasury/categories. Antes había aquí dos
+// listas fijas inventadas que no coincidían con el legacy.
 
 /**
  * Simula el reparto en cascada (mismo algoritmo que el backend) para previsualizar

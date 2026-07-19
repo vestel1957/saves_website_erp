@@ -25,7 +25,7 @@ export class StaffController {
   }
   @Get(':id') detail(@Param('id') id: string) { return this.staff.detail(id); }
   @Post() create(@Body() dto: CreateStaffDto) { return this.staff.create(dto); }
-  @Patch(':id') update(@Param('id') id: string, @Body() dto: UpdateStaffDto) { return this.staff.update(id, dto); }
+  @Patch(':id') update(@Param('id') id: string, @Body() dto: UpdateStaffDto, @CurrentUser() actor: AuthUser) { return this.staff.update(id, dto, actor); }
 
   /** Permisos del empleado (vista): cualquiera con acceso al área los consulta. */
   @Get(':id/permissions') permissions(@Param('id') id: string) { return this.staff.permissions(id); }

@@ -37,6 +37,11 @@ export const SETTING_DEFS: SettingDef[] = [
   { key: 'network.oltLive', group: 'red', label: 'Ejecutar aprovisionamiento REAL en OLT', default: 'false', placeholder: 'true | false' },
   { key: 'network.genieacsLive', group: 'red', label: 'Ejecutar cortes REALES de TV en GenieACS (TR-069)', default: 'false', placeholder: 'true | false' },
   { key: 'tickets.cascadeBilling', group: 'soporte', label: 'Al cerrar orden: generar cargos automáticos (reconexión/instalación)', default: 'false', placeholder: 'true | false' },
+  // Chatbot de WhatsApp. Se editan desde Configuración → WhatsApp (endpoints
+  // /admin/chatbot/switch y /allowlist), pero se declaran aquí para que existan en el
+  // catálogo y no queden como claves sueltas invisibles en AppSetting.
+  { key: 'chatbot.enabled', group: 'chatbot', label: 'Responder automáticamente en WhatsApp con el agente de IA', default: 'false', placeholder: 'true | false' },
+  { key: 'chatbot.allowlist', group: 'chatbot', label: 'Piloto: solo responder a estos teléfonos (vacío = todos)', placeholder: '573001112233, 573004445566' },
   { key: 'billing.invoiceTerms', group: 'billing', label: 'Términos de la factura', multiline: true },
   { key: 'billing.contractClause', group: 'billing', label: 'Cláusula de contrato', multiline: true },
   { key: 'billing.docFooter', group: 'billing', label: 'Pie de página de documentos', multiline: true },

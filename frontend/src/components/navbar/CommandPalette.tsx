@@ -21,10 +21,22 @@ type SubHit = {
   branch: string | null;
 };
 
-/** Entrada unificada de la lista de resultados (cliente o navegación). */
+/** Un resultado de la búsqueda con IA (lo arma el backend, ya clicable). */
+type AiHit = {
+  module: string;
+  id: string;
+  href: string;
+  title: string;
+  subtitle: string;
+  badge?: string | null;
+};
+
+/** Entrada unificada de la lista de resultados. */
 type Entry =
   | { type: "sub"; key: string; sub: SubHit }
-  | { type: "nav"; key: string; item: CommandItem };
+  | { type: "nav"; key: string; item: CommandItem }
+  | { type: "ai-action"; key: string }
+  | { type: "ai-hit"; key: string; hit: AiHit };
 
 export function CommandPalette() {
   const router = useRouter();
@@ -34,6 +46,13 @@ export function CommandPalette() {
   const [cursor, setCursor] = useState(0);
   const [subs, setSubs] = useState<SubHit[]>([]);
   const [loadingSubs, setLoadingSubs] = useState(false);
+  // Búsqueda con IA: modo explícito que reemplaza los resultados por los que
+  // devuelve el backend tras interpretar la frase.
+  const [aiMode, setAiMode] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiHits, setAiHits] = useState<AiHit[]>([]);
+  const [aiInterpreted, setAiInterpreted] = useState<string | null>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Abrir con ⌘K / Ctrl+K o por evento (click en el buscador del navbar).
@@ -61,9 +80,15 @@ export function CommandPalette() {
       setQuery("");
       setCursor(0);
       setSubs([]);
+      resetAi();
       requestAnimationFrame(() => inputRef.current?.focus());
     }
   }, [open]);
+
+  // Al cambiar la frase se abandona el modo IA (los resultados dejan de valer).
+  useEffect(() => {
+    resetAi();
+  }, [query]);
 
   // Búsqueda de clientes en el backend (con debounce).
   useEffect(() => {
@@ -97,28 +122,79 @@ export function CommandPalette() {
     );
   }, [query]);
 
-  // Lista unificada: clientes primero, luego navegación.
-  const entries = useMemo<Entry[]>(
-    () => [
+  // Lista unificada. En modo IA solo se muestran los resultados de la IA; si no,
+  // clientes + navegación, con la acción "Buscar con IA" al frente cuando la
+  // frase parece una consulta (≥3 caracteres).
+  const entries = useMemo<Entry[]>(() => {
+    if (aiMode) {
+      return aiHits.map((h): Entry => ({ type: "ai-hit", key: `ai-${h.module}-${h.id}`, hit: h }));
+    }
+    const aiAction: Entry[] =
+      query.trim().length >= 3 ? [{ type: "ai-action", key: "ai-action" }] : [];
+    return [
+      ...aiAction,
       ...subs.map((s): Entry => ({ type: "sub", key: `sub-${s.id}`, sub: s })),
       ...navResults.map((it): Entry => ({ type: "nav", key: `nav-${it.section}-${it.label}`, item: it })),
-    ],
-    [subs, navResults],
-  );
+    ];
+  }, [aiMode, aiHits, query, subs, navResults]);
 
   // Mantener el cursor dentro de rango cuando cambian los resultados.
   useEffect(() => {
     setCursor((c) => Math.min(c, Math.max(0, entries.length - 1)));
   }, [entries.length]);
 
+  function resetAi() {
+    setAiMode(false);
+    setAiHits([]);
+    setAiInterpreted(null);
+    setAiError(null);
+    setAiLoading(false);
+  }
+
+  // Lanza la búsqueda con IA: manda la frase al backend y reemplaza los
+  // resultados por lo que interpretó. No cierra el palette.
+  async function runAi() {
+    const q = query.trim();
+    if (q.length < 3 || aiLoading) return;
+    setAiLoading(true);
+    setAiError(null);
+    try {
+      const res = await authFetch("/search/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ q }),
+      });
+      const data = res.ok ? await res.json() : null;
+      if (!data || data.unavailable) {
+        setAiError("La búsqueda con IA no está disponible ahora.");
+        setAiLoading(false);
+        return;
+      }
+      setAiHits(data.hits ?? []);
+      setAiInterpreted(data.interpreted ?? null);
+      setAiMode(true);
+      setCursor(0);
+    } catch {
+      setAiError("No se pudo completar la búsqueda con IA.");
+    } finally {
+      setAiLoading(false);
+    }
+  }
+
   function choose(entry: Entry | undefined) {
     if (!entry) return;
+    if (entry.type === "ai-action") {
+      void runAi();
+      return;
+    }
     setOpen(false);
     if (entry.type === "sub") {
       router.push(`/clientes/${entry.sub.id}`);
-    } else if (entry.item.href) {
+    } else if (entry.type === "ai-hit") {
+      router.push(entry.hit.href);
+    } else if (entry.type === "nav" && entry.item.href) {
       router.push(entry.item.href);
-    } else {
+    } else if (entry.type === "nav") {
       toast(`${entry.item.label} — módulo en construcción`, "sparkles");
     }
   }
@@ -141,7 +217,7 @@ export function CommandPalette() {
   if (!open) return null;
 
   const q = query.trim();
-  const showEmpty = entries.length === 0 && !loadingSubs;
+  const showEmpty = entries.length === 0 && !loadingSubs && !aiLoading;
 
   return (
     <div
@@ -163,27 +239,52 @@ export function CommandPalette() {
             placeholder="Buscar clientes, módulos y páginas…"
             className="h-12 flex-1 bg-transparent text-sm text-text-primary outline-none placeholder:text-text-tertiary"
           />
-          {loadingSubs && <Icon name="loader" size={14} className="animate-spin text-text-tertiary" />}
+          {(loadingSubs || aiLoading) && (
+            <Icon name="loader" size={14} className="animate-spin text-text-tertiary" />
+          )}
           <kbd className="rounded border border-border-subtle bg-surface-2 px-1.5 py-0.5 text-[10px] font-semibold text-text-tertiary">
             ESC
           </kbd>
         </div>
 
+        {/* chip de interpretación IA + errores */}
+        {aiMode && aiInterpreted && (
+          <div className="flex items-center gap-2 border-b border-border-subtle bg-surface-2/60 px-4 py-2 text-[11px] text-text-secondary">
+            <Icon name="sparkles" size={13} className="shrink-0 text-brand" />
+            <span className="truncate">
+              IA entendió: <span className="font-medium text-text-primary">{aiInterpreted}</span>
+            </span>
+          </div>
+        )}
+        {aiError && (
+          <div className="border-b border-border-subtle px-4 py-2 text-[11px] text-error">{aiError}</div>
+        )}
+
         {/* results */}
         <div className="max-h-[46vh] overflow-y-auto p-2">
           {showEmpty ? (
             <p className="px-3 py-8 text-center text-[13px] text-text-tertiary">
-              {q ? `Sin resultados para “${q}”.` : "Escribe para buscar."}
+              {aiMode
+                ? `La IA no encontró resultados para “${q}”.`
+                : q
+                  ? `Sin resultados para “${q}”.`
+                  : "Escribe para buscar."}
             </p>
           ) : (
             entries.map((entry, i) => {
               const prev = entries[i - 1];
+              const active = i === cursor;
+              const rowClass = `flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors ${
+                active ? "bg-surface-2" : ""
+              }`;
               const header =
-                entry.type === "sub" && prev?.type !== "sub"
-                  ? "Clientes"
-                  : entry.type === "nav" && prev?.type !== "nav"
-                    ? "Ir a"
-                    : null;
+                entry.type === "ai-hit" && prev?.type !== "ai-hit"
+                  ? "Resultados IA"
+                  : entry.type === "sub" && prev?.type !== "sub"
+                    ? "Clientes"
+                    : entry.type === "nav" && prev?.type !== "nav"
+                      ? "Ir a"
+                      : null;
               return (
                 <div key={entry.key}>
                   {header && (
@@ -191,13 +292,48 @@ export function CommandPalette() {
                       {header}
                     </div>
                   )}
-                  {entry.type === "sub" ? (
+                  {entry.type === "ai-action" ? (
                     <button
                       onMouseEnter={() => setCursor(i)}
                       onClick={() => choose(entry)}
-                      className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors ${
-                        i === cursor ? "bg-surface-2" : ""
-                      }`}
+                      className={rowClass}
+                    >
+                      <Icon name="sparkles" size={16} className="shrink-0 text-brand" />
+                      <span className="flex-1 text-[13px] font-medium text-text-primary">
+                        Buscar <span className="text-brand">“{q}”</span> con IA
+                      </span>
+                      <span className="text-[10px] font-medium uppercase tracking-wide text-text-tertiary">
+                        lenguaje natural
+                      </span>
+                      {active && <Icon name="corner-down-left" size={13} className="shrink-0 text-text-tertiary" />}
+                    </button>
+                  ) : entry.type === "ai-hit" ? (
+                    <button
+                      onMouseEnter={() => setCursor(i)}
+                      onClick={() => choose(entry)}
+                      className={rowClass}
+                    >
+                      <Icon
+                        name={entry.hit.module === "facturas" ? "file-text" : "user"}
+                        size={16}
+                        className="shrink-0 text-brand"
+                      />
+                      <span className="flex min-w-0 flex-1 flex-col">
+                        <span className="truncate text-[13px] font-medium text-text-primary">{entry.hit.title}</span>
+                        <span className="truncate text-[11px] text-text-tertiary">{entry.hit.subtitle}</span>
+                      </span>
+                      {entry.hit.badge && (
+                        <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-text-tertiary">
+                          {entry.hit.badge}
+                        </span>
+                      )}
+                      {active && <Icon name="corner-down-left" size={13} className="shrink-0 text-text-tertiary" />}
+                    </button>
+                  ) : entry.type === "sub" ? (
+                    <button
+                      onMouseEnter={() => setCursor(i)}
+                      onClick={() => choose(entry)}
+                      className={rowClass}
                     >
                       <Icon name="user" size={16} className="shrink-0 text-brand" />
                       <span className="flex min-w-0 flex-1 flex-col">
@@ -213,15 +349,13 @@ export function CommandPalette() {
                           {entry.sub.status.toLowerCase()}
                         </span>
                       )}
-                      {i === cursor && <Icon name="corner-down-left" size={13} className="shrink-0 text-text-tertiary" />}
+                      {active && <Icon name="corner-down-left" size={13} className="shrink-0 text-text-tertiary" />}
                     </button>
                   ) : (
                     <button
                       onMouseEnter={() => setCursor(i)}
                       onClick={() => choose(entry)}
-                      className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors ${
-                        i === cursor ? "bg-surface-2" : ""
-                      }`}
+                      className={rowClass}
                     >
                       <Icon
                         name={entry.item.icon}
@@ -232,7 +366,7 @@ export function CommandPalette() {
                       <span className="text-[11px] font-medium uppercase tracking-wide text-text-tertiary">
                         {entry.item.section.toLowerCase()}
                       </span>
-                      {i === cursor && <Icon name="corner-down-left" size={13} className="text-text-tertiary" />}
+                      {active && <Icon name="corner-down-left" size={13} className="text-text-tertiary" />}
                     </button>
                   )}
                 </div>
@@ -252,7 +386,7 @@ export function CommandPalette() {
             abrir
           </span>
           <span className="ml-auto flex items-center gap-1">
-            <Icon name="user" size={12} /> busca clientes por nombre, documento, celular o abonado
+            <Icon name="sparkles" size={12} className="text-brand" /> escribe una frase y pulsa “Buscar con IA”
           </span>
         </div>
       </div>

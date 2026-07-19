@@ -19,6 +19,7 @@ import {
 } from "@/lib/billing";
 
 const NuevaFacturaModal = dynamic(() => import("@/components/billing/NuevaFacturaModal").then((m) => m.NuevaFacturaModal), { ssr: false });
+const GenerarFacturasModal = dynamic(() => import("@/components/billing/GenerarFacturasModal").then((m) => m.GenerarFacturasModal), { ssr: false });
 
 const fmtDate = (d: string | null) => (d ? new Date(d).toLocaleDateString("es-CO") : "—");
 const isOverdue = (r: InvoiceRow) => r.balance > 0 && !!r.dueDate && new Date(r.dueDate).getTime() < Date.now();
@@ -44,6 +45,7 @@ export default function FacturacionPage() {
   const [pageSize, setPageSize] = useState(25);
 
   const [nuevaOpen, setNuevaOpen] = useState(false);
+  const [generarOpen, setGenerarOpen] = useState(false);
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [hydrated, setHydrated] = useState(false);
@@ -249,6 +251,16 @@ export default function FacturacionPage() {
           >
             <Icon name="calendar-clock" size={15} /> Generación automática
           </Link>
+          {canEmit && (
+            <button
+              type="button"
+              onClick={() => setGenerarOpen(true)}
+              title="Emite la mensualidad del mes a los abonados activos"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border-default bg-surface px-3.5 py-2 text-[13px] font-semibold text-text-secondary transition-colors hover:bg-surface-2"
+            >
+              <Icon name="layers" size={15} /> Generar facturas del mes
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setNuevaOpen(true)}
@@ -263,6 +275,14 @@ export default function FacturacionPage() {
         <NuevaFacturaModal
           open={nuevaOpen}
           onClose={() => setNuevaOpen(false)}
+          onDone={() => { load(); loadStats(); }}
+        />
+      )}
+
+      {generarOpen && (
+        <GenerarFacturasModal
+          open={generarOpen}
+          onClose={() => setGenerarOpen(false)}
           onDone={() => { load(); loadStats(); }}
         />
       )}

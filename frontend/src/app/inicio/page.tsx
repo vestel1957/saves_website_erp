@@ -206,7 +206,7 @@ function MiJornada() {
         <div className="flex flex-col justify-center gap-2 rounded-xl border border-border-subtle bg-surface p-4">
           <div className="text-[13px] font-bold text-text-primary">Acciones</div>
           <Button onClick={() => setNueva(true)}><Icon name="plus" size={14} /> Nueva orden de trabajo</Button>
-          <Link href="/red/masivo" className="text-center text-[12px] font-medium text-brand hover:underline">Operaciones masivas (por sede) →</Link>
+          <Link href="/mikrotik/masivo" className="text-center text-[12px] font-medium text-brand hover:underline">Operaciones masivas (por sede) →</Link>
         </div>
       </div>
 

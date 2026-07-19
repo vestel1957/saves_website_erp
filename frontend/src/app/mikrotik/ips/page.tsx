@@ -3,22 +3,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { PageHeading } from "@/components/accounting/PageHeading";
 import { Badge } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Field";
 import { Icon } from "@/components/Icon";
+import { toast } from "@/components/ui/Toast";
 import { DataTable } from "@/components/inventory/DataTable";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
+import { IpPoolModal, type IpPool } from "@/components/network/IpPoolModal";
 import { useAuth } from "@/context/AuthProvider";
-
-type IpPool = {
-  id: string;
-  name: string;
-  ipLocal: string;
-  ipRemote: string;
-  tech: string;
-  isDefault: boolean;
-  profiles: string;
-  branch: string | null;
-};
 
 function profileList(s: string): string[] {
   return s.split(",").map((p) => p.trim()).filter(Boolean);
@@ -28,6 +20,8 @@ export default function IpsPage() {
   const { loading: authLoading, authFetch } = useAuth();
   const [rows, setRows] = useState<IpPool[] | null>(null);
   const [search, setSearch] = useState("");
+  const [editing, setEditing] = useState<IpPool | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
 
   const load = useCallback((q: string) => {
     const qs = q.trim() ? `?search=${encodeURIComponent(q.trim())}` : "";
@@ -40,6 +34,19 @@ export default function IpsPage() {
     return () => clearTimeout(t);
   }, [authLoading, search, load]);
 
+  const abrir = (pool: IpPool | null) => { setEditing(pool); setModalOpen(true); };
+
+  /** Predeterminado de la sede: solo puede haber uno, como en el legacy. */
+  const marcarDefecto = async (pool: IpPool) => {
+    const r = await authFetch(`/network/ip-pools/${pool.id}/default`, { method: "PUT" });
+    if (r.ok) {
+      toast(`"${pool.name}" es ahora el pool predeterminado de ${pool.branch ?? "la sede"}.`, "check");
+      load(search);
+    } else {
+      toast("No se pudo marcar como predeterminado.", "x");
+    }
+  };
+
   if (authLoading) return <PageSkeleton />;
 
   return (
@@ -50,9 +57,15 @@ export default function IpsPage() {
         subtitle="Pools de direcciones IP configurados por Mikrotik: rango local/remoto y perfiles PPPoE disponibles."
       />
 
-      <div className="relative max-w-sm">
-        <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary"><Icon name="search" size={15} /></span>
-        <Input className="pl-9" placeholder="Buscar por nombre, IP o tecnología…" value={search} onChange={(e) => setSearch(e.target.value)} />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="relative max-w-sm flex-1">
+          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary"><Icon name="search" size={15} /></span>
+          <Input className="pl-9" placeholder="Buscar por nombre, IP o tecnología…" value={search} onChange={(e) => setSearch(e.target.value)} />
+        </div>
+        <Button onClick={() => abrir(null)}>
+          <Icon name="plus" size={15} />
+          Nuevo pool
+        </Button>
       </div>
 
       <DataTable
@@ -82,7 +95,30 @@ export default function IpsPage() {
               return <span className="text-text-tertiary">{list.length} perfil(es)</span>;
             },
           },
+          {
+            key: "acciones",
+            header: "",
+            render: (r: IpPool) => (
+              <div className="flex justify-end gap-1">
+                {!r.isDefault && (
+                  <Button variant="ghost" size="sm" onClick={() => void marcarDefecto(r)} title="Marcar como predeterminado de la sede">
+                    <Icon name="flag" size={14} />
+                  </Button>
+                )}
+                <Button variant="ghost" size="sm" onClick={() => abrir(r)} title="Editar">
+                  <Icon name="pencil" size={14} />
+                </Button>
+              </div>
+            ),
+          },
         ]}
+      />
+
+      <IpPoolModal
+        open={modalOpen}
+        pool={editing}
+        onClose={() => setModalOpen(false)}
+        onSaved={() => load(search)}
       />
     </div>
   );

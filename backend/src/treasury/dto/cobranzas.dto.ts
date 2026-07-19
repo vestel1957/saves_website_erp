@@ -63,6 +63,14 @@ export class ExpenseDto {
   @IsOptional() @IsString()
   payerName?: string;
 
+  /**
+   * Opcional: ligar el egreso a un cliente (sin tocar sus facturas). Paridad
+   * legacy `payerid`, que en egresos SÍ se usa —2.269 de 29.531— sobre todo en
+   * Compras y Devoluciones; en ingresos es anecdótico (2 de 181).
+   */
+  @IsOptional() @IsString()
+  subscriberId?: string;
+
   @IsOptional() @IsString()
   bankName?: string;
 
@@ -115,19 +123,19 @@ export class CashOpenDto {
   note?: string;
 }
 
-/** Cierre de caja (arqueo) de una caja en una fecha. */
+/**
+ * Cierre de caja de una caja en una fecha.
+ *
+ * Sólo caja y fecha: no hay base ni consignado que teclear. Réplica del legacy, donde la
+ * base es cero y el cierre barre el efectivo entero del cajón (ver `cierre-legacy.ts`).
+ * Todo lo demás se deriva del libro.
+ */
 export class CashCloseDto {
   @IsInt()
   cashAccountId!: number;
 
   @IsDateString()
   date!: string;
-
-  @IsOptional() @IsNumber() @Min(0)
-  base?: number;
-
-  @IsOptional() @IsNumber() @Min(0)
-  deposited?: number;
 }
 
 /**
@@ -205,6 +213,14 @@ export class EditTxDto {
 export class CashAccountDto {
   @IsString() @MinLength(1)
   holder!: string;
+
+  /**
+   * Fondo fijo: la plata que nunca sale del cajón, y por eso no entra en el excedente
+   * del arqueo. Es por caja porque no es una constante del negocio (de los 3 cierres
+   * reales que existen, uno cerró con base de 300.000). Omitido = no se toca.
+   */
+  @IsOptional() @IsNumber() @Min(0)
+  fixedFund?: number;
 
   @IsOptional() @IsString()
   accountNumber?: string;

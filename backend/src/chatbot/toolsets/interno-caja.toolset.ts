@@ -7,8 +7,17 @@ import { CobranzasService } from '../../treasury/cobranzas.service';
 import { authUserOf } from '../chatbot.identity';
 import { canAny, cop, fecha, gated, safe } from './toolset.util';
 
-/** Mismo gate que el controller de tesorería. */
+/** Mismo gate que el controller de tesorería: quién puede CONSULTAR la caja. */
 const CAJA = [P.AREA_CAJA, P.AREA_CONTABILIDAD, P.AREA_ADMINISTRACION];
+
+/**
+ * Quién puede ESCRIBIR. Más estrecho que `CAJA`, y tiene que coincidir con el
+ * `permission` del `preparePending`: el motor lo revalida al confirmar, así que
+ * declararle la herramienta a quien no lo tiene le hace recorrer todo el flujo para
+ * chocar al final con "ya no tienes permiso" — que además insinúa que el permiso
+ * cambió, cuando nunca lo tuvo.
+ */
+const CAJA_ESCRIBE = [P.AREA_CAJA];
 
 /** Fecha de hoy en ISO corto, para acotar consultas al día. */
 const hoy = () => new Date().toISOString().slice(0, 10);
@@ -30,7 +39,8 @@ export class InternoCajaToolset implements Toolset {
   ) {}
 
   definitions(ctx: ToolContext): ToolDef[] {
-    return gated(canAny(ctx, CAJA), [
+    return [
+      ...gated(canAny(ctx, CAJA), [
       {
         name: 'caja_del_dia',
         description: 'Resumen de tesorería: ingresos, egresos y saldo. Por defecto el día de hoy.',
@@ -65,6 +75,8 @@ export class InternoCajaToolset implements Toolset {
         description: 'Cuentas de caja/banco disponibles, con su id (necesario para registrar un ingreso).',
         input_schema: { type: 'object', properties: {} },
       },
+      ]),
+      ...gated(canAny(ctx, CAJA_ESCRIBE), [
       {
         name: 'registrar_ingreso',
         description:
@@ -82,7 +94,8 @@ export class InternoCajaToolset implements Toolset {
           required: ['monto', 'categoria', 'metodo'],
         },
       },
-    ]);
+      ]),
+    ];
   }
 
   async execute(name: string, input: Record<string, unknown>, ctx: ToolContext): Promise<string> {
@@ -94,7 +107,7 @@ export class InternoCajaToolset implements Toolset {
       case 'movimientos_caja':
         return safe(() => this.movimientos(input));
       case 'cierres_caja':
-        return safe(() => this.cierres());
+        return safe(() => this.cierres(ctx));
       case 'cuentas_caja':
         return safe(() => this.cuentas());
       case 'registrar_ingreso':
@@ -133,8 +146,10 @@ export class InternoCajaToolset implements Toolset {
     return `${res.total} movimiento(s):\n${lineas.join('\n')}${extra}`;
   }
 
-  private async cierres(): Promise<string> {
-    const res: any = await this.treasury.cashCloses({ pageSize: 5 } as any);
+  private async cierres(ctx: ToolContext): Promise<string> {
+    // Va con el usuario del chat: si es cajera, sólo ve los cierres de SU caja. Sin
+    // esto, la restricción se saltaría preguntándole al bot por WhatsApp.
+    const res: any = await this.treasury.cashCloses({ pageSize: 5 } as any, authUserOf(ctx.user));
     if (!res.items?.length) return 'No hay cierres de caja registrados.';
     return res.items
       .map((c: any) => `• ${fecha(c.date)} · ${c.cashAccountName ?? c.accountName ?? 'caja'} · ${cop(c.total ?? c.amount)}`)

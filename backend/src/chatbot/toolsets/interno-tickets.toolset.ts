@@ -7,8 +7,17 @@ import { SupportWriteService } from '../../support/support-write.service';
 import { authUserOf } from '../chatbot.identity';
 import { canAny, fecha, gated, safe } from './toolset.util';
 
-/** Mismo gate que el controller de soporte. */
+/** Mismo gate que el controller de soporte: quién puede CONSULTAR tickets. */
 const SOPORTE = [P.AREA_TECNICOS, P.AREA_ADMINISTRACION, P.AREA_CAJA];
+
+/**
+ * Quién puede ESCRIBIR. Más estrecho que `SOPORTE`, y tiene que coincidir con el
+ * `permission` de cada `preparePending`: el motor lo revalida al confirmar, así que
+ * declararle la herramienta a quien no lo tiene le hace recorrer todo el flujo para
+ * chocar al final con "ya no tienes permiso" — que además insinúa que el permiso
+ * cambió, cuando nunca lo tuvo.
+ */
+const SOPORTE_ESCRIBE = [P.AREA_TECNICOS];
 
 const ESTADOS = ['PENDIENTE', 'REALIZANDO', 'RESUELTO', 'ANULADA'] as const;
 
@@ -27,7 +36,8 @@ export class InternoTicketsToolset implements Toolset {
   ) {}
 
   definitions(ctx: ToolContext): ToolDef[] {
-    return gated(canAny(ctx, SOPORTE), [
+    return [
+      ...gated(canAny(ctx, SOPORTE), [
       {
         name: 'mis_tickets',
         description:
@@ -53,6 +63,8 @@ export class InternoTicketsToolset implements Toolset {
         description: 'Detalle completo de un ticket: cliente, problema, estado, historial y materiales.',
         input_schema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
       },
+      ]),
+      ...gated(canAny(ctx, SOPORTE_ESCRIBE), [
       {
         name: 'crear_ticket',
         description: 'Crea un ticket de soporte para un abonado. Requiere confirmación del funcionario.',
@@ -90,7 +102,8 @@ export class InternoTicketsToolset implements Toolset {
           required: ['id', 'status'],
         },
       },
-    ]);
+      ]),
+    ];
   }
 
   async execute(name: string, input: Record<string, unknown>, ctx: ToolContext): Promise<string> {

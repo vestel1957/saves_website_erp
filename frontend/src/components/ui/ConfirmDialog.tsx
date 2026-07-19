@@ -38,7 +38,9 @@ export function ConfirmDialog({
         <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${danger ? "bg-error-soft text-error-text" : "bg-brand-soft text-brand"}`}>
           <Icon name={icon ?? (danger ? "alert-triangle" : "alert-circle")} size={20} />
         </span>
-        <div className="flex-1 text-[13px] text-text-secondary">{message}</div>
+        {/* min-w-0: sin esto el item flex no baja de su ancho de contenido y un
+            mensaje con texto largo sin espacios desborda el modal en vez de cortarse. */}
+        <div className="min-w-0 flex-1 text-[13px] text-text-secondary">{message}</div>
       </div>
       <div className="mt-5 flex justify-end gap-2">
         <Button variant="ghost" onClick={onClose} disabled={busy}>{cancelLabel}</Button>

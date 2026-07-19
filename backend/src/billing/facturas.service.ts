@@ -33,6 +33,30 @@ function dueOnDay(base: Date, day: number): Date {
 
 type Tx = Prisma.TransactionClient;
 
+/** Por qué un abonado objetivo no terminó facturado en la corrida. */
+export type GenerateSkipReason =
+  | 'ALREADY_BILLED'  // ya tenía factura en el mes
+  | 'REACTIVATED'     // volvió de RETIRADO dentro del mes (lo cubre la reconexión)
+  | 'NO_SERVICES'     // sin SubscriberService activo con precio
+  | 'PROMO'           // mes de promoción gratis (contador promo)
+  | 'PROMO2'          // mes de promoción gratis (contador promo2)
+  | 'ERROR';          // la escritura falló
+
+/** Decisión de la corrida para un abonado. En `dryRun` es lo que se HARÍA. */
+export type GeneratePlanRow = {
+  subscriberId: string;
+  action: 'BILL' | 'SKIP' | 'FAIL';
+  reason?: GenerateSkipReason;
+  error?: string;
+  tid?: number;
+  subtotal?: number;
+  tax?: number;
+  total?: number;
+  serviceCombo?: string | null;
+  serviceTv?: string | null;
+  items?: { productName: string | null; qty: number; price: number; taxRate: number; taxTotal: number }[];
+};
+
 /** Escritura de facturación (Cobranza): crear factura, generar en lote y notas C/D. */
 @Injectable()
 export class FacturasService {
@@ -129,13 +153,27 @@ export class FacturasService {
     return result;
   }
 
-  /** Generar facturas recurrentes en lote (clona la última factura de cada cliente). */
+  /**
+   * Generar la facturación recurrente en lote: una mensualidad por abonado, armada
+   * desde su plan (`SubscriberService` activos), NO clonando la última factura.
+   * Así los cargos puntuales (instalación, reconexión) no se arrastran al mes siguiente.
+   *
+   * Con `dto.dryRun` no escribe nada y devuelve `plan` (la decisión y el motivo por
+   * abonado); con `dto.asIfUnbilled` además re-simula un mes ya facturado.
+   */
   async generate(dto: GenerateInvoicesDto, user: AuthUser) {
+    const dryRun = dto.dryRun === true;
+    const asIfUnbilled = dto.asIfUnbilled === true;
+    // asIfUnbilled desactiva el anti-duplicado: fuera de una simulación volvería a
+    // facturar un mes ya facturado. Solo se permite acompañado de dryRun.
+    if (asIfUnbilled && !dryRun) {
+      throw new BadRequestException('asIfUnbilled solo se permite junto con dryRun.');
+    }
+
     const invoiceDate = dateOnly(dto.invoiceDate);
     const dueDate = dto.dueDays ? addDays(invoiceDate, dto.dueDays) : dueOnDay(invoiceDate, await this.billingDueDay());
     const monthStart = new Date(Date.UTC(invoiceDate.getUTCFullYear(), invoiceDate.getUTCMonth(), 1));
     const monthEnd = new Date(Date.UTC(invoiceDate.getUTCFullYear(), invoiceDate.getUTCMonth() + 1, 1));
-    const limit = Math.min(dto.limit ?? 500, 2000);
 
     // Población objetivo. Paridad legacy Invoices_model.php:1112: la facturación
     // recurrente SOLO incluye abonados en estado Activo o Compromiso; nunca factura
@@ -144,11 +182,14 @@ export class FacturasService {
     if (dto.subscriberIds?.length) subWhere.id = { in: dto.subscriberIds };
     else if (dto.branchId) subWhere.branchId = dto.branchId;
 
-    // Factura la mensualidad LIMPIA desde el plan del abonado (SubscriberService
-    // activos), no clonando la última factura. Así los cargos puntuales (instalación,
-    // reconexión, descuentos de un mes) nunca se arrastran al mes siguiente.
+    // SIN tope por defecto: la corrida del mes tiene que cubrir a TODOS los
+    // facturables (el legacy factura el grupo entero). `limit` es una ayuda de
+    // pruebas, no un default — un tope silencioso deja el mes a medio facturar
+    // y el lote reporta éxito igual. `orderBy` fija qué entra cuando sí hay tope.
     const subs = await this.prisma.subscriber.findMany({
-      where: subWhere, take: limit,
+      where: subWhere,
+      orderBy: { id: 'asc' },
+      ...(dto.limit ? { take: dto.limit } : {}),
       select: {
         id: true,
         eInvoice: true,
@@ -163,7 +204,8 @@ export class FacturasService {
 
     // ¿Quiénes ya tienen factura este mes? Una sola consulta (usa el índice de
     // invoiceDate) en vez de un count por abonado — evita N roundtrips a la BD.
-    const alreadyBilled = new Set(
+    // Con asIfUnbilled el mes se trata como vacío (es lo que se está simulando).
+    const alreadyBilled = asIfUnbilled ? new Set<string>() : new Set(
       (await this.prisma.subInvoice.findMany({
         where: { invoiceDate: { gte: monthStart, lt: monthEnd } },
         select: { subscriberId: true },
@@ -173,9 +215,14 @@ export class FacturasService {
     // Contadores de meses de promoción gratis: se leen de la última factura de cada
     // abonado (paridad legacy `invoices.promo/promo2`). Mientras haya meses gratis, NO
     // se factura y el contador se descuenta una vez por mes calendario.
+    // Con asIfUnbilled se lee la última factura ANTERIOR al mes: si no, se leerían
+    // los contadores de la factura del propio mes que se está re-simulando.
     const promoBySub = new Map(
       (await this.prisma.subInvoice.findMany({
-        where: { subscriberId: { in: subs.map((s) => s.id) } },
+        where: {
+          subscriberId: { in: subs.map((s) => s.id) },
+          ...(asIfUnbilled ? { invoiceDate: { lt: monthStart } } : {}),
+        },
         orderBy: [{ invoiceDate: 'desc' }, { tid: 'desc' }],
         distinct: ['subscriberId'],
         select: { id: true, subscriberId: true, promo: true, promo2: true, promoModifiedDate: true, promo2ModifiedDate: true },
@@ -184,31 +231,36 @@ export class FacturasService {
     const curYm = `${invoiceDate.getUTCFullYear()}-${invoiceDate.getUTCMonth()}`;
     const ymOf = (d: Date | null | undefined) => (d ? `${d.getUTCFullYear()}-${d.getUTCMonth()}` : null);
 
-    let generated = 0, skipped = 0;
-    const created: { subscriberId: string; tid: number }[] = [];
+    let generated = 0, skipped = 0, failed = 0;
+    const plan: GeneratePlanRow[] = [];
+    const bill = (row: GeneratePlanRow) => { plan.push(row); return row; };
+    const skip = (subscriberId: string, reason: GenerateSkipReason) => {
+      skipped++; plan.push({ subscriberId, action: 'SKIP', reason });
+    };
+
     for (const s of subs) {
       // ¿ya tiene factura este mes? → skip (evita duplicar).
-      if (alreadyBilled.has(s.id)) { skipped++; continue; }
+      if (alreadyBilled.has(s.id)) { skip(s.id, 'ALREADY_BILLED'); continue; }
       // Guard de reactivación (legacy): si el abonado venía de RETIRADO y se reactivó
       // dentro del mes que se factura, NO se genera el mes completo (ese mes lo cubre
       // el flujo de reconexión/prorrateo) → evita el doble cobro al reactivado.
-      if (s.previousStatus === 'RETIRADO' && ymOf(s.statusChangedAt) === curYm) { skipped++; continue; }
+      if (s.previousStatus === 'RETIRADO' && ymOf(s.statusChangedAt) === curYm) { skip(s.id, 'REACTIVATED'); continue; }
       // Sin servicios activos con precio → nada que cobrar este mes.
-      if (!s.services.length) { skipped++; continue; }
+      if (!s.services.length) { skip(s.id, 'NO_SERVICES'); continue; }
 
       // ¿Mes de promoción gratis? → no se factura; se descuenta el contador una vez/mes.
       const promo = promoBySub.get(s.id);
       if (promo && promo.promo != null && (promo.promo > 0 || ymOf(promo.promoModifiedDate) === curYm)) {
-        if (ymOf(promo.promoModifiedDate) !== curYm) {
+        if (!dryRun && ymOf(promo.promoModifiedDate) !== curYm) {
           await this.prisma.subInvoice.update({ where: { id: promo.id }, data: { promo: promo.promo - 1, promoModifiedDate: invoiceDate } });
         }
-        skipped++; continue;
+        skip(s.id, 'PROMO'); continue;
       }
       if (promo && promo.promo2 != null && (promo.promo2 > 0 || ymOf(promo.promo2ModifiedDate) === curYm)) {
-        if (ymOf(promo.promo2ModifiedDate) !== curYm) {
+        if (!dryRun && ymOf(promo.promo2ModifiedDate) !== curYm) {
           await this.prisma.subInvoice.update({ where: { id: promo.id }, data: { promo2: promo.promo2 > 0 ? promo.promo2 - 1 : 0, promo2ModifiedDate: invoiceDate } });
         }
-        skipped++; continue;
+        skip(s.id, 'PROMO2'); continue;
       }
 
       // Snapshot de servicios (como el legacy) + ítems desde el plan. El IVA sale
@@ -222,6 +274,15 @@ export class FacturasService {
         return { productName: name, description: name, qty: 1, price: num(svc.price), taxRate: num(svc.taxRate) };
       });
       const { rows, subtotal, tax, total } = this.computeTotals(items);
+      const shape = {
+        subscriberId: s.id, action: 'BILL' as const,
+        subtotal, tax, total, serviceCombo, serviceTv,
+        items: rows.map((r) => ({ productName: r.productName ?? null, qty: r.qty, price: r.price, taxRate: r.taxRate, taxTotal: r.taxTotal })),
+      };
+
+      // Simulación: se calculó todo el lote, no se escribe nada.
+      if (dryRun) { generated++; bill(shape); continue; }
+
       try {
         const inv = await this.prisma.$transaction(async (tx) => {
           const tid = await this.nextTid(tx);
@@ -242,15 +303,24 @@ export class FacturasService {
           });
         });
         generated++;
-        created.push({ subscriberId: s.id, tid: inv.tid });
+        bill({ ...shape, tid: inv.tid });
         // Contabilización automática de la factura recurrente (idempotente; no rompe el lote).
         await this.posting.postSalesInvoice({
           sourceId: inv.id, date: invoiceDate, number: inv.tid,
           subtotal, tax, createdBy: user?.name ?? user?.email ?? null,
         });
-      } catch { skipped++; }
+      } catch (e) {
+        // Un fallo NO es una omisión: se cuenta y se nombra aparte. Antes caía en el
+        // mismo saco que los skips legítimos y una colisión de tid (nextTid es
+        // MAX(tid)+1, con carrera real) quedaba invisible.
+        failed++;
+        plan.push({ subscriberId: s.id, action: 'FAIL', reason: 'ERROR', error: (e as Error).message });
+      }
     }
-    return { targeted: subs.length, generated, skipped };
+    return {
+      targeted: subs.length, generated, skipped, failed,
+      ...(dryRun ? { dryRun: true, asIfUnbilled, invoiceDate, dueDate, plan } : {}),
+    };
   }
 
   /**

@@ -25,15 +25,18 @@ function CajaModal({ caja, onClose, onDone }: { caja: CashAccount | "new" | null
   const [code, setCode] = useState("");
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
+  const [fixedFund, setFixedFund] = useState("200000");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     if (caja && caja !== "new") {
       setHolder(caja.name ?? ""); setAccountNumber(caja.accountNumber ?? ""); setCode(caja.code ?? "");
+      setFixedFund(String(caja.fixedFund ?? 200000));
       setPhone(""); setAddress(""); setErr(null);
     } else if (caja === "new") {
-      setHolder(""); setAccountNumber(""); setCode(""); setPhone(""); setAddress(""); setErr(null);
+      setHolder(""); setAccountNumber(""); setCode(""); setPhone(""); setAddress("");
+      setFixedFund("200000"); setErr(null);
     }
   }, [caja]);
 
@@ -45,6 +48,7 @@ function CajaModal({ caja, onClose, onDone }: { caja: CashAccount | "new" | null
       const body = {
         holder: holder.trim(), accountNumber: accountNumber || undefined,
         code: code || undefined, phone: phone || undefined, address: address || undefined,
+        fixedFund: Number(fixedFund) || 0,
       };
       const url = editing ? `/treasury/cash-accounts/${(caja as CashAccount).id}` : `/treasury/cash-accounts`;
       const res = await authFetch(url, { method: editing ? "PATCH" : "POST", body: JSON.stringify(body) });
@@ -63,6 +67,11 @@ function CajaModal({ caja, onClose, onDone }: { caja: CashAccount | "new" | null
         <Field label="Código"><Input value={code} onChange={(e) => setCode(e.target.value)} /></Field>
         <Field label="Teléfono"><Input value={phone} onChange={(e) => setPhone(e.target.value)} /></Field>
         <Field label="Dirección"><Input value={address} onChange={(e) => setAddress(e.target.value)} /></Field>
+        <div className="sm:col-span-2">
+          <Field label="Fondo fijo" hint="La plata que nunca sale del cajón. No entra en el excedente del arqueo.">
+            <Input type="number" min={0} value={fixedFund} onChange={(e) => setFixedFund(e.target.value)} />
+          </Field>
+        </div>
       </div>
       {err && <p className="mt-2 text-[12px] text-error-text">{err}</p>}
       <div className="mt-3 flex justify-end gap-2">

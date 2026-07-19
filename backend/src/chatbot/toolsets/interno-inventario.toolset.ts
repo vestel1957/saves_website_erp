@@ -12,6 +12,15 @@ import { canAny, cop, gated, safe } from './toolset.util';
 const INVENTARIO = [P.AREA_ADMINISTRACION, P.AREA_TECNICOS];
 
 /**
+ * Quién puede ESCRIBIR. Más estrecho que `INVENTARIO`, y tiene que coincidir con el
+ * `permission` del `preparePending`: el motor lo revalida al confirmar, así que
+ * declararle la herramienta a quien no lo tiene le hace recorrer todo el flujo para
+ * chocar al final con "ya no tienes permiso" — que además insinúa que el permiso
+ * cambió, cuando nunca lo tuvo.
+ */
+const INVENTARIO_ESCRIBE = [P.AREA_TECNICOS];
+
+/**
  * Stock y consumo de material. El descuento de stock NO se hace suelto: se hace
  * SIEMPRE contra un ticket (`SupportWriteService.consumeMaterials`), que es el único
  * camino que el ERP tiene para descontar material dejando trazabilidad de en qué
@@ -27,7 +36,8 @@ export class InternoInventarioToolset implements Toolset {
   ) {}
 
   definitions(ctx: ToolContext): ToolDef[] {
-    return gated(canAny(ctx, INVENTARIO), [
+    return [
+      ...gated(canAny(ctx, INVENTARIO), [
       {
         name: 'consultar_stock',
         description: 'Consulta el stock de materiales por nombre o código. Devuelve cantidad disponible y bodega.',
@@ -39,6 +49,8 @@ export class InternoInventarioToolset implements Toolset {
           },
         },
       },
+      ]),
+      ...gated(canAny(ctx, INVENTARIO_ESCRIBE), [
       {
         name: 'descontar_material',
         description:
@@ -53,7 +65,8 @@ export class InternoInventarioToolset implements Toolset {
           required: ['ticketId', 'materialId', 'cantidad'],
         },
       },
-    ]);
+      ]),
+    ];
   }
 
   async execute(name: string, input: Record<string, unknown>, ctx: ToolContext): Promise<string> {

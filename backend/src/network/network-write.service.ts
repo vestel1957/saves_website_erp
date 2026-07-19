@@ -17,6 +17,31 @@ export class AssignPortDto {
 export class RejectTransferDto {
   @IsOptional() @IsString() reason?: string;
 }
+
+/**
+ * Pool de IP (legacy `ips_users_mk`). Los campos son los mismos que el formulario del
+ * legacy (views/mikrotiks/ips_users.php): nombre, ip_local, ip_remota, tegnologia,
+ * sede y perfiles. `defecto` no se manda aquí: se decide solo al crear y se cambia
+ * con su propia ruta, igual que en el legacy.
+ */
+export class CreateIpPoolDto {
+  @IsString() @MinLength(1) name!: string;
+  @IsString() @MinLength(1) ipLocal!: string;
+  @IsString() @MinLength(1) ipRemote!: string;
+  @IsString() branchId!: string;
+  @IsOptional() @IsString() tech?: string;
+  /** Perfiles PPPoE separados por coma, como los guarda el legacy. */
+  @IsOptional() @IsString() profiles?: string;
+}
+
+export class UpdateIpPoolDto {
+  @IsOptional() @IsString() @MinLength(1) name?: string;
+  @IsOptional() @IsString() @MinLength(1) ipLocal?: string;
+  @IsOptional() @IsString() @MinLength(1) ipRemote?: string;
+  @IsOptional() @IsString() branchId?: string;
+  @IsOptional() @IsString() tech?: string;
+  @IsOptional() @IsString() profiles?: string;
+}
 export class CreateEquipmentDto {
   @IsString() warehouseId!: string;
   @IsOptional() @IsString() mac?: string;
@@ -426,5 +451,111 @@ export class NetworkWriteService {
     if (!eq) throw new NotFoundException('Equipo no encontrado');
     await this.prisma.equipment.update({ where: { id: equipmentId }, data: { subscriberId: null, status: 'Disponible' } });
     return { id: equipmentId, unassigned: true };
+  }
+
+  // ── Pools de IP (ips_users_mk) ──────────────────────────────────────────────
+  // Paridad legacy `Mikrotiks::guardar_configuracion` (Mikrotiks.php:250-289) y
+  // `Mikrotiks::set_default_ips_user` (:66-70). Nexus solo había migrado la lectura:
+  // la pantalla mostraba los pools y no dejaba tocar ninguno.
+  //
+  // Se replica lo que el legacy hace, y SOLO eso:
+  //   · crear, editar y marcar predeterminado,
+  //   · el `defecto` es POR SEDE (uno solo por sede),
+  //   · al crear el primer pool de una sede, queda predeterminado automáticamente.
+  // NO se añade borrado: el legacy no lo tiene (verificado, no hay ningún DELETE
+  // sobre `ips_users_mk`), y estos pools los referencian los perfiles PPPoE de los
+  // abonados — borrar uno dejaría clientes apuntando a un pool inexistente.
+
+  /** Normaliza la lista de perfiles al formato del legacy: separados por coma. */
+  private normProfiles(raw?: string): string {
+    return (raw ?? '')
+      .split(/[,;\n]+/)
+      .map((p) => p.trim())
+      .filter(Boolean)
+      .join(',');
+  }
+
+  private async resolveSede(branchId: string) {
+    const branch = await this.prisma.branch.findUnique({
+      where: { id: branchId },
+      select: { id: true, legacyId: true, name: true },
+    });
+    if (!branch) throw new NotFoundException('Sede no encontrada');
+    if (branch.legacyId == null) throw new BadRequestException('La sede no tiene código legacy: no se puede asociar el pool');
+    return branch;
+  }
+
+  async createIpPool(dto: CreateIpPoolDto) {
+    const branch = await this.resolveSede(dto.branchId);
+    const name = dto.name.trim();
+    const dup = await this.prisma.ipUserMk.findFirst({
+      where: { sedeLegacy: branch.legacyId!, name: { equals: name, mode: 'insensitive' } },
+      select: { id: true },
+    });
+    if (dup) throw new BadRequestException('Ya existe un pool con ese nombre en la sede');
+
+    return this.prisma.$transaction(async (tx) => {
+      // Paridad legacy (Mikrotiks.php:259-261): el primer pool de una sede queda
+      // predeterminado solo. Si no, la sede se quedaría sin pool por defecto y el
+      // aprovisionamiento no sabría cuál usar.
+      const yaHay = await tx.ipUserMk.count({ where: { sedeLegacy: branch.legacyId! } });
+      const max = await tx.ipUserMk.aggregate({ _max: { legacyId: true } });
+      return tx.ipUserMk.create({
+        data: {
+          legacyId: (max._max.legacyId ?? 0) + 1,
+          name,
+          ipLocal: dto.ipLocal.trim(),
+          ipRemote: dto.ipRemote.trim(),
+          tech: (dto.tech ?? '').trim(),
+          sedeLegacy: branch.legacyId!,
+          isDefault: yaHay === 0,
+          profiles: this.normProfiles(dto.profiles),
+        },
+      });
+    });
+  }
+
+  async updateIpPool(id: string, dto: UpdateIpPoolDto) {
+    const pool = await this.prisma.ipUserMk.findUnique({ where: { id } });
+    if (!pool) throw new NotFoundException('Pool de IP no encontrado');
+
+    let sedeLegacy = pool.sedeLegacy;
+    if (dto.branchId) sedeLegacy = (await this.resolveSede(dto.branchId)).legacyId!;
+
+    const name = dto.name?.trim() ?? pool.name;
+    const dup = await this.prisma.ipUserMk.findFirst({
+      where: { sedeLegacy, name: { equals: name, mode: 'insensitive' }, id: { not: id } },
+      select: { id: true },
+    });
+    if (dup) throw new BadRequestException('Ya existe un pool con ese nombre en la sede');
+
+    return this.prisma.ipUserMk.update({
+      where: { id },
+      data: {
+        name,
+        sedeLegacy,
+        // `undefined` = no tocar; así un PATCH parcial no borra lo que no manda.
+        ipLocal: dto.ipLocal?.trim(),
+        ipRemote: dto.ipRemote?.trim(),
+        tech: dto.tech?.trim(),
+        profiles: dto.profiles === undefined ? undefined : this.normProfiles(dto.profiles),
+      },
+    });
+  }
+
+  /**
+   * Marca el pool como predeterminado de SU sede. Paridad legacy
+   * `set_default_ips_user`: primero limpia el de la sede, luego lo pone en este.
+   * En una transacción — el legacy lo hacía en dos UPDATE sueltos y un fallo entre
+   * ambos dejaba a la sede sin ningún predeterminado.
+   */
+  async setDefaultIpPool(id: string) {
+    const pool = await this.prisma.ipUserMk.findUnique({ where: { id }, select: { id: true, sedeLegacy: true } });
+    if (!pool) throw new NotFoundException('Pool de IP no encontrado');
+    await this.prisma.$transaction([
+      this.prisma.ipUserMk.updateMany({ where: { sedeLegacy: pool.sedeLegacy }, data: { isDefault: false } }),
+      this.prisma.ipUserMk.update({ where: { id }, data: { isDefault: true } }),
+    ]);
+    return { id, isDefault: true };
   }
 }

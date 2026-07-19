@@ -2,8 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
-import { PageHeading } from "@/components/accounting/PageHeading";
+import { useParams, useRouter } from "next/navigation";
 import { Icon } from "@/components/Icon";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Field";
@@ -40,6 +39,7 @@ function StatCard({ label, value, icon }: { label: string; value: string; icon: 
 
 export default function CategoriaMaterialesPage() {
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
   const { loading: authLoading, authFetch } = useAuth();
 
   const [cat, setCat] = useState<Category | null>(null);
@@ -84,7 +84,13 @@ export default function CategoriaMaterialesPage() {
 
   return (
     <div className="space-y-4">
-      <PageHeading icon="boxes" title="Volver" />
+      <button
+        type="button"
+        onClick={() => router.back()}
+        className="inline-flex items-center gap-1 text-[12px] font-medium text-text-tertiary transition-colors hover:text-text-secondary"
+      >
+        <Icon name="arrow-left" size={13} /> Volver
+      </button>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h1 className="flex items-center gap-2 text-[18px] font-bold text-text-primary">

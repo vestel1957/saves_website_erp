@@ -33,7 +33,7 @@ export default function PlanDeCuentasPage() {
   if (loading) return <PageSkeleton />;
 
   return (
-    <div className="mx-auto max-w-4xl">
+    <div className="flex flex-col gap-4">
       <PageHeading icon="list-tree" title="Plan de cuentas" subtitle="Estructura PUC del negocio (clase → grupo → cuenta → auxiliar)" />
       {error ? (
         <div className="rounded-xl border border-error-subtle bg-error-soft p-4 text-[13px] text-error-text">{error}</div>

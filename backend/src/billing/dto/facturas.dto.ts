@@ -1,6 +1,6 @@
 import { Type } from 'class-transformer';
 import {
-  IsArray, IsDateString, IsIn, IsInt, IsNumber, IsOptional, IsString, Min, MinLength, ValidateNested,
+  IsArray, IsBoolean, IsDateString, IsIn, IsInt, IsNumber, IsOptional, IsString, Min, MinLength, ValidateNested,
 } from 'class-validator';
 
 export class InvoiceItemDto {
@@ -38,7 +38,7 @@ export class CreateInvoiceDto {
   items!: InvoiceItemDto[];
 }
 
-/** Generar facturas recurrentes en lote (clona la última factura de cada cliente). */
+/** Generar facturas recurrentes en lote (una mensualidad por abonado, desde su plan). */
 export class GenerateInvoicesDto {
   @IsOptional() @IsString()
   branchId?: string;
@@ -52,8 +52,33 @@ export class GenerateInvoicesDto {
   @IsOptional() @IsInt() @Min(1)
   dueDays?: number;
 
+  /**
+   * Tope de abonados a procesar. OMITIDO = TODOS los facturables, que es lo que la
+   * corrida del mes necesita (el legacy factura al grupo entero, sin tope:
+   * Invoices_model.php:1111). No poner un default: un tope silencioso deja el mes
+   * a medio facturar y el lote reporta éxito igual.
+   */
   @IsOptional() @IsInt() @Min(1)
   limit?: number;
+
+  /**
+   * Simulación: calcula el lote completo y NO escribe nada (ni facturas, ni el
+   * descuento de los contadores de promo, ni el asiento contable). Devuelve `plan`
+   * con la decisión y el motivo por abonado. Sirve para previsualizar la corrida
+   * del mes y para compararla contra la del legacy antes del corte.
+   */
+  @IsOptional() @IsBoolean()
+  dryRun?: boolean;
+
+  /**
+   * Solo con `dryRun`. Simula el mes como si aún NO se hubiera facturado: ignora las
+   * facturas del propio mes objetivo (que si no harían omitir a todo el mundo por
+   * `alreadyBilled`) y lee los contadores de promo de la última factura ANTERIOR al
+   * mes. Es lo que permite re-simular un mes ya facturado —p.ej. el que emitió el
+   * legacy— y comparar factura por factura.
+   */
+  @IsOptional() @IsBoolean()
+  asIfUnbilled?: boolean;
 }
 
 /**

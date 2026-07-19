@@ -26,9 +26,23 @@ import {
  * Lo exporta el WhatsappModule para que cualquier canal (alertas de inventario,
  * mantenimiento, SST…) y el chatbot puedan enviar mensajes.
  */
+/** Resultado de comprobar las credenciales contra Kapso (ver `probe()`). */
+export interface WhatsappProbe {
+  /** true = las credenciales sirven y el número respondió. */
+  ok: boolean;
+  error?: string;
+  phone?: string | null;
+  name?: string | null;
+  quality?: string | null;
+  /** 'EXPIRED' aquí suele impedir enviar aunque el resto esté bien. */
+  codeVerification?: string | null;
+  platform?: string | null;
+}
+
 @Injectable()
 export class WhatsappService {
   private readonly logger = new Logger('WhatsappService');
+  private probeCache: { at: number; result: WhatsappProbe } | null = null;
   /** Versión de la Graph API que Kapso expone en la ruta (p. ej. v24.0). */
   private get graphVersion() {
     return process.env.KAPSO_GRAPH_VERSION ?? 'v24.0';
@@ -61,7 +75,10 @@ export class WhatsappService {
     return { 'X-API-Key': this.apiKey };
   }
 
-  /** Estado para diagnóstico/administración. */
+  /**
+   * Estado por CONFIGURACIÓN: dice que las variables están puestas, NO que sirvan.
+   * Para saber si de verdad se puede enviar, usa `probe()`.
+   */
   status() {
     return {
       provider: 'kapso' as const,
@@ -72,6 +89,52 @@ export class WhatsappService {
       baseUrl: this.baseUrl,
       graphVersion: this.graphVersion,
     };
+  }
+
+  /**
+   * Comprueba CONTRA KAPSO que las credenciales sirven y devuelve el estado real del
+   * número.
+   *
+   * Existe porque `enabled` solo mira que las variables no estén vacías: con una API
+   * key de un proyecto borrado, `enabled` decía true mientras la API respondía
+   * `401 "Application has been deleted"` — y como `sendText` degrada a log, el chatbot
+   * habría contestado al vacío sin que nadie se enterara. Esto es lo que hay que mirar
+   * antes de encender el bot.
+   *
+   * Cacheado 60s: lo llama un panel, no hace falta pegarle a Kapso en cada refresco.
+   */
+  async probe(): Promise<WhatsappProbe> {
+    if (this.probeCache && Date.now() - this.probeCache.at < 60_000) return this.probeCache.result;
+
+    let result: WhatsappProbe;
+    if (!this.enabled) {
+      result = { ok: false, error: 'Kapso sin configurar: falta KAPSO_API_KEY o KAPSO_PHONE_NUMBER_ID.' };
+    } else {
+      const fields = 'display_phone_number,verified_name,quality_rating,code_verification_status,platform_type';
+      const url = `${this.baseUrl}/${this.graphVersion}/${this.phoneNumberId}?fields=${fields}`;
+      try {
+        const res = await fetch(url, { headers: this.authHeaders() });
+        const data: any = await res.json().catch(() => ({}));
+        if (!res.ok || data?.error) {
+          const msg = data?.error?.message ?? `HTTP ${res.status}`;
+          result = { ok: false, error: `Kapso rechazó las credenciales: ${msg}` };
+        } else {
+          result = {
+            ok: true,
+            phone: data.display_phone_number ?? null,
+            name: data.verified_name ?? null,
+            quality: data.quality_rating ?? null,
+            codeVerification: data.code_verification_status ?? null,
+            platform: data.platform_type ?? null,
+          };
+        }
+      } catch (e) {
+        result = { ok: false, error: `No se pudo contactar a Kapso: ${(e as Error).message}` };
+      }
+    }
+    if (!result.ok) this.logger.warn(`Diagnóstico de WhatsApp: ${result.error}`);
+    this.probeCache = { at: Date.now(), result };
+    return result;
   }
 
   /**

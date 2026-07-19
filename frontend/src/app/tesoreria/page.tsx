@@ -40,6 +40,10 @@ export default function TesoreriaPage() {
   const [type, setType] = useState("");
   const [category, setCategory] = useState("");
   const [status, setStatus] = useState("");
+  /** Filtro por caja: hasta ahora los movimientos de una caja solo se veían dentro del
+   *  detalle de un cierre, y solo del día de ese cierre. */
+  const [cashAccountId, setCashAccountId] = useState("");
+  const [accounts, setAccounts] = useState<{ id: number; name: string }[]>([]);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [egresoOpen, setEgresoOpen] = useState(false);
@@ -63,12 +67,18 @@ export default function TesoreriaPage() {
     if (type) qs.set("type", type);
     if (category) qs.set("category", category);
     if (status) qs.set("status", status);
+    if (cashAccountId) qs.set("cashAccountId", cashAccountId);
     try { setData(await (await authFetch(`/treasury/transactions?${qs}`)).json()); }
     finally { setLoading(false); }
-  }, [authFetch, page, pageSize, search, type, category, status]);
+  }, [authFetch, page, pageSize, search, type, category, status, cashAccountId]);
 
   useEffect(() => { if (!authLoading) { const t = setTimeout(load, search ? 350 : 0); return () => clearTimeout(t); } }, [authLoading, load]);
-  useEffect(() => { setPage(1); }, [search, type, category, status, pageSize]);
+  useEffect(() => { setPage(1); }, [search, type, category, status, cashAccountId, pageSize]);
+
+  useEffect(() => {
+    if (authLoading) return;
+    void authFetch("/treasury/cash-accounts").then((r) => (r.ok ? r.json() : [])).then(setAccounts).catch(() => {});
+  }, [authLoading, authFetch]);
 
   if (authLoading) return <PageSkeleton />;
 
@@ -116,6 +126,10 @@ export default function TesoreriaPage() {
           <option value="">Estado</option>
           <option value="VIGENTE">Vigente</option>
           <option value="ANULADA">Anulada</option>
+        </Select>
+        <Select value={cashAccountId} onChange={(e) => setCashAccountId(e.target.value)} className="w-auto">
+          <option value="">Todas las cajas</option>
+          {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
         </Select>
       </div>
 

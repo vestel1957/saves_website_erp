@@ -51,11 +51,12 @@ export class TreasuryController {
     @Query('to') to?: string,
     @Query('all') all?: string,
     @Query('cashAccountId') cashAccountId?: string,
+    @CurrentUser() user?: AuthUser,
   ) {
     return this.treasury.cashCloses({
       page: Number(page), pageSize: Number(pageSize), from, to, all,
       cashAccountId: cashAccountId ? Number(cashAccountId) : undefined,
-    });
+    }, user!);
   }
 
   /** Cierres agregados por día/semana/mes (vista consolidada). */
@@ -66,17 +67,54 @@ export class TreasuryController {
     @Query('to') to?: string,
     @Query('all') all?: string,
     @Query('cashAccountId') cashAccountId?: string,
+    @CurrentUser() user?: AuthUser,
   ) {
     return this.treasury.cashClosesSummary({
       group, from, to, all,
       cashAccountId: cashAccountId ? Number(cashAccountId) : undefined,
-    });
+    }, user!);
+  }
+
+  /**
+   * Arqueo de una caja en un día que aún no se ha cerrado, SIN escribir nada.
+   * Lo consume el modal de cierre para que el cajero compare contra el cajón antes de
+   * cerrar, en vez de descubrir el arqueo después de guardarlo.
+   */
+  @Get('cash-close/preview')
+  cashClosePreview(
+    @Query('cashAccountId') cashAccountId: string,
+    @Query('date') date: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.treasury.cashClosePreview(Number(cashAccountId), date, user);
+  }
+
+  /**
+   * Detalle de un cierre: sus cifras y los movimientos que lo componen.
+   * Va declarada DESPUÉS de `cash-closes/summary`: si no, 'summary' entraría por `:id`.
+   */
+  @Get('cash-closes/:id')
+  cashCloseDetail(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.treasury.cashCloseDetail(id, user);
+  }
+
+  /**
+   * Informe del cierre (cobranza, bancos, servicios, meses, forma de pago, anulaciones,
+   * egresos) de una caja en una fecha, sin necesidad de que esté cerrada.
+   */
+  @Get('cash-close/report')
+  cashCloseReport(
+    @Query('cashAccountId') cashAccountId: string,
+    @Query('date') date: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.treasury.cashCloseReport(Number(cashAccountId), date, user);
   }
 
   /** PDF del cierre de caja (arqueo). */
   @Get('cash-closes/:id/pdf')
-  async cashClosePdf(@Param('id') id: string, @Res() res: Response) {
-    const d = await this.treasury.cashClosePdfData(id);
+  async cashClosePdf(@Param('id') id: string, @Res() res: Response, @CurrentUser() user?: AuthUser) {
+    const d = await this.treasury.cashClosePdfData(id, user!);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="cierre-caja.pdf"`);
     cashClosePdf(res, d);
@@ -100,10 +138,15 @@ export class TreasuryController {
     @Query('from') from?: string,
     @Query('to') to?: string,
     @Query('all') all?: string,
+    @Query('cashAccountId') cashAccountId?: string,
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
   ) {
-    return this.treasury.list({ search, type, category, status, from, to, all, page: Number(page), pageSize: Number(pageSize) });
+    return this.treasury.list({
+      search, type, category, status, from, to, all,
+      cashAccountId: cashAccountId ? Number(cashAccountId) : undefined,
+      page: Number(page), pageSize: Number(pageSize),
+    });
   }
 
   @Get('transactions/:id')
@@ -139,8 +182,18 @@ export class TreasuryController {
 
   /** Cajas disponibles (para selectores de recaudo/egreso/cierre). */
   @Get('cash-accounts')
-  cashAccounts() {
-    return this.cobranzas.cashAccounts();
+  cashAccounts(@CurrentUser() user: AuthUser) {
+    // Acotada a lo que este usuario puede ver: la cajera sólo su caja + los bancos.
+    return this.cobranzas.cashAccounts(user);
+  }
+
+  /**
+   * Qué caja puede ver quien pregunta. La pantalla lo usa para fijarle la suya a la
+   * cajera (y no dejarla cambiar de caja) en vez de ofrecerle "todas".
+   */
+  @Get('mi-caja')
+  miCaja(@CurrentUser() user: AuthUser) {
+    return this.cobranzas.miCaja(user);
   }
 
   /** Crear una caja o banco. */

@@ -8,7 +8,8 @@ import { Input, Select, Textarea, Field } from "@/components/ui/Field";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
-import { type CashAccount, PAY_METHODS, BANKS, EXPENSE_CATEGORIES, INCOME_CATEGORIES } from "@/lib/cobranzas";
+import { type CashAccount, PAY_METHODS, BANKS, isBankMethod } from "@/lib/cobranzas";
+import { SubscriberPicker, type PickedSub } from "@/components/cobranzas/SubscriberPicker";
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -22,12 +23,48 @@ function useCashAccounts(open: boolean) {
   return accounts;
 }
 
+/**
+ * Categorías de movimiento, desde el catálogo real (`transactions_cat` del legacy,
+ * ya migrado a TransactionCategory y administrable en /tesoreria/cajas).
+ *
+ * Ingresos y egresos comparten la MISMA lista: el legacy no separa por tipo
+ * (`transactions_cat` no tiene columna `type`) y en la práctica se usan en ambos
+ * sentidos —p.ej. "Compras" aparece como Income 38 veces y como Expense 2.641—.
+ * Antes esto era una lista fija en código que no coincidía con el legacy, así que
+ * los movimientos nuevos no cuadraban con el histórico ni con los reportes.
+ */
+function useTxCategories(open: boolean) {
+  const { authFetch } = useAuth();
+  const [categories, setCategories] = useState<string[]>([]);
+  useEffect(() => {
+    if (!open) return;
+    void authFetch(`/treasury/categories`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows: { name: string }[]) => setCategories(rows.map((c) => c.name)))
+      .catch(() => {});
+  }, [open, authFetch]);
+  return categories;
+}
+
+/** Selector de categoría compartido por los modales de ingreso y egreso. */
+function CategoriaField({ categories, value, onChange }: { categories: string[]; value: string; onChange: (v: string) => void }) {
+  return (
+    <Field label="Categoría" required hint={categories.length ? undefined : "Se administran en Cajas y categorías"}>
+      <Select value={value} onChange={(e) => onChange(e.target.value)} disabled={!categories.length}>
+        {!categories.length && <option value="">Cargando…</option>}
+        {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+      </Select>
+    </Field>
+  );
+}
+
 /** Registrar un egreso/gasto de caja. */
 export function EgresoModal({ open, onClose, onDone }: { open: boolean; onClose: () => void; onDone: () => void }) {
   const { authFetch } = useAuth();
   const accounts = useCashAccounts(open);
+  const categories = useTxCategories(open);
   const [amount, setAmount] = useState("");
-  const [category, setCategory] = useState(EXPENSE_CATEGORIES[0]);
+  const [category, setCategory] = useState("");
   const [method, setMethod] = useState("Cash");
   const [bank, setBank] = useState(BANKS[0]);
   const [cashAccountId, setCashAccountId] = useState("");
@@ -40,11 +77,15 @@ export function EgresoModal({ open, onClose, onDone }: { open: boolean; onClose:
 
   useEffect(() => { if (open) { setAmount(""); setNote(""); setPayerName(""); setFile(null); setErr(null); } }, [open]);
   useEffect(() => { if (accounts.length && !cashAccountId) setCashAccountId(String(accounts[0].id)); }, [accounts, cashAccountId]);
+  useEffect(() => { if (categories.length && !category) setCategory(categories[0]); }, [categories, category]);
 
   async function submit() {
     setErr(null);
     const amt = Number(amount) || 0;
     if (amt <= 0) { setErr("Ingresa un monto mayor a cero."); return; }
+    // Sin categoría el movimiento se guardaría con cadena vacía y quedaría fuera
+    // de los reportes, que agrupan por categoría.
+    if (!category) { setErr("Selecciona una categoría."); return; }
     setSaving(true);
     try {
       const res = await authFetch(`/treasury/expenses`, {
@@ -53,7 +94,7 @@ export function EgresoModal({ open, onClose, onDone }: { open: boolean; onClose:
           amount: amt, category, method,
           cashAccountId: cashAccountId ? Number(cashAccountId) : undefined,
           accountName: accounts.find((a) => String(a.id) === cashAccountId)?.name,
-          bankName: method === "Bank" ? bank : undefined,
+          bankName: isBankMethod(method) ? bank : undefined,
           payerName: payerName || undefined, date, note: note || undefined,
         }),
       });
@@ -75,11 +116,9 @@ export function EgresoModal({ open, onClose, onDone }: { open: boolean; onClose:
     <Modal open={open} onClose={onClose} title="Registrar egreso" maxWidth="max-w-xl">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <Field label="Monto" required><Input type="number" min={0} value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" autoFocus /></Field>
-        <Field label="Categoría" required>
-          <Select value={category} onChange={(e) => setCategory(e.target.value)}>{EXPENSE_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}</Select>
-        </Field>
+        <CategoriaField categories={categories} value={category} onChange={setCategory} />
         <Field label="Método"><Select value={method} onChange={(e) => setMethod(e.target.value)}>{PAY_METHODS.filter((m) => m.value !== "Balance").map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}</Select></Field>
-        {method === "Bank" && <Field label="Banco"><Select value={bank} onChange={(e) => setBank(e.target.value)}>{BANKS.map((b) => <option key={b} value={b}>{b}</option>)}</Select></Field>}
+        {isBankMethod(method) && <Field label="Banco"><Select value={bank} onChange={(e) => setBank(e.target.value)}>{BANKS.map((b) => <option key={b} value={b}>{b}</option>)}</Select></Field>}
         <Field label="Caja / cuenta"><Select value={cashAccountId} onChange={(e) => setCashAccountId(e.target.value)}><option value="">— Sin caja —</option>{accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</Select></Field>
         <Field label="Beneficiario"><Input value={payerName} onChange={(e) => setPayerName(e.target.value)} placeholder="A quién se paga" /></Field>
         <Field label="Fecha"><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></Field>
@@ -107,25 +146,31 @@ export function EgresoModal({ open, onClose, onDone }: { open: boolean; onClose:
 export function IngresoLibreModal({ open, onClose, onDone }: { open: boolean; onClose: () => void; onDone: () => void }) {
   const { authFetch } = useAuth();
   const accounts = useCashAccounts(open);
+  const categories = useTxCategories(open);
   const [amount, setAmount] = useState("");
-  const [category, setCategory] = useState(INCOME_CATEGORIES[0]);
+  const [category, setCategory] = useState("");
   const [method, setMethod] = useState("Cash");
   const [bank, setBank] = useState(BANKS[0]);
   const [cashAccountId, setCashAccountId] = useState("");
   const [payerName, setPayerName] = useState("");
+  const [payerSub, setPayerSub] = useState<PickedSub | null>(null);
   const [date, setDate] = useState(today());
   const [note, setNote] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  useEffect(() => { if (open) { setAmount(""); setNote(""); setPayerName(""); setFile(null); setErr(null); } }, [open]);
+  useEffect(() => { if (open) { setAmount(""); setNote(""); setPayerName(""); setPayerSub(null); setFile(null); setErr(null); } }, [open]);
   useEffect(() => { if (accounts.length && !cashAccountId) setCashAccountId(String(accounts[0].id)); }, [accounts, cashAccountId]);
+  useEffect(() => { if (categories.length && !category) setCategory(categories[0]); }, [categories, category]);
 
   async function submit() {
     setErr(null);
     const amt = Number(amount) || 0;
     if (amt <= 0) { setErr("Ingresa un monto mayor a cero."); return; }
+    // Sin categoría el movimiento se guardaría con cadena vacía y quedaría fuera
+    // de los reportes, que agrupan por categoría.
+    if (!category) { setErr("Selecciona una categoría."); return; }
     setSaving(true);
     try {
       const res = await authFetch(`/treasury/income`, {
@@ -134,8 +179,13 @@ export function IngresoLibreModal({ open, onClose, onDone }: { open: boolean; on
           amount: amt, category, method,
           cashAccountId: cashAccountId ? Number(cashAccountId) : undefined,
           accountName: accounts.find((a) => String(a.id) === cashAccountId)?.name,
-          bankName: method === "Bank" ? bank : undefined,
-          payerName: payerName || undefined, date, note: note || undefined,
+          bankName: isBankMethod(method) ? bank : undefined,
+          // Si se eligió un cliente, manda su id y su nombre (paridad legacy:
+          // `payer_id` + `payer_name`). El texto libre sigue valiendo para
+          // pagadores que no son clientes.
+          subscriberId: payerSub?.id,
+          payerName: payerSub?.name ?? payerName ?? undefined,
+          date, note: note || undefined,
         }),
       });
       const data = await res.json();
@@ -156,14 +206,25 @@ export function IngresoLibreModal({ open, onClose, onDone }: { open: boolean; on
       <p className="mb-2 text-[12px] text-text-secondary">Ingreso que no se aplica a facturas (otros conceptos, ingresos sin cliente).</p>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <Field label="Monto" required><Input type="number" min={0} value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" autoFocus /></Field>
-        <Field label="Categoría" required>
-          <Select value={category} onChange={(e) => setCategory(e.target.value)}>{INCOME_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}</Select>
-        </Field>
+        <CategoriaField categories={categories} value={category} onChange={setCategory} />
         <Field label="Método"><Select value={method} onChange={(e) => setMethod(e.target.value)}>{PAY_METHODS.filter((m) => m.value !== "Balance").map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}</Select></Field>
-        {method === "Bank" && <Field label="Banco"><Select value={bank} onChange={(e) => setBank(e.target.value)}>{BANKS.map((b) => <option key={b} value={b}>{b}</option>)}</Select></Field>}
+        {isBankMethod(method) && <Field label="Banco"><Select value={bank} onChange={(e) => setBank(e.target.value)}>{BANKS.map((b) => <option key={b} value={b}>{b}</option>)}</Select></Field>}
         <Field label="Caja / cuenta"><Select value={cashAccountId} onChange={(e) => setCashAccountId(e.target.value)}><option value="">— Sin caja —</option>{accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</Select></Field>
-        <Field label="Pagador"><Input value={payerName} onChange={(e) => setPayerName(e.target.value)} placeholder="Quién paga (opcional)" /></Field>
         <Field label="Fecha"><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></Field>
+        {/* Paridad legacy ("Search Payer"): el ingreso puede quedar ligado a un
+            cliente. No toca sus facturas; solo deja constancia de quién pagó. */}
+        <div className="sm:col-span-2">
+          <Field label="Cliente" hint="Opcional. Liga el ingreso a un cliente sin afectar sus facturas.">
+            <SubscriberPicker value={payerSub} onChange={setPayerSub} />
+          </Field>
+        </div>
+        {!payerSub && (
+          <div className="sm:col-span-2">
+            <Field label="Pagador" hint="Para quien no es cliente.">
+              <Input value={payerName} onChange={(e) => setPayerName(e.target.value)} placeholder="Quién paga (opcional)" />
+            </Field>
+          </div>
+        )}
         <div className="sm:col-span-2"><Field label="Nota"><Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} /></Field></div>
         <div className="sm:col-span-2">
           <Field label="Comprobante (opcional)" hint="Foto o PDF del soporte.">
@@ -193,7 +254,7 @@ export function EditarMovimientoModal({
 }) {
   const { authFetch } = useAuth();
   const isSalePayment = !!tx && !!tx.invoiceTid && tx.category === "Sales" && tx.type === "INCOME";
-  const cats = tx?.type === "EXPENSE" ? EXPENSE_CATEGORIES : INCOME_CATEGORIES;
+  const cats = useTxCategories(!!tx);
   const [category, setCategory] = useState("");
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState("Cash");
@@ -245,20 +306,49 @@ export function EditarMovimientoModal({
   );
 }
 
-/** Cierre de caja (arqueo). */
+/**
+ * Cierre de caja — réplica del legacy.
+ *
+ * No pide base ni consignado: en el legacy la base es cero y al cerrar se barre el
+ * efectivo ENTERO del cajón, que se arrastra al próximo día hábil como una transacción
+ * 'Saldo <fecha>'. El cajero sólo elige caja y fecha, y confirma contra lo que cuenta.
+ */
 export function CierreCajaModal({ open, onClose, onDone }: { open: boolean; onClose: () => void; onDone: () => void }) {
   const { authFetch } = useAuth();
-  const accounts = useCashAccounts(open);
+  // La lista ya viene acotada por el backend (la cajera sólo ve la suya). Aquí se quitan
+  // además los bancos (`branchLegacy = 0`): un banco no se cierra, se consolida DENTRO
+  // del cierre de la caja.
+  const todas = useCashAccounts(open);
+  const accounts = todas.filter((a: any) => a.branchLegacy !== 0);
   const [cashAccountId, setCashAccountId] = useState("");
   const [date, setDate] = useState(today());
-  const [base, setBase] = useState("");
-  const [deposited, setDeposited] = useState("");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [result, setResult] = useState<any>(null);
+  /** Arqueo del día ANTES de cerrar: se carga al elegir caja y fecha. */
+  const [preview, setPreview] = useState<any>(null);
+  const [loadingPrev, setLoadingPrev] = useState(false);
+  const [verMovs, setVerMovs] = useState(false);
 
-  useEffect(() => { if (open) { setBase(""); setDeposited(""); setErr(null); setResult(null); } }, [open]);
+  useEffect(() => { if (open) { setErr(null); setResult(null); setVerMovs(false); } }, [open]);
   useEffect(() => { if (accounts.length && !cashAccountId) setCashAccountId(String(accounts[0].id)); }, [accounts, cashAccountId]);
+
+  // Previsualizar sin escribir nada: un arqueo es contar el cajón y compararlo con lo
+  // que dice el sistema. Antes el arqueo solo aparecía DESPUÉS de guardar el cierre.
+  useEffect(() => {
+    if (!open || !cashAccountId || !date || result) { return; }
+    let vivo = true;
+    setLoadingPrev(true);
+    void authFetch(`/treasury/cash-close/preview?cashAccountId=${cashAccountId}&date=${date}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (vivo) setPreview(d); })
+      .catch(() => { if (vivo) setPreview(null); })
+      .finally(() => { if (vivo) setLoadingPrev(false); });
+    return () => { vivo = false; };
+  }, [open, cashAccountId, date, result, authFetch]);
+
+  const fechaLarga = (d?: string) =>
+    d ? new Date(d).toLocaleDateString("es-CO", { weekday: "long", day: "2-digit", month: "long" }) : "—";
 
   async function submit() {
     setErr(null);
@@ -267,12 +357,14 @@ export function CierreCajaModal({ open, onClose, onDone }: { open: boolean; onCl
     try {
       const res = await authFetch(`/treasury/cash-close`, {
         method: "POST",
-        body: JSON.stringify({ cashAccountId: Number(cashAccountId), date, base: Number(base) || 0, deposited: Number(deposited) || 0 }),
+        body: JSON.stringify({ cashAccountId: Number(cashAccountId), date }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "No se pudo cerrar la caja");
       setResult(data);
-      toast(`Cierre registrado · excedente ${cop(data.surplus)}`);
+      if (data.escrito) toast(`Caja cerrada · se barrieron ${cop(data.excedente)}`);
+      else if (data.motivo === "ya-cerrado") toast("Esta caja ya estaba cerrada ese día");
+      else toast("Sin excedente: no había efectivo que arrastrar");
       onDone();
     } catch (e: any) { setErr(e.message); } finally { setSaving(false); }
   }
@@ -282,27 +374,88 @@ export function CierreCajaModal({ open, onClose, onDone }: { open: boolean; onCl
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <Field label="Caja" required><Select value={cashAccountId} onChange={(e) => setCashAccountId(e.target.value)}><option value="">— Selecciona —</option>{accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</Select></Field>
         <Field label="Fecha" required><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></Field>
-        <Field label="Base inicial" hint="Efectivo con que abrió"><Input type="number" min={0} value={base} onChange={(e) => setBase(e.target.value)} placeholder="0" /></Field>
-        <Field label="Consignado" hint="Lo depositado al banco"><Input type="number" min={0} value={deposited} onChange={(e) => setDeposited(e.target.value)} placeholder="0" /></Field>
       </div>
       {err && <p className="mt-2 text-[12px] text-error-text">{err}</p>}
-      {result && (
-        <div className="mt-3 rounded-lg border border-border-subtle bg-surface-2 p-3 text-[12px]">
-          <div className="mb-1 font-bold text-text-primary">Arqueo del día</div>
-          <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-            <span className="text-text-tertiary">Arrastre día anterior</span><span className="text-right font-medium">{cop(result.carryover ?? 0)}</span>
-            <span className="text-text-tertiary">Ventas (ingresos)</span><span className="text-right font-medium text-success-text">+ {cop(result.sales)}</span>
-            <span className="text-text-tertiary">Egresos</span><span className="text-right font-medium text-error-text">− {cop(result.expenses)}</span>
-            <span className="text-text-tertiary">Consignado</span><span className="text-right font-medium text-error-text">− {cop(result.deposited)}</span>
-            <span className="col-span-2 my-0.5 border-t border-border-subtle" />
-            <span className="font-semibold text-text-primary">Excedente (arrastra a mañana)</span><span className="text-right font-bold text-text-primary">{cop(result.surplus)}</span>
-          </div>
-          <p className="mt-2 text-[11px] text-text-tertiary">El fondo fijo ({cop(result.fondoFijo ?? 0)}) permanece en la caja y no entra al excedente.</p>
-        </div>
+
+      {/* El arqueo ANTES de cerrar: el cajero compara contra el cajón y recién cierra. */}
+      {!result && preview?.yaCerrado && (
+        <p className="mt-2 rounded-lg bg-warning-soft px-3 py-2 text-[12px] text-warning-text">
+          Esta caja ya se cerró en esta fecha (se barrieron {cop(preview.guardado ?? 0)}). No se
+          vuelve a arrastrar: cerrar dos veces duplicaría el saldo.
+        </p>
       )}
+      {!result && loadingPrev && <p className="mt-3 text-[12px] text-text-tertiary">Calculando el arqueo…</p>}
+
+      {(result || (preview && !loadingPrev)) && (() => {
+        const g = preview?.desglose ?? { arrastre: 0, ventas: 0, egresos: 0, transferencias: 0, noEfectivo: 0 };
+        const exced = result ? result.excedente : (preview?.excedente ?? 0);
+        const habil = result?.proximoDiaHabil ?? preview?.proximoDiaHabil;
+        const movs = preview?.movimientos ?? [];
+        return (
+          <div className="mt-3 rounded-lg border border-border-subtle bg-surface-2 p-3 text-[12px]">
+            <div className="mb-1 flex items-center justify-between">
+              <span className="font-bold text-text-primary">{result ? "Caja cerrada" : "Arqueo del día"}</span>
+              {!result && <span className="text-[11px] text-text-tertiary">aún no se ha guardado</span>}
+            </div>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+              <span className="text-text-tertiary">Arrastre que entró</span><span className="text-right font-medium">{cop(g.arrastre)}</span>
+              <span className="text-text-tertiary">Recaudo en efectivo</span><span className="text-right font-medium text-success-text">+ {cop(g.ventas)}</span>
+              <span className="text-text-tertiary">Egresos en efectivo</span><span className="text-right font-medium text-error-text">− {cop(g.egresos)}</span>
+              {g.transferencias !== 0 && (
+                <>
+                  <span className="text-text-tertiary">Traslados entre cajas</span>
+                  <span className={`text-right font-medium ${g.transferencias < 0 ? "text-error-text" : "text-success-text"}`}>
+                    {g.transferencias < 0 ? "−" : "+"} {cop(Math.abs(g.transferencias))}
+                  </span>
+                </>
+              )}
+              <span className="col-span-2 my-0.5 border-t border-border-subtle" />
+              <span className="font-semibold text-text-primary">Efectivo en el cajón</span><span className="text-right font-bold text-text-primary">{cop(exced)}</span>
+            </div>
+            <p className="mt-2 text-[11px] text-text-tertiary">
+              Se barre <strong className="text-text-secondary">todo</strong> el efectivo (la base es cero) y
+              se arrastra al <strong className="text-text-secondary">{fechaLarga(habil)}</strong>, el próximo
+              día hábil.
+              {g.noEfectivo > 0 && <> El recaudo por banco/tarjeta ({cop(g.noEfectivo)}) no está en el cajón y no se barre.</>}
+            </p>
+
+            {/* Los movimientos de ESTA caja, ese día: es contra esto que se cuadra. */}
+            {!result && !!movs.length && (
+              <div className="mt-2 border-t border-border-subtle pt-2">
+                <button type="button" onClick={() => setVerMovs((v) => !v)} className="text-[12px] font-medium text-brand hover:underline">
+                  {verMovs ? "Ocultar" : "Ver"} los {movs.length} movimiento(s) de esta caja
+                </button>
+                {verMovs && (
+                  <div className="mt-1.5 max-h-56 overflow-auto rounded-md border border-border-subtle bg-surface">
+                    <table className="w-full text-[11.5px]">
+                      <tbody>
+                        {movs.map((m: any) => (
+                          <tr key={m.id} className="border-b border-border-subtle last:border-0">
+                            <td className="px-2 py-1 text-text-secondary">{m.payer}</td>
+                            <td className="px-2 py-1 text-text-tertiary">{m.category}{m.transfer ? " (traslado)" : ""}</td>
+                            <td className={`px-2 py-1 text-right tabular-nums ${m.type === "INCOME" ? "text-success-text" : "text-error-text"}`}>
+                              {m.type === "INCOME" ? "+" : "−"}{cop(m.amount)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+            {!result && !movs.length && (
+              <p className="mt-2 border-t border-border-subtle pt-2 text-[11px] text-text-tertiary">
+                Esta caja no tiene movimientos en esa fecha.
+              </p>
+            )}
+          </div>
+        );
+      })()}
+
       <div className="mt-3 flex justify-end gap-2">
         <Button variant="secondary" onClick={onClose} disabled={saving}>{result ? "Cerrar" : "Cancelar"}</Button>
-        {!result && <Button onClick={submit} disabled={saving}>{saving ? "Calculando…" : "Cerrar caja"}</Button>}
+        {!result && <Button onClick={submit} disabled={saving || loadingPrev}>{saving ? "Guardando…" : "Cerrar caja"}</Button>}
       </div>
     </Modal>
   );

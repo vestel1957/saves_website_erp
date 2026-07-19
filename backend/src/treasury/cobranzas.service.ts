@@ -8,16 +8,47 @@ import {
   CashAccountDto, CashCloseDto, CashOpenDto, CollectDto, EditTxDto, ExpenseDto,
   IncomeDto, TransferDto, TxCategoryDto, VoidTxDto,
 } from './dto/cobranzas.dto';
+import {
+  aporteEfectivo, CATEGORIA_SALDO, esNotaSaldo, notaSaldo, proximoDiaHabil, rangoDia,
+  sinElBarridoDelDia, whereArrastre, whereEfectivo,
+} from './cierre-legacy';
+import { alcanceDe, exigirAcceso, puedeVer } from './caja-scope';
 
 const num = (d: Prisma.Decimal | number | null | undefined) => (d == null ? 0 : Number(d));
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /**
- * Fondo fijo de caja (base inicial estándar). En el legacy saves-vestel la base
- * es un valor fijo que NUNCA sale del cajón (200.000 en la mayoría de cajas).
- * La base real con que se abre = FONDO_FIJO + arrastre del día anterior.
+ * ¿El método mueve dinero por banco (y no por el cajón de efectivo)?
+ *
+ * Decide el asiento contable (banco vs. caja) y si se guarda el nombre del banco.
+ * `Cheque` cuenta como banco: se consigna, no se queda como efectivo en caja —si
+ * contara como caja, aparecería en el arqueo del cierre, y un arqueo cuenta
+ * billetes. Paridad legacy: el método "Cheque" sigue vivo allá (último uso ayer).
  */
-const FONDO_FIJO = 200000;
+const isBankMethod = (method: string | null | undefined) => method === 'Bank' || method === 'Cheque';
+
+/**
+ * Fondo fijo por defecto de una caja: la plata que NUNCA sale del cajón, y por eso no
+ * entra en el excedente. La base real con que se abre = fondo fijo + arrastre del día
+ * anterior.
+ *
+ * Es solo el DEFAULT: el valor real vive en `CashAccount.fixedFund`, porque no es una
+ * constante del negocio — de los 3 únicos cierres reales que existen, uno cerró con
+ * base de 300.000.
+ */
+const FONDO_FIJO_DEFAULT = 200000;
+
+/** Categoría con la que `createTransfer` marca los dos lados de un traslado entre cajas. */
+const CAT_TRANSFERENCIA = 'Transferencia';
+
+/** Fondo fijo de una caja; cae al default si la caja no existe. */
+async function fondoFijoDe(prisma: PrismaService, cashAccountId: number): Promise<number> {
+  const acc = await prisma.cashAccount.findUnique({
+    where: { legacyId: cashAccountId },
+    select: { fixedFund: true },
+  });
+  return acc ? round2(num(acc.fixedFund)) : FONDO_FIJO_DEFAULT;
+}
 
 const SUB_NAME_SELECT = {
   firstName: true, secondName: true, lastName1: true, lastName2: true,
@@ -105,7 +136,7 @@ export class CobranzasService {
           method: dto.method,
           date: when,
           cashAccountId: dto.cashAccountId ?? null, accountName: dto.accountName ?? null,
-          bankName: dto.method === 'Bank' ? (dto.bankName ?? null) : null,
+          bankName: isBankMethod(dto.method) ? (dto.bankName ?? null) : null,
           ext: false, status: 'VIGENTE', note: dto.note ?? null, issuerUserId: null,
         },
       });
@@ -117,7 +148,7 @@ export class CobranzasService {
     if (dto.method !== 'Balance') {
       await this.posting.postTreasuryIncome({
         sourceId: result.id, date: when, amount: result.amount, category: dto.category,
-        toBank: dto.method === 'Bank', createdBy: user?.name ?? user?.email ?? null,
+        toBank: isBankMethod(dto.method), createdBy: user?.name ?? user?.email ?? null,
       });
     }
     return result;
@@ -275,7 +306,7 @@ export class CobranzasService {
             payerName: payer, subscriberId: sub.id,
             method: dto.method, date: payDate, invoiceId: inv.id,
             cashAccountId: dto.cashAccountId ?? null, accountName: dto.accountName ?? null,
-            bankName: dto.method === 'Bank' ? (dto.bankName ?? null) : null,
+            bankName: isBankMethod(dto.method) ? (dto.bankName ?? null) : null,
             ext: false, status: 'VIGENTE',
             note: dto.note ?? `Pago de la factura #${inv.tid}`,
           },
@@ -320,7 +351,7 @@ export class CobranzasService {
     if (dto.method !== 'Balance' && result.totalApplied > 0) {
       await this.posting.postCustomerPayment({
         sourceId: result.receiptId, date: payDate, amount: result.totalApplied,
-        toBank: dto.method === 'Bank', createdBy: user?.name ?? user?.email ?? null,
+        toBank: isBankMethod(dto.method), createdBy: user?.name ?? user?.email ?? null,
       });
     }
     // Reconexión automática tras el pago (paridad legacy: al pagar se reactiva).
@@ -391,27 +422,39 @@ export class CobranzasService {
   /** Registrar un egreso/gasto de caja. */
   async createExpense(dto: ExpenseDto, user: AuthUser) {
     const amount = round2(Number(dto.amount));
+    // Igual que en el ingreso: se valida antes de crear. Si no, un id de cliente
+    // inexistente revienta como violación de clave foránea (error 500 opaco) en
+    // vez de un 404 legible.
+    if (dto.subscriberId) {
+      const sub = await this.prisma.subscriber.findUnique({ where: { id: dto.subscriberId }, select: { id: true } });
+      if (!sub) throw new NotFoundException('Cliente no encontrado');
+    }
     const when = dto.date ? dateOnly(dto.date) : dateOnly(new Date().toISOString());
     const result = await this.prisma.$transaction(async (tx) => {
       const t = await tx.transaction.create({
         data: {
           type: 'EXPENSE', category: dto.category, debit: amount, credit: 0,
           payerName: dto.payerName ?? null,
+          subscriberId: dto.subscriberId ?? null,
           method: dto.method,
           date: when,
           cashAccountId: dto.cashAccountId ?? null, accountName: dto.accountName ?? null,
-          bankName: dto.method === 'Bank' ? (dto.bankName ?? null) : null,
+          bankName: isBankMethod(dto.method) ? (dto.bankName ?? null) : null,
           ext: true, status: 'VIGENTE', note: dto.note ?? null,
           issuerUserId: null,
         },
       });
       await this.recomputeCashBalance(tx, dto.cashAccountId);
+      // Ojo: NO se recalcula el saldo del cliente. El egreso nace `ext: true` y
+      // `recomputeSubscriber` solo suma movimientos `ext: false`, así que ligar el
+      // cliente aquí es informativo (deja constancia de a quién se le pagó) y no
+      // le mueve la cartera. El ingreso sí la mueve porque nace `ext: false`.
       return { id: t.id, amount };
     });
     // Contabilización automática (DR gasto, CR banco/caja).
     await this.posting.postTreasuryExpense({
       sourceId: result.id, date: when, amount: result.amount, category: dto.category,
-      fromBank: dto.method === 'Bank', createdBy: user?.name ?? user?.email ?? null,
+      fromBank: isBankMethod(dto.method), createdBy: user?.name ?? user?.email ?? null,
     });
     return result;
   }
@@ -467,11 +510,22 @@ export class CobranzasService {
    * nuevas y con saldo persistente), fusionada con las cajas "derivadas" que
    * aparecen en transacciones antiguas pero aún no tienen fila propia, para no
    * perder selectores. El `id` expuesto es el legacyId (el que llevan las tx).
+   *
+   * Si se pasa `user`, la lista viene ACOTADA a lo que ese usuario puede ver: una cajera
+   * sólo su caja + los bancos (port de `acc_list()` del legacy). Ver `caja-scope.ts`.
    */
-  async cashAccounts() {
+  async cashAccounts(user?: AuthUser) {
+    const alcance = user ? await alcanceDe(this.prisma, user) : null;
+    // Nombre de la sede: `branchLegacy` no es una FK, se cruza a mano contra
+    // `Branch.legacyId` (mismo patrón que `config.service.ts`). Verificado: es el mismo
+    // espacio de ids que `accounts.sede` del legacy (3=Villanueva, 2=Yopal...).
+    const sedes = await this.prisma.branch.findMany({ select: { legacyId: true, name: true } });
+    const sedeDe = new Map(sedes.map((b) => [b.legacyId, b.name]));
+    const nombreSede = (b: number | null) =>
+      b === 0 ? 'Banco' : b == null ? null : (sedeDe.get(b) ?? `Sede ${b}`);
     const [accounts, derived] = await Promise.all([
       this.prisma.cashAccount.findMany({
-        select: { id: true, legacyId: true, holder: true, balance: true, branchLegacy: true, accountNumber: true, code: true },
+        select: { id: true, legacyId: true, holder: true, balance: true, branchLegacy: true, accountNumber: true, code: true, fixedFund: true },
         orderBy: { holder: 'asc' },
       }),
       this.prisma.transaction.groupBy({
@@ -486,7 +540,9 @@ export class CobranzasService {
       .map((a) => ({
         id: a.legacyId as number, cuid: a.id, name: a.holder,
         balance: num(a.balance), branchLegacy: a.branchLegacy,
-        accountNumber: a.accountNumber, code: a.code, persisted: true,
+        sede: nombreSede(a.branchLegacy),
+        accountNumber: a.accountNumber, code: a.code,
+        fixedFund: num(a.fixedFund), persisted: true,
       }));
     // Derivadas: id presente en tx pero sin fila CashAccount.
     const seen = new Set<number>();
@@ -495,10 +551,36 @@ export class CobranzasService {
       seen.add(r.cashAccountId);
       out.push({
         id: r.cashAccountId, cuid: null as any, name: r.accountName ?? `Caja ${r.cashAccountId}`,
-        balance: 0, branchLegacy: null, accountNumber: null, code: null, persisted: false,
+        balance: 0, branchLegacy: null, sede: null, accountNumber: null, code: null,
+        // Sin fila CashAccount no hay fondo propio: se muestra el default.
+        fixedFund: FONDO_FIJO_DEFAULT, persisted: false,
       });
     }
-    return out.sort((a, b) => a.name.localeCompare(b.name));
+    const visibles = alcance
+      ? out.filter((a) => puedeVer(alcance, a.id, a.branchLegacy))
+      : out;
+    return visibles.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /**
+   * El alcance del usuario que pregunta, para que la UI se adapte sola: si es cajera se
+   * le fija SU caja; si no, puede elegir sede y caja.
+   */
+  async miCaja(user: AuthUser) {
+    const a = await alcanceDe(this.prisma, user);
+    const caja = a.caja != null
+      ? await this.prisma.cashAccount.findUnique({
+          where: { legacyId: a.caja },
+          select: { legacyId: true, holder: true, branchLegacy: true },
+        })
+      : null;
+    return {
+      /** true = puede elegir cualquier caja. false = está acotada a la suya. */
+      todas: a.todas,
+      esCajera: !a.todas,
+      caja: caja ? { id: caja.legacyId, name: caja.holder, branchLegacy: caja.branchLegacy } : null,
+      sedes: a.sedes,
+    };
   }
 
   /** Asigna el siguiente legacyId libre para una caja nueva (max entre cajas y tx + 1). */
@@ -520,6 +602,8 @@ export class CobranzasService {
           accountNumber: dto.accountNumber ?? null, branchLegacy: dto.branchLegacy ?? null,
           code: dto.code ?? null, address: dto.address ?? null, phone: dto.phone ?? null,
           departmentRef: dto.departmentRef ?? null, balance: 0,
+          // Omitido = el default del schema (200.000).
+          ...(dto.fixedFund == null ? {} : { fixedFund: round2(dto.fixedFund) }),
         },
       });
       return { id: a.legacyId, cuid: a.id, name: a.holder };
@@ -537,6 +621,8 @@ export class CobranzasService {
         accountNumber: dto.accountNumber ?? null, branchLegacy: dto.branchLegacy ?? null,
         code: dto.code ?? null, address: dto.address ?? null, phone: dto.phone ?? null,
         departmentRef: dto.departmentRef ?? null,
+        // Omitido = no se toca (no se pisa con el default al editar otro campo).
+        ...(dto.fixedFund == null ? {} : { fixedFund: round2(dto.fixedFund) }),
       },
     });
     return { id: upd.legacyId, cuid: upd.id, name: upd.holder };
@@ -621,32 +707,71 @@ export class CobranzasService {
   }
 
   /**
-   * Arrastre: excedente del ÚLTIMO cierre anterior a la fecha para esa caja.
-   * Es lo que quedó en el cajón (más allá del fondo fijo) el día anterior y que
-   * "rueda" hacia hoy. Devuelve 0 si la caja nunca se ha cerrado.
+   * Efectivo que hay en el cajón de una caja ese día, ANTES de barrerlo.
+   *
+   * Es la única cifra del cierre: en el legacy el excedente ES el efectivo (la base es
+   * cero). El arrastre del día anterior ya viene dentro, porque entró como una
+   * transacción `Saldo <fecha>` de tipo INCOME — por eso aquí no se suma nada aparte.
    */
-  async getCarryover(cashAccountId: number, date: string): Promise<{ carryover: number; from: Date | null }> {
-    const d = dateOnly(date);
-    const prev = await this.prisma.cashClose.findFirst({
-      where: { cashAccountId, date: { lt: d } },
-      orderBy: { date: 'desc' },
+  async efectivoDeCaja(cashAccountId: number, d: Date): Promise<number> {
+    // Se traen las filas en vez de agregar en SQL porque el legacy trunca POR FILA
+    // (`intval`), y un SUM() exacto no da lo mismo cuando hay centavos.
+    const filas = await this.prisma.transaction.findMany({
+      where: { ...whereEfectivo(cashAccountId, d), ...sinElBarridoDelDia(d) },
+      select: { credit: true, debit: true },
     });
-    return { carryover: prev ? round2(num(prev.surplus)) : 0, from: prev?.date ?? null };
+    return filas.reduce((s, f) => s + aporteEfectivo(f), 0);
+  }
+
+  /** ¿Ya se cerró esta caja este día? (la pata EXPENSE del arrastre es la marca). */
+  async cierreDelDia(cashAccountId: number, d: Date) {
+    return this.prisma.transaction.findFirst({
+      where: {
+        cashAccountId, date: rangoDia(d), type: 'EXPENSE',
+        note: notaSaldo(d), status: 'VIGENTE',
+      },
+      select: { id: true, debit: true },
+    });
   }
 
   /**
-   * Sugerencia de apertura para una caja/fecha: fondo fijo + arrastre del día
-   * anterior. La base propuesta ya trae el arrastre sumado (modelo elegido).
-   * Si ya existe apertura para ese día, la devuelve como `existing`.
+   * Arrastre que ENTRÓ a un día: la pata INCOME `Saldo <fecha>` que el cierre anterior
+   * dejó fechada hoy. Se lee del libro, que es donde vive el arrastre en el modelo del
+   * legacy — antes salía de `CashClose.surplus`, y sumar eso encima del libro contaba el
+   * arrastre dos veces (la transacción YA está en el efectivo del día).
+   */
+  async getCarryover(cashAccountId: number, date: string): Promise<{ carryover: number; from: Date | null }> {
+    const d = dateOnly(date);
+    const candidatas = await this.prisma.transaction.findMany({
+      where: { ...whereArrastre, cashAccountId, date: rangoDia(d), type: 'INCOME' },
+      select: { credit: true, note: true },
+    });
+    // `esNotaSaldo` es lo que descarta los "Saldo de mano de obra..." y demás gastos
+    // corrientes que empiezan igual pero no son arrastre.
+    const entrada = candidatas.find((t) => esNotaSaldo(t.note));
+    if (!entrada) return { carryover: 0, from: null };
+    // La nota lleva la fecha del cierre que lo generó: 'Saldo 2026-07-16'.
+    const from = new Date(`${entrada.note!.slice(6)}T00:00:00.000Z`);
+    return { carryover: round2(num(entrada.credit)), from };
+  }
+
+  /**
+   * Sugerencia de apertura para una caja/fecha: fondo fijo + arrastre del día anterior.
+   *
+   * OJO: el fondo fijo es una función PROPIA de SAVES (la apertura de caja no existe en
+   * el legacy). El CIERRE no lo usa: allá la base es cero y se barre el efectivo entero.
    */
   async cashOpenSuggest(cashAccountId: number, date: string) {
-    const { carryover, from } = await this.getCarryover(cashAccountId, date);
-    const existing = await this.getCashOpen(cashAccountId, date);
+    const [{ carryover, from }, existing, fondoFijo] = await Promise.all([
+      this.getCarryover(cashAccountId, date),
+      this.getCashOpen(cashAccountId, date),
+      fondoFijoDe(this.prisma, cashAccountId),
+    ]);
     return {
-      fondoFijo: FONDO_FIJO,
+      fondoFijo,
       carryover,
       carryoverFrom: from,
-      base: round2(FONDO_FIJO + carryover),
+      base: round2(fondoFijo + carryover),
       existing,
     };
   }
@@ -668,44 +793,65 @@ export class CobranzasService {
     };
   }
 
-  /** Cierre de caja (arqueo): agrega ingresos/egresos vigentes de la caja en la fecha. */
+  /**
+   * Cierre de caja — réplica del legacy `Reports.php::sacar_pdf()` (~619-670).
+   *
+   * Barre el efectivo del cajón y lo arrastra al próximo día hábil escribiendo las dos
+   * patas `Saldo <fecha>`. No hay base ni fondo fijo: el legacy se lleva todo (ver
+   * `cierre-legacy.ts`). No escribe nada si el excedente no es > 0, y si el día ya está
+   * cerrado no vuelve a escribir (guarda anti-duplicado del legacy).
+   */
   async createCashClose(dto: CashCloseDto, user: AuthUser) {
+    // Una cajera no puede cerrar la caja de otra sede.
+    await exigirAcceso(this.prisma, user, dto.cashAccountId);
     const d = dateOnly(dto.date);
-    const next = new Date(d.getTime() + 24 * 60 * 60 * 1000);
-    const dateWhere: Prisma.TransactionWhereInput = {
-      cashAccountId: dto.cashAccountId, status: 'VIGENTE',
-      date: { gte: d, lt: next },
-    };
-    const [inc, exp] = await Promise.all([
-      this.prisma.transaction.aggregate({ _sum: { credit: true }, where: { ...dateWhere, type: 'INCOME' } }),
-      this.prisma.transaction.aggregate({ _sum: { debit: true }, where: { ...dateWhere, type: 'EXPENSE' } }),
-    ]);
-    const sales = round2(num(inc._sum.credit));
-    const expenses = round2(num(exp._sum.debit));
-    // Base: la que pase el usuario, o la de la apertura del día si existe.
-    let base = round2(Number(dto.base ?? 0));
-    if (dto.base == null) {
-      const apertura = await this.prisma.cashOpen.findUnique({
-        where: { cashAccountId_date: { cashAccountId: dto.cashAccountId, date: d } },
-      });
-      if (apertura) base = round2(num(apertura.base));
-    }
-    const deposited = round2(Number(dto.deposited ?? 0));
-    // Excedente (legacy saves-vestel): lo que queda en el cajón MÁS ALLÁ del
-    // fondo fijo, y que se arrastra al día siguiente. El fondo fijo (200k) nunca
-    // sale, por eso NO entra en el excedente:
-    //   excedente = arrastre_del_día_anterior + ventas − egresos − consignado
-    const { carryover } = await this.getCarryover(dto.cashAccountId, dto.date);
-    const surplus = round2(carryover + sales - expenses - deposited);
-
-    const close = await this.prisma.cashClose.upsert({
-      where: { cashAccountId_date: { cashAccountId: dto.cashAccountId, date: d } },
-      create: { cashAccountId: dto.cashAccountId, date: d, base, sales, expenses, deposited, surplus, userId: 0 },
-      update: { base, sales, expenses, deposited, surplus },
+    const cuenta = await this.prisma.cashAccount.findUnique({
+      where: { legacyId: dto.cashAccountId },
+      select: { holder: true },
     });
-    return {
-      id: close.id, cashAccountId: close.cashAccountId, date: close.date,
-      base, fondoFijo: FONDO_FIJO, carryover, sales, expenses, deposited, surplus,
+    if (!cuenta) throw new NotFoundException('Caja no encontrada');
+
+    const [efectivo, yaCerrado] = await Promise.all([
+      this.efectivoDeCaja(dto.cashAccountId, d),
+      this.cierreDelDia(dto.cashAccountId, d),
+    ]);
+    const habil = proximoDiaHabil(d);
+    const base = { cashAccountId: dto.cashAccountId, date: d, accountName: cuenta.holder, excedente: efectivo, proximoDiaHabil: habil };
+
+    // Ya cerrado: el legacy no reescribe (evita duplicar el arrastre). Devolvemos el
+    // excedente que se barrió entonces, no el de ahora.
+    if (yaCerrado) {
+      return { ...base, excedente: round2(num(yaCerrado.debit)), escrito: false, motivo: 'ya-cerrado' as const };
+    }
+    // El legacy sólo arrastra saldos positivos. Un cajón vacío (o en negativo por un
+    // descuadre) no genera movimiento: no hay nada que llevar al día siguiente.
+    if (efectivo <= 0) {
+      return { ...base, escrito: false, motivo: 'sin-excedente' as const };
+    }
+
+    const comun = {
+      cashAccountId: dto.cashAccountId,
+      accountName: cuenta.holder,
+      category: CATEGORIA_SALDO,
+      method: 'Cash',
+      payerName: user.name || user.email, // legacy: `payer` = nombre del cajero
+      note: notaSaldo(d), // ambas patas llevan la fecha del cierre
+      status: 'VIGENTE' as const,
+      ext: false,
+      issuerUserId: null,
+      invoiceId: null, // legacy `tid = -1` (sin factura)
     };
+
+    // Las dos patas van juntas o no va ninguna: media pareja descuadraría la caja.
+    await this.prisma.$transaction([
+      this.prisma.transaction.create({
+        data: { ...comun, type: 'EXPENSE', debit: efectivo, credit: 0, date: d },
+      }),
+      this.prisma.transaction.create({
+        data: { ...comun, type: 'INCOME', debit: 0, credit: efectivo, date: habil },
+      }),
+    ]);
+
+    return { ...base, escrito: true, motivo: null };
   }
 }

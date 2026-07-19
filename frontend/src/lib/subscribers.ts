@@ -49,6 +49,42 @@ export const SUB_STATUS_TONE: Record<string, "success" | "error" | "warning" | "
   DEPURADO: "default", RETIRADO: "default", EVENTO: "default", INACTIVO: "default",
 };
 
+/** Opciones de filtro adicionales (heredadas del legacy: servicio, tecnología, cuenta). */
+export const SUB_SERVICIO_OPTS: { value: string; label: string }[] = [
+  { value: "", label: "Todos los servicios" },
+  { value: "internet", label: "Internet" },
+  { value: "tv", label: "TV" },
+  { value: "combo", label: "Combo (Internet + TV)" },
+];
+
+export const SUB_TECH_OPTS: { value: string; label: string }[] = [
+  { value: "", label: "Toda tecnología" },
+  { value: "FTTH", label: "Fibra (FTTH)" },
+  { value: "EOC", label: "EOC / cobre" },
+];
+
+/**
+ * Estado de cuenta. Combina en un solo select los dos parámetros del backend
+ * (`cuenta` = aldia|debe|compromiso y `deuda` = 1|gt2). `cuentaParams` traduce
+ * el valor elegido a los query params correctos.
+ */
+export const SUB_CUENTA_OPTS: { value: string; label: string }[] = [
+  { value: "", label: "Toda la cuenta" },
+  { value: "aldia", label: "Al día" },
+  { value: "debe", label: "Con deuda" },
+  { value: "debe1", label: "Debe 1 mes" },
+  { value: "debeGt2", label: "Debe +2 meses" },
+  { value: "compromiso", label: "En compromiso" },
+];
+
+/** Traduce el valor del select de "Estado de cuenta" a los query params del backend. */
+export function cuentaParams(v: string): { cuenta?: string; deuda?: string } {
+  if (v === "debe1") return { deuda: "1" };
+  if (v === "debeGt2") return { deuda: "gt2" };
+  if (v === "aldia" || v === "debe" || v === "compromiso") return { cuenta: v };
+  return {};
+}
+
 export const INVOICE_STATUS_LABEL: Record<string, string> = {
   PAID: "Pagada", DUE: "Pendiente", PARTIAL: "Parcial", CANCELED: "Anulada",
 };

@@ -677,6 +677,22 @@ model User {
   // Teléfono de WhatsApp en E.164 sin '+' (ej. 573001112233). Vincula el número
   // entrante del chatbot con este usuario para heredar sus permisos RBAC.
   whatsappPhone         String?             @unique
+  /// Caja asignada a esta cajera. Port del legacy `asignaciones` (detalle='caja',
+  /// colaborador=usuario) -> `tipo`, que es lo que usa `acc_list()` para que cada cajera
+  /// sólo vea la suya.
+  ///
+  /// Guarda el `CashAccount.legacyId` (Int) y NO el cuid: el legacyId es el id que hablan
+  /// las transacciones y toda la API de tesorería, y las cajas "derivadas" (las que
+  /// aparecen en transacciones viejas sin fila propia) ni siquiera tienen cuid.
+  ///
+  /// null en una cajera = sin caja asignada -> sólo ve los bancos, igual que el legacy
+  /// (allá `$asignacion` sale null y el `where('id', null)` no casa con nada).
+  cajaLegacyId          Int?
+  /// Sedes a las que accede. Port de `aauth_users.sede_accede` ('-2-,-3-,-4-').
+  /// **VACÍO = TODAS**, que es el '0' del legacy (así lo tienen gerencia y admin).
+  /// Guarda `Branch.legacyId`, que es el mismo espacio de ids que `accounts.sede`
+  /// (verificado: 2=Yopal, 3=Villanueva, 4=Monterrey, 5=Mocoa, 6=Aguazul, 7=Tauramena).
+  sedesAccede           Int[]
   roles                 UserRole[]
   permissionOverrides   UserPermission[] // ajustes por empleado (ALLOW/DENY sobre el rol)
   movements             InventoryMovement[]
@@ -3444,17 +3460,37 @@ model Voiding {
   createdAt     DateTime    @default(now())
 }
 
-/// Cierre de caja diario por cuenta (legacy `cierres_caja`; sin lógica en el repo legacy).
+/// OBSOLETO (2026-07-17) — ya no se escribe ni se lee. NO USAR.
+///
+/// El comentario anterior afirmaba que "el legacy no tiene cierre de caja". Es FALSO: sí
+/// lo tiene y corre a diario en producción, sólo que no usa la tabla `cierres_caja` (esa
+/// sí está muerta, con 3 filas de prueba del 30-dic-2025) ni la palabra "arqueo". Vive en
+/// `Reports.php::sacar_pdf()` y materializa el cierre como DOS transacciones
+/// `Saldo <fecha>` — el arrastre es un movimiento del libro, no un campo. Ver
+/// `src/treasury/cierre-legacy.ts`.
+///
+/// Este modelo era un diseño propio (fondo fijo, arrastre en `surplus`, consignado) que
+/// no correspondía al legacy y además contaba el arrastre dos veces: la fila
+/// `Saldo <ayer>` YA está en el efectivo del día, y encima se sumaba `surplus` del cierre
+/// anterior. Se conserva la tabla sólo para no perder las 3 filas migradas; el cierre
+/// vive ahora en `Transaction`.
 model CashClose {
   id            String   @id @default(cuid())
   legacyId      Int?     @unique
   cashAccountId Int // account_id
   date          DateTime @db.Date // fecha
   base          Decimal  @default(0) @db.Decimal(14, 2)
-  sales         Decimal  @default(0) @db.Decimal(14, 2) // ventas
+  sales         Decimal  @default(0) @db.Decimal(14, 2) // ventas (recaudo del día)
   expenses      Decimal  @default(0) @db.Decimal(14, 2) // egresos
+  /// Transferencias de otras cajas propias. Van en su PROPIA línea: mover plata de la
+  /// caja A a la B no es venta ni gasto, es la misma plata cambiando de cajón. Antes
+  /// entraban en `sales` e inflaban el recaudo reportado, y el excedente inflado se
+  /// arrastraba al día siguiente vía el arrastre.
+  transfersIn   Decimal  @default(0) @db.Decimal(14, 2)
+  transfersOut  Decimal  @default(0) @db.Decimal(14, 2)
   deposited     Decimal  @default(0) @db.Decimal(14, 2) // consignado
-  surplus       Decimal  @default(0) @db.Decimal(14, 2) // excedente
+  /// excedente = arrastre + ventas − egresos + transferencias recibidas − enviadas − consignado
+  surplus       Decimal  @default(0) @db.Decimal(14, 2)
   userId        Int // usuario_id
   createdAt     DateTime @default(now())
 
@@ -3534,6 +3570,11 @@ model CashAccount {
   holder        String // holder (nombre de la caja)
   branchLegacy  Int? // sede (0 = banco)
   balance       Decimal @default(0) @db.Decimal(16, 2) // lastbal
+  /// Fondo fijo de la caja: la plata que NUNCA sale del cajón y por eso no entra en
+  /// el excedente del arqueo. Estaba hardcodeado en 200.000 para todas, pero de los
+  /// 3 únicos cierres reales que existen uno cerró con base de 300.000 → no es una
+  /// constante del negocio. Por caja, con 200.000 de default.
+  fixedFund     Decimal @default(200000) @db.Decimal(14, 2)
   code          String?
   address       String? // direccion
   phone         String? // telefono
@@ -4694,6 +4735,68 @@ model BusinessGoal {
 /// Ajuste global key/value (moneda, SMTP, términos de facturación, cláusula de
 /// contrato, etc). `secret=true` ⇒ el valor nunca se devuelve al frontend, solo
 /// se enmascara ("hasValue"). `group` agrupa para la UI (moneda|smtp|billing).
+/// Estado conversacional del agente de WhatsApp (implementa `SessionStore` del motor).
+/// Existe porque el almacén por defecto es en MEMORIA: un `pm2 restart` borraba la
+/// acción pendiente, así que el técnico respondía "SÍ" y su corte ya confirmado se
+/// evaporaba (o el "SÍ" se colaba al LLM como mensaje suelto). En modo cluster era
+/// peor: el `preparePending` quedaba en un worker y el "SÍ" podía llegar a otro.
+/// `convKey` es la clave del motor: `<transporte>:<telefono>`, p.ej. `kapso:5730011…`.
+model ChatbotSession {
+  id        String   @id @default(cuid())
+  convKey   String   @unique
+  /// Historial de turnos (`Turn[]` del motor), ya recortado a `maxHistory`.
+  history   Json     @default("[]")
+  /// Acción de escritura a la espera de un SÍ/NO (`StoredPending`). Null = ninguna.
+  /// Serializable a propósito: guarda herramienta + input resuelto, no un closure.
+  pending   Json?
+  /// Cuándo se creó la pendiente, para caducarla sin depender de un timer en memoria.
+  pendingAt DateTime?
+
+  /// Conversación escalada a una persona: mientras tenga fecha, el bot NO responde
+  /// aquí. El mensaje entrante se sigue registrando (WhatsappLogService), así que un
+  /// funcionario lo atiende desde el visor de conversaciones, igual que antes de que
+  /// el bot existiera. Sin esto, el prompt le prometía al cliente "te paso a un
+  /// asesor" y no pasaba absolutamente nada.
+  handoffAt     DateTime?
+  /// Lo que el cliente pidió, para que quien lo atienda no arranque de cero.
+  handoffReason String?
+
+  updatedAt DateTime @updatedAt
+
+  @@index([updatedAt])
+  @@index([handoffAt])
+}
+
+/// Consumo diario del LLM del chatbot, agregado por día y modelo. Existe para poner
+/// un techo: sin esto nadie contaba tokens y CUALQUIER número desconocido que escriba
+/// gasta (el agente público atiende a todo el mundo, por diseño).
+/// El dato se toma del `usage` que devuelve OpenAI, capturado en el cliente: el puerto
+/// de telemetría del motor no lo trae (su `LlmResponse` no lleva `usage`) y su propia
+/// documentación avisa de que no es para facturación.
+model ChatbotUsage {
+  id           String   @id @default(cuid())
+  /// Día natural (UTC) al que se imputa el gasto.
+  day          DateTime @db.Date
+  model        String
+  inputTokens  Int      @default(0)
+  outputTokens Int      @default(0)
+  requests     Int      @default(0)
+  updatedAt    DateTime @updatedAt
+
+  @@unique([day, model])
+  @@index([day])
+}
+
+/// Ids de mensaje ya procesados, para deduplicar los reintentos de Kapso. En memoria
+/// se perdían al reiniciar y un reintento se procesaba dos veces — que en una escritura
+/// confirmada significa ejecutarla dos veces.
+model ChatbotSeenMessage {
+  messageId String   @id
+  seenAt    DateTime @default(now())
+
+  @@index([seenAt])
+}
+
 model AppSetting {
   id        String   @id @default(cuid())
   key       String   @unique // p.ej. "smtp.host", "billing.invoiceTerms"

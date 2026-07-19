@@ -85,6 +85,7 @@ const ROUTE_AREA: [RegExp, string[]][] = [
   // (administración) aprueba/despacha, caja recibe. Regla específica ANTES de /red.
   [/^\/red\/transferencias(\/|$)/, ["tecnicos", "administracion", "caja"]],
   [/^\/red(\/|$)/, ["tecnicos"]],
+  [/^\/mikrotik(\/|$)/, ["tecnicos"]],
   [/^\/configuracion(\/|$)/, ["sistemas"]],
   [/^\/clientes(\/|$)/, ["administracion", "caja"]],
   [/^\/playhub(\/|$)/, ["administracion"]],

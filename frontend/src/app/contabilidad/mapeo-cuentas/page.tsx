@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { PageHeading } from "@/components/accounting/PageHeading";
+import { Icon } from "@/components/Icon";
 import { Select } from "@/components/ui/Field";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { toast } from "@/components/ui/Toast";
@@ -68,36 +69,47 @@ export default function MapeoCuentasPage() {
   const missing = rows.filter((r) => !r.accountId).length;
 
   return (
-    <div className="mx-auto max-w-3xl">
+    <div className="flex flex-col gap-4">
       <PageHeading icon="settings" title="Mapeo de cuentas" subtitle="Cuentas que usa la contabilización automática de facturas, compras y pagos" />
 
       {missing > 0 && (
-        <div className="mb-4 rounded-xl border border-warning-subtle bg-warning-soft p-3 text-[12.5px] text-warning-text">
+        <div className="flex items-center gap-2 rounded-xl border border-warning-subtle bg-warning-soft p-3 text-[12.5px] text-warning-text">
+          <Icon name="alert-triangle" size={15} className="shrink-0" />
           Faltan {missing} mapeo(s) por configurar. Los documentos sin mapeo no se contabilizarán automáticamente.
         </div>
       )}
 
-      <div className="flex flex-col divide-y divide-border-subtle overflow-hidden rounded-xl border border-border-subtle bg-surface">
+      {/* Grilla de tarjetas: cada mapeo es su propia tarjeta y llenan el ancho. */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {rows.map((r) => {
           const meta = KEY_LABELS[r.key] ?? { label: r.key, desc: "" };
+          const asignada = !!r.accountId;
           return (
-            <div key={r.key} className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="min-w-0">
-                <p className="text-[13.5px] font-semibold text-text-primary">{meta.label}</p>
-                <p className="text-[12px] text-text-tertiary">{meta.desc}</p>
-              </div>
-              <div className="w-full sm:w-72">
-                <Select
-                  value={r.accountId ?? ""}
-                  disabled={saving === r.key}
-                  onChange={(e) => assign(r.key, e.target.value)}
+            <div key={r.key} className="flex flex-col gap-3 rounded-xl border border-border-subtle bg-surface p-4">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-[13.5px] font-semibold text-text-primary">{meta.label}</p>
+                  <p className="text-[12px] text-text-tertiary">{meta.desc}</p>
+                </div>
+                <span
+                  title={asignada ? "Asignada" : "Sin asignar"}
+                  className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full ${
+                    asignada ? "bg-success-soft text-success-text" : "bg-warning-soft text-warning-text"
+                  }`}
                 >
-                  <option value="">Sin asignar…</option>
-                  {postable.map((a) => (
-                    <option key={a.id} value={a.id}>{a.code} · {a.name}</option>
-                  ))}
-                </Select>
+                  <Icon name={asignada ? "check" : "alert-triangle"} size={13} />
+                </span>
               </div>
+              <Select
+                value={r.accountId ?? ""}
+                disabled={saving === r.key}
+                onChange={(e) => assign(r.key, e.target.value)}
+              >
+                <option value="">Sin asignar…</option>
+                {postable.map((a) => (
+                  <option key={a.id} value={a.id}>{a.code} · {a.name}</option>
+                ))}
+              </Select>
             </div>
           );
         })}

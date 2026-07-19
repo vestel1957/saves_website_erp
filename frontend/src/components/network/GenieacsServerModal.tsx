@@ -26,10 +26,13 @@ export function GenieacsServerModal({
   const [form, setForm] = useState({ name: "", nbiUrl: "", username: "", password: "", sedeLegacy: "0" });
   const [showPass, setShowPass] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
   useEffect(() => {
     if (!open) return;
     setShowPass(false);
+    setTestResult(null);
     if (server) {
       setForm({ name: server.name, nbiUrl: server.nbiUrl, username: server.username, password: "", sedeLegacy: String(server.sedeLegacy) });
     } else {
@@ -38,6 +41,27 @@ export function GenieacsServerModal({
   }, [open, server]);
 
   const set = (k: keyof typeof form) => (e: { target: { value: string } }) => setForm((f) => ({ ...f, [k]: e.target.value }));
+
+  /**
+   * Prueba la conexión al NBI del servidor YA guardado (usa sus credenciales de la
+   * BD). Para probar credenciales recién tecleadas hay que Guardar primero: por eso
+   * sólo se ofrece al editar. Un 401/403 llega con mensaje claro desde el backend.
+   */
+  const testConnection = async () => {
+    if (!server) return;
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const r = await authFetch(`/network/genieacs/servers/${server.id}/test`, { method: "POST" });
+      const data = await r.json();
+      if (!r.ok) { setTestResult({ ok: false, msg: data?.message ?? "No se pudo probar" }); return; }
+      setTestResult(data?.ok ? { ok: true, msg: "Conexión OK con el NBI." } : { ok: false, msg: data?.error ?? "NBI inaccesible." });
+    } catch (err) {
+      setTestResult({ ok: false, msg: (err as Error).message });
+    } finally {
+      setTesting(false);
+    }
+  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -94,12 +118,33 @@ export function GenieacsServerModal({
           </Field>
         </div>
 
-        <div className="flex justify-end gap-2 pt-1">
-          <Button type="button" variant="ghost" onClick={onClose}>Cancelar</Button>
-          <Button type="submit" disabled={saving}>
-            <Icon name={saving ? "loader" : "save"} size={15} className={saving ? "animate-spin" : ""} />
-            {saving ? "Guardando…" : "Guardar"}
-          </Button>
+        {testResult && (
+          <div
+            className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm ${
+              testResult.ok ? "bg-success-soft text-success-text" : "bg-error-soft text-error-text"
+            }`}
+          >
+            <Icon name={testResult.ok ? "check" : "alert-triangle"} size={15} />
+            <span>{testResult.msg}</span>
+          </div>
+        )}
+
+        <div className="flex items-center justify-between gap-2 pt-1">
+          {editing ? (
+            <Button type="button" variant="secondary" size="sm" onClick={testConnection} disabled={testing}>
+              <Icon name={testing ? "loader" : "wifi"} size={15} className={testing ? "animate-spin" : ""} />
+              {testing ? "Probando…" : "Probar conexión"}
+            </Button>
+          ) : (
+            <span className="text-xs text-text-tertiary">Guarda para poder probar la conexión.</span>
+          )}
+          <div className="flex gap-2">
+            <Button type="button" variant="ghost" onClick={onClose}>Cancelar</Button>
+            <Button type="submit" disabled={saving}>
+              <Icon name={saving ? "loader" : "save"} size={15} className={saving ? "animate-spin" : ""} />
+              {saving ? "Guardando…" : "Guardar"}
+            </Button>
+          </div>
         </div>
       </form>
     </Modal>

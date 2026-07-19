@@ -2,6 +2,7 @@ import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post,
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { InventoryService } from './inventory.service';
+import { InventoryAlertsService } from './alerts.service';
 import { CreateMaterialDto, SimpleCatalogDto, TransferDto, UpdateMaterialDto } from './dto/inventory.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AreaGuard } from '../auth/area.guard';
@@ -13,9 +14,20 @@ import { CurrentUser, AuthUser } from '../auth/current-user.decorator';
 @UseGuards(JwtAuthGuard, AreaGuard)
 @RequireArea('administracion', 'tecnicos')
 export class InventoryController {
-  constructor(private readonly inv: InventoryService) {}
+  constructor(
+    private readonly inv: InventoryService,
+    private readonly alertsSvc: InventoryAlertsService,
+  ) {}
 
   @Get('stats') stats() { return this.inv.stats(); }
+
+  // ── Alertas de stock (campana del TopNav) ──────────────────────────────────
+  // Van antes de `materials/:id` y compañía por claridad; no colisionan porque
+  // 'alerts' es un segmento literal.
+  @Get('alerts') alerts() { return this.alertsSvc.list(); }
+  @Post('alerts/run') runAlerts() { return this.alertsSvc.run(); }
+  @Post('alerts/read-all') readAllAlerts() { return this.alertsSvc.readAll(); }
+
   @Get('categories') categories() { return this.inv.categories(); }
   @Get('warehouses') warehouses() { return this.inv.warehouses(); }
   @Post('categories') createCategory(@Body() dto: SimpleCatalogDto) { return this.inv.createCategory(dto); }

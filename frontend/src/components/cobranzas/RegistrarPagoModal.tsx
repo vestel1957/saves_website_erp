@@ -10,7 +10,7 @@ import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import {
-  type Debt, type CashAccount, PAY_METHODS, BANKS, previewCascade,
+  type Debt, type CashAccount, PAY_METHODS, BANKS, isBankMethod, previewCascade,
 } from "@/lib/cobranzas";
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -69,7 +69,7 @@ export function RegistrarPagoModal({
           subscriberId, amount: amountNum, method,
           cashAccountId: cashAccountId ? Number(cashAccountId) : undefined,
           accountName: accounts.find((a) => String(a.id) === cashAccountId)?.name,
-          bankName: method === "Bank" ? bank : undefined,
+          bankName: isBankMethod(method) ? bank : undefined,
           date, note: note || undefined,
         }),
       });
@@ -127,7 +127,7 @@ export function RegistrarPagoModal({
                     {PAY_METHODS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
                   </Select>
                 </Field>
-                {method === "Bank" && (
+                {isBankMethod(method) && (
                   <Field label="Banco">
                     <Select value={bank} onChange={(e) => setBank(e.target.value)}>
                       {BANKS.map((b) => <option key={b} value={b}>{b}</option>)}

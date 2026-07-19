@@ -25,7 +25,11 @@ export type OltDashboard = {
 
 export type Board = { slot: string; board: string; status: string; gpon: boolean; epon: boolean };
 export type LiveOnu = { fsp: string; ont_id: string; sn: string; control_flag: string; run_state: string; config_state: string; match_state: string; rx_power: string };
-export type AutofindOnu = { fsp: string; sn: string; sn_full: string; password: string; loid: string };
+export type AutofindOnu = {
+  fsp: string; sn: string; sn_full: string; password: string; loid: string;
+  /** Campos extra del autofind (pueden venir vacíos según el modelo de ONU). */
+  mac?: string; model?: string; vendor?: string; version?: string;
+};
 export type Profile = { id: string; name: string };
 export type SystemInfo = { model: string; version: string; patch: string; uptime: string };
 

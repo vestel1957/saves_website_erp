@@ -32,3 +32,4 @@ Thumbs.db
 
 # large binaries / assets checked in ad-hoc
 *.png.bak
+*.xlsx

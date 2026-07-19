@@ -1,7 +1,7 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { IsArray, IsOptional, IsString, ArrayNotEmpty } from 'class-validator';
 import { NetworkService } from './network.service';
-import { NetworkWriteService, EquipTransferDto, AssignPortDto, AssignEquipmentSubDto, CreateEquipmentDto, CreateNapDto, CreateVlanDto, RejectTransferDto, UpdateNapDto } from './network-write.service';
+import { NetworkWriteService, EquipTransferDto, AssignPortDto, AssignEquipmentSubDto, CreateEquipmentDto, CreateIpPoolDto, CreateNapDto, CreateVlanDto, RejectTransferDto, UpdateIpPoolDto, UpdateNapDto } from './network-write.service';
 import { MikrotikService } from './mikrotik.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AreaGuard } from '../auth/area.guard';
@@ -101,6 +101,18 @@ export class NetworkController {
   @Get('olts') olts() { return this.network.olts(); }
   @Get('warehouses') warehouses() { return this.network.warehouses(); }
   @Get('ip-pools') ipPools(@Query('search') search?: string) { return this.network.ipPools({ search }); }
+
+  // Escritura de pools de IP. Paridad legacy `Mikrotiks::guardar_configuracion` +
+  // `set_default_ips_user`. NO hay borrado: el legacy tampoco lo tiene.
+  @Post('ip-pools')
+  createIpPool(@Body() dto: CreateIpPoolDto) { return this.write.createIpPool(dto); }
+
+  @Patch('ip-pools/:id')
+  updateIpPool(@Param('id') id: string, @Body() dto: UpdateIpPoolDto) { return this.write.updateIpPool(id, dto); }
+
+  /** Marca el pool como predeterminado de su sede (solo puede haber uno por sede). */
+  @Put('ip-pools/:id/default')
+  setDefaultIpPool(@Param('id') id: string) { return this.write.setDefaultIpPool(id); }
   @Get('branches') branches() { return this.network.branches(); }
   @Get('vlans') vlans(@Query('branchId') branchId?: string) { return this.network.vlans(branchId); }
 

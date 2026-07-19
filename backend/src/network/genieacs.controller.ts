@@ -36,10 +36,15 @@ export class GenieacsController {
   @Get('inventory')
   inventory(
     @Query('serverId') serverId?: string, @Query('search') search?: string,
-    @Query('model') model?: string, @Query('estado') estado?: string,
+    @Query('model') model?: string, @Query('manufacturer') manufacturer?: string,
+    @Query('estado') estado?: string,
+    @Query('sortBy') sortBy?: string, @Query('sortDir') sortDir?: string,
     @Query('page') page?: string, @Query('pageSize') pageSize?: string,
   ) {
-    return this.acs.inventory({ serverId, search, model, estado, page: Number(page), pageSize: Number(pageSize) });
+    return this.acs.inventory({
+      serverId, search, model, manufacturer, estado, sortBy, sortDir,
+      page: Number(page), pageSize: Number(pageSize),
+    });
   }
   @Get('history') history(@Query('serverId') serverId?: string, @Query('limit') limit?: string) {
     return this.acs.history(serverId, Number(limit) || 100);

@@ -7,6 +7,19 @@ export const AGENT_CLIENTE = 'clientes';
 export const AGENT_PUBLICO = 'publico';
 
 /**
+ * Nombre del transporte. Compone la clave de conversación: `kapso:573001112233`.
+ *
+ * Vive en este módulo —y no junto al transporte— porque lo necesitan tanto el
+ * transporte como el gate, y el transporte ya depende del gate: tenerlo allí crearía
+ * un ciclo de imports, y un `const` atrapado en un ciclo llega `undefined` en runtime
+ * aunque `tsc` no diga nada. Este módulo no importa a nadie, así que es seguro.
+ */
+export const SAVES_TRANSPORT_NAME = 'kapso';
+
+/** Clave de conversación del motor para un teléfono ya normalizado. */
+export const convKeyOf = (phone: string) => `${SAVES_TRANSPORT_NAME}:${phone}`;
+
+/**
  * Permiso sintético que porta un abonado identificado. No está en el catálogo RBAC
  * del ERP a propósito: ningún funcionario puede tenerlo y ningún abonado puede
  * tener un `area.*`. Así el toolset de clientes y el interno son disjuntos por

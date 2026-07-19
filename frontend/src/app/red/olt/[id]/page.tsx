@@ -153,12 +153,7 @@ export default function OperarOltPage() {
   return (
     <>
       <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
-        <div className="flex flex-col items-start gap-1">
-          <PageHeading icon="radio-tower" title={`OLT ${olt.name}`} />
-          <h1 className="flex items-center gap-1.5 text-[16px] font-bold text-text-primary">
-            <Icon name="radio-tower" size={17} className="text-brand" />OLT {olt.name}
-          </h1>
-        </div>
+        <PageHeading icon="radio-tower" title={`OLT ${olt.name}`} />
         <div className="flex items-center gap-2 text-[12px] text-text-tertiary">
           <span className="font-mono">{olt.brand} · {olt.ip}:{olt.port}</span>
           {mode && <Badge label={live ? "MODO LIVE" : "DRY-RUN"} tone={live ? "error" : "info"} />}
@@ -240,6 +235,12 @@ export default function OperarOltPage() {
           </div>
           <DataTable rows={autofind ?? []} empty="No hay ONUs esperando autenticación." columns={[
             { key: "sn", header: "Serial (SN)", render: (o) => <span className="font-mono text-text-secondary">{o.sn}</span> },
+            { key: "mac", header: "MAC", render: (o) => o.mac
+              ? <span className="font-mono text-text-secondary">{o.mac}</span>
+              : <span className="text-text-tertiary" title="La ONU no reporta MAC en el autofind">—</span> },
+            { key: "model", header: "Equipo", render: (o) => (
+              <span className="text-[12px]">{o.model || o.vendor || "—"}</span>
+            ) },
             { key: "fsp", header: "F/S/P", render: (o) => <span className="font-mono">{o.fsp || "—"}</span> },
             { key: "loid", header: "LOID", render: (o) => o.loid || "—" },
             { key: "acc", header: "", render: (o) => {

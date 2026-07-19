@@ -10,12 +10,13 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Input, Select } from "@/components/ui/Field";
 import { ClienteWizardModal } from "@/components/subscribers/ClienteWizardModal";
+import { SubscriberFilters } from "@/components/subscribers/SubscriberFilters";
 import { Pagination } from "@/components/ui/Pagination";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { useAuth } from "@/context/AuthProvider";
 import {
   type SubscriberList, type Branch,
-  SUB_STATUS_LABEL, SUB_STATUS_TONE, cop,
+  SUB_STATUS_LABEL, SUB_STATUS_TONE, cop, cuentaParams,
 } from "@/lib/subscribers";
 
 export default function ClientesPage() {
@@ -29,6 +30,9 @@ export default function ClientesPage() {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [branchId, setBranchId] = useState("");
+  const [servicio, setServicio] = useState("");
+  const [tecnologia, setTecnologia] = useState("");
+  const [cuenta, setCuenta] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
 
@@ -44,13 +48,18 @@ export default function ClientesPage() {
     if (search.trim()) qs.set("search", search.trim());
     if (status) qs.set("status", status);
     if (branchId) qs.set("branchId", branchId);
+    if (servicio) qs.set("servicio", servicio);
+    if (tecnologia) qs.set("tecnologia", tecnologia);
+    const cp = cuentaParams(cuenta);
+    if (cp.cuenta) qs.set("cuenta", cp.cuenta);
+    if (cp.deuda) qs.set("deuda", cp.deuda);
     try {
       const res = await authFetch(`/subscribers?${qs.toString()}`);
       setData(await res.json());
     } finally {
       setLoading(false);
     }
-  }, [authFetch, page, pageSize, search, status, branchId]);
+  }, [authFetch, page, pageSize, search, status, branchId, servicio, tecnologia, cuenta]);
 
   // Debounce de búsqueda/filtros.
   useEffect(() => {
@@ -60,7 +69,7 @@ export default function ClientesPage() {
   }, [authLoading, load]);
 
   // Al cambiar filtros, vuelve a página 1.
-  useEffect(() => { setPage(1); }, [search, status, branchId, pageSize]);
+  useEffect(() => { setPage(1); }, [search, status, branchId, servicio, tecnologia, cuenta, pageSize]);
 
   if (authLoading) return <PageSkeleton />;
 
@@ -91,6 +100,10 @@ export default function ClientesPage() {
           <option value="">Todas las sedes</option>
           {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
         </Select>
+        <SubscriberFilters
+          servicio={servicio} tecnologia={tecnologia} cuenta={cuenta}
+          onServicio={setServicio} onTecnologia={setTecnologia} onCuenta={setCuenta}
+        />
         <Button className="ml-auto" onClick={() => setCreateOpen(true)}>
           <Icon name="user-plus" size={15} /> Nuevo cliente
         </Button>

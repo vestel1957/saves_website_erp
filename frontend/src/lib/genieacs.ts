@@ -10,6 +10,10 @@ export type GenieacsServer = {
   sedeLegacy: number;
   isDefault: boolean;
   online: boolean;
+  /** El NBI tiene basic-auth configurado (usuario + clave). */
+  hasAuth?: boolean;
+  /** La clave ya quedó cifrada en reposo (false = fila legacy en texto plano). */
+  secretEncrypted?: boolean;
 };
 
 export type GenieacsDashboard = {
@@ -61,6 +65,24 @@ export const GENIEACS_ACTION_LABEL: Record<string, string> = {
   LINK: "Servidor",
   DELETE: "Eliminar",
 };
+
+/** Opciones del filtro de estado. Deben coincidir con las que entiende el service. */
+export const ESTADO_OPTIONS: { value: string; label: string }[] = [
+  { value: "", label: "Todos los estados" },
+  { value: "vivos", label: "Vivos (≤1 día)" },
+  { value: "recientes", label: "Recientes (≤180 días)" },
+  { value: "muertos", label: "Muertos (>180 días)" },
+  { value: "suspendidos", label: "TV suspendida" },
+  { value: "activos", label: "TV activa" },
+];
+
+/** Fecha y hora exactas del último inform, para el detalle y el `title` de la tabla. */
+export function informExact(iso: string | null): string {
+  if (!iso) return "Nunca informó";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "Fecha inválida";
+  return new Date(t).toLocaleString("es-CO", { dateStyle: "medium", timeStyle: "short" });
+}
 
 /** Tono para la antigüedad del último inform. */
 export function informTone(days: number | null): "success" | "warning" | "error" | "default" {

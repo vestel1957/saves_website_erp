@@ -47,7 +47,7 @@ export default function NotasPage() {
       <PageHeading icon="file-text" title="Notas crédito / débito" subtitle="Ajustes sobre facturas (rebaja o recargo)" />
 
       {/* Barra única: búsqueda (se estira) + filtro de tipo + acción, todo en una línea. */}
-      <div className="mb-3 mt-4 flex items-center gap-2">
+      <div className="mb-3 -mt-2 flex items-center gap-2">
         <div className="relative min-w-0 flex-1">
           <Icon name="search" size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary" />
           <Input className="pl-9" placeholder="Buscar por N° de factura, cliente o descripción…" value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -66,6 +66,7 @@ export default function NotasPage() {
       {loading && !data ? <PageSkeleton /> : (
         <>
           <DataTable
+            autoHeight
             rows={data?.items ?? []}
             empty="No se encontraron notas."
             columns={[

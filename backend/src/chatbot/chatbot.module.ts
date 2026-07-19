@@ -13,6 +13,9 @@ import { ConfigDataModule } from '../config/config.module';
 import { ChatbotService } from './chatbot.service';
 import { ChatbotIdentityService } from './chatbot-identity.service';
 import { ChatbotLinkService } from './chatbot-link.service';
+import { ChatbotGateService } from './chatbot-gate.service';
+import { ChatbotSessionStore } from './chatbot-session.store';
+import { ChatbotUsageService } from './chatbot-usage.service';
 import { ChatbotController } from './chatbot.controller';
 import { SavesTransport } from './saves-transport';
 import { InternoAbonadosToolset } from './toolsets/interno-abonados.toolset';
@@ -52,6 +55,9 @@ import { PublicoToolset } from './toolsets/publico.toolset';
     ChatbotService,
     ChatbotIdentityService,
     ChatbotLinkService,
+    ChatbotGateService,
+    ChatbotSessionStore,
+    ChatbotUsageService,
     SavesTransport,
     InternoAbonadosToolset,
     InternoTicketsToolset,

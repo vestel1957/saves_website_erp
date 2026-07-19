@@ -82,8 +82,9 @@ export function TopNav() {
   }
 
   function openAlert(a: InvAlert) {
-    // Centro de alertas de inventario.
-    router.push("/inventario/alertas");
+    // No hay centro de alertas dedicado: el listado de material con el filtro de
+    // stock bajo muestra exactamente lo que la alerta reporta.
+    router.push("/inventario?lowStock=1");
   }
 
   const squareBtn =

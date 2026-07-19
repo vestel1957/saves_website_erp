@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { PageHeading } from "@/components/accounting/PageHeading";
 import { Icon } from "@/components/Icon";
 import { Badge } from "@/components/ui/Badge";
@@ -17,6 +18,7 @@ const fmt = (d: string | null) => (d ? new Date(d).toLocaleDateString("es-CO") :
 
 export default function ActasPage() {
   const { loading: authLoading, authFetch } = useAuth();
+  const router = useRouter();
   const [data, setData] = useState<ActaList | null>(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
@@ -44,6 +46,7 @@ export default function ActasPage() {
           autoHeight
           rows={data.items}
           empty="No hay actas registradas."
+          onRowClick={(r: Acta) => router.push(`/inventario/actas/${r.id}`)}
           columns={[
             { key: "date", header: "Fecha", render: (r: Acta) => fmt(r.date) },
             { key: "from", header: "Origen", render: (r: Acta) => <span className="text-text-secondary">{r.from || "—"}</span> },
@@ -51,6 +54,9 @@ export default function ActasPage() {
             { key: "items", header: "Ítems", align: "right", render: (r: Acta) => <Badge label={String(r.items)} tone="info" /> },
             { key: "obs", header: "Observaciones", render: (r: Acta) => <span className="text-text-tertiary">{r.observations || "—"}</span> },
             { key: "status", header: "Estado", render: (r: Acta) => <Badge label={r.status} tone={r.status === "Recibida" ? "success" : "default"} /> },
+            { key: "go", header: "", align: "right", render: () => (
+                <span className="inline-flex items-center gap-1 text-[12px] font-semibold text-text-tertiary">Ver <Icon name="chevron-right" size={14} /></span>
+              ) },
           ]}
         />
         {data.pages > 1 && (

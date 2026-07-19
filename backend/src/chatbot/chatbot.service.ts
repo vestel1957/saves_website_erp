@@ -2,8 +2,13 @@ import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { AgentEngine, type AgentResolver, type AgentUser, type AuditEntry } from '@s4gk/wa-agent';
 import { OpenAiProvider } from '@s4gk/wa-agent/openai';
 import { WhisperTranscriber } from '@s4gk/wa-agent/whisper';
+import OpenAI from 'openai';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit/audit.service';
+import { WhatsappService } from '../common/whatsapp/whatsapp.service';
+import { ChatbotGateService } from './chatbot-gate.service';
+import { ChatbotSessionStore } from './chatbot-session.store';
+import { ChatbotUsageService } from './chatbot-usage.service';
 import { SavesTransport } from './saves-transport';
 import { ChatbotIdentityService } from './chatbot-identity.service';
 import { AGENT_CLIENTE, AGENT_INTERNO, AGENT_PUBLICO, identityOf } from './chatbot.identity';
@@ -40,6 +45,10 @@ export class ChatbotService implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
+    private readonly whatsapp: WhatsappService,
+    private readonly gate: ChatbotGateService,
+    private readonly store: ChatbotSessionStore,
+    private readonly usage: ChatbotUsageService,
     private readonly transport: SavesTransport,
     private readonly identity: ChatbotIdentityService,
     private readonly abonados: InternoAbonadosToolset,
@@ -52,17 +61,16 @@ export class ChatbotService implements OnModuleInit {
     private readonly publico: PublicoToolset,
   ) {}
 
-  get enabled(): boolean {
-    return process.env.WA_AGENT_ENABLED === 'true';
-  }
-
+  /**
+   * El motor se MONTA siempre que haya API key del LLM, encendido o no. Quien decide
+   * si atiende cada mensaje es el ChatbotGateService, en el transporte. Así el
+   * interruptor de Configuración surte efecto en segundos, sin reiniciar el backend:
+   * apagar el bot con `pm2 restart` no sirve cuando hay clientes escribiendo.
+   * Montado y apagado no cuesta nada: ningún mensaje llega al motor.
+   */
   async onModuleInit(): Promise<void> {
-    if (!this.enabled) {
-      this.logger.log('Agente de WhatsApp DESACTIVADO (WA_AGENT_ENABLED != true).');
-      return;
-    }
     if (!process.env.OPENAI_API_KEY) {
-      this.logger.warn('OPENAI_API_KEY no configurada: el agente NO se inicia.');
+      this.logger.warn('OPENAI_API_KEY no configurada: el agente NO se monta.');
       return;
     }
 
@@ -71,9 +79,28 @@ export class ChatbotService implements OnModuleInit {
     );
 
     this.engine = new AgentEngine({
-      provider: new OpenAiProvider({ model: process.env.WHATSAPP_BOT_MODEL ?? 'gpt-4o-mini' }),
+      provider: new OpenAiProvider({
+        model: process.env.WHATSAPP_BOT_MODEL ?? 'gpt-4o-mini',
+        // Cliente propio SOLO para acotar el tiempo. Sin esto se heredan los valores
+        // del SDK —timeout 10 min y 2 reintentos— y un turno puede colgarse ~30 min;
+        // y como el motor encadena hasta 6 vueltas de herramientas, el techo es
+        // absurdo. Nadie espera eso en WhatsApp: mejor fallar rápido y que el motor
+        // responda "tuve un problema" que dejar al cliente mirando el chat.
+        // `instrument` además contabiliza los tokens: el `usage` de OpenAI solo existe
+        // aquí, porque el adaptador del motor lo descarta al normalizar la respuesta.
+        client: this.usage.instrument(new OpenAI({
+          apiKey: process.env.OPENAI_API_KEY,
+          timeout: Number(process.env.WHATSAPP_BOT_TIMEOUT_MS ?? 45_000),
+          maxRetries: 1,
+        })),
+      }),
       transports: [this.transport],
       identity: this.identity,
+
+      // Estado en BD, no en memoria: una confirmación pendiente tiene que sobrevivir
+      // a un `pm2 restart` y ser visible desde cualquier worker. Con el almacén por
+      // defecto, reiniciar entre "¿confirmas?" y el "SÍ" perdía la acción.
+      store: this.store,
       transcriber: new WhisperTranscriber({ model: process.env.WHATSAPP_STT_MODEL ?? 'whisper-1', language: 'es' }),
 
       // Agente por defecto = el PÚBLICO (el de menos privilegio). El motor cae aquí
@@ -104,8 +131,28 @@ export class ChatbotService implements OnModuleInit {
     });
 
     await this.engine.start();
-    const modo = this.transport.ready ? 'Kapso conectado' : 'Kapso SIN configurar (no podrá responder)';
-    this.logger.log(`Agente de WhatsApp activo (${modo}) · agentes: interno, clientes, público.`);
+
+    const cfg = await this.gate.config();
+    const estado = cfg.enabled
+      ? cfg.pilot
+        ? `ENCENDIDO en PILOTO (solo ${cfg.allowlist.length} número(s) de la lista blanca)`
+        : 'ENCENDIDO para TODOS los que escriban'
+      : 'apagado';
+    this.logger.log(`Agente de WhatsApp montado · ${estado} · agentes: interno, clientes, público.`);
+
+    // Si está encendido, verificar de verdad que se puede responder. Con credenciales
+    // muertas el bot pensaría en el vacío: mejor gritarlo en el arranque.
+    if (cfg.enabled) {
+      const probe = await this.whatsapp.probe();
+      if (!probe.ok) {
+        this.logger.error(`El bot está ENCENDIDO pero NO puede responder: ${probe.error}`);
+      } else {
+        this.logger.log(`WhatsApp listo: ${probe.name ?? '?'} (${probe.phone ?? '?'}) · calidad ${probe.quality ?? '?'}`);
+        if (probe.codeVerification && probe.codeVerification !== 'VERIFIED') {
+          this.logger.warn(`El número está ${probe.codeVerification} (no VERIFIED): el envío puede fallar.`);
+        }
+      }
+    }
   }
 
   /** Quién atiende: lo decide la identidad ya resuelta, nunca el modelo. */
@@ -143,14 +190,27 @@ export class ChatbotService implements OnModuleInit {
     });
   }
 
-  /** Estado para diagnóstico (lo consume el endpoint de administración). */
-  status() {
+  /**
+   * Estado para el panel. Incluye el diagnóstico REAL contra Kapso: sin él, "montado"
+   * y "configurado" se leen como "funciona", que es justo el engaño que hay que evitar.
+   */
+  async status() {
+    const [cfg, whatsapp, uso] = await Promise.all([
+      this.gate.config(), this.whatsapp.probe(), this.usage.summary(),
+    ]);
     return {
-      enabled: this.enabled,
+      ...cfg,
       running: !!this.engine,
-      transportReady: this.transport.ready,
+      model: this.engine?.status().provider.model ?? null,
       agents: [AGENT_INTERNO, AGENT_CLIENTE, AGENT_PUBLICO],
-      ...(this.engine?.status() ?? {}),
+      whatsapp,
+      uso,
+      /**
+       * Resumen honesto: solo true si está encendido, montado, puede responder de
+       * verdad Y le queda presupuesto. Cualquier "sí, pero" aquí es un bot que en la
+       * práctica no contesta.
+       */
+      operativo: cfg.enabled && !!this.engine && whatsapp.ok && !uso.excedido,
     };
   }
 }

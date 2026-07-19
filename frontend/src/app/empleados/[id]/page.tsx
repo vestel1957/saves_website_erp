@@ -6,7 +6,8 @@ import { useParams } from "next/navigation";
 import { Icon } from "@/components/Icon";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import { Input } from "@/components/ui/Field";
+import { Field, Input, Select } from "@/components/ui/Field";
+import { Modal } from "@/components/Modal";
 import { toast } from "@/components/ui/Toast";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { TabBar } from "@/components/accounting/TabBar";
@@ -14,6 +15,14 @@ import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 
 type TabKey = "datos" | "permisos";
+
+/** Rol legacy del empleado (aauth_users.roleid). Distinto de los roles RBAC. */
+const ROLE_LABELS: Record<string, string> = {
+  "2": "Cajero",
+  "3": "Técnico",
+  "4": "Administrativo",
+  "5": "Administrador",
+};
 
 const fmtDate = (d: string | null) => (d ? new Date(d).toLocaleDateString("es-CO") : "—");
 const fmtDateTime = (d: string | null) => (d ? new Date(d).toLocaleString("es-CO", { dateStyle: "short", timeStyle: "short" }) : "—");
@@ -680,12 +689,145 @@ function PermisosCard({ staffId }: { staffId: string }) {
   );
 }
 
+// ── Edición de datos del empleado ───────────────────────────────────────────
+// Refleja UpdateStaffDto del backend. Se envían todos los campos del formulario:
+// los que el usuario deja vacíos viajan como "" y el backend los pasa a NULL.
+const EDIT_FIELDS = [
+  "name", "docNumber", "username", "email", "phone", "phoneAlt",
+  "eps", "pension", "rh", "address", "city", "region",
+] as const;
+
+/** Fecha ISO del backend → `yyyy-mm-dd` que espera <input type="date">. */
+const toDateInput = (d: string | null | undefined) => (d ? new Date(d).toISOString().slice(0, 10) : "");
+
+function EditarEmpleadoModal({
+  emp, open, onClose, onSaved,
+}: { emp: any; open: boolean; onClose: () => void; onSaved: () => void }) {
+  const { authFetch } = useAuth();
+  const [areas, setAreas] = useState<any[]>([]);
+  const [form, setForm] = useState<any>({});
+  const [saving, setSaving] = useState(false);
+
+  // Al abrir, precarga el formulario con los datos actuales del empleado.
+  useEffect(() => {
+    if (!open) return;
+    const f: any = {};
+    for (const k of EDIT_FIELDS) f[k] = emp[k] ?? "";
+    f.role = emp.role != null ? String(emp.role) : "";
+    f.areaId = emp.areaId ?? "";
+    f.entryDate = toDateInput(emp.entryDate);
+    setForm(f);
+    void authFetch("/staff/areas").then((r) => r.json()).then(setAreas).catch(() => {});
+  }, [open, emp, authFetch]);
+
+  const setF = (k: string, v: string) => setForm((f: any) => ({ ...f, [k]: v }));
+
+  const submit = useCallback(async () => {
+    if (!String(form.name ?? "").trim()) { toast("El nombre es obligatorio.", "alert-triangle"); return; }
+    setSaving(true);
+    try {
+      const body: any = {};
+      for (const k of EDIT_FIELDS) body[k] = String(form[k] ?? "").trim();
+      // null explícito (no undefined): JSON.stringify descarta undefined y el
+      // backend dejaría el campo intacto, volviendo el borrado un no-op mudo.
+      body.role = form.role ? Number(form.role) : null;
+      body.areaId = form.areaId ?? "";
+      body.entryDate = form.entryDate || null;
+      const res = await authFetch(`/staff/${emp.id}`, { method: "PATCH", body: JSON.stringify(body) });
+      const d = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(d?.message || "Error");
+      toast("Empleado actualizado.", "check");
+      onSaved();
+      onClose();
+    } catch (e: any) {
+      toast(e?.message || "No se pudo actualizar el empleado.", "alert-triangle");
+    } finally {
+      setSaving(false);
+    }
+  }, [authFetch, emp.id, form, onSaved, onClose]);
+
+  return (
+    <Modal open={open} onClose={onClose} title="Editar empleado" maxWidth="max-w-2xl">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="sm:col-span-2">
+          <Field label="Nombre" required>
+            <Input value={form.name ?? ""} onChange={(e) => setF("name", e.target.value)} placeholder="Nombre completo" />
+          </Field>
+        </div>
+        <Field label="Documento">
+          <Input value={form.docNumber ?? ""} onChange={(e) => setF("docNumber", e.target.value)} />
+        </Field>
+        <Field label="Usuario">
+          <Input value={form.username ?? ""} onChange={(e) => setF("username", e.target.value)} />
+        </Field>
+        <div className="sm:col-span-2">
+          <Field label="Email" hint="Es el vínculo con la cuenta de acceso: si lo cambias, revisa la pestaña de permisos.">
+            <Input type="email" value={form.email ?? ""} onChange={(e) => setF("email", e.target.value)} />
+          </Field>
+        </div>
+        <Field label="Rol">
+          <Select value={form.role ?? ""} onChange={(e) => setF("role", e.target.value)}>
+            <option value="">Sin rol</option>
+            {Object.entries(ROLE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </Select>
+        </Field>
+        <Field label="Área">
+          <Select value={form.areaId ?? ""} onChange={(e) => setF("areaId", e.target.value)}>
+            <option value="">Sin área</option>
+            {areas.map((a: any) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </Select>
+        </Field>
+        <Field label="Fecha de ingreso">
+          <Input type="date" value={form.entryDate ?? ""} onChange={(e) => setF("entryDate", e.target.value)} />
+        </Field>
+        <Field label="RH">
+          <Input value={form.rh ?? ""} onChange={(e) => setF("rh", e.target.value)} placeholder="O+" />
+        </Field>
+        <Field label="EPS">
+          <Input value={form.eps ?? ""} onChange={(e) => setF("eps", e.target.value)} />
+        </Field>
+        <Field label="Pensión">
+          <Input value={form.pension ?? ""} onChange={(e) => setF("pension", e.target.value)} />
+        </Field>
+        <Field label="Teléfono">
+          <Input value={form.phone ?? ""} onChange={(e) => setF("phone", e.target.value)} />
+        </Field>
+        <Field label="Teléfono alterno">
+          <Input value={form.phoneAlt ?? ""} onChange={(e) => setF("phoneAlt", e.target.value)} />
+        </Field>
+        <Field label="Ciudad">
+          <Input value={form.city ?? ""} onChange={(e) => setF("city", e.target.value)} />
+        </Field>
+        <Field label="Región">
+          <Input value={form.region ?? ""} onChange={(e) => setF("region", e.target.value)} />
+        </Field>
+        <div className="sm:col-span-2">
+          <Field label="Dirección">
+            <Input value={form.address ?? ""} onChange={(e) => setF("address", e.target.value)} />
+          </Field>
+        </div>
+      </div>
+      <div className="mt-4 flex justify-end gap-2">
+        <Button variant="secondary" onClick={onClose} disabled={saving}>
+          <Icon name="x" size={15} />
+          Cancelar
+        </Button>
+        <Button variant="primary" onClick={submit} disabled={saving}>
+          <Icon name="check" size={15} />
+          {saving ? "Guardando…" : "Guardar cambios"}
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
 export default function EmpleadoDetallePage() {
   const { id } = useParams<{ id: string }>();
   const { loading: authLoading, authFetch } = useAuth();
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<TabKey>("datos");
+  const [openEdit, setOpenEdit] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -725,6 +867,12 @@ export default function EmpleadoDetallePage() {
             <Badge label={emp.roleLabel ?? "—"} tone="info" />
             <Badge label={emp.banned ? "Inhabilitado" : "Activo"} tone={emp.banned ? "error" : "success"} />
           </div>
+        </div>
+        <div className="ml-auto">
+          <Button variant="secondary" onClick={() => setOpenEdit(true)}>
+            <Icon name="pencil" size={15} />
+            Editar
+          </Button>
         </div>
       </div>
 
@@ -780,6 +928,8 @@ export default function EmpleadoDetallePage() {
         /* Permisos y accesos */
         <PermisosCard staffId={id} />
       )}
+
+      <EditarEmpleadoModal emp={emp} open={openEdit} onClose={() => setOpenEdit(false)} onSaved={load} />
     </>
   );
 }

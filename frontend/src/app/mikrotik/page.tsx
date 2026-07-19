@@ -114,7 +114,7 @@ export default function MikrotikPanelPage() {
       <DataTable
         rows={routers}
         empty="No hay Mikrotiks registrados. Pulse «Agregar Mikrotik» para crear el primero."
-        onRowClick={(r) => nav.push(`/red/mikrotik/${r.id}`)}
+        onRowClick={(r) => nav.push(`/mikrotik/${r.id}`)}
         columns={[
           { key: "name", header: "Nombre", render: (r) => (
             <span className="flex items-center gap-1.5 font-medium text-text-primary">
@@ -134,7 +134,7 @@ export default function MikrotikPanelPage() {
                 className="rounded p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-brand disabled:opacity-50">
                 <Icon name={testing === r.id ? "loader" : "zap"} size={15} className={testing === r.id ? "animate-spin" : ""} />
               </button>
-              <button title="Operar" onClick={() => nav.push(`/red/mikrotik/${r.id}`)}
+              <button title="Operar" onClick={() => nav.push(`/mikrotik/${r.id}`)}
                 className="rounded p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-brand"><Icon name="settings" size={15} /></button>
               {r.sedeRouters > 1 && !r.isDefault && (
                 <button title="Marcar por defecto de la sede" onClick={() => setDefault(r)}

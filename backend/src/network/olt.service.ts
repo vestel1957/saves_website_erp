@@ -207,10 +207,12 @@ export class OltService {
 
   async testConnection(id: string, user?: AuthUser) {
     const olt = await this.resolveOlt(id);
+    this.logger.log(`TEST OLT "${olt.name}" → ${olt.ip}:${olt.port} (SSH como "${olt.username}")${user?.name ? ` — pedido por ${user.name}` : ''}`);
     const driver = createOltDriver(olt.brand, olt.ip, olt.port, olt.username, olt.password);
     const ok = await driver.connect();
     const error = driver.getError();
     driver.disconnect();
+    this.logger.log(`TEST OLT "${olt.name}" resultado: ${ok ? 'Conexión OK' : 'FALLÓ — ' + error}`);
     await this.prisma.olt.update({ where: { id }, data: { online: ok } });
     await this.audit('TEST', olt, ok, false, ok ? 'Conexión OK' : `ERROR: ${error}`, { user });
     return { ok, error };
@@ -285,10 +287,12 @@ export class OltService {
     if (!this.live) {
       const drv = new OltHuawei(olt.ip, olt.port, olt.username, olt.password);
       const commands = drv.buildProvisionCommands(params);
+      this.logger.log(`AUTENTICAR ONU (DRY-RUN) SN ${params.sn} en "${olt.name}" fsp ${fsp} — ${commands.length} comandos, NO se contacta la OLT`);
       await this.audit('PROVISION', olt, true, true, `DRY-RUN autenticar SN ${params.sn}: ` + commands.join(' · '), { sn: params.sn, fsp, user });
       return { ok: true, dryRun: true, message: `DRY-RUN: no se contacta la OLT. Active OLT_LIVE=true para autenticar de verdad.`, commands };
     }
 
+    this.logger.warn(`AUTENTICAR ONU (LIVE) SN ${params.sn} en "${olt.name}" (${olt.ip}) fsp ${fsp}${user?.name ? ` — pedido por ${user.name}` : ''}`);
     const r = await this.withDriver(olt, (d) => d.provisionOnu(params));
     const res = r.data as any;
     await this.audit('PROVISION', olt, r.ok, false, r.ok ? (res?.message ?? 'ONT agregada') : `ERROR: ${r.error}`, { sn: params.sn, fsp, user });

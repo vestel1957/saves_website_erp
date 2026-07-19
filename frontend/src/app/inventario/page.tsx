@@ -11,6 +11,7 @@ import { DataTable } from "@/components/inventory/DataTable";
 import { Pagination } from "@/components/ui/Pagination";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { Modal } from "@/components/Modal";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
@@ -45,10 +46,16 @@ export default function MaterialPage() {
     typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("categoryId") || "" : "",
   );
   const [warehouseId, setWarehouseId] = useState("");
-  const [lowStock, setLowStock] = useState(false);
+  // ?lowStock=1 al entrar desde la campana de alertas de stock.
+  const [lowStock, setLowStock] = useState<boolean>(() =>
+    typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("lowStock") === "1" : false,
+  );
   const [page, setPage] = useState(1);
 
   const [modalOpen, setModalOpen] = useState(false);
+  const [editing, setEditing] = useState<any>(null);
+  const [delRow, setDelRow] = useState<any>(null);
+  const [deleting, setDeleting] = useState(false);
   const [importing, setImporting] = useState(false);
 
   async function importExcel(file: File) {
@@ -101,37 +108,81 @@ export default function MaterialPage() {
 
   const set = (k: string) => (e: any) => setForm((f: any) => ({ ...f, [k]: e.target.value }));
 
+  function openNew() {
+    setEditing(null);
+    setForm(emptyForm);
+    setModalOpen(true);
+  }
+
+  /** El listado no trae categoryId ni descripción: se piden al detalle. */
+  async function openEdit(row: any) {
+    try {
+      const res = await authFetch(`/inventory/materials/${row.id}`);
+      const m = await res.json();
+      if (!res.ok) throw new Error(m?.message || "No se pudo cargar el material");
+      setEditing(m);
+      setForm({
+        name: m.name ?? "", code: m.code ?? "", categoryId: m.category?.id ?? "", warehouseId: m.warehouse?.id ?? "",
+        price: m.price ?? "", cost: m.cost ?? "", taxRate: m.taxRate ?? "",
+        qty: m.qty ?? "", alert: m.alert ?? "", description: m.description ?? "",
+      });
+      setModalOpen(true);
+    } catch (e: any) {
+      toast(e?.message || "No se pudo cargar el material", "alert-triangle");
+    }
+  }
+
   const submit = async () => {
     if (!form.name.trim()) { toast("El nombre es obligatorio"); return; }
     setSaving(true);
     try {
-      const res = await authFetch("/inventory/materials", {
-        method: "POST",
-        body: JSON.stringify({
-          name: form.name,
-          code: form.code || undefined,
-          categoryId: form.categoryId || undefined,
-          warehouseId: form.warehouseId || undefined,
-          price: form.price !== "" ? Number(form.price) : undefined,
-          cost: form.cost !== "" ? Number(form.cost) : undefined,
-          taxRate: form.taxRate !== "" ? Number(form.taxRate) : undefined,
-          qty: form.qty !== "" ? Number(form.qty) : undefined,
-          alert: form.alert !== "" ? Number(form.alert) : undefined,
-          description: form.description || undefined,
-        }),
-      });
+      const body: any = {
+        name: form.name,
+        code: form.code || undefined,
+        categoryId: form.categoryId || undefined,
+        price: form.price !== "" ? Number(form.price) : undefined,
+        cost: form.cost !== "" ? Number(form.cost) : undefined,
+        taxRate: form.taxRate !== "" ? Number(form.taxRate) : undefined,
+        qty: form.qty !== "" ? Number(form.qty) : undefined,
+        alert: form.alert !== "" ? Number(form.alert) : undefined,
+        description: form.description || undefined,
+      };
+      // La bodega solo se fija al crear: moverla después exige un traspaso con acta.
+      if (!editing) body.warehouseId = form.warehouseId || undefined;
+      const res = await authFetch(
+        editing ? `/inventory/materials/${editing.id}` : "/inventory/materials",
+        { method: editing ? "PATCH" : "POST", body: JSON.stringify(body) },
+      );
       const d = await res.json();
       if (!res.ok) throw new Error(d?.message || "Error");
-      toast("Material creado");
+      toast(editing ? "Material actualizado" : "Material creado", "check");
       setModalOpen(false);
+      setEditing(null);
       setForm(emptyForm);
       await load();
     } catch (e: any) {
-      toast(e?.message || "No se pudo crear");
+      toast(e?.message || "No se pudo guardar", "alert-triangle");
     } finally {
       setSaving(false);
     }
   };
+
+  async function removeMaterial() {
+    if (!delRow) return;
+    setDeleting(true);
+    try {
+      const res = await authFetch(`/inventory/materials/${delRow.id}`, { method: "DELETE" });
+      const d = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(d?.message || "No se pudo eliminar");
+      toast("Material eliminado", "check");
+      setDelRow(null);
+      await load();
+    } catch (e: any) {
+      toast(e?.message || "No se pudo eliminar", "alert-triangle");
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   const columns = useMemo(() => [
     { key: "name", header: "Nombre", render: (r: any) => <span className="font-medium text-text-primary">{r.name}</span> },
@@ -141,6 +192,20 @@ export default function MaterialPage() {
     { key: "price", header: "Precio", align: "right" as const, render: (r: any) => <span>{cop(r.price ?? 0)}</span> },
     { key: "qty", header: "Stock", align: "right" as const, render: (r: any) => r.low ? <Badge label={`${r.qty ?? 0} · Bajo`} tone="error" /> : <span>{r.qty ?? 0}</span> },
     { key: "value", header: "Valor", align: "right" as const, render: (r: any) => <span className="font-semibold">{cop(r.value ?? 0)}</span> },
+    {
+      key: "acciones", header: "", align: "right" as const,
+      render: (r: any) => (
+        <div className="flex justify-end gap-1">
+          <button type="button" onClick={() => void openEdit(r)} className="rounded-md p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-text-primary" title="Editar">
+            <Icon name="pencil" size={15} />
+          </button>
+          <button type="button" onClick={() => setDelRow(r)} className="rounded-md p-1.5 text-text-tertiary hover:bg-error-soft hover:text-error-text" title="Eliminar">
+            <Icon name="trash" size={15} />
+          </button>
+        </div>
+      ),
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   ], []);
 
   if (authLoading || (loading && !data)) return <PageSkeleton />;
@@ -157,7 +222,7 @@ export default function MaterialPage() {
             <Icon name={importing ? "loader" : "upload"} size={14} className={importing ? "animate-spin" : ""} /> {importing ? "Importando…" : "Importar Excel"}
             <input type="file" accept=".xlsx" className="hidden" disabled={importing} onChange={(e) => { const f = e.target.files?.[0]; if (f) void importExcel(f); e.target.value = ""; }} />
           </label>
-          <Button variant="primary" size="sm" onClick={() => setModalOpen(true)}><Icon name="plus" size={14} />Nuevo material</Button>
+          <Button variant="primary" size="sm" onClick={openNew}><Icon name="plus" size={14} />Nuevo material</Button>
         </div>
       </div>
 
@@ -201,7 +266,7 @@ export default function MaterialPage() {
         />
       )}
 
-      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title="Nuevo material" maxWidth="max-w-lg">
+      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editing ? "Editar material" : "Nuevo material"} maxWidth="max-w-lg">
         <div className="flex flex-col gap-3">
           <Field label="Nombre" required>
             <Input value={form.name} onChange={set("name")} placeholder="Nombre del material" />
@@ -215,12 +280,18 @@ export default function MaterialPage() {
               </Select>
             </Field>
           </div>
-          <Field label="Bodega">
-            <Select value={form.warehouseId} onChange={set("warehouseId")}>
-              <option value="">Sin bodega</option>
-              {warehouses.map((w: any) => <option key={w.id} value={w.id}>{w.title}</option>)}
-            </Select>
-          </Field>
+          {editing ? (
+            <Field label="Bodega" hint="Para mover el material a otra bodega usa un traspaso, que deja acta del movimiento.">
+              <Input value={editing.warehouse?.title ?? "Sin bodega"} disabled />
+            </Field>
+          ) : (
+            <Field label="Bodega">
+              <Select value={form.warehouseId} onChange={set("warehouseId")}>
+                <option value="">Sin bodega</option>
+                {warehouses.map((w: any) => <option key={w.id} value={w.id}>{w.title}</option>)}
+              </Select>
+            </Field>
+          )}
           <div className="grid grid-cols-3 gap-3">
             <Field label="Precio"><Input type="number" value={form.price} onChange={set("price")} /></Field>
             <Field label="Costo"><Input type="number" value={form.cost} onChange={set("cost")} /></Field>
@@ -235,10 +306,20 @@ export default function MaterialPage() {
           </Field>
           <div className="flex justify-end gap-2 pt-1">
             <Button variant="ghost" size="sm" onClick={() => setModalOpen(false)}><Icon name="x" size={14} />Cancelar</Button>
-            <Button variant="primary" size="sm" onClick={submit} disabled={saving}><Icon name="check" size={14} />{saving ? "Guardando…" : "Crear"}</Button>
+            <Button variant="primary" size="sm" onClick={submit} disabled={saving}><Icon name="check" size={14} />{saving ? "Guardando…" : editing ? "Guardar cambios" : "Crear"}</Button>
           </div>
         </div>
       </Modal>
+
+      <ConfirmDialog
+        open={Boolean(delRow)}
+        title="Eliminar material"
+        message={<>¿Seguro que quieres eliminar <strong>{delRow?.name}</strong> del inventario? Esta acción no se puede deshacer.</>}
+        confirmLabel="Eliminar"
+        busy={deleting}
+        onConfirm={removeMaterial}
+        onClose={() => setDelRow(null)}
+      />
     </>
   );
 }

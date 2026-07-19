@@ -306,9 +306,16 @@ export abstract class OltDriver {
    */
   protected cleanOutput(raw: string, cmd: string): string {
     raw = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-    // Quitar indicadores de paginación (con relleno de backspaces/espacios).
-    raw = raw.replace(/\s*-+ ?[Mm]ore ?\([^)]*\) ?-+[\x08 ]*/g, '');
-    raw = raw.replace(/\s*-+ ?[Mm]ore ?-+[\x08 ]*/g, '');
+    // Quitar secuencias de escape ANSI/CSI (el paginador emite ESC[37D para
+    // reposicionar el cursor; si no se quitan, se cuelan como "[37D" en los valores).
+    raw = raw.replace(/\x1b\[[0-9;?=]*[ -/]*[@-~]/g, '');
+    raw = raw.replace(/\x1b./g, '');
+    // Quitar indicadores de paginación (con relleno de backspaces/espacios). El
+    // "More" reposiciona el cursor y refloja la línea siguiente pegándola a la
+    // anterior, así que lo reemplazamos por un SALTO DE LÍNEA (no por '') para no
+    // fundir dos campos (ej. "Ont EquipmentID" con "Ont Customized Info").
+    raw = raw.replace(/[ \t]*-+ ?[Mm]ore ?\([^)]*\) ?-+[\x08 ]*/g, '\n');
+    raw = raw.replace(/[ \t]*-+ ?[Mm]ore ?-+[\x08 ]*/g, '\n');
     raw = raw.replace(/\{ <cr>[^}]*\}:\s*/g, '');
     raw = raw.replace(/[\x08]+/g, '');
 

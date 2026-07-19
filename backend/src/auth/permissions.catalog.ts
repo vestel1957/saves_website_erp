@@ -418,9 +418,19 @@ export const SCREENS: ScreenDef[] = [
   { href: '/red/equipos', label: 'Administrar equipos', module: 'Red / ISP', areas: ['tecnicos'] },
   { href: '/red/equipos/nuevo', label: 'Ingreso de equipo', module: 'Red / ISP', areas: ['tecnicos'] },
   { href: '/red/bodegas', label: 'Bodega de equipos', module: 'Red / ISP', areas: ['tecnicos'] },
-  { href: '/red', label: 'Mikrotik / OLT', module: 'Red / ISP', areas: ['tecnicos'] },
+  { href: '/red', label: 'Red / ISP (resumen)', module: 'Red / ISP', areas: ['tecnicos'] },
   { href: '/red/onus', label: 'ONUs', module: 'Red / ISP', areas: ['tecnicos'] },
-  { href: '/red/masivo', label: 'Operaciones masivas', module: 'Red / ISP', areas: ['tecnicos'] },
+  // Faltaban en el catálogo pese a estar en el nav: sin llave de pantalla, `can()`
+  // solo las concedía a system.admin, así que un técnico no las veía en el menú.
+  { href: '/red/naps', label: 'Cajas NAP', module: 'Red / ISP', areas: ['tecnicos'] },
+  { href: '/red/olt', label: 'Gestión OLT', module: 'Red / ISP', areas: ['tecnicos'] },
+  { href: '/red/genieacs', label: 'GenieACS · TR-069', module: 'Red / ISP', areas: ['tecnicos'] },
+
+  // MIKROTIK — módulo propio (2026-07-15). `/mikrotik/masivo` es el antiguo
+  // `/red/masivo`: su llave se renombra en BD conservando las concesiones.
+  { href: '/mikrotik', label: 'Gestión de routers', module: 'Mikrotik', areas: ['tecnicos'] },
+  { href: '/mikrotik/masivo', label: 'Operaciones masivas', module: 'Mikrotik', areas: ['tecnicos'] },
+  { href: '/mikrotik/ips', label: 'IPs de usuarios', module: 'Mikrotik', areas: ['tecnicos'] },
 
   { href: '/inventario', label: 'Material', module: 'Inventario / Compras', areas: ['administracion'] },
   { href: '/inventario/traspasos', label: 'Traspasos', module: 'Inventario / Compras', areas: ['administracion'] },
@@ -431,13 +441,14 @@ export const SCREENS: ScreenDef[] = [
   { href: '/empleados', label: 'Empleados', module: 'Personas y Proyectos', areas: ['administracion'] },
   { href: '/proyectos', label: 'Proyectos', module: 'Personas y Proyectos', areas: ['administracion'] },
   { href: '/agenda', label: 'Agenda / Tareas', module: 'Personas y Proyectos', areas: ['administracion', 'caja'] },
+  { href: '/tareas', label: 'Tareas / Pendientes', module: 'Personas y Proyectos', areas: ['administracion', 'gerencia', 'tecnicos', 'caja'] },
 
   { href: '/configuracion', label: 'Configuración', module: 'Sistemas', areas: ['sistemas'] },
-  { href: '/configuracion/ajustes', label: 'Ajustes globales', module: 'Sistemas', areas: ['sistemas'] },
   { href: '/configuracion/planes', label: 'Planes de servicio', module: 'Sistemas', areas: ['sistemas'] },
   { href: '/configuracion/api', label: 'API pública', module: 'Sistemas', areas: ['sistemas'] },
   { href: '/configuracion/usuarios', label: 'Usuarios y roles', module: 'Sistemas', areas: ['sistemas'] },
   { href: '/configuracion/whatsapp', label: 'Mensajería / WhatsApp', module: 'Sistemas', areas: ['sistemas'] },
+  { href: '/configuracion/chatbot', label: 'Agente de WhatsApp (bot)', module: 'Sistemas', areas: ['sistemas'] },
   { href: '/configuracion/automatizaciones', label: 'Automatizaciones', module: 'Sistemas', areas: ['sistemas'] },
   { href: '/configuracion/actividad', label: 'Bitácora / Auditoría', module: 'Sistemas', areas: ['sistemas'] },
   { href: '/configuracion/datos', label: 'Importar / Exportar', module: 'Sistemas', areas: ['sistemas'] },

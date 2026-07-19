@@ -4,6 +4,12 @@ Refactor incremental y seguro del proyecto SAVES (backend NestJS + frontend Next
 Rama de trabajo: `refactor/fundamentos-arquitectura`. Cada paso verifica build
 (`tsc --noEmit`, `eslint`, `nest build`/`next build`) y va en su propio commit.
 
+> **Este documento cubre la deuda ESTRUCTURAL** (extraer god services y god pages).
+> Los hallazgos de corrección, seguridad y operación de la auditoría del 19–20 jul 2026
+> —integridad del dinero, autorización, índices, tests, despliegue— están en
+> [`PLAN.md`](./PLAN.md), que tiene prioridad sobre este backlog: extraer servicios sin
+> tests es mover código a ciegas.
+
 ## Principios
 
 - **Sin cambiar comportamiento**: las extracciones mueven código; no reescriben lógica.

@@ -8,6 +8,11 @@
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:prod": "node dist/main.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint \"src/**/*.ts\"",
+    "lint:fix": "eslint \"src/**/*.ts\" --fix",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\"",
     "test": "jest",
     "test:watch": "jest --watch",
     "prisma:generate": "prisma generate",
@@ -53,6 +58,7 @@
     "ssh2": "^1.17.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "@nestjs/cli": "^10.4.9",
     "@nestjs/schematics": "^10.2.3",
     "@types/compression": "^1.8.1",
@@ -61,10 +67,15 @@
     "@types/node": "^22.10.5",
     "@types/pdfkit": "^0.17.6",
     "@types/ssh2": "^1.15.5",
+    "eslint": "^9.39.5",
+    "eslint-config-prettier": "^9.1.2",
+    "eslint-plugin-prettier": "^5.5.6",
     "jest": "^29.7.0",
+    "prettier": "^3.9.5",
     "prisma": "^6.2.1",
     "ts-jest": "^29.4.11",
     "ts-node": "^10.9.2",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.64.0"
   }
 }

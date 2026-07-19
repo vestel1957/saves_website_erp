@@ -50,7 +50,7 @@ export class OltHuawei extends OltDriver {
     const ver = await this.sendCommand('display version');
     const info: any = { model: '', version: '', patch: '', uptime: '' };
     let m: RegExpMatchArray | null;
-    if ((m = ver.match(/\b(MA\d{4}[A-Z0-9\-]*)/i))) info.model = m[1];
+    if ((m = ver.match(/\b(MA\d{4}[A-Z0-9-]*)/i))) info.model = m[1];
     if ((m = ver.match(/VERSION[^\n:]*:\s*([^\r\n]+)/i))) info.version = m[1].trim();
     if ((m = ver.match(/PATCH[^\n:]*:\s*([^\r\n]+)/i))) info.patch = m[1].trim();
     if ((m = ver.match(/uptime\s+is\s+([^\r\n]+)/i))) {

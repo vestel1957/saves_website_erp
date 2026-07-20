@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { scopeDate } from '../common/date-scope';
 import { AuthUser } from '../auth/current-user.decorator';
 import { sedesDe, whereSedePorSuscriptor, exigirSedeSuscriptor } from '../common/sede-scope';
+import { paginacion } from '../common/pagination-params';
 
 function subName(s: {
   firstName: string | null; secondName: string | null; lastName1: string | null;
@@ -53,8 +54,7 @@ export class SupportService {
   }
 
   async tickets(params: { search?: string; status?: string; type?: string; tec?: string; priority?: string; sede?: string; from?: string; to?: string; all?: string; page?: number; pageSize?: number }, user?: AuthUser) {
-    const page = Math.max(1, Number(params.page) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number(params.pageSize) || 25));
+    const { page, pageSize } = paginacion(params);
     const where: Prisma.TicketWhereInput = {};
     // Acceso por sede: el ticket la hereda de su suscriptor. Un ticket SIN suscriptor
     // (interno) no lo ve un usuario acotado, por el mismo criterio conservador que

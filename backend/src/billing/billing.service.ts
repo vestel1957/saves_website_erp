@@ -8,6 +8,7 @@ import { invoicePdfBuffer } from './billing-pdf';
 import { num } from '../common/money';
 import { sedesDe, whereSedePorSuscriptor, exigirSedeSuscriptor } from '../common/sede-scope';
 import { AuthUser } from '../auth/current-user.decorator';
+import { paginacion } from '../common/pagination-params';
 
 const cop = (n: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(n || 0);
 
@@ -113,8 +114,7 @@ export class BillingService {
     from?: string; to?: string; all?: string; overdue?: string;
     page?: number; pageSize?: number;
   }, user?: AuthUser) {
-    const page = Math.max(1, Number(params.page) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number(params.pageSize) || 25));
+    const { page, pageSize } = paginacion(params);
     const search = (params.search || '').trim();
 
     const where: Prisma.SubInvoiceWhereInput = {};

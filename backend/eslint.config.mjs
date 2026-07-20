@@ -32,7 +32,10 @@ export default tseslint.config(
       '@typescript-eslint/no-inferrable-types': 'off',
       // NestJS usa decoradores y patrones que chocan con estas reglas
       '@typescript-eslint/no-extraneous-class': 'off',
-      'no-empty': ['warn', { allowEmptyCatch: true }],
+      // Sin `allowEmptyCatch`: un catch vacío tiene que doler. La regla ignora los
+      // bloques que llevan comentario, así que el best-effort deliberado (red,
+      // reconexión, limpieza) sigue pasando siempre que se explique POR QUÉ se traga.
+      'no-empty': 'warn',
       // Este backend parsea salida de terminales OLT/SSH: los caracteres de
       // control (\x1b, \x08) en regex son intencionales.
       'no-control-regex': 'off',

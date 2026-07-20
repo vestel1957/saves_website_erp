@@ -113,7 +113,9 @@ export class DataService {
       const val = (c: number) => (c ? String(row.getCell(c).value ?? '').trim() : '');
       const mac = val(cMac), serial = val(cSerial);
       if (!mac && !serial) { if (val(cCode) || val(cBrand)) errors.push({ row: r, reason: 'sin MAC ni serial' }); continue; }
-      valid.push({ code: Number(val(cCode)) || undefined, mac: mac || null, serial: serial || null, brand: val(cBrand) || null, status: val(cStatus) || 'Disponible' });
+      // Se arrastra el número de fila del Excel: si la inserción falla, el usuario
+      // tiene que saber QUÉ fila corregir. Antes se reportaba `row: -1`.
+      valid.push({ fila: r, code: Number(val(cCode)) || undefined, mac: mac || null, serial: serial || null, brand: val(cBrand) || null, status: val(cStatus) || 'Disponible' });
     }
 
     let created = 0;
@@ -122,7 +124,12 @@ export class DataService {
         try {
           await this.prisma.equipment.create({ data: { code: e.code ?? 0, mac: e.mac, serial: e.serial, brand: e.brand, status: e.status } as any });
           created++;
-        } catch { errors.push({ row: -1, reason: `no se pudo crear ${e.mac ?? e.serial}` }); }
+        } catch (err) {
+          // Se conserva el motivo real (duplicado, longitud, tipo…). Descartarlo
+          // hacía imposible depurar una importación de cientos de filas.
+          const motivo = err instanceof Error ? err.message.split('\n').pop()?.trim() : String(err);
+          errors.push({ row: e.fila, reason: `no se pudo crear ${e.mac ?? e.serial}: ${motivo}` });
+        }
       }
     }
 

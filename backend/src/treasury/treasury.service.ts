@@ -9,6 +9,7 @@ import { informeCierre } from './cierre-informe';
 import { cajasPermitidas, exigirAcceso } from './caja-scope';
 import { AuthUser } from '../auth/current-user.decorator';
 import { num, round2 } from '../common/money';
+import { paginacion } from '../common/pagination-params';
 
 
 function subName(s: {
@@ -72,8 +73,7 @@ export class TreasuryService {
 
   /** Listado paginado de movimientos. Por defecto AÑO ACTUAL (override con from/to o all=1). */
   async list(params: { search?: string; type?: string; category?: string; status?: string; from?: string; to?: string; all?: string; cashAccountId?: number; page?: number; pageSize?: number }, user: AuthUser) {
-    const page = Math.max(1, Number(params.page) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number(params.pageSize) || 25));
+    const { page, pageSize } = paginacion(params);
     const search = (params.search || '').trim();
 
     const where: Prisma.TransactionWhereInput = {};
@@ -437,8 +437,7 @@ export class TreasuryService {
 
   /** Listado paginado de cierres + totales del conjunto filtrado. Por defecto AÑO ACTUAL. */
   async cashCloses(params: { from?: string; to?: string; all?: string; cashAccountId?: number; page?: number; pageSize?: number }, user: AuthUser) {
-    const page = Math.max(1, Number(params.page) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number(params.pageSize) || 25));
+    const { page, pageSize } = paginacion(params);
     if (params.cashAccountId) await exigirAcceso(this.prisma, user, Number(params.cashAccountId));
     const whereSql = this.cashCloseWhereSql(params, await cajasPermitidas(this.prisma, user));
 

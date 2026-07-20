@@ -8,6 +8,7 @@ import type { AuthUser } from '../auth/current-user.decorator';
 import { num } from '../common/money';
 import { sedesDe, whereSedeSuscriptor, exigirSedeSuscriptor } from '../common/sede-scope';
 import { nextTid, TID_SEQ } from '../common/tid';
+import { paginacion } from '../common/pagination-params';
 
 
 /** Estados de factura que cuentan como deuda. */
@@ -129,10 +130,9 @@ export class SubscribersService {
 
   /** Listado paginado con búsqueda y filtros. */
   async list(params: ListFilter, user?: AuthUser) {
-    const page = Math.max(1, Number(params.page) || 1);
     // Con plan permitimos páginas más grandes (la vista de grupo carga muchos a la vez).
     const withPlan = params.withPlan === '1' || params.withPlan === 'true';
-    const pageSize = Math.min(withPlan ? 500 : 100, Math.max(1, Number(params.pageSize) || 25));
+    const { page, pageSize } = paginacion(params, { maxPageSize: withPlan ? 500 : 100 });
 
     const where = await this.computeWhere(params, user);
 

@@ -29,6 +29,7 @@ export const TID_SEQ = {
   /** Número de abonado. Ojo: la columna NO es única (ver la migración), pero al
    *  menos deja de fabricar duplicados nuevos por concurrencia. */
   subscriberAbonado: '"Subscriber_abonado_seq"',
+  quote: '"Quote_tid_seq"',
 } as const;
 
 export type TidSequence = (typeof TID_SEQ)[keyof typeof TID_SEQ];

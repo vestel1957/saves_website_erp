@@ -6,6 +6,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { PostingService } from '../accounting/posting.service';
 import { num, round2 } from '../common/money';
+import { nextTid, TID_SEQ } from '../common/tid';
 
 const dOnly = (s?: string) => { const d = s ? new Date(s) : new Date(); return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())); };
 
@@ -139,8 +140,10 @@ export class OmniService {
     const today = dOnly();
     const sub = await this.prisma.subscriber.findUnique({ where: { id: q.subscriberId }, select: { eInvoice: true } });
     const result = await this.prisma.$transaction(async (tx) => {
-      const max = await tx.subInvoice.aggregate({ _max: { tid: true } });
-      const tid = (max._max.tid ?? 1000) + 1;
+      // MISMA secuencia que usa `FacturasService`: calcular aquí un MAX(tid)+1 propio
+      // insertaba una factura sin avanzar la secuencia, así que el siguiente
+      // `nextval()` habría devuelto un número ya usado (P2002).
+      const tid = await nextTid(tx, TID_SEQ.subInvoice);
       const due = new Date(today.getTime() + 30 * 24 * 3600 * 1000);
       const inv = await tx.subInvoice.create({
         data: {
@@ -193,8 +196,7 @@ export class OmniService {
     const tax = round2(rows.reduce((s, r) => s + r.taxTotal, 0));
     const total = round2(subtotal + tax);
     return this.prisma.$transaction(async (tx) => {
-      const max = await tx.quote.aggregate({ _max: { tid: true } });
-      const tid = (max._max.tid ?? 1000) + 1;
+      const tid = await nextTid(tx, TID_SEQ.quote);
       const q = await tx.quote.create({
         data: {
           tid, subscriberId: dto.subscriberId ?? null, invoiceDate: dOnly(), subtotal, tax, total, status: 'pending',

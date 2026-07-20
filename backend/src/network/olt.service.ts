@@ -5,6 +5,7 @@ import { AuthUser } from '../auth/current-user.decorator';
 import { OltDriver } from './olt/olt-ssh.client';
 import { OltHuawei } from './olt/olt-huawei.driver';
 import { createOltDriver, OLT_BRANDS } from './olt/olt-factory';
+import { decryptSecret, encryptSecret } from '../common/secret-box';
 
 /**
  * OltService — clon de SmartOLT: control total de ONUs por SSH.
@@ -89,7 +90,7 @@ export class OltService {
     olt: { id: string; brand: string; ip: string; port: string; username: string; password: string },
     fn: (driver: OltDriver) => Promise<T>,
   ): Promise<{ ok: boolean; error: string; raw: string; data: T | null }> {
-    const driver = createOltDriver(olt.brand, olt.ip, olt.port, olt.username, olt.password);
+    const driver = createOltDriver(olt.brand, olt.ip, olt.port, olt.username, decryptSecret(olt.password));
     const connected = await driver.connect();
     if (!connected) {
       const error = driver.getError();
@@ -156,7 +157,7 @@ export class OltService {
       data: {
         name: dto.name, brand: dto.brand || 'Huawei', ip: dto.ip, port: String(dto.port || '22'),
         tech: dto.tech || 'GPON', sedeLegacy, branchId: dto.branchId || null,
-        username: dto.username || '', password: dto.password || '',
+        username: dto.username || '', password: encryptSecret(dto.password || ''),
         isDefault: already === 0,
         defaultLineProfile: dto.defaultLineProfile ? Number(dto.defaultLineProfile) : null,
         defaultSrvProfile: dto.defaultSrvProfile ? Number(dto.defaultSrvProfile) : null,
@@ -178,7 +179,7 @@ export class OltService {
     if (dto.port !== undefined) data.port = String(dto.port);
     if (dto.sedeLegacy !== undefined) data.sedeLegacy = Number(dto.sedeLegacy);
     // password: sólo si viene y no es la máscara.
-    if (dto.password && !/^\*+$/.test(dto.password)) data.password = dto.password;
+    if (dto.password && !/^\*+$/.test(dto.password)) data.password = encryptSecret(dto.password);
     for (const k of ['defaultLineProfile', 'defaultSrvProfile', 'defaultVlan', 'defaultGemport', 'defaultUserVlan'] as const) {
       if (dto[k] !== undefined) (data as any)[k] = dto[k] === '' || dto[k] === null ? null : Number(dto[k]);
     }
@@ -208,7 +209,7 @@ export class OltService {
   async testConnection(id: string, user?: AuthUser) {
     const olt = await this.resolveOlt(id);
     this.logger.log(`TEST OLT "${olt.name}" → ${olt.ip}:${olt.port} (SSH como "${olt.username}")${user?.name ? ` — pedido por ${user.name}` : ''}`);
-    const driver = createOltDriver(olt.brand, olt.ip, olt.port, olt.username, olt.password);
+    const driver = createOltDriver(olt.brand, olt.ip, olt.port, olt.username, decryptSecret(olt.password));
     const ok = await driver.connect();
     const error = driver.getError();
     driver.disconnect();
@@ -285,7 +286,7 @@ export class OltService {
     const fsp = `${params.frame ?? 0}/${params.slot}/${params.port}`;
 
     if (!this.live) {
-      const drv = new OltHuawei(olt.ip, olt.port, olt.username, olt.password);
+      const drv = new OltHuawei(olt.ip, olt.port, olt.username, decryptSecret(olt.password));
       const commands = drv.buildProvisionCommands(params);
       this.logger.log(`AUTENTICAR ONU (DRY-RUN) SN ${params.sn} en "${olt.name}" fsp ${fsp} — ${commands.length} comandos, NO se contacta la OLT`);
       await this.audit('PROVISION', olt, true, true, `DRY-RUN autenticar SN ${params.sn}: ` + commands.join(' · '), { sn: params.sn, fsp, user });

@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { RouterosClient, RouterosError, RosRow } from './routeros/routeros-client';
+import { decryptSecret, encryptSecret } from '../common/secret-box';
 
 /**
  * MikrotikAdminService — clon de `application/controllers/Mikrotiks.php` del legacy.
@@ -100,7 +101,7 @@ export class MikrotikAdminService {
   ): Promise<{ ok: boolean; error: string; data: T | null }> {
     const api = new RouterosClient();
     try {
-      await api.connect(router.ip, Number(router.port), router.username, router.password, { timeoutMs: 8000 });
+      await api.connect(router.ip, Number(router.port), router.username, decryptSecret(router.password), { timeoutMs: 8000 });
       const data = await fn(api);
       api.close();
       return { ok: true, error: '', data };
@@ -164,7 +165,7 @@ export class MikrotikAdminService {
         branchId: dto.branchId,
         sedeLegacy: branch.legacyId,
         username: dto.username || '',
-        password: dto.password || '',
+        password: encryptSecret(dto.password || ''),
         isDefault: already === 0,
       },
     });
@@ -180,7 +181,7 @@ export class MikrotikAdminService {
     }
     if (dto.port !== undefined) data.port = String(dto.port);
     // password: sólo si viene y no es la máscara de asteriscos.
-    if (dto.password && !/^\*+$/.test(dto.password)) data.password = dto.password;
+    if (dto.password && !/^\*+$/.test(dto.password)) data.password = encryptSecret(dto.password);
     if (dto.branchId !== undefined && dto.branchId !== mk.branchId) {
       const branch = await this.prisma.branch.findUnique({ where: { id: dto.branchId }, select: { id: true, legacyId: true } });
       if (!branch) throw new BadRequestException('Sede no encontrada.');

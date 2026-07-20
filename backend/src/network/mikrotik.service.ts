@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { WhatsappService } from '../common/whatsapp/whatsapp.service';
 import { RouterosClient, RouterosError } from './routeros/routeros-client';
+import { decryptSecret, encryptSecret } from '../common/secret-box';
 
 /**
  * Integración real de corte / reconexión contra los MikroTik de Vestel.
@@ -342,7 +343,7 @@ export class MikrotikService {
     for (const other of others) {
       const oapi = new RouterosClient();
       try {
-        await oapi.connect(other.ip, Number(other.port), other.username, other.password, { timeoutMs: 8000 });
+        await oapi.connect(other.ip, Number(other.port), other.username, decryptSecret(other.password), { timeoutMs: 8000 });
         const mr = mode === 'mark' ? await this.markMorosoOnApi(oapi, sub, ip) : await this.unmarkMorosoOnApi(oapi, sub, ip);
         oapi.close();
         res.steps.push(`[${other.name}] ${mr.ok ? mr.steps.join(' · ') : '✗ ' + mr.error}`);
@@ -396,7 +397,7 @@ export class MikrotikService {
 
     const api = new RouterosClient();
     try {
-      await api.connect(router.ip, Number(router.port), router.username, router.password, { timeoutMs: 8000 });
+      await api.connect(router.ip, Number(router.port), router.username, decryptSecret(router.password), { timeoutMs: 8000 });
       res.steps.push(`conectado a ${routerInfo.host}`);
 
       const r = await this.cutOnApi(api, sub);
@@ -465,7 +466,7 @@ export class MikrotikService {
 
     const api = new RouterosClient();
     try {
-      await api.connect(router.ip, Number(router.port), router.username, router.password, { timeoutMs: 8000 });
+      await api.connect(router.ip, Number(router.port), router.username, decryptSecret(router.password), { timeoutMs: 8000 });
       res.steps.push(`conectado a ${routerInfo.host}`);
 
       const r = await this.reconnectOnApi(api, sub);
@@ -543,7 +544,7 @@ export class MikrotikService {
 
     const api = new RouterosClient();
     try {
-      await api.connect(router.ip, Number(router.port), router.username, router.password, { timeoutMs: 8000 });
+      await api.connect(router.ip, Number(router.port), router.username, decryptSecret(router.password), { timeoutMs: 8000 });
       res.steps.push(`conectado a ${routerInfo.host}`);
       const existing = await api.comm('/ppp/secret/getall', { '.proplist': '.id', '?name': name });
       if (existing.length && existing[0]['.id']) {
@@ -599,7 +600,7 @@ export class MikrotikService {
 
     const api = new RouterosClient();
     try {
-      await api.connect(router.ip, Number(router.port), router.username, router.password, { timeoutMs: 8000 });
+      await api.connect(router.ip, Number(router.port), router.username, decryptSecret(router.password), { timeoutMs: 8000 });
       res.steps.push(`conectado a ${routerInfo.host}`);
       const secret = await api.comm('/ppp/secret/getall', { '.proplist': '.id', '?name': name });
       if (!secret.length || !secret[0]['.id']) throw new RouterosError(`No existe /ppp/secret para ${name}.`);
@@ -655,7 +656,7 @@ export class MikrotikService {
 
     const api = new RouterosClient();
     try {
-      await api.connect(router.ip, Number(router.port), router.username, router.password, { timeoutMs: 6000 });
+      await api.connect(router.ip, Number(router.port), router.username, decryptSecret(router.password), { timeoutMs: 6000 });
       const secrets = await api.comm('/ppp/secret/getall', { '?name': name });
       const active = await api.comm('/ppp/active/getall', { '?name': name });
       const inAct = await api.comm('/ip/firewall/address-list/print', { '?list': ADDRESS_LIST_ACTIVE, '?comment': comment });
@@ -702,7 +703,7 @@ export class MikrotikService {
     }
     const api = new RouterosClient();
     try {
-      await api.connect(router.ip, Number(router.port), router.username, router.password, { timeoutMs: 6000 });
+      await api.connect(router.ip, Number(router.port), router.username, decryptSecret(router.password), { timeoutMs: 6000 });
       const id = await api.comm('/system/identity/print');
       api.close();
       res.ok = true;
@@ -827,7 +828,7 @@ export class MikrotikService {
     for (const { router, subs } of groups.values()) {
       const api = new RouterosClient();
       try {
-        await api.connect(router.ip, Number(router.port), router.username, router.password, { timeoutMs: 8000 });
+        await api.connect(router.ip, Number(router.port), router.username, decryptSecret(router.password), { timeoutMs: 8000 });
       } catch (e) {
         const msg = e instanceof RouterosError ? e.message : (e as Error).message;
         for (const sub of subs) { const st = state.get(sub.id)!; st.res.error = msg; st.res.message = `No se pudo conectar a ${router.name}`; st.res.steps.push(`✗ ${router.name}: ${msg}`); }
@@ -849,7 +850,7 @@ export class MikrotikService {
     for (const { router, subs } of morosoGroups.values()) {
       const api = new RouterosClient();
       try {
-        await api.connect(router.ip, Number(router.port), router.username, router.password, { timeoutMs: 8000 });
+        await api.connect(router.ip, Number(router.port), router.username, decryptSecret(router.password), { timeoutMs: 8000 });
       } catch (e) {
         const msg = e instanceof RouterosError ? e.message : (e as Error).message;
         for (const sub of subs) state.get(sub.id)?.res.steps.push(`[${router.name}] ✗ no conectó: ${msg}`);

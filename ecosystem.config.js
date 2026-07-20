@@ -80,6 +80,11 @@ module.exports = {
         GENIEACS_LIVE: env.GENIEACS_LIVE ?? 'false',
         // Secreto de firma de los JWT. Debe coincidir con el del frontend.
         AUTH_SECRET,
+        // Llave de cifrado en reposo de las credenciales de routers y OLTs.
+        // Va SEPARADA de AUTH_SECRET a propósito: secret-box usa AUTH_SECRET como
+        // respaldo, así que sin esta variable rotar el secreto de sesión dejaría
+        // ilegibles todas las contraseñas de los equipos.
+        SECRET_ENC_KEY: required('SECRET_ENC_KEY'),
         // Integraciones. El webhook de WhatsApp rechaza todo si falta el app secret
         // (es el único endpoint sin guard: la firma es su única barrera).
         WHATSAPP_WEBHOOK_APP_SECRET: required('WHATSAPP_WEBHOOK_APP_SECRET'),

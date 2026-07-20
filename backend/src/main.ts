@@ -50,8 +50,14 @@ async function bootstrap() {
   });
 
   const port = process.env.PORT ? Number(process.env.PORT) : 4000;
-  await app.listen(port);
-  console.log(`🚀 Nexus API running on http://localhost:${port}/api`);
+  // Se escucha SÓLO en localhost: el único camino desde internet es el proxy TLS
+  // (Plesk/Apache en 443 → 127.0.0.1), que ya termina el certificado. Exponer el
+  // puerto además al 0.0.0.0 dejaba la API accesible por HTTP plano en
+  // http://<ip>:3061, esquivando el TLS y mandando el token en claro.
+  // `HOST=0.0.0.0` permite volver atrás sin tocar código si hiciera falta.
+  const host = process.env.HOST ?? '127.0.0.1';
+  await app.listen(port, host);
+  console.log(`🚀 API de SAVES escuchando en http://${host}:${port}/api`);
 }
 
 bootstrap();

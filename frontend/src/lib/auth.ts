@@ -115,12 +115,31 @@ export function getTokenFromCookie(): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
+/**
+ * `Secure` sólo cuando la página se sirve por HTTPS.
+ *
+ * Marcarla siempre rompería el desarrollo local (el navegador no envía cookies
+ * `Secure` por http://localhost), y no marcarla nunca es lo que permitía que el
+ * token viajara en claro. Como la entrada pública es ya exclusivamente HTTPS
+ * —los puertos 3060/3061 sólo escuchan en 127.0.0.1—, en producción esto siempre
+ * se activa.
+ *
+ * Falta `HttpOnly`, y no es un olvido: el propio frontend lee la cookie desde JS
+ * en `getTokenFromCookie()` para firmar cada petición. Ponerla HttpOnly exige que
+ * sea el backend quien la emita y que `authFetch` pase a `credentials: 'include'`.
+ * Es un cambio de diseño, no un atributo.
+ */
+function atributosCookie(): string {
+  const seguro = typeof location !== "undefined" && location.protocol === "https:";
+  return `path=/; samesite=lax${seguro ? "; secure" : ""}`;
+}
+
 export function setTokenCookie(token: string) {
-  document.cookie = `${TOKEN_COOKIE}=${token}; path=/; max-age=${TOKEN_MAX_AGE}; samesite=lax`;
+  document.cookie = `${TOKEN_COOKIE}=${token}; max-age=${TOKEN_MAX_AGE}; ${atributosCookie()}`;
 }
 
 export function clearTokenCookie() {
-  document.cookie = `${TOKEN_COOKIE}=; path=/; max-age=0; samesite=lax`;
+  document.cookie = `${TOKEN_COOKIE}=; max-age=0; ${atributosCookie()}`;
 }
 
 // ---- API calls -------------------------------------------------------------

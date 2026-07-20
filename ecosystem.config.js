@@ -102,7 +102,9 @@ module.exports = {
       name: 'saves-frontend',
       cwd: '/home/dev/saves/frontend',
       script: 'node_modules/.bin/next',
-      args: 'start -p 3060 -H 0.0.0.0',
+      // -H 127.0.0.1: igual que la API, la única entrada desde internet es el
+      // proxy TLS. Con 0.0.0.0 el frontend respondía también en http://<ip>:3060.
+      args: 'start -p 3060 -H 127.0.0.1',
       instances: 1,
       autorestart: true,
       watch: false,

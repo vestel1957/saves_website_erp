@@ -78,6 +78,17 @@ module.exports = {
         // de verdad contra los routers de producción (auditado en MikrotikActionLog).
         MIKROTIK_LIVE: env.MIKROTIK_LIVE ?? 'false',
         GENIEACS_LIVE: env.GENIEACS_LIVE ?? 'false',
+        // Facturación electrónica DIAN vía Siigo. En dry-run arma el payload pero NO
+        // timbra. Se centraliza aquí —junto al resto de gates LIVE— por claridad: aunque
+        // ConfigModule también lee backend/.env, tener EINVOICE_LIVE en un sitio distinto
+        // que MIKROTIK_LIVE/OLT_LIVE despistaba (parecía "inalcanzable"). Con esto los
+        // gates viven todos en el mismo lugar. Requiere además el mapeo DIAN de cada
+        // SiigoAccount lleno (documentId/sellerId/ivaTaxId/medios de pago); ver
+        // docs/EINVOICE-ACTIVACION.md.
+        EINVOICE_LIVE: env.EINVOICE_LIVE ?? 'false',
+        SIIGO_PARTNER_ID: env.SIIGO_PARTNER_ID ?? 'savescrmintegrationsiigo',
+        // Búsqueda IA (⌘K). Off si no hay OPENAI_API_KEY; el gate lo apaga explícitamente.
+        AI_SEARCH_ENABLED: env.AI_SEARCH_ENABLED ?? 'false',
         // Secreto de firma de los JWT. Debe coincidir con el del frontend.
         AUTH_SECRET,
         // Llave de cifrado en reposo de las credenciales de routers y OLTs.

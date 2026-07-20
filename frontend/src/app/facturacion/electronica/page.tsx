@@ -68,10 +68,8 @@ export default function EfacturaPage() {
       return `/einvoice?${qs}`;
     },
     [page, search, type, all],
-    { debounceMs: search ? 350 : 0, saltar: authLoading },
+    { debounceMs: search ? 350 : 0, saltar: authLoading || tab !== "historico" },
   );
-
-  useEffect(() => { if (!authLoading && tab === "historico") { const t = setTimeout(load, search ? 350 : 0); return () => clearTimeout(t); } }, [authLoading, tab, load, search]);
   useEffect(() => { setPage(1); }, [search, type, all]);
 
   async function openDetail(rid: string) {

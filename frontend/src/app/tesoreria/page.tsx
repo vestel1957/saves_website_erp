@@ -14,6 +14,7 @@ import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import { type TxList, type TreasuryStats, TX_TYPE_LABEL, TX_TYPE_TONE } from "@/lib/treasury";
 import dynamic from "next/dynamic";
+import { useRequest } from "@/lib/useRequest";
 
 const EgresoModal = dynamic(() => import("@/components/cobranzas/TesoreriaModals").then((m) => m.EgresoModal), { ssr: false });
 const CierreCajaModal = dynamic(() => import("@/components/cobranzas/TesoreriaModals").then((m) => m.CierreCajaModal), { ssr: false });
@@ -33,8 +34,6 @@ export default function TesoreriaPage() {
   const { loading: authLoading, authFetch } = useAuth();
   const [stats, setStats] = useState<TreasuryStats | null>(null);
   const [cats, setCats] = useState<{ name: string }[]>([]);
-  const [data, setData] = useState<TxList | null>(null);
-  const [loading, setLoading] = useState(true);
 
   const [search, setSearch] = useState("");
   const [type, setType] = useState("");
@@ -60,19 +59,22 @@ export default function TesoreriaPage() {
     void authFetch("/treasury/categories").then((r) => r.json()).then(setCats).catch(() => {});
   }, [authLoading, authFetch, loadStats]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
-    if (search.trim()) qs.set("search", search.trim());
-    if (type) qs.set("type", type);
-    if (category) qs.set("category", category);
-    if (status) qs.set("status", status);
-    if (cashAccountId) qs.set("cashAccountId", cashAccountId);
-    try { setData(await (await authFetch(`/treasury/transactions?${qs}`)).json()); }
-    finally { setLoading(false); }
-  }, [authFetch, page, pageSize, search, type, category, status, cashAccountId]);
+  // Carga con cancelación: al teclear se aborta la petición en vuelo para que
+  // una respuesta lenta no pise a otra más reciente. Ver lib/useRequest.
+  const { data, cargando: loading, error, refrescar: load } = useRequest<TxList>(
+    () => {
+      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+      if (search.trim()) qs.set("search", search.trim());
+      if (type) qs.set("type", type);
+      if (category) qs.set("category", category);
+      if (status) qs.set("status", status);
+      if (cashAccountId) qs.set("cashAccountId", cashAccountId);
+      return `/treasury/transactions?${qs}`;
+    },
+    [page, pageSize, search, type, category, status, cashAccountId],
+    { debounceMs: search ? 350 : 0, saltar: authLoading },
+  );
 
-  useEffect(() => { if (!authLoading) { const t = setTimeout(load, search ? 350 : 0); return () => clearTimeout(t); } }, [authLoading, load]);
   useEffect(() => { setPage(1); }, [search, type, category, status, cashAccountId, pageSize]);
 
   useEffect(() => {

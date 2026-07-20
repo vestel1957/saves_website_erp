@@ -15,6 +15,7 @@ import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import { StatCard } from "@/components/ui/StatCard";
+import { useRequest } from "@/lib/useRequest";
 
 const STATUS_TONE: Record<string, "default" | "success" | "error" | "warning" | "info" | "brand"> = {
   DRAFT: "default",
@@ -40,8 +41,6 @@ export default function DevolucionesPage() {
   const [status, setStatus] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const [data, setData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
 
   // Modal nueva devolución
   const [open, setOpen] = useState(false);
@@ -55,29 +54,23 @@ export default function DevolucionesPage() {
   const [materialResults, setMaterialResults] = useState<any[]>([]);
   const [items, setItems] = useState<ItemRow[]>([]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
-    if (search.trim()) qs.set("search", search.trim());
-    if (status) qs.set("status", status);
-    try {
-      const res = await authFetch(`/returns?${qs.toString()}`);
-      setData(await res.json());
-    } finally {
-      setLoading(false);
-    }
-  }, [authFetch, page, pageSize, search, status]);
+  // Carga con cancelación: al teclear se aborta la petición en vuelo para que
+  // una respuesta lenta no pise a otra más reciente. Ver lib/useRequest.
+  const { data, cargando: loading, error, refrescar: load } = useRequest<any>(
+    () => {
+      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+      if (search.trim()) qs.set("search", search.trim());
+      if (status) qs.set("status", status);
+      return `/returns?${qs.toString()}`;
+    },
+    [page, pageSize, search, status],
+    { debounceMs: search ? 350 : 0, saltar: authLoading },
+  );
 
   useEffect(() => {
     if (authLoading) return;
     void authFetch("/returns/stats").then((r) => r.json()).then(setStats).catch(() => {});
   }, [authLoading, authFetch]);
-
-  useEffect(() => {
-    if (authLoading) return;
-    const t = setTimeout(load, search ? 350 : 0);
-    return () => clearTimeout(t);
-  }, [authLoading, load]);
 
   useEffect(() => { setPage(1); }, [search, status, pageSize]);
 

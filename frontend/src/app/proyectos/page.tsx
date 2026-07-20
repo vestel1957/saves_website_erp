@@ -16,6 +16,7 @@ import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import { SubscriberPicker, type PickedSub } from "@/components/cobranzas/SubscriberPicker";
 import { StatCard } from "@/components/ui/StatCard";
+import { useRequest } from "@/lib/useRequest";
 
 const STATUS_OPTS = ["Waiting", "Pending", "Progress", "Finished", "Terminated"];
 const PRIORITY_OPTS = ["Low", "Medium", "High", "Urgent"];
@@ -46,8 +47,6 @@ function ProgressBar({ value }: { value: number }) {
 export default function ProyectosPage() {
   const { loading: authLoading, authFetch } = useAuth();
   const [stats, setStats] = useState<any>(null);
-  const [data, setData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
 
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
@@ -75,16 +74,19 @@ export default function ProyectosPage() {
     loadStats();
   }, [authLoading, loadStats]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
-    if (search.trim()) qs.set("search", search.trim());
-    if (status) qs.set("status", status);
-    try { setData(await (await authFetch(`/projects?${qs}`)).json()); }
-    finally { setLoading(false); }
-  }, [authFetch, page, pageSize, search, status]);
+  // Carga con cancelación: al teclear se aborta la petición en vuelo para que
+  // una respuesta lenta no pise a otra más reciente. Ver lib/useRequest.
+  const { data, cargando: loading, error, refrescar: load } = useRequest<any>(
+    () => {
+      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+      if (search.trim()) qs.set("search", search.trim());
+      if (status) qs.set("status", status);
+      return `/projects?${qs}`;
+    },
+    [page, pageSize, search, status],
+    { debounceMs: search ? 350 : 0, saltar: authLoading },
+  );
 
-  useEffect(() => { if (!authLoading) { const t = setTimeout(load, search ? 350 : 0); return () => clearTimeout(t); } }, [authLoading, load]);
   useEffect(() => { setPage(1); }, [search, status, pageSize]);
 
   function resetForm() {

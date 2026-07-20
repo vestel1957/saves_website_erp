@@ -13,6 +13,7 @@ import { Modal } from "@/components/Modal";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import type { Nap, Paged, BranchOpt, VlanOpt } from "@/lib/network";
+import { useRequest } from "@/lib/useRequest";
 
 export default function NapsPage() {
   const { loading: authLoading, authFetch } = useAuth();
@@ -79,29 +80,24 @@ export default function NapsPage() {
 function BranchNaps({ branch, onBack }: { branch: BranchOpt; onBack: () => void }) {
   const { authFetch } = useAuth();
   const router = useRouter();
-  const [data, setData] = useState<Paged<Nap> | null>(null);
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<"name" | "vlan">("name");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize), sort, branchId: branch.id });
-    if (search.trim()) qs.set("search", search.trim());
-    try {
-      setData(await (await authFetch(`/network/naps?${qs}`)).json());
-    } finally {
-      setLoading(false);
-    }
-  }, [authFetch, branch.id, page, pageSize, sort, search]);
+  // Carga con cancelación: al teclear se aborta la petición en vuelo para que
+  // una respuesta lenta no pise a otra más reciente. Ver lib/useRequest.
+  const { data, cargando: loading, error, refrescar: load } = useRequest<Paged<Nap>>(
+    () => {
+      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize), sort, branchId: branch.id });
+      if (search.trim()) qs.set("search", search.trim());
+      return `/network/naps?${qs}`;
+    },
+    [branch.id, page, pageSize, sort, search],
+    { debounceMs: search ? 350 : 0 },
+  );
 
-  useEffect(() => {
-    const t = setTimeout(load, search ? 350 : 0);
-    return () => clearTimeout(t);
-  }, [load, search]);
 
   useEffect(() => {
     setPage(1);

@@ -14,6 +14,7 @@ import { Modal } from "@/components/Modal";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import dynamic from "next/dynamic";
+import { useRequest } from "@/lib/useRequest";
 
 const NuevaNotaModal = dynamic(() => import("@/components/billing/NuevaNotaModal").then((m) => m.NuevaNotaModal), { ssr: false });
 
@@ -23,21 +24,22 @@ export default function NotasPage() {
   const [type, setType] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const [data, setData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
   const [openNew, setOpenNew] = useState(false);
   const [detail, setDetail] = useState<any>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
-    if (search.trim()) qs.set("search", search.trim());
-    if (type) qs.set("type", type);
-    try { setData(await (await authFetch(`/billing/notes?${qs}`)).json()); }
-    finally { setLoading(false); }
-  }, [authFetch, page, pageSize, search, type]);
+  // Carga con cancelación: al teclear se aborta la petición en vuelo para que
+  // una respuesta lenta no pise a otra más reciente. Ver lib/useRequest.
+  const { data, cargando: loading, error, refrescar: load } = useRequest<any>(
+    () => {
+      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+      if (search.trim()) qs.set("search", search.trim());
+      if (type) qs.set("type", type);
+      return `/billing/notes?${qs}`;
+    },
+    [page, pageSize, search, type],
+    { debounceMs: search ? 350 : 0, saltar: authLoading },
+  );
 
-  useEffect(() => { if (!authLoading) { const t = setTimeout(load, search ? 350 : 0); return () => clearTimeout(t); } }, [authLoading, load]);
   useEffect(() => { setPage(1); }, [search, type, pageSize]);
 
   if (authLoading) return <PageSkeleton />;

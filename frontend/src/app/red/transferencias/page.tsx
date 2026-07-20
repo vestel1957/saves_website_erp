@@ -13,6 +13,7 @@ import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { Modal } from "@/components/Modal";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
+import { useRequest } from "@/lib/useRequest";
 
 function statusTone(s: string): "default" | "success" | "warning" | "info" | "error" {
   if (s === "Recibida" || s === "Aprobada" || s === "Completada" || s === "Confirmada") return "success";
@@ -32,10 +33,8 @@ export default function TransferenciasPage() {
   const { loading: authLoading, authFetch, can } = useAuth();
   const canApprove = can("inventory.admin"); // Jefe de bodega (inventario) aprueba/despacha
   const canReceive = can("area.caja"); // caja recibe en la sede destino
-  const [data, setData] = useState<any>(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const [loading, setLoading] = useState(true);
 
   // Filtros de la lista
   const [search, setSearch] = useState("");
@@ -60,25 +59,19 @@ export default function TransferenciasPage() {
   const [rejecting, setRejecting] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
-    if (search.trim()) qs.set("search", search.trim());
-    if (status) qs.set("status", status);
-    if (warehouseFilter) qs.set("warehouseId", warehouseFilter);
-    try {
-      setData(await (await authFetch(`/network/transfers?${qs}`)).json());
-    } finally {
-      setLoading(false);
-    }
-  }, [authFetch, page, pageSize, search, status, warehouseFilter]);
-
-  useEffect(() => {
-    if (!authLoading) {
-      const t = setTimeout(load, search ? 350 : 0);
-      return () => clearTimeout(t);
-    }
-  }, [authLoading, load]);
+  // Carga con cancelación: al teclear se aborta la petición en vuelo para que
+  // una respuesta lenta no pise a otra más reciente. Ver lib/useRequest.
+  const { data, cargando: loading, error, refrescar: load } = useRequest<any>(
+    () => {
+      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+      if (search.trim()) qs.set("search", search.trim());
+      if (status) qs.set("status", status);
+      if (warehouseFilter) qs.set("warehouseId", warehouseFilter);
+      return `/network/transfers?${qs}`;
+    },
+    [page, pageSize, search, status, warehouseFilter],
+    { debounceMs: search ? 350 : 0, saltar: authLoading },
+  );
 
   // Al cambiar cualquier filtro volvemos a la primera página
   useEffect(() => {

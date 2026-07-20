@@ -18,6 +18,7 @@ import {
   type InvoiceList, type InvoiceRow, type BillingStats, RON_LABEL,
 } from "@/lib/billing";
 import { fmtDate } from "@/lib/format";
+import { useRequest } from "@/lib/useRequest";
 
 const NuevaFacturaModal = dynamic(() => import("@/components/billing/NuevaFacturaModal").then((m) => m.NuevaFacturaModal), { ssr: false });
 const GenerarFacturasModal = dynamic(() => import("@/components/billing/GenerarFacturasModal").then((m) => m.GenerarFacturasModal), { ssr: false });
@@ -31,8 +32,6 @@ export default function FacturacionPage() {
   const [emittingId, setEmittingId] = useState<string | null>(null);
   const [stats, setStats] = useState<BillingStats | null>(null);
   const [branches, setBranches] = useState<{ id: string; name: string }[]>([]);
-  const [data, setData] = useState<InvoiceList | null>(null);
-  const [loading, setLoading] = useState(true);
 
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
@@ -107,20 +106,16 @@ export default function FacturacionPage() {
     if (canEmit) void authFetch("/einvoice/mode").then((r) => (r.ok ? r.json() : null)).then(setEMode).catch(() => {});
   }, [authLoading, authFetch, loadStats, canEmit]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const qs = filterQs({ page: String(page), pageSize: String(pageSize) });
-    try {
-      const res = await authFetch(`/billing/invoices?${qs.toString()}`);
-      setData(await res.json());
-    } finally { setLoading(false); }
-  }, [authFetch, filterQs, page, pageSize]);
-
-  useEffect(() => {
-    if (authLoading || !hydrated) return;
-    const t = setTimeout(load, search ? 350 : 0);
-    return () => clearTimeout(t);
-  }, [authLoading, hydrated, load, search]);
+  // Carga con cancelación: al teclear se aborta la petición en vuelo para que
+  // una respuesta lenta no pise a otra más reciente. Ver lib/useRequest.
+  const { data, cargando: loading, error, refrescar: load } = useRequest<InvoiceList>(
+    () => {
+      const qs = filterQs({ page: String(page), pageSize: String(pageSize) });
+      return `/billing/invoices?${qs.toString()}`;
+    },
+    [filterQs, page, pageSize],
+    { debounceMs: search ? 350 : 0, saltar: authLoading || !hydrated },
+  );
 
   useEffect(() => { setPage(1); }, [search, status, ron, branchId, from, to, overdue, pageSize]);
 

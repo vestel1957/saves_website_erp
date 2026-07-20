@@ -15,10 +15,10 @@ import { Modal } from "@/components/Modal";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { SubscriberPicker, type PickedSub } from "@/components/cobranzas/SubscriberPicker";
+import { useRequest } from "@/lib/useRequest";
 
 export default function ConexionesPage() {
   const { loading: authLoading, authFetch } = useAuth();
-  const [data, setData] = useState<any>(null);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [branchId, setBranchId] = useState("");
@@ -27,32 +27,25 @@ export default function ConexionesPage() {
   const [napOptions, setNapOptions] = useState<ComboItem[]>([]);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const [loading, setLoading] = useState(true);
 
   const [assignFor, setAssignFor] = useState<any>(null);
   const [sub, setSub] = useState<PickedSub | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
-    if (search.trim()) qs.set("search", search.trim());
-    if (status) qs.set("status", status);
-    if (branchId) qs.set("branchId", branchId);
-    if (napId) qs.set("napId", napId);
-    try {
-      setData(await (await authFetch(`/network/ports?${qs}`)).json());
-    } finally {
-      setLoading(false);
-    }
-  }, [authFetch, page, pageSize, search, status, branchId, napId]);
-
-  useEffect(() => {
-    if (!authLoading) {
-      const t = setTimeout(load, search ? 350 : 0);
-      return () => clearTimeout(t);
-    }
-  }, [authLoading, load, search]);
+  // Carga con cancelación: al teclear se aborta la petición en vuelo para que
+  // una respuesta lenta no pise a otra más reciente. Ver lib/useRequest.
+  const { data, cargando: loading, error, refrescar: load } = useRequest<any>(
+    () => {
+      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+      if (search.trim()) qs.set("search", search.trim());
+      if (status) qs.set("status", status);
+      if (branchId) qs.set("branchId", branchId);
+      if (napId) qs.set("napId", napId);
+      return `/network/ports?${qs}`;
+    },
+    [page, pageSize, search, status, branchId, napId],
+    { debounceMs: search ? 350 : 0, saltar: authLoading },
+  );
 
   useEffect(() => {
     setPage(1);

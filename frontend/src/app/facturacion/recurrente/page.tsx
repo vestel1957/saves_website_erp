@@ -15,14 +15,13 @@ import { useAuth } from "@/context/AuthProvider";
 import { NuevaPlantillaModal } from "@/components/cobranzas/NuevaPlantillaModal";
 import { cop } from "@/lib/subscribers";
 import { StatCard } from "@/components/ui/StatCard";
+import { useRequest } from "@/lib/useRequest";
 
 export default function RecurrentePage() {
   const { loading: authLoading, authFetch } = useAuth();
   const [stats, setStats] = useState<any>(null);
-  const [data, setData] = useState<any>(null);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -30,16 +29,19 @@ export default function RecurrentePage() {
     void authFetch("/billing/recurring/stats").then((r) => r.json()).then(setStats).catch(() => {});
   }, [authFetch]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const qs = new URLSearchParams({ page: String(page), pageSize: "25" });
-    if (search.trim()) qs.set("search", search.trim());
-    try { setData(await (await authFetch(`/billing/recurring?${qs}`)).json()); }
-    finally { setLoading(false); }
-  }, [authFetch, page, search]);
+  // Carga con cancelación: al teclear se aborta la petición en vuelo para que
+  // una respuesta lenta no pise a otra más reciente. Ver lib/useRequest.
+  const { data, cargando: loading, error, refrescar: load } = useRequest<any>(
+    () => {
+      const qs = new URLSearchParams({ page: String(page), pageSize: "25" });
+      if (search.trim()) qs.set("search", search.trim());
+      return `/billing/recurring?${qs}`;
+    },
+    [page, search],
+    { debounceMs: search ? 350 : 0, saltar: authLoading },
+  );
 
   useEffect(() => { if (!authLoading) { loadStats(); } }, [authLoading, loadStats]);
-  useEffect(() => { if (!authLoading) { const t = setTimeout(load, search ? 350 : 0); return () => clearTimeout(t); } }, [authLoading, load]);
   useEffect(() => { setPage(1); }, [search]);
 
   async function run(id: string) {

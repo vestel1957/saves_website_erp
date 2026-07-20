@@ -15,6 +15,7 @@ import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { fmtDate } from "@/lib/format";
 import { StatCard } from "@/components/ui/StatCard";
+import { useRequest } from "@/lib/useRequest";
 
 type Task = {
   id: string; legacyId: number; name: string | null; status: string; priority: string;
@@ -47,8 +48,6 @@ export default function TareasPage() {
   const { loading: authLoading, authFetch } = useAuth();
   const [stats, setStats] = useState<any>(null);
   const [assignees, setAssignees] = useState<{ id: number; name: string }[]>([]);
-  const [data, setData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
 
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
@@ -75,27 +74,21 @@ export default function TareasPage() {
     void authFetch("/tasks/assignees").then((r) => r.json()).then(setAssignees).catch(() => {});
   }, [authLoading, authFetch, loadStats]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
-      if (search.trim()) qs.set("search", search.trim());
-      if (status) qs.set("status", status);
-      if (priority) qs.set("priority", priority);
-      if (kind) qs.set("kind", kind);
-      if (mine) qs.set("mine", "true");
-      const res = await authFetch(`/tasks?${qs.toString()}`);
-      setData(await res.json());
-    } finally {
-      setLoading(false);
-    }
-  }, [authFetch, page, pageSize, search, status, priority, kind, mine]);
-
-  useEffect(() => {
-    if (authLoading) return;
-    const t = setTimeout(load, search ? 350 : 0);
-    return () => clearTimeout(t);
-  }, [authLoading, load]);
+  // Carga con cancelación: al teclear se aborta la petición en vuelo para que
+  // una respuesta lenta no pise a otra más reciente. Ver lib/useRequest.
+  const { data, cargando: loading, error, refrescar: load } = useRequest<any>(
+    () => {
+        const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+        if (search.trim()) qs.set("search", search.trim());
+        if (status) qs.set("status", status);
+        if (priority) qs.set("priority", priority);
+        if (kind) qs.set("kind", kind);
+        if (mine) qs.set("mine", "true");
+      return `/tasks?${qs.toString()}`;
+    },
+    [page, pageSize, search, status, priority, kind, mine],
+    { debounceMs: search ? 350 : 0, saltar: authLoading },
+  );
 
   useEffect(() => { setPage(1); }, [search, status, priority, kind, mine, pageSize]);
 

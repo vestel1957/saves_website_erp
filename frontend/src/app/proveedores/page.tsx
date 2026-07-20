@@ -13,6 +13,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/format";
+import { useRequest } from "@/lib/useRequest";
 
 const CATEGORY_LABEL: Record<number, string> = { 1: "Productos", 2: "Servicios" };
 
@@ -35,8 +36,6 @@ export default function ProveedoresPage() {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const [data, setData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
 
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<any>(EMPTY_FORM);
@@ -46,23 +45,17 @@ export default function ProveedoresPage() {
   const [statement, setStatement] = useState<any>(null);
   const [stmtLoading, setStmtLoading] = useState(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const qs = new URLSearchParams({ category: String(tab), page: String(page), pageSize: String(pageSize) });
-    if (search.trim()) qs.set("search", search.trim());
-    try {
-      const res = await authFetch(`/orders/suppliers?${qs.toString()}`);
-      setData(await res.json());
-    } finally {
-      setLoading(false);
-    }
-  }, [authFetch, tab, page, pageSize, search]);
-
-  useEffect(() => {
-    if (authLoading) return;
-    const t = setTimeout(load, search ? 350 : 0);
-    return () => clearTimeout(t);
-  }, [authLoading, load]);
+  // Carga con cancelación: al teclear se aborta la petición en vuelo para que
+  // una respuesta lenta no pise a otra más reciente. Ver lib/useRequest.
+  const { data, cargando: loading, error, refrescar: load } = useRequest<any>(
+    () => {
+      const qs = new URLSearchParams({ category: String(tab), page: String(page), pageSize: String(pageSize) });
+      if (search.trim()) qs.set("search", search.trim());
+      return `/orders/suppliers?${qs.toString()}`;
+    },
+    [tab, page, pageSize, search],
+    { debounceMs: search ? 350 : 0, saltar: authLoading },
+  );
 
   useEffect(() => { setPage(1); }, [tab, search, pageSize]);
 

@@ -16,6 +16,7 @@ import { SubscriberFilters } from "@/components/subscribers/SubscriberFilters";
 import { useAuth } from "@/context/AuthProvider";
 import { PERM } from "@/lib/auth";
 import { type SubscriberList, SUB_STATUS_LABEL, SUB_STATUS_TONE, cop, cuentaParams } from "@/lib/subscribers";
+import { useRequest } from "@/lib/useRequest";
 
 export default function SedeClientesPage() {
   const { id } = useParams<{ id: string }>();
@@ -23,8 +24,6 @@ export default function SedeClientesPage() {
   const canWhatsapp = can(PERM.WHATSAPP_MANAGE);
 
   const [sedeName, setSedeName] = useState<string>("");
-  const [data, setData] = useState<SubscriberList | null>(null);
-  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [servicio, setServicio] = useState("");
@@ -61,28 +60,23 @@ export default function SedeClientesPage() {
       .catch(() => {});
   }, [authLoading, authFetch, id]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize), branchId: String(id) });
-    if (search.trim()) qs.set("search", search.trim());
-    if (status) qs.set("status", status);
-    if (servicio) qs.set("servicio", servicio);
-    if (tecnologia) qs.set("tecnologia", tecnologia);
-    const cp = cuentaParams(cuenta);
-    if (cp.cuenta) qs.set("cuenta", cp.cuenta);
-    if (cp.deuda) qs.set("deuda", cp.deuda);
-    try {
-      setData(await (await authFetch(`/subscribers?${qs.toString()}`)).json());
-    } finally {
-      setLoading(false);
-    }
-  }, [authFetch, id, page, pageSize, search, status, servicio, tecnologia, cuenta]);
-
-  useEffect(() => {
-    if (authLoading) return;
-    const t = setTimeout(load, search ? 350 : 0);
-    return () => clearTimeout(t);
-  }, [authLoading, load]);
+  // Carga con cancelación: al teclear se aborta la petición en vuelo para que
+  // una respuesta lenta no pise a otra más reciente. Ver lib/useRequest.
+  const { data, cargando: loading, error, refrescar: load } = useRequest<SubscriberList>(
+    () => {
+      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize), branchId: String(id) });
+      if (search.trim()) qs.set("search", search.trim());
+      if (status) qs.set("status", status);
+      if (servicio) qs.set("servicio", servicio);
+      if (tecnologia) qs.set("tecnologia", tecnologia);
+      const cp = cuentaParams(cuenta);
+      if (cp.cuenta) qs.set("cuenta", cp.cuenta);
+      if (cp.deuda) qs.set("deuda", cp.deuda);
+      return `/subscribers?${qs.toString()}`;
+    },
+    [id, page, pageSize, search, status, servicio, tecnologia, cuenta],
+    { debounceMs: search ? 350 : 0, saltar: authLoading },
+  );
   useEffect(() => { setPage(1); }, [search, status, servicio, tecnologia, cuenta, pageSize]);
 
   if (authLoading) return <PageSkeleton />;

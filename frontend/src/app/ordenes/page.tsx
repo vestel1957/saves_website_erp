@@ -13,6 +13,7 @@ import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { OrdersFilterButton, EMPTY_FILTERS, countActiveFilters, type OrderFilters } from "@/components/orders/OrdersFilterButton";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
+import { useRequest } from "@/lib/useRequest";
 
 function statusTone(status: string): "default" | "success" | "error" | "warning" {
   if (status === "recibido" || status === "finalizado") return "success";
@@ -23,8 +24,6 @@ function statusTone(status: string): "default" | "success" | "error" | "warning"
 
 export default function OrdenesPage() {
   const { loading: authLoading, authFetch } = useAuth();
-  const [data, setData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
 
   const [kind, setKind] = useState<"compra" | "servicio">("compra");
   const [search, setSearch] = useState("");
@@ -40,29 +39,25 @@ export default function OrdenesPage() {
     void authFetch("/orders/branches").then((r) => r.json()).then((b) => setBranches(Array.isArray(b) ? b : [])).catch(() => {});
   }, [authLoading, authFetch]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const qs = new URLSearchParams({ kind, page: String(page), pageSize: String(pageSize) });
-    if (search.trim()) qs.set("search", search.trim());
-    if (filters.status) qs.set("status", filters.status);
-    if (filters.category) qs.set("category", filters.category);
-    if (filters.branch) qs.set("branch", filters.branch);
-    if (filters.supplier) qs.set("supplier", filters.supplier);
-    if (filters.minTotal) qs.set("minTotal", filters.minTotal);
-    if (filters.maxTotal) qs.set("maxTotal", filters.maxTotal);
-    if (filters.from) qs.set("from", filters.from);
-    if (filters.to) qs.set("to", filters.to);
-    try {
-      const res = await authFetch(`/orders?${qs.toString()}`);
-      setData(await res.json());
-    } finally { setLoading(false); }
-  }, [authFetch, kind, page, pageSize, search, filters]);
-
-  useEffect(() => {
-    if (authLoading) return;
-    const t = setTimeout(load, search ? 350 : 0);
-    return () => clearTimeout(t);
-  }, [authLoading, load]);
+  // Carga con cancelación: al teclear se aborta la petición en vuelo para que
+  // una respuesta lenta no pise a otra más reciente. Ver lib/useRequest.
+  const { data, cargando: loading, error, refrescar: load } = useRequest<any>(
+    () => {
+      const qs = new URLSearchParams({ kind, page: String(page), pageSize: String(pageSize) });
+      if (search.trim()) qs.set("search", search.trim());
+      if (filters.status) qs.set("status", filters.status);
+      if (filters.category) qs.set("category", filters.category);
+      if (filters.branch) qs.set("branch", filters.branch);
+      if (filters.supplier) qs.set("supplier", filters.supplier);
+      if (filters.minTotal) qs.set("minTotal", filters.minTotal);
+      if (filters.maxTotal) qs.set("maxTotal", filters.maxTotal);
+      if (filters.from) qs.set("from", filters.from);
+      if (filters.to) qs.set("to", filters.to);
+      return `/orders?${qs.toString()}`;
+    },
+    [kind, page, pageSize, search, filters],
+    { debounceMs: search ? 350 : 0, saltar: authLoading },
+  );
 
   useEffect(() => { setPage(1); }, [kind, search, filters, pageSize]);
 

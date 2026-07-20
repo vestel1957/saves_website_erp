@@ -26,6 +26,9 @@ export const TID_SEQ = {
   recurringInvoice: '"RecurringInvoice_tid_seq"',
   stockReturn: '"StockReturn_tid_seq"',
   supplyOrder: '"SupplyOrder_tid_seq"',
+  /** Número de abonado. Ojo: la columna NO es única (ver la migración), pero al
+   *  menos deja de fabricar duplicados nuevos por concurrencia. */
+  subscriberAbonado: '"Subscriber_abonado_seq"',
 } as const;
 
 export type TidSequence = (typeof TID_SEQ)[keyof typeof TID_SEQ];

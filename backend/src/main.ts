@@ -4,8 +4,13 @@ import compression from 'compression';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/errors/all-exceptions.filter';
+import { comprobarEntornoOAbortar } from './common/env.validation';
 
 async function bootstrap() {
+  // Antes de levantar nada: si falta configuración crítica, fallar aquí y ruidoso.
+  // Un proceso que arranca a medias es peor que uno que no arranca.
+  comprobarEntornoOAbortar();
+
   // rawBody: true expone req.rawBody (Buffer) para verificar la firma del
   // webhook de WhatsApp Cloud API (X-Hub-Signature-256).
   const app = await NestFactory.create(AppModule, { rawBody: true });

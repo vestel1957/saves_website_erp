@@ -7,6 +7,7 @@ import { MikrotikAdminService } from '../network/mikrotik-admin.service';
 import type { AuthUser } from '../auth/current-user.decorator';
 import { num } from '../common/money';
 import { sedesDe, whereSedeSuscriptor, exigirSedeSuscriptor } from '../common/sede-scope';
+import { nextTid, TID_SEQ } from '../common/tid';
 
 
 /** Estados de factura que cuentan como deuda. */
@@ -744,8 +745,9 @@ export class SubscribersService {
 
     const data: any = buildProfileData(dto);
     if (data.abonado == null) {
-      const max = await this.prisma.subscriber.aggregate({ _max: { abonado: true } });
-      data.abonado = (max._max.abonado ?? 0) + 1;
+      // Secuencia de Postgres, no MAX+1: dos altas simultáneas obtenían el mismo
+      // número y, al no haber restricción única en la columna, se duplicaba sin ruido.
+      data.abonado = await nextTid(this.prisma, TID_SEQ.subscriberAbonado);
     }
     data.fullName = composeName(dto.firstName, dto.secondName, dto.lastName1, dto.lastName2) ?? dto.companyName ?? null;
     data.status = 'INSTALAR' as SubscriberStatus;

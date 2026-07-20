@@ -1,9 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { PageHeading } from "@/components/accounting/PageHeading";
+import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
-import { AuthNotice } from "@/components/inventory/DataTable";
+import { AuthNotice } from "@/components/ui/DataTable";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Field, Input } from "@/components/ui/Field";

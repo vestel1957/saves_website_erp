@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/Modal";
 import { toast } from "@/components/ui/Toast";
-import { DataTable } from "@/components/inventory/DataTable";
+import { DataTable } from "@/components/ui/DataTable";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { useAuth } from "@/context/AuthProvider";
 import { PERM } from "@/lib/auth";

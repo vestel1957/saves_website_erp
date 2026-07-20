@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { Icon } from "@/components/Icon";
-import { DataTable } from "@/components/inventory/DataTable";
+import { DataTable } from "@/components/ui/DataTable";
 import { Badge } from "@/components/ui/Badge";
 import { Input } from "@/components/ui/Field";
 import { Pagination } from "@/components/ui/Pagination";

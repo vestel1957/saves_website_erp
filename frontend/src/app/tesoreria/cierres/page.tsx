@@ -3,8 +3,8 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Icon } from "@/components/Icon";
-import { PageHeading } from "@/components/accounting/PageHeading";
-import { DataTable } from "@/components/inventory/DataTable";
+import { PageHeading } from "@/components/ui/PageHeading";
+import { DataTable } from "@/components/ui/DataTable";
 import { Button } from "@/components/ui/Button";
 import { Field, Input, Select } from "@/components/ui/Field";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "@/context/AuthProvider";
 import type { PageMeta } from "@/components/ui/Pagination";
-import type { SortState } from "@/components/inventory/DataTable";
+import type { SortState } from "@/components/ui/DataTable";
 
 type Params = Record<string, string | undefined>;
 

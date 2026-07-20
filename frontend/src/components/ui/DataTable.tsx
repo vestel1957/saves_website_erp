@@ -153,7 +153,7 @@ export function DataTable<T>({
 }
 
 // Reexportado desde el componente canónico para mantener compatibilidad con
-// los imports existentes (`@/components/inventory/DataTable`).
+// los imports existentes (`@/components/ui/DataTable`).
 export { Badge } from "../ui/Badge";
 // AuthNotice vive en su propio módulo (client) para poder mostrar el skeleton
 // mientras la sesión carga; se reexporta aquí por compatibilidad de imports.

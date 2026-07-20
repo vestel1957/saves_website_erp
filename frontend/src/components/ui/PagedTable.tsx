@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { DataTable, type Column } from "@/components/inventory/DataTable";
+import { DataTable, type Column } from "@/components/ui/DataTable";
 import { Icon } from "@/components/Icon";
 
 /** Páginas a mostrar con elipsis: 1 … (p-1) p (p+1) … N */

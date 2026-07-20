@@ -3,9 +3,9 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { PageHeading } from "@/components/accounting/PageHeading";
+import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
-import { DataTable } from "@/components/inventory/DataTable";
+import { DataTable } from "@/components/ui/DataTable";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Input, Select } from "@/components/ui/Field";
@@ -18,14 +18,14 @@ import {
   type SubscriberList, type Branch,
   SUB_STATUS_LABEL, SUB_STATUS_TONE, cop, cuentaParams,
 } from "@/lib/subscribers";
+import { useRequest } from "@/lib/useRequest";
+import { LoadError } from "@/components/ui/LoadError";
 
 export default function ClientesPage() {
   const router = useRouter();
   const [createOpen, setCreateOpen] = useState(false);
   const { loading: authLoading, authFetch } = useAuth();
   const [branches, setBranches] = useState<Branch[]>([]);
-  const [data, setData] = useState<SubscriberList | null>(null);
-  const [loading, setLoading] = useState(true);
 
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
@@ -42,31 +42,31 @@ export default function ClientesPage() {
     void authFetch("/subscribers/branches").then((r) => r.json()).then(setBranches).catch(() => {});
   }, [authLoading, authFetch]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
-    if (search.trim()) qs.set("search", search.trim());
-    if (status) qs.set("status", status);
-    if (branchId) qs.set("branchId", branchId);
-    if (servicio) qs.set("servicio", servicio);
-    if (tecnologia) qs.set("tecnologia", tecnologia);
-    const cp = cuentaParams(cuenta);
-    if (cp.cuenta) qs.set("cuenta", cp.cuenta);
-    if (cp.deuda) qs.set("deuda", cp.deuda);
-    try {
-      const res = await authFetch(`/subscribers?${qs.toString()}`);
-      setData(await res.json());
-    } finally {
-      setLoading(false);
-    }
-  }, [authFetch, page, pageSize, search, status, branchId, servicio, tecnologia, cuenta]);
-
-  // Debounce de búsqueda/filtros.
-  useEffect(() => {
-    if (authLoading) return;
-    const t = setTimeout(load, search ? 350 : 0);
-    return () => clearTimeout(t);
-  }, [authLoading, load]);
+  // Carga con cancelación: al teclear en el filtro, la petición en vuelo se aborta.
+  // Antes sólo se cancelaba el temporizador del debounce, así que una respuesta
+  // lenta podía llegar después de otra más nueva y pisar la tabla con datos que ya
+  // no correspondían al filtro escrito.
+  const {
+    data,
+    cargando: loading,
+    error,
+    refrescar: load,
+  } = useRequest<SubscriberList>(
+    () => {
+      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+      if (search.trim()) qs.set("search", search.trim());
+      if (status) qs.set("status", status);
+      if (branchId) qs.set("branchId", branchId);
+      if (servicio) qs.set("servicio", servicio);
+      if (tecnologia) qs.set("tecnologia", tecnologia);
+      const cp = cuentaParams(cuenta);
+      if (cp.cuenta) qs.set("cuenta", cp.cuenta);
+      if (cp.deuda) qs.set("deuda", cp.deuda);
+      return `/subscribers?${qs.toString()}`;
+    },
+    [page, pageSize, search, status, branchId, servicio, tecnologia, cuenta],
+    { debounceMs: search ? 350 : 0, saltar: authLoading },
+  );
 
   // Al cambiar filtros, vuelve a página 1.
   useEffect(() => { setPage(1); }, [search, status, branchId, servicio, tecnologia, cuenta, pageSize]);
@@ -117,7 +117,11 @@ export default function ClientesPage() {
       />
 
       {/* Tabla */}
-      {loading && !data ? (
+      {error && !data ? (
+        // Distingue "falló la carga" de "no hay clientes": antes un 500 dejaba la
+        // tabla vacía y parecía que el filtro no devolvía nada.
+        <LoadError message={error} onRetry={load} />
+      ) : loading && !data ? (
         <PageSkeleton />
       ) : (
         <>

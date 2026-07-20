@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { PageHeading } from "@/components/accounting/PageHeading";
+import { PageHeading } from "@/components/ui/PageHeading";
 import { StatCard } from "@/components/accounting/StatCard";
 import { ChartCard } from "@/components/charts/ChartCard";
 import { AreaLineChart } from "@/components/charts/AreaLineChart";

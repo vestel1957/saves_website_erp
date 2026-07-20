@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { PageHeading } from "@/components/accounting/PageHeading";
+import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
 import { TxTable } from "@/components/cobranzas/TxTable";
 

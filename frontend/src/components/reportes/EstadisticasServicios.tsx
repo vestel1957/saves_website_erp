@@ -1,5 +1,5 @@
 import { ChartCard, DonutChart, HBarList, colorAt } from "@/components/charts";
-import { DataTable } from "@/components/inventory/DataTable";
+import { DataTable } from "@/components/ui/DataTable";
 import { nfmt } from "@/lib/reportes";
 
 export function EstadisticasServicios({ data }: { data: any }) {

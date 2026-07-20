@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { PageHeading } from "@/components/accounting/PageHeading";
+import { PageHeading } from "@/components/ui/PageHeading";
 import { TabBar } from "@/components/accounting/TabBar";
 import { TrialBalanceTable } from "@/components/accounting/TrialBalanceTable";
 import { StatementSection, TotalRow } from "@/components/accounting/StatementView";

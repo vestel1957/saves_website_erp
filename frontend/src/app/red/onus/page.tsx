@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { Icon } from "@/components/Icon";
-import { PageHeading } from "@/components/accounting/PageHeading";
-import { DataTable } from "@/components/inventory/DataTable";
+import { PageHeading } from "@/components/ui/PageHeading";
+import { DataTable } from "@/components/ui/DataTable";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Input, Select } from "@/components/ui/Field";

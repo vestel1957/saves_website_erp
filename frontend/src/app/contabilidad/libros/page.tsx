@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { PageHeading } from "@/components/accounting/PageHeading";
+import { PageHeading } from "@/components/ui/PageHeading";
 import { TabBar } from "@/components/accounting/TabBar";
 import { JournalTable } from "@/components/accounting/JournalTable";
 import { LedgerTable } from "@/components/accounting/LedgerTable";

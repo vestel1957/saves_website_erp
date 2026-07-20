@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Icon } from "@/components/Icon";
-import { PageHeading } from "@/components/accounting/PageHeading";
-import { DataTable } from "@/components/inventory/DataTable";
+import { PageHeading } from "@/components/ui/PageHeading";
+import { DataTable } from "@/components/ui/DataTable";
 import { PermissionGate } from "@/components/PermissionGate";
 import { useAuth } from "@/context/AuthProvider";
 import { initials } from "@/lib/auth";

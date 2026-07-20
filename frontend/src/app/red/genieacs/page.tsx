@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Icon } from "@/components/Icon";
-import { PageHeading } from "@/components/accounting/PageHeading";
-import { DataTable, type SortState } from "@/components/inventory/DataTable";
+import { PageHeading } from "@/components/ui/PageHeading";
+import { DataTable, type SortState } from "@/components/ui/DataTable";
 import { Pagination } from "@/components/ui/Pagination";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";

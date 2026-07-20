@@ -6,7 +6,7 @@ import { useParams } from "next/navigation";
 import { Icon } from "@/components/Icon";
 import { Input } from "@/components/ui/Field";
 import { Badge } from "@/components/ui/Badge";
-import { DataTable, type SortState } from "@/components/inventory/DataTable";
+import { DataTable, type SortState } from "@/components/ui/DataTable";
 import { Pagination } from "@/components/ui/Pagination";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { toast } from "@/components/ui/Toast";

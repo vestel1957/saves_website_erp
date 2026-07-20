@@ -1,5 +1,5 @@
 import { ChartCard, AreaLineChart, TrendStat, compactCOP } from "@/components/charts";
-import { DataTable } from "@/components/inventory/DataTable";
+import { DataTable } from "@/components/ui/DataTable";
 import { cop } from "@/lib/subscribers";
 import { monthLabel, nfmt } from "@/lib/reportes";
 import { Section } from "./Section";

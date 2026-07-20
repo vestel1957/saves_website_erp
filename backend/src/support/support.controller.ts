@@ -1,5 +1,5 @@
 import {
-  BadRequestException, Body, Controller, Get, Param, Post, Query, Res, UploadedFile, UseGuards, UseInterceptors,
+  BadRequestException, Body, Controller, Get, Param, Post, Query, Req, Res, UploadedFile, UseGuards, UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
@@ -52,7 +52,17 @@ export class SupportController {
   // --- Escritura ---
   @Get('technicians') technicians() { return this.write.technicians(); }
   @Post('tickets') createTicket(@Body() dto: CreateTicketDto, @CurrentUser() user: AuthUser) { return this.write.createTicket(dto, user); }
-  @Post('tickets/:id/status') updateStatus(@Param('id') id: string, @Body() dto: UpdateStatusDto, @CurrentUser() user: AuthUser) { return this.write.updateStatus(id, dto, user); }
+  /** La IP se pasa al servicio para poder cotejarla con la ubicación declarada
+   *  (un técnico en el wifi de la oficina no puede estar a 3 km). */
+  @Post('tickets/:id/status')
+  updateStatus(
+    @Param('id') id: string,
+    @Body() dto: UpdateStatusDto,
+    @CurrentUser() user: AuthUser,
+    @Req() req: { ip?: string; socket?: { remoteAddress?: string } },
+  ) {
+    return this.write.updateStatus(id, dto, user, req?.ip ?? req?.socket?.remoteAddress ?? null);
+  }
   @Post('tickets/:id/assign') assign(@Param('id') id: string, @Body() dto: AssignDto) { return this.write.assign(id, dto); }
   @Post('tickets/:id/priority') setPriority(@Param('id') id: string, @Body() dto: PriorityDto) { return this.write.setPriority(id, dto); }
   @Post('tickets/:id/signature') sign(@Param('id') id: string, @Body() dto: SignatureDto) { return this.write.saveSignature(id, dto); }

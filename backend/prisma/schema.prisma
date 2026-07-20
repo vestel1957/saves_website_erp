@@ -4613,6 +4613,9 @@ model Ticket {
   closeGeoOk        Boolean?
   /// Motivo escrito por quien cerró estando fuera de rango. Es lo que se audita.
   closeGeoReason    String?
+  /// Señales de que la ubicación del cierre podría ser simulada (ver spoof.policy).
+  /// Vacío = nada raro. No prueban nada por sí solas: son para mirar, no para acusar.
+  closeFlags        String[]         @default([])
 
   @@index([subscriberId])
   @@index([code])
@@ -4901,6 +4904,9 @@ model GeoPing {
   /// Entidad tocada (nº de orden, id de abonado…), para poder saltar a ella.
   refType   String?
   refId     String?
+  /// Señales de ubicación posiblemente simulada al grabar este punto
+  /// (ver spoof.policy.ts). Vacío = nada raro. Son indicios, no pruebas.
+  flags     String[] @default([])
   createdAt DateTime @default(now())
 
   /// El mapa pregunta "último punto de cada técnico" y la auditoría "recorrido de

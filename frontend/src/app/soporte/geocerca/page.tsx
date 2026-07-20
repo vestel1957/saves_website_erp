@@ -22,6 +22,7 @@ type Caso = {
   distanciaM: number | null;
   precisionM: number | null;
   justificacion: string | null;
+  senales: string[];
   cierre: { lat: number; lng: number } | null;
   cliente: { id: string; abonado: number; nombre: string | null; punto: { lat: number; lng: number } | null } | null;
 };
@@ -30,9 +31,40 @@ type Informe = {
   dias: number;
   modo: "off" | "observar" | "exigir";
   radioM: number;
-  resumen: { fuera: number; dentro: number; sinDato: number };
+  resumen: { fuera: number; dentro: number; sinDato: number; sospechosos: number };
   casos: Caso[];
+  sospechosos: {
+    id: string; code: number | null; type: string | null; tecnico: string | null;
+    fecha: string | null; senales: string[]; dentroDeRango: boolean | null;
+    cliente: { id: string; abonado: number; nombre: string | null } | null;
+  }[];
 };
+
+/** Qué significa cada señal, en cristiano. Ninguna prueba nada por sí sola. */
+const SENAL: Record<string, string> = {
+  "precision-perfecta": "Precisión demasiado buena para un GPS real",
+  "punto-repetido": "Coordenada calcada a otra anterior",
+  "salto-imposible": "Se habría movido a una velocidad imposible",
+  "ip-contradice": "Escribió desde la red de la oficina",
+  "foto-en-otro-sitio": "La foto de evidencia se tomó lejos",
+};
+
+function Senales({ lista }: { lista: string[] }) {
+  if (!lista?.length) return null;
+  return (
+    <div className="mt-1 flex flex-wrap gap-1">
+      {lista.map((s) => (
+        <span
+          key={s}
+          title={SENAL[s] ?? s}
+          className="inline-flex items-center gap-1 rounded-md bg-error-soft px-1.5 py-0.5 text-[10.5px] font-semibold text-error-text"
+        >
+          <Icon name="alert-triangle" size={10} /> {SENAL[s] ?? s}
+        </span>
+      ))}
+    </div>
+  );
+}
 
 const MODO_TEXTO: Record<Informe["modo"], { label: string; tone: "warning" | "success" | "default"; ayuda: string }> = {
   observar: {
@@ -110,6 +142,46 @@ export default function GeocercaPage() {
         />
       </div>
 
+      {d.sospechosos.length > 0 && (
+        <div className="mb-4 rounded-xl border border-error bg-error-soft p-4">
+          <p className="flex items-center gap-1.5 text-[13px] font-bold text-error-text">
+            <Icon name="alert-triangle" size={15} /> Ubicaciones que podrían estar simuladas
+          </p>
+          <p className="mt-0.5 text-[12px] leading-relaxed text-text-secondary">
+            Estos cierres traen señales que un GPS real no produce. <strong>No prueban nada</strong>:
+            son motivos para preguntar, no para acusar. El caso a mirar primero es el que además
+            pasó la cerca, porque la habría pasado justamente por el punto falso.
+          </p>
+          <div className="mt-3 space-y-2">
+            {d.sospechosos.map((s) => (
+              <div key={s.id} className="rounded-lg bg-surface px-3 py-2">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[12.5px]">
+                  <Link href={`/soporte/${s.id}`} className="font-semibold text-brand hover:underline">
+                    #{s.code ?? "—"}
+                  </Link>
+                  <span className="text-text-secondary">{s.type ?? "—"}</span>
+                  <span className="text-text-primary">{s.tecnico ?? "sin técnico"}</span>
+                  {s.cliente && (
+                    <Link href={`/clientes/${s.cliente.id}`} className="text-text-tertiary hover:underline">
+                      {s.cliente.nombre ?? `#${s.cliente.abonado}`}
+                    </Link>
+                  )}
+                  {s.dentroDeRango === true && (
+                    <span className="rounded bg-warning-soft px-1.5 py-0.5 text-[10.5px] font-bold text-warning-text">
+                      pasó la cerca
+                    </span>
+                  )}
+                  <span className="ml-auto text-[11.5px] text-text-tertiary">
+                    {s.fecha ? fmtDate(s.fecha) : "—"}
+                  </span>
+                </div>
+                <Senales lista={s.senales} />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {d.casos.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border-subtle bg-surface p-10 text-center">
           <Icon name="check" size={22} className="text-success-text" />
@@ -166,6 +238,7 @@ export default function GeocercaPage() {
                     {c.justificacion ?? (
                       <span className="text-text-tertiary">— (no se pidió: modo observación)</span>
                     )}
+                    <Senales lista={c.senales} />
                   </td>
                   <td className="px-3 py-2 text-text-tertiary">{c.fecha ? fmtDate(c.fecha) : "—"}</td>
                 </tr>

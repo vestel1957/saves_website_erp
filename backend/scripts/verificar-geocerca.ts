@@ -262,6 +262,39 @@ async function main() {
       `fuera=${informe.resumen.fuera}`,
     );
 
+    // ── Señales de ubicación simulada ──────────────────────────────────
+    await setModo('exigir');
+    console.log('\n── Detección de ubicación simulada ───────────────────');
+
+    // Precisión perfecta + coordenada calcada al punto anterior: dos cosas que
+    // un receptor GPS real no hace nunca.
+    id = await nuevaOrden(TIPO_CAMPO, conGps.id);
+    r = await cerrar(tokTec, id, { lat: EN_LA_PUERTA.lat, lng: EN_LA_PUERTA.lng, accuracyM: 0 });
+    t = await prisma.ticket.findUnique({ where: { id } });
+    comprobar(
+      'precisión de 0 m se marca como sospechosa',
+      r.status < 300 && (t?.closeFlags ?? []).includes('precision-perfecta'),
+      `flags=${JSON.stringify(t?.closeFlags)}`,
+    );
+
+    id = await nuevaOrden(TIPO_CAMPO, conGps.id);
+    r = await cerrar(tokTec, id, { lat: EN_LA_PUERTA.lat, lng: EN_LA_PUERTA.lng, accuracyM: 12 });
+    t = await prisma.ticket.findUnique({ where: { id } });
+    comprobar(
+      'coordenada calcada a la anterior se marca',
+      r.status < 300 && (t?.closeFlags ?? []).includes('punto-repetido'),
+      `flags=${JSON.stringify(t?.closeFlags)}`,
+    );
+
+    const conSenales = await fetch(`${API}/support/geofence-report?dias=1`, {
+      headers: { Authorization: `Bearer ${tokAdmin}` },
+    }).then((x) => x.json() as Promise<{ sospechosos: unknown[] }>);
+    comprobar(
+      'el informe lista los cierres con señales',
+      conSenales.sospechosos.length >= 2,
+      `sospechosos=${conSenales.sospechosos.length}`,
+    );
+
     // ── Modo OFF ───────────────────────────────────────────────────────
     await setModo('off');
     console.log('\n── Modo OFF: la cerca no existe ──────────────────────');

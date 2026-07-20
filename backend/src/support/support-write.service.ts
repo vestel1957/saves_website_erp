@@ -122,7 +122,7 @@ export class SupportWriteService {
     });
   }
 
-  async updateStatus(id: string, dto: UpdateStatusDto, user?: AuthUser) {
+  async updateStatus(id: string, dto: UpdateStatusDto, user?: AuthUser, ip?: string | null) {
     const t = await this.prisma.ticket.findUnique({ where: { id } });
     if (!t) throw new NotFoundException('Orden no encontrada');
     // Bloqueo de cierre sin firma (porta Tickets.php). Desactivable con
@@ -136,7 +136,12 @@ export class SupportWriteService {
     // (ANULADA no: anular una orden es justamente decir que no se hizo).
     const cerca =
       dto.status === 'RESUELTO'
-        ? await this.geofence.evaluar({ type: t.type, subscriberId: t.subscriberId }, dto, user)
+        ? await this.geofence.evaluar(
+            { id, code: t.code, type: t.type, subscriberId: t.subscriberId },
+            dto,
+            user,
+            ip,
+          )
         : null;
 
     const data: Prisma.TicketUpdateInput = { status: dto.status };
@@ -182,6 +187,7 @@ export class SupportWriteService {
             accuracy: datos.closeAccuracyM,
             reason: 'ticket.close',
             refType: 'ticket', refId: ticketId,
+            flags: cerca.senales,
           },
         })
         .catch(() => undefined);

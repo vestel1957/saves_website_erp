@@ -2,6 +2,7 @@ import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { parsePoint } from '../geo/geo.util';
+import { detectarSenales, type Senal } from './spoof.policy';
 import {
   TIPOS_DE_CAMPO_POR_DEFECTO,
   evaluarCierre,
@@ -14,6 +15,9 @@ import {
 const K_MODO = 'tickets.geofence.mode';
 const K_RADIO = 'tickets.geofence.radiusM';
 const K_TIPOS = 'tickets.geofence.fieldTypes';
+/** IPs públicas de las oficinas, para cotejarlas con el punto declarado.
+ *  Formato: "190.14.238.10@5.3378,-72.3959;otra.ip@lat,lng" */
+const K_OFICINAS = 'security.officeIps';
 
 const RADIO_POR_DEFECTO_M = 100;
 
@@ -30,6 +34,8 @@ export class GeofenceException extends HttpException {
 
 export type ResultadoCerca = {
   veredicto: Veredicto;
+  /** Señales de ubicación posiblemente simulada. */
+  senales: Senal[];
   /** Qué escribir en el Ticket al cerrar. */
   datos: {
     closeLat: number | null;
@@ -38,6 +44,7 @@ export type ResultadoCerca = {
     closeDistanceM: number | null;
     closeGeoOk: boolean | null;
     closeGeoReason: string | null;
+    closeFlags: string[];
   };
   /** Coordenada a guardarle al abonado (solo cuando no tenía ninguna). */
   georreferenciar: { lat: number; lng: number } | null;
@@ -88,9 +95,10 @@ export class GeofenceService {
    * contrario devuelve lo que el llamador debe persistir.
    */
   async evaluar(
-    ticket: { type: string | null; subscriberId: string | null },
+    ticket: { id?: string; code?: number | null; type: string | null; subscriberId: string | null },
     dto: { lat?: number; lng?: number; accuracyM?: number; justificacion?: string },
     user: AuthUser | undefined,
+    ip?: string | null,
   ): Promise<ResultadoCerca> {
     const [modo, radioM, tiposCampo] = await Promise.all([
       this.modo(),
@@ -123,6 +131,17 @@ export class GeofenceService {
       justificacion: dto.justificacion,
     });
 
+    // Señales de ubicación simulada. Se calculan aunque el cierre se permita:
+    // el caso interesante es justo el que pasa la cerca porque el punto es falso.
+    const senales = tecnico
+      ? await this.senalesDe(tecnico, user, ip, ticket.code ?? null)
+      : [];
+    if (senales.length) {
+      this.log.warn(
+        `Ubicación sospechosa al cerrar (${user?.name ?? '?'}): ${senales.join(', ')}`,
+      );
+    }
+
     const base = {
       closeLat: tecnico?.lat ?? null,
       closeLng: tecnico?.lng ?? null,
@@ -130,6 +149,7 @@ export class GeofenceService {
       closeDistanceM: null as number | null,
       closeGeoOk: null as boolean | null,
       closeGeoReason: null as string | null,
+      closeFlags: senales as string[],
     };
 
     switch (veredicto.accion) {
@@ -149,6 +169,7 @@ export class GeofenceService {
       case 'permitir-y-georreferenciar':
         return {
           veredicto,
+          senales,
           datos: { ...base, closeGeoOk: null },
           georreferenciar: tecnico ? { lat: tecnico.lat, lng: tecnico.lng } : null,
         };
@@ -156,6 +177,7 @@ export class GeofenceService {
       case 'permitir-justificado':
         return {
           veredicto,
+          senales,
           datos: {
             ...base,
             closeDistanceM: veredicto.distanciaM,
@@ -173,6 +195,7 @@ export class GeofenceService {
         );
         return {
           veredicto,
+          senales,
           datos: { ...base, closeDistanceM: veredicto.distanciaM, closeGeoOk: false },
           georreferenciar: null,
         };
@@ -181,6 +204,7 @@ export class GeofenceService {
       default:
         return {
           veredicto,
+          senales,
           datos: {
             ...base,
             closeDistanceM: 'distanciaM' in veredicto ? veredicto.distanciaM : null,
@@ -214,8 +238,21 @@ export class GeofenceService {
       select: {
         id: true, code: true, type: true, assigned: true, finalDate: true,
         closeDistanceM: true, closeAccuracyM: true, closeGeoReason: true,
-        closeLat: true, closeLng: true,
+        closeLat: true, closeLng: true, closeFlags: true,
         subscriber: { select: { id: true, abonado: true, fullName: true, gpsLat: true, gpsLng: true } },
+      },
+    });
+
+    // Los cierres CON señales pero que pasaron la cerca son el caso más
+    // interesante: la pasaron precisamente porque el punto podría ser falso.
+    const sospechosos = await this.prisma.ticket.findMany({
+      where: { finalDate: { gte: desde }, NOT: { closeFlags: { isEmpty: true } } },
+      orderBy: { finalDate: 'desc' },
+      take: 100,
+      select: {
+        id: true, code: true, type: true, assigned: true, finalDate: true,
+        closeFlags: true, closeGeoOk: true, closeDistanceM: true,
+        subscriber: { select: { id: true, abonado: true, fullName: true } },
       },
     });
 
@@ -223,7 +260,14 @@ export class GeofenceService {
       dias,
       modo: await this.modo(),
       radioM: await this.radioM(),
-      resumen: { fuera, dentro, sinDato },
+      resumen: { fuera, dentro, sinDato, sospechosos: sospechosos.length },
+      sospechosos: sospechosos.map((c) => ({
+        id: c.id, code: c.code, type: c.type, tecnico: c.assigned, fecha: c.finalDate,
+        senales: c.closeFlags, dentroDeRango: c.closeGeoOk,
+        cliente: c.subscriber
+          ? { id: c.subscriber.id, abonado: c.subscriber.abonado, nombre: c.subscriber.fullName }
+          : null,
+      })),
       casos: casos.map((c) => ({
         id: c.id,
         code: c.code,
@@ -233,6 +277,7 @@ export class GeofenceService {
         distanciaM: c.closeDistanceM,
         precisionM: c.closeAccuracyM,
         justificacion: c.closeGeoReason,
+        senales: c.closeFlags,
         cierre: c.closeLat != null && c.closeLng != null ? { lat: c.closeLat, lng: c.closeLng } : null,
         cliente: c.subscriber
           ? {
@@ -244,6 +289,73 @@ export class GeofenceService {
           : null,
       })),
     };
+  }
+
+  /**
+   * Reúne las señales de ubicación simulada para un punto reportado.
+   *
+   * Todo lo que necesita ya está guardado: los puntos anteriores del usuario
+   * (GeoPing) y la geo de las fotos de evidencia de esta misma orden. No se le
+   * pide nada extra al técnico.
+   */
+  private async senalesDe(
+    punto: { lat: number; lng: number; accuracyM: number | null },
+    user: AuthUser | undefined,
+    ip: string | null | undefined,
+    ticketCode: number | null,
+  ): Promise<Senal[]> {
+    if (!user) return [];
+    const ahora = new Date();
+
+    const [previos, hilos, oficinas] = await Promise.all([
+      // Los últimos puntos del mismo usuario: para el punto calcado y el salto.
+      this.prisma.geoPing.findMany({
+        where: { userId: user.id },
+        orderBy: { createdAt: 'desc' },
+        take: 20,
+        select: { lat: true, lng: true, createdAt: true },
+      }),
+      // Fotos de evidencia de esta orden, que traen su propia coordenada.
+      ticketCode != null
+        ? this.prisma.ticketThread.findMany({
+            where: { ticketCode, geoLat: { not: null }, geoLng: { not: null } },
+            orderBy: { date: 'desc' },
+            take: 10,
+            select: { geoLat: true, geoLng: true },
+          })
+        : Promise.resolve([]),
+      this.oficinas(),
+    ]);
+
+    const anterior = previos[0]
+      ? { lat: previos[0].lat, lng: previos[0].lng, en: previos[0].createdAt }
+      : null;
+
+    return detectarSenales({
+      punto: { ...punto, en: ahora },
+      anterior,
+      puntosPrevios: previos.map((p) => ({ lat: p.lat, lng: p.lng })),
+      ip,
+      oficinas,
+      fotos: hilos.flatMap((h) => {
+        const p = parsePoint(h.geoLat, h.geoLng);
+        return p ? [p] : [];
+      }),
+    });
+  }
+
+  /** IPs públicas de oficina con su coordenada. Formato "ip@lat,lng;ip@lat,lng". */
+  private async oficinas(): Promise<{ ip: string; lat: number; lng: number }[]> {
+    const crudo = process.env.OFFICE_IPS ?? (await this.ajuste(K_OFICINAS));
+    if (!crudo?.trim()) return [];
+    return crudo
+      .split(';')
+      .flatMap((par) => {
+        const [ip, coord] = par.split('@');
+        const [lat, lng] = (coord ?? '').split(',').map(Number);
+        if (!ip?.trim() || !Number.isFinite(lat) || !Number.isFinite(lng)) return [];
+        return [{ ip: ip.trim(), lat, lng }];
+      });
   }
 
   private async ajuste(key: string): Promise<string | null> {

@@ -3,6 +3,7 @@
 import { usePathname } from "next/navigation";
 import { Sidebar } from "@/components/Sidebar";
 import { TopNav } from "@/components/TopNav";
+import { GeoGate } from "@/components/map/GeoGate";
 
 // Rutas públicas que NO llevan el chrome de staff (mismo criterio que el
 // middleware `PUBLIC_PATHS`): login y el portal del abonado.
@@ -23,7 +24,12 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
       <Sidebar />
       <div className="flex flex-1 flex-col overflow-hidden">
         <TopNav />
-        <main className="flex flex-1 flex-col gap-5 overflow-y-auto p-4 md:p-6">{children}</main>
+        <main className="flex flex-1 flex-col gap-5 overflow-y-auto p-4 md:p-6">
+          {/* Puerta de ubicación: a un técnico con el permiso denegado no se le
+              enseña nada hasta que lo reactive. Envuelve el contenido y no el
+              marco, para que le queden el menú y el botón de salir. */}
+          <GeoGate>{children}</GeoGate>
+        </main>
       </div>
     </div>
   );

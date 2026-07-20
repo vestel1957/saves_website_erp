@@ -139,13 +139,13 @@ export class SubscribersController {
   }
 
   @Get(':id/form')
-  editForm(@Param('id') id: string) {
-    return this.subscribers.editForm(id);
+  editForm(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.subscribers.editForm(id, user);
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() dto: UpdateSubscriberDto) {
-    return this.subscribers.update(id, dto);
+  update(@Param('id') id: string, @Body() dto: UpdateSubscriberDto, @CurrentUser() user: AuthUser) {
+    return this.subscribers.update(id, dto, user);
   }
 
   /** Cambiar el plan del abonado (catálogo → precio de la próxima factura + perfil al router). */
@@ -230,48 +230,48 @@ export class SubscribersController {
   // ── Facturas ─────────────────────────────────────────────────
 
   @Get(':id/invoices')
-  invoices(@Param('id') id: string) {
-    return this.subscribers.invoices(id);
+  invoices(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.subscribers.invoices(id, user);
   }
 
   // ── Facturas: editar / eliminar ──────────────────────────────
 
   @Patch(':id/invoices/:invoiceId')
-  updateInvoice(@Param('id') id: string, @Param('invoiceId') invoiceId: string, @Body() dto: UpdateInvoiceDto) {
-    return this.subscribers.updateInvoice(id, invoiceId, dto);
+  updateInvoice(@Param('id') id: string, @Param('invoiceId') invoiceId: string, @Body() dto: UpdateInvoiceDto, @CurrentUser() user: AuthUser) {
+    return this.subscribers.updateInvoice(id, invoiceId, dto, user);
   }
 
   @Delete(':id/invoices/:invoiceId')
-  deleteInvoice(@Param('id') id: string, @Param('invoiceId') invoiceId: string) {
-    return this.subscribers.deleteInvoice(id, invoiceId);
+  deleteInvoice(@Param('id') id: string, @Param('invoiceId') invoiceId: string, @CurrentUser() user: AuthUser) {
+    return this.subscribers.deleteInvoice(id, invoiceId, user);
   }
 
   // ── Estado de cuenta ─────────────────────────────────────────
 
   @Get(':id/statement')
-  statement(@Param('id') id: string) {
-    return this.subscribers.statement(id);
+  statement(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.subscribers.statement(id, user);
   }
 
   @Get(':id/paz-y-salvo.pdf')
-  async pazYSalvo(@Param('id') id: string, @Res() res: Response) {
-    const data = await this.subscribers.statement(id);
+  async pazYSalvo(@Param('id') id: string, @Res() res: Response, @CurrentUser() user?: AuthUser) {
+    const data = await this.subscribers.statement(id, user);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="paz-y-salvo-${data.subscriber.abonado}.pdf"`);
     pazYSalvoPdf(res, data);
   }
 
   @Get(':id/contract.pdf')
-  async contractPdfEndpoint(@Param('id') id: string, @Res() res: Response) {
-    const data = await this.subscribers.contractData(id);
+  async contractPdfEndpoint(@Param('id') id: string, @Res() res: Response, @CurrentUser() user?: AuthUser) {
+    const data = await this.subscribers.contractData(id, user);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="contrato-${data.abonado}.pdf"`);
     contractPdf(res, data);
   }
 
   @Get(':id/statement.pdf')
-  async statementPdfEndpoint(@Param('id') id: string, @Res() res: Response) {
-    const data = await this.subscribers.statement(id);
+  async statementPdfEndpoint(@Param('id') id: string, @Res() res: Response, @CurrentUser() user?: AuthUser) {
+    const data = await this.subscribers.statement(id, user);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="estado-cuenta-${data.subscriber.abonado}.pdf"`);
     statementPdf(res, data);

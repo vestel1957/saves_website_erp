@@ -66,7 +66,10 @@ export class ApiKeyGuard implements CanActivate {
 }
 
 function clientIp(req: any): string {
-  const fwd = req.headers?.['x-forwarded-for'];
-  if (typeof fwd === 'string' && fwd) return fwd.split(',')[0].trim();
+  // Usar SOLO `req.ip`. Con `trust proxy` activado en main.ts, Express ya resuelve
+  // la IP real del cliente a partir del X-Forwarded-For que fija NUESTRO proxy.
+  // Parsear el header crudo (como antes) tomaba el primer elemento, que lo controla
+  // el cliente: bastaba `X-Forwarded-For: <ip-permitida>` para saltarse la allowlist
+  // de IP de la clave y envenenar el `lastUsedIp` del registro forense.
   return req.ip ?? req.socket?.remoteAddress ?? 'unknown';
 }

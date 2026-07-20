@@ -1,5 +1,6 @@
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import compression from 'compression';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
@@ -13,7 +14,15 @@ async function bootstrap() {
 
   // rawBody: true expone req.rawBody (Buffer) para verificar la firma del
   // webhook de WhatsApp Cloud API (X-Hub-Signature-256).
-  const app = await NestFactory.create(AppModule, { rawBody: true });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });
+
+  // Confiar en UN proxy (Plesk/Apache en 127.0.0.1 → aquí). Sin esto, Express ve el
+  // socket de loopback y `req.ip` es SIEMPRE 127.0.0.1 para todo internet, con lo que
+  // el rate-limiting por IP (login y ThrottlerGuard) trata a todos los clientes como
+  // uno solo: 10 logins fallidos bloqueaban el login de TODA la empresa. Con esto,
+  // `req.ip` toma el X-Forwarded-For que fija el proxy y el límite es por cliente real.
+  // `1` = un único salto de confianza; NO usar `true`, que confiaría en XFF falsificado.
+  app.set('trust proxy', 1);
 
   // Comprime las respuestas (gzip). Los listados JSON viajan ~5-8x más livianos.
   app.use(compression());

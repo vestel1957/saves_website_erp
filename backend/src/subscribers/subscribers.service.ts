@@ -191,7 +191,8 @@ export class SubscribersService {
 
   /** Ficha completa de un suscriptor. */
   /** Datos para el contrato de servicio (PDF). */
-  async contractData(id: string) {
+  async contractData(id: string, user?: AuthUser) {
+    await exigirSedeSuscriptor(this.prisma, user, id);
     const s = await this.prisma.subscriber.findUnique({
       where: { id },
       select: {
@@ -482,7 +483,10 @@ export class SubscribersService {
   }
 
   /** Campos crudos editables (para precargar el wizard en modo edición). */
-  async editForm(id: string) {
+  async editForm(id: string, user?: AuthUser) {
+    // Devuelve pppPassword en claro: sin este guard, un usuario acotado a la sede A
+    // leía las credenciales PPPoE de un cliente de la sede B cambiando el id en la URL.
+    await exigirSedeSuscriptor(this.prisma, user, id);
     const s = await this.prisma.subscriber.findUnique({
       where: { id },
       select: {
@@ -501,7 +505,8 @@ export class SubscribersService {
   }
 
   /** Editar el perfil del cliente (pasos 1 y 2). Devuelve la ficha fresca. */
-  async update(id: string, dto: UpdateSubscriberDto) {
+  async update(id: string, dto: UpdateSubscriberDto, user?: AuthUser) {
+    await exigirSedeSuscriptor(this.prisma, user, id);
     const s = await this.prisma.subscriber.findUnique({
       where: { id },
       select: { id: true, firstName: true, secondName: true, lastName1: true, lastName2: true, pppUsername: true },
@@ -549,6 +554,7 @@ export class SubscribersService {
    * No reprecia facturas ya emitidas; aplica desde la siguiente facturación.
    */
   async changePlan(subscriberId: string, planId: string, user?: AuthUser) {
+    await exigirSedeSuscriptor(this.prisma, user, subscriberId);
     const [sub, plan] = await Promise.all([
       this.prisma.subscriber.findUnique({ where: { id: subscriberId }, select: { id: true } }),
       this.prisma.plan.findUnique({ where: { id: planId } }),
@@ -602,6 +608,7 @@ export class SubscribersService {
    * kind, manda el último. Devuelve un resultado por plan aplicado.
    */
   async changePlans(subscriberId: string, planIds: string[], user?: AuthUser) {
+    await exigirSedeSuscriptor(this.prisma, user, subscriberId);
     const uniqueIds = [...new Set(planIds.filter(Boolean))];
     if (uniqueIds.length === 0) throw new BadRequestException('Selecciona al menos un plan.');
 
@@ -761,7 +768,8 @@ export class SubscribersService {
   // ── Facturas ──────────────────────────────────────────────────
 
   /** Todas las facturas del cliente (para la pestaña con paginación en cliente). */
-  async invoices(id: string) {
+  async invoices(id: string, user?: AuthUser) {
+    await exigirSedeSuscriptor(this.prisma, user, id);
     const rows = await this.prisma.subInvoice.findMany({
       where: { subscriberId: id },
       orderBy: { invoiceDate: 'desc' },
@@ -773,7 +781,8 @@ export class SubscribersService {
   // ── Facturas: editar / eliminar ───────────────────────────────
 
   /** Editar la cabecera de una factura del cliente (fecha, vencimiento, tipo, estado, notas). */
-  async updateInvoice(subscriberId: string, invoiceId: string, dto: UpdateInvoiceDto) {
+  async updateInvoice(subscriberId: string, invoiceId: string, dto: UpdateInvoiceDto, user?: AuthUser) {
+    await exigirSedeSuscriptor(this.prisma, user, subscriberId);
     const inv = await this.prisma.subInvoice.findFirst({
       where: { id: invoiceId, subscriberId }, select: { id: true },
     });
@@ -794,7 +803,8 @@ export class SubscribersService {
    * Eliminar una factura. Por seguridad SOLO si no tiene movimientos de dinero
    * asociados (pagos, servicios adicionales o e-factura). Los ítems caen en cascada.
    */
-  async deleteInvoice(subscriberId: string, invoiceId: string) {
+  async deleteInvoice(subscriberId: string, invoiceId: string, user?: AuthUser) {
+    await exigirSedeSuscriptor(this.prisma, user, subscriberId);
     const inv = await this.prisma.subInvoice.findFirst({
       where: { id: invoiceId, subscriberId },
       select: {
@@ -826,7 +836,8 @@ export class SubscribersService {
    * Ledger cronológico del cliente: cargos (facturas) y abonos (pagos vigentes),
    * con saldo acumulado. `pazysalvo = true` si no hay saldo pendiente.
    */
-  async statement(id: string) {
+  async statement(id: string, user?: AuthUser) {
+    await exigirSedeSuscriptor(this.prisma, user, id);
     const s = await this.prisma.subscriber.findUnique({
       where: { id },
       select: {

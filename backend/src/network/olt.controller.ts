@@ -3,7 +3,10 @@ import { Allow, IsOptional, IsString } from 'class-validator';
 import { OltService } from './olt.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AreaGuard } from '../auth/area.guard';
+import { PermissionsGuard } from '../auth/permissions.guard';
 import { RequireArea } from '../auth/require-area.decorator';
+import { RequirePermissions } from '../auth/require-permissions.decorator';
+import { APP_PERMISSIONS } from '../auth/permissions.catalog';
 import { CurrentUser, AuthUser } from '../auth/current-user.decorator';
 
 // Campos numéricos que llegan como número o string desde el front → @Allow()
@@ -59,7 +62,7 @@ class OltUpsertDto {
 
 /** Gestión OLT — clon SmartOLT (control total de ONUs por SSH). */
 @Controller('network/olt')
-@UseGuards(JwtAuthGuard, AreaGuard)
+@UseGuards(JwtAuthGuard, AreaGuard, PermissionsGuard)
 @RequireArea('tecnicos', 'administracion')
 export class OltController {
   constructor(private readonly olt: OltService) {}
@@ -86,6 +89,7 @@ export class OltController {
   // --- CRUD de OLTs ---
   @Get('olts') olts() { return this.olt.listOlts(); }
   @Post('olts') create(@Body() dto: OltUpsertDto, @CurrentUser() user: AuthUser) { return this.olt.createOlt(dto, user); }
+  @RequirePermissions(APP_PERMISSIONS.NETWORK_OLT_MANAGE)
   @Patch('olts/:id') update(@Param('id') id: string, @Body() dto: OltUpsertDto, @CurrentUser() user: AuthUser) { return this.olt.updateOlt(id, dto, user); }
   @Delete('olts/:id') remove(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.olt.deleteOlt(id, user); }
   @Post('olts/:id/default') setDefault(@Param('id') id: string) { return this.olt.setDefault(id); }
@@ -108,12 +112,15 @@ export class OltController {
   @Post(':id/onu/find') find(@Param('id') id: string, @Body('sn') sn: string) { return this.olt.findBySn(id, sn); }
 
   // --- Escrituras (GATE dry-run) ---
+  @RequirePermissions(APP_PERMISSIONS.NETWORK_OLT_MANAGE)
   @Post(':id/onu/provision') provision(@Param('id') id: string, @Body() dto: ProvisionDto, @CurrentUser() user: AuthUser) {
     return this.olt.provision(id, dto, user);
   }
+  @RequirePermissions(APP_PERMISSIONS.NETWORK_OLT_MANAGE)
   @Post(':id/onu/reboot') reboot(@Param('id') id: string, @Body() dto: OnuActionDto, @CurrentUser() user: AuthUser) {
     return this.olt.reboot(id, dto, user);
   }
+  @RequirePermissions(APP_PERMISSIONS.NETWORK_OLT_MANAGE)
   @Post(':id/onu/delete') deleteOnu(@Param('id') id: string, @Body() dto: OnuActionDto, @CurrentUser() user: AuthUser) {
     return this.olt.remove(id, dto, user);
   }

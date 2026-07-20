@@ -155,6 +155,19 @@ export const APP_PERMISSIONS = {
   // Caja y ventas (cajera) — rol par del legacy "roleid=3". Sección propia del
   // sidebar acotada a caja + facturación/notas + clientes + tickets + órdenes.
   AREA_CAJA: 'area.caja',
+
+  // ── Acciones DESTRUCTIVAS ────────────────────────────────────────────────
+  // Hasta ahora estas operaciones sólo exigían "pertenecer al área", así que
+  // cualquiera del área técnicos podía dejar sin servicio a todo el parque, y
+  // cualquiera de contabilidad disparar la facturación de 21k abonados. Con los
+  // interruptores en LIVE eso se ejecuta de verdad contra routers y OLTs.
+  //
+  // Se separan del área para poder tener un técnico que ve la red pero no corta.
+  NETWORK_CUT: 'network.cut', // cortar servicio (individual y masivo)
+  NETWORK_RECONNECT: 'network.reconnect', // reconectar servicio
+  NETWORK_ROUTERS_MANAGE: 'network.routers.manage', // crear/borrar routers, tumbar sesiones PPPoE
+  NETWORK_OLT_MANAGE: 'network.olt.manage', // autorizar/reiniciar/ELIMINAR ONUs por SSH
+  CRON_RUN: 'system.cron.run', // disparar cronjobs a mano (facturación masiva, cartera)
 } as const;
 
 export type AppPermission = (typeof APP_PERMISSIONS)[keyof typeof APP_PERMISSIONS];
@@ -178,6 +191,12 @@ export const ALL_APP_PERMISSIONS: { key: string; label: string; group: string }[
   { key: A.AREA_TECNICOS, label: 'Área: Técnicos', group: 'Áreas Vestel' },
   { key: A.AREA_SISTEMAS, label: 'Área: Sistemas', group: 'Áreas Vestel' },
   { key: A.AREA_CAJA, label: 'Área: Caja y ventas', group: 'Áreas Vestel' },
+  // Acciones destructivas — se conceden aparte del área a propósito.
+  { key: A.NETWORK_CUT, label: 'Cortar servicio (individual y masivo)', group: 'Operaciones críticas' },
+  { key: A.NETWORK_RECONNECT, label: 'Reconectar servicio', group: 'Operaciones críticas' },
+  { key: A.NETWORK_ROUTERS_MANAGE, label: 'Administrar routers y sesiones PPPoE', group: 'Operaciones críticas' },
+  { key: A.NETWORK_OLT_MANAGE, label: 'Administrar ONUs de la OLT (autorizar/reiniciar/eliminar)', group: 'Operaciones críticas' },
+  { key: A.CRON_RUN, label: 'Ejecutar procesos programados a mano (facturación masiva)', group: 'Operaciones críticas' },
 ];
 
 /** Permiso que otorga acceso total — verificado por el PermissionsGuard. */
@@ -522,21 +541,32 @@ export const ALL_ROLES: RoleDef[] = [
     name: 'Contabilidad',
     description: 'Facturación, cobranza/caja y facturación electrónica',
     area: 'Áreas Vestel',
-    permissions: [A.AREA_CONTABILIDAD, A.DASHBOARD_VIEW, A.ACCOUNTING_VIEW, ...screensForArea('contabilidad')],
+    permissions: [A.AREA_CONTABILIDAD, A.DASHBOARD_VIEW, A.ACCOUNTING_VIEW, A.CRON_RUN, ...screensForArea('contabilidad')],
   },
   {
     key: 'area-tecnicos',
     name: 'Técnicos',
     description: 'Soporte/tickets, red/ISP, equipos y corte/reconexión',
     area: 'Áreas Vestel',
-    permissions: [A.AREA_TECNICOS, ...screensForArea('tecnicos')],
+    // Las acciones destructivas se incluyen para que el rol siga funcionando igual
+    // que antes de separarlas. Quitarlas de aquí es lo que permite tener un técnico
+    // de consulta; esa decisión es de negocio, no del refactor.
+    permissions: [
+      A.AREA_TECNICOS,
+      A.NETWORK_CUT, A.NETWORK_RECONNECT, A.NETWORK_ROUTERS_MANAGE, A.NETWORK_OLT_MANAGE,
+      ...screensForArea('tecnicos'),
+    ],
   },
   {
     key: 'area-sistemas',
     name: 'Sistemas',
     description: 'Configuración, usuarios y roles, WhatsApp y dispositivos',
     area: 'Áreas Vestel',
-    permissions: [A.AREA_SISTEMAS, A.USERS_MANAGE, A.WHATSAPP_MANAGE, ...screensForArea('sistemas')],
+    permissions: [
+      A.AREA_SISTEMAS, A.USERS_MANAGE, A.WHATSAPP_MANAGE, A.CRON_RUN,
+      A.NETWORK_ROUTERS_MANAGE, A.NETWORK_OLT_MANAGE,
+      ...screensForArea('sistemas'),
+    ],
   },
   {
     // Cajera (legacy "Caja y ventas", roleid=3). Rol acotado a la operación de

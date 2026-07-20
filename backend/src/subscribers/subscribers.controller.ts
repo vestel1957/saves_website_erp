@@ -14,7 +14,10 @@ import { SubscriberFilesService } from './subscriber-files.service';
 import { SubscriberNotesService } from './subscriber-notes.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AreaGuard } from '../auth/area.guard';
+import { PermissionsGuard } from '../auth/permissions.guard';
 import { RequireArea } from '../auth/require-area.decorator';
+import { RequirePermissions } from '../auth/require-permissions.decorator';
+import { APP_PERMISSIONS } from '../auth/permissions.catalog';
 import { CurrentUser, type AuthUser } from '../auth/current-user.decorator';
 import { UpdateSubscriberDto, AddNoteDto, UpdateInvoiceDto, CreateSubscriberDto, CheckDuplicatesDto } from './dto/update-subscriber.dto';
 import { AssignPlanDto, AssignPlansDto } from '../plans/dto/plan.dto';
@@ -34,7 +37,7 @@ const ALLOWED_EXT = new Set([
 
 /** Clientes / abonados ISP (vertical migrado de saves-vestel). */
 @Controller('subscribers')
-@UseGuards(JwtAuthGuard, AreaGuard)
+@UseGuards(JwtAuthGuard, AreaGuard, PermissionsGuard)
 @RequireArea('administracion', 'contabilidad', 'tecnicos', 'caja')
 export class SubscribersController {
   constructor(
@@ -60,10 +63,13 @@ export class SubscribersController {
   }
 
   // ── Operaciones masivas por FILTRO (corta/reconecta TODOS los que cumplen) ──
+  @RequirePermissions(APP_PERMISSIONS.NETWORK_CUT)
   @Post('bulk/cut')
   bulkCut(@Body() dto: BulkFilterDto, @CurrentUser() user: AuthUser) {
     return this.subscribers.cutByFilter(dto, user);
   }
+
+  @RequirePermissions(APP_PERMISSIONS.NETWORK_RECONNECT)
 
   @Post('bulk/reconnect')
   bulkReconnect(@Body() dto: BulkFilterDto, @CurrentUser() user: AuthUser) {

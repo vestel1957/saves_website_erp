@@ -38,9 +38,11 @@ export class NetworkController {
   @Get('mikrotik/mode') mikrotikMode() {
     return { live: this.mikrotik.isLive, mode: this.mikrotik.isLive ? 'LIVE' : 'DRY_RUN' };
   }
+  @RequirePermissions(APP_PERMISSIONS.NETWORK_CUT)
   @Post('subscribers/:id/cut') cut(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.mikrotik.cut(id, user);
   }
+  @RequirePermissions(APP_PERMISSIONS.NETWORK_RECONNECT)
   @Post('subscribers/:id/reconnect') reconnect(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.mikrotik.reconnect(id, user);
   }
@@ -56,9 +58,11 @@ export class NetworkController {
   @Post('mikrotiks/:id/test') testMikrotik(@Param('id') id: string) {
     return this.mikrotik.testRouter(id);
   }
+  @RequirePermissions(APP_PERMISSIONS.NETWORK_CUT)
   @Post('cut-batch') cutBatch(@Body() dto: BatchIdsDto, @CurrentUser() user: AuthUser) {
     return this.mikrotik.cutBatch(dto.ids, user);
   }
+  @RequirePermissions(APP_PERMISSIONS.NETWORK_RECONNECT)
   @Post('reconnect-batch') reconnectBatch(@Body() dto: BatchIdsDto, @CurrentUser() user: AuthUser) {
     return this.mikrotik.reconnectBatch(dto.ids, user);
   }

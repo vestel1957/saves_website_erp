@@ -3,7 +3,10 @@ import { Allow, IsBoolean, IsOptional, IsString } from 'class-validator';
 import { MikrotikAdminService } from './mikrotik-admin.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AreaGuard } from '../auth/area.guard';
+import { PermissionsGuard } from '../auth/permissions.guard';
 import { RequireArea } from '../auth/require-area.decorator';
+import { RequirePermissions } from '../auth/require-permissions.decorator';
+import { APP_PERMISSIONS } from '../auth/permissions.catalog';
 import { CurrentUser, AuthUser } from '../auth/current-user.decorator';
 
 class RouterUpsertDto {
@@ -28,7 +31,7 @@ class KickDto {
  * Espejo de OltController: CRUD + validación + lecturas/escrituras en vivo (dry-run).
  */
 @Controller('network/mikrotik')
-@UseGuards(JwtAuthGuard, AreaGuard)
+@UseGuards(JwtAuthGuard, AreaGuard, PermissionsGuard)
 @RequireArea('tecnicos', 'administracion')
 export class MikrotikController {
   constructor(private readonly mk: MikrotikAdminService) {}
@@ -39,7 +42,9 @@ export class MikrotikController {
 
   // --- CRUD de routers ---
   @Get('routers') routers() { return this.mk.listRouters(); }
+  @RequirePermissions(APP_PERMISSIONS.NETWORK_ROUTERS_MANAGE)
   @Post('routers') create(@Body() dto: RouterUpsertDto, @CurrentUser() user: AuthUser) { return this.mk.createRouter(dto, user); }
+  @RequirePermissions(APP_PERMISSIONS.NETWORK_ROUTERS_MANAGE)
   @Patch('routers/:id') update(@Param('id') id: string, @Body() dto: RouterUpsertDto, @CurrentUser() user: AuthUser) { return this.mk.updateRouter(id, dto, user); }
   @Delete('routers/:id') remove(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.mk.deleteRouter(id, user); }
   @Post('routers/:id/default') setDefault(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.mk.setDefault(id, user); }
@@ -57,9 +62,11 @@ export class MikrotikController {
   @Get(':id/history') history(@Param('id') id: string, @Query('limit') limit?: string) { return this.mk.history(id, Number(limit) || 100); }
 
   // --- Escrituras (GATE dry-run) ---
+  @RequirePermissions(APP_PERMISSIONS.NETWORK_ROUTERS_MANAGE)
   @Post(':id/secret/toggle') toggleSecret(@Param('id') id: string, @Body() dto: ToggleSecretDto, @CurrentUser() user: AuthUser) {
     return this.mk.toggleSecret(id, dto.name, dto.disabled, user);
   }
+  @RequirePermissions(APP_PERMISSIONS.NETWORK_ROUTERS_MANAGE)
   @Post(':id/active/kick') kick(@Param('id') id: string, @Body() dto: KickDto, @CurrentUser() user: AuthUser) {
     return this.mk.kickActive(id, dto.name, user);
   }

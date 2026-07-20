@@ -17,6 +17,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AreaGuard } from '../auth/area.guard';
 import { RequireArea } from '../auth/require-area.decorator';
 import { CurrentUser, AuthUser } from '../auth/current-user.decorator';
+import { enviarAdjuntoSeguro, mimeAceptado, nombreEnDisco, MIMES_IMAGEN } from '../common/uploads';
 
 /** Carpeta de evidencias fotográficas de las órdenes de soporte. */
 const SUPPORT_ROOT = join(process.cwd(), 'uploads', 'support');
@@ -47,8 +48,7 @@ export class SupportController {
   async signaturePng(@Param('id') id: string, @Res() res: Response) {
     const file = join(process.cwd(), 'uploads', 'signatures', `${id}.png`);
     if (!existsSync(file)) return res.status(404).send('sin firma');
-    res.setHeader('Content-Type', 'image/png');
-    return res.sendFile(file);
+    return enviarAdjuntoSeguro(res, file, `firma-${id}.png`);
   }
   @Post('tickets/:id/thread') thread(@Param('id') id: string, @Body() dto: ThreadDto, @CurrentUser() user: AuthUser) { return this.write.addThread(id, dto, user); }
 
@@ -73,10 +73,12 @@ export class SupportController {
     FileInterceptor('file', {
       storage: diskStorage({
         destination: (_req, _file, cb) => { if (!existsSync(SUPPORT_ROOT)) mkdirSync(SUPPORT_ROOT, { recursive: true }); cb(null, SUPPORT_ROOT); },
-        filename: (_req, file, cb) => cb(null, `${randomUUID()}${extname(file.originalname).toLowerCase()}`),
+        filename: (_req, file, cb) => cb(null, nombreEnDisco(randomUUID(), file.mimetype)),
       }),
       limits: { fileSize: 15 * 1024 * 1024 },
-      fileFilter: (_req, file, cb) => cb(null, file.mimetype.startsWith('image/')),
+      // Lista blanca de MIME concretos, no `startsWith('image/')`: aquél aceptaba
+      // cualquier `image/loquesea` y la extensión salía del nombre del cliente.
+      fileFilter: (_req, file, cb) => cb(null, mimeAceptado(file.mimetype, MIMES_IMAGEN)),
     }),
   )
   attach(@Param('id') id: string, @UploadedFile() file: MulterFile, @Body() dto: AttachDto) {
@@ -88,7 +90,7 @@ export class SupportController {
   @Get('threads/:threadId/attachment')
   async attachment(@Param('threadId') threadId: string, @Res() res: Response) {
     const a = await this.support.getThreadAttachment(threadId);
-    return res.sendFile(join(SUPPORT_ROOT, a.storedName));
+    return enviarAdjuntoSeguro(res, join(SUPPORT_ROOT, a.storedName), a.storedName);
   }
 
   @Get('tickets')

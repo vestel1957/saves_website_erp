@@ -14,6 +14,11 @@ import { AreaGuard } from '../auth/area.guard';
 import { RequireArea } from '../auth/require-area.decorator';
 
 const DOC_ROOT = join(process.cwd(), 'uploads', 'documents');
+/** Extensiones que admite el repositorio documental. */
+const EXT_DOCUMENTO = new Set([
+  '.pdf', '.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic',
+  '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.csv', '.txt', '.zip',
+]);
 
 /** Módulos nicho: PlayHub/IPTV, mensajería interna, gestor documental. */
 @Controller('extras')
@@ -50,6 +55,13 @@ export class ExtrasController {
         filename: (_req, file, cb) => cb(null, `${randomUUID()}${extname(file.originalname).toLowerCase()}`),
       }),
       limits: { fileSize: 25 * 1024 * 1024 },
+      // No tenía NINGÚN filtro: aceptaba cualquier extensión. Se sirve siempre como
+      // descarga (`res.download`), así que no era ejecutable en el navegador, pero
+      // no hay razón para dejar que el repositorio documental acepte binarios.
+      fileFilter: (_req, file, cb) => {
+        const ok = EXT_DOCUMENTO.has(extname(file.originalname).toLowerCase());
+        cb(ok ? null : new BadRequestException('Tipo de archivo no permitido'), ok);
+      },
     }),
   )
   async uploadDocument(@UploadedFile() file: any, @Body() body: { title?: string; folderId?: string }) {
@@ -66,6 +78,7 @@ export class ExtrasController {
   async download(@Param('id') id: string, @Res() res: Response) {
     const d = await this.extras.getDocument(id);
     if (!d.storedName) throw new BadRequestException('Este documento no tiene archivo descargable (solo metadata migrada).');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
     return res.download(join(DOC_ROOT, d.storedName), d.fileName ?? d.storedName);
   }
 }

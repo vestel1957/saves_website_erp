@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { ConfigModule } from '@nestjs/config';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -42,6 +44,12 @@ import { SearchModule } from './search/search.module';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    // Rate limiting global. El límite es GENEROSO a propósito: una oficina entera
+    // sale por la misma IP pública, así que un tope estrecho castigaría a usuarios
+    // legítimos. Aun así corta en seco el escaneo automatizado y el abuso de los
+    // endpoints caros (PDFs, exportaciones a Excel, masivas).
+    // El login sigue teniendo además su propio freno, mucho más estricto.
+    ThrottlerModule.forRoot([{ name: 'global', ttl: 60_000, limit: 600 }]),
     EventEmitterModule.forRoot(),
     ScheduleModule.forRoot(),
     PrismaModule,
@@ -82,5 +90,6 @@ import { SearchModule } from './search/search.module';
     PublicApiModule,
     SearchModule,
   ],
+  providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })
 export class AppModule {}

@@ -1,6 +1,7 @@
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import compression from 'compression';
+import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/errors/all-exceptions.filter';
 
@@ -11,6 +12,19 @@ async function bootstrap() {
 
   // Comprime las respuestas (gzip). Los listados JSON viajan ~5-8x más livianos.
   app.use(compression());
+
+  // Cabeceras de seguridad. Dos ajustes conscientes sobre los valores por defecto:
+  //  - `crossOriginResourcePolicy` en 'cross-origin': el frontend corre en otro
+  //    puerto (3060) que la API (3061), o sea otro origen. Con el 'same-origin' que
+  //    trae helmet por defecto, el navegador bloquearía los adjuntos y PDFs.
+  //  - CSP desactivada: esta app sólo sirve JSON y ficheros de descarga, nunca HTML
+  //    propio, así que una CSP aquí no protege nada y sí puede romper clientes.
+  app.use(
+    helmet({
+      crossOriginResourcePolicy: { policy: 'cross-origin' },
+      contentSecurityPolicy: false,
+    }),
+  );
 
   app.setGlobalPrefix('api');
   app.useGlobalPipes(

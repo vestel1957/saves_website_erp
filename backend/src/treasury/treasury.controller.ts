@@ -18,6 +18,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AreaGuard } from '../auth/area.guard';
 import { RequireArea } from '../auth/require-area.decorator';
 import { CurrentUser, AuthUser } from '../auth/current-user.decorator';
+import { enviarAdjuntoSeguro, mimeAceptado, nombreEnDisco } from '../common/uploads';
 
 /** Carpeta de comprobantes/evidencia de los movimientos de tesorería. */
 const TREASURY_ROOT = join(process.cwd(), 'uploads', 'treasury');
@@ -161,10 +162,10 @@ export class TreasuryController {
     FileInterceptor('file', {
       storage: diskStorage({
         destination: (_req, _file, cb) => { if (!existsSync(TREASURY_ROOT)) mkdirSync(TREASURY_ROOT, { recursive: true }); cb(null, TREASURY_ROOT); },
-        filename: (_req, file, cb) => cb(null, `${randomUUID()}${extname(file.originalname).toLowerCase()}`),
+        filename: (_req, file, cb) => cb(null, nombreEnDisco(randomUUID(), file.mimetype)),
       }),
       limits: { fileSize: 15 * 1024 * 1024 },
-      fileFilter: (_req, file, cb) => cb(null, file.mimetype.startsWith('image/') || file.mimetype === 'application/pdf'),
+      fileFilter: (_req, file, cb) => cb(null, mimeAceptado(file.mimetype)),
     }),
   )
   attach(@Param('id') id: string, @UploadedFile() file: MulterFile, @CurrentUser() user: AuthUser) {
@@ -176,7 +177,7 @@ export class TreasuryController {
   @Get('transactions/:id/attachment')
   async attachment(@Param('id') id: string, @Res() res: Response, @CurrentUser() user: AuthUser) {
     const a = await this.treasury.getTransactionAttachment(id, user);
-    return res.sendFile(join(TREASURY_ROOT, a.storedName));
+    return enviarAdjuntoSeguro(res, join(TREASURY_ROOT, a.storedName), a.originalName);
   }
 
   // --- Cobranzas (escritura) ---

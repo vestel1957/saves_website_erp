@@ -196,6 +196,9 @@ export class SubscribersController {
     const abs = join(UPLOAD_ROOT, id, f.storedName);
     if (!existsSync(abs)) throw new NotFoundException('El archivo no está en el servidor');
     res.setHeader('Content-Type', f.mimeType || 'application/octet-stream');
+    // `res.download` ya manda `attachment`; nosniff impide además que el navegador
+    // ignore ese Content-Type y adivine el tipo mirando el contenido.
+    res.setHeader('X-Content-Type-Options', 'nosniff');
     res.download(abs, f.originalName);
   }
 

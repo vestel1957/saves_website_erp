@@ -2,6 +2,7 @@ import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
 import { PortalService } from './portal.service';
 import { SubscriberAuthGuard, CurrentSubscriber } from './subscriber-auth.guard';
 import { PortalLoginDto } from './dto/portal.dto';
+import { LoginThrottleGuard } from '../auth/login-throttle.guard';
 
 /**
  * Portal de autoservicio del ABONADO (migra `crm/user` + `crm/Payments`).
@@ -12,7 +13,13 @@ import { PortalLoginDto } from './dto/portal.dto';
 export class PortalController {
   constructor(private readonly portal: PortalService) {}
 
+  /**
+   * El login del abonado es número de abonado (secuencial) + documento: enumerar
+   * abonados y probar cédulas es directo, así que necesita el mismo freno que el
+   * login de staff, que sí lo tenía.
+   */
   @Post('login')
+  @UseGuards(LoginThrottleGuard)
   login(@Body() dto: PortalLoginDto) {
     return this.portal.login(dto.abonado, dto.document);
   }

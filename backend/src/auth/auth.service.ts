@@ -5,6 +5,7 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from './current-user.decorator';
 import { hashPassword, signToken, verifyPassword } from './crypto.util';
@@ -13,6 +14,22 @@ import { ROLE_AREA_BY_KEY, SUPERADMIN_PERMISSION, SCREENS, screenKey, ALL_PERMIS
 @Injectable()
 export class AuthService {
   constructor(private readonly prisma: PrismaService) {}
+
+  /** Registra un evento de login (éxito o fallo) en la bitácora. Best-effort. */
+  private async auditLogin(
+    action: 'LOGIN' | 'LOGIN_FAILED',
+    userId: string | null,
+    ip?: string,
+    after?: Prisma.InputJsonValue,
+  ) {
+    try {
+      await this.prisma.auditLog.create({
+        data: { action, entity: 'Auth', userId, ipAddress: ip ?? null, after: after ?? Prisma.JsonNull },
+      });
+    } catch {
+      /* la auditoría no puede tumbar el login */
+    }
+  }
 
   /** Loads a user and flattens their role permissions into req.user. */
   async resolveUser(userId: string): Promise<AuthUser | null> {
@@ -45,11 +62,16 @@ export class AuthService {
     };
   }
 
-  async login(email: string, password: string) {
+  async login(email: string, password: string, meta?: { ip?: string }) {
     const user = await this.prisma.user.findUnique({ where: { email } });
     if (!user || !user.isActive || !verifyPassword(password, user.passwordHash)) {
+      // Auditar el intento fallido: con quién (si el correo existe) y desde dónde.
+      // NUNCA se guarda la contraseña; sólo el correo tecleado. Best-effort: un
+      // fallo al auditar no debe convertir un 401 en un 500.
+      await this.auditLogin('LOGIN_FAILED', user?.id ?? null, meta?.ip, { email });
       throw new UnauthorizedException('Credenciales inválidas.');
     }
+    await this.auditLogin('LOGIN', user.id, meta?.ip);
     const resolved = await this.resolveUser(user.id);
     // Áreas de acceso (slug tras "area.") + flag superadmin, embebidos en el JWT
     // para que el middleware del edge pueda bloquear rutas por área sin consultar la BD.

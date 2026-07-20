@@ -163,8 +163,8 @@ export class SubscribersController {
   // ── Archivos ────────────────────────────────────────────────────
 
   @Get(':id/files')
-  listFiles(@Param('id') id: string) {
-    return this.files.listFiles(id);
+  listFiles(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.files.listFiles(id, user);
   }
 
   @Post(':id/files')
@@ -189,7 +189,7 @@ export class SubscribersController {
     if (!file) throw new BadRequestException('No se recibió ningún archivo');
     // El archivo ya se escribió en disco; si el cliente no existe, lo limpiamos.
     try {
-      return await this.files.addFile(id, file, user?.name ?? user?.email);
+      return await this.files.addFile(id, file, user?.name ?? user?.email, user);
     } catch (e) {
       try { unlinkSync(file.path); } catch { /* noop */ }
       throw e;
@@ -197,8 +197,8 @@ export class SubscribersController {
   }
 
   @Get(':id/files/:fileId/download')
-  async download(@Param('id') id: string, @Param('fileId') fileId: string, @Res() res: Response) {
-    const f = await this.files.fileMeta(id, fileId);
+  async download(@Param('id') id: string, @Param('fileId') fileId: string, @Res() res: Response, @CurrentUser() user?: AuthUser) {
+    const f = await this.files.fileMeta(id, fileId, user);
     const abs = join(UPLOAD_ROOT, id, f.storedName);
     if (!existsSync(abs)) throw new NotFoundException('El archivo no está en el servidor');
     res.setHeader('Content-Type', f.mimeType || 'application/octet-stream');
@@ -209,8 +209,8 @@ export class SubscribersController {
   }
 
   @Delete(':id/files/:fileId')
-  async deleteFile(@Param('id') id: string, @Param('fileId') fileId: string) {
-    const storedName = await this.files.deleteFile(id, fileId);
+  async deleteFile(@Param('id') id: string, @Param('fileId') fileId: string, @CurrentUser() user?: AuthUser) {
+    const storedName = await this.files.deleteFile(id, fileId, user);
     try { unlinkSync(join(UPLOAD_ROOT, id, storedName)); } catch { /* archivo ya no existe */ }
     return { ok: true };
   }
@@ -219,12 +219,12 @@ export class SubscribersController {
 
   @Post(':id/notes')
   addNote(@Param('id') id: string, @Body() dto: AddNoteDto, @CurrentUser() user: AuthUser) {
-    return this.notes.addNote(id, dto.body, user?.name ?? user?.email);
+    return this.notes.addNote(id, dto.body, user?.name ?? user?.email, user);
   }
 
   @Delete(':id/notes/:noteId')
-  deleteNote(@Param('id') id: string, @Param('noteId') noteId: string) {
-    return this.notes.deleteNote(id, noteId);
+  deleteNote(@Param('id') id: string, @Param('noteId') noteId: string, @CurrentUser() user: AuthUser) {
+    return this.notes.deleteNote(id, noteId, user);
   }
 
   // ── Facturas ─────────────────────────────────────────────────

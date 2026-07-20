@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Ip, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -21,8 +21,8 @@ export class AuthController {
 
   @Post('login')
   @UseGuards(LoginThrottleGuard)
-  login(@Body() dto: LoginDto) {
-    return this.auth.login(dto.email, dto.password);
+  login(@Body() dto: LoginDto, @Ip() ip: string) {
+    return this.auth.login(dto.email, dto.password, { ip });
   }
 
   /** Stateless logout — tokens are short-lived; the client drops its cookie. */

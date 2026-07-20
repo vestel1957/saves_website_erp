@@ -1,5 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import type { AuthUser } from '../auth/current-user.decorator';
+import { exigirSedeSuscriptor } from '../common/sede-scope';
 
 /** Forma mínima del archivo que entrega multer. */
 type UploadedFileMeta = {
@@ -18,7 +20,8 @@ export class SubscriberFilesService {
   constructor(private readonly prisma: PrismaService) {}
 
   /** Lista de archivos adjuntos del cliente (metadata). */
-  async listFiles(id: string) {
+  async listFiles(id: string, user?: AuthUser) {
+    await exigirSedeSuscriptor(this.prisma, user, id);
     const files = await this.prisma.subscriberFile.findMany({
       where: { subscriberId: id },
       orderBy: { createdAt: 'desc' },
@@ -34,7 +37,8 @@ export class SubscriberFilesService {
   }
 
   /** Registra la metadata de un archivo ya guardado en disco por multer. */
-  async addFile(id: string, file: UploadedFileMeta, uploadedByName?: string) {
+  async addFile(id: string, file: UploadedFileMeta, uploadedByName?: string, user?: AuthUser) {
+    await exigirSedeSuscriptor(this.prisma, user, id);
     const row = await this.prisma.subscriberFile.create({
       data: {
         subscriberId: id,
@@ -55,15 +59,16 @@ export class SubscriberFilesService {
   }
 
   /** Metadata de un archivo (para descargar/servir). Valida que pertenezca al cliente. */
-  async fileMeta(subscriberId: string, fileId: string) {
+  async fileMeta(subscriberId: string, fileId: string, user?: AuthUser) {
+    await exigirSedeSuscriptor(this.prisma, user, subscriberId);
     const f = await this.prisma.subscriberFile.findFirst({ where: { id: fileId, subscriberId } });
     if (!f) throw new NotFoundException('Archivo no encontrado');
     return f;
   }
 
   /** Elimina el registro del archivo. Devuelve el nombre en disco para que el controller lo borre. */
-  async deleteFile(subscriberId: string, fileId: string) {
-    const f = await this.fileMeta(subscriberId, fileId);
+  async deleteFile(subscriberId: string, fileId: string, user?: AuthUser) {
+    const f = await this.fileMeta(subscriberId, fileId, user);
     await this.prisma.subscriberFile.delete({ where: { id: f.id } });
     return f.storedName;
   }

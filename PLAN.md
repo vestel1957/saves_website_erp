@@ -53,8 +53,11 @@ que falle antes y pase después. Ya se hizo así con `collect()`
 | `2a33547` | **2.1** Acceso por sede en clientes, facturas y tickets (+ masivas, ⌘K, chatbot) |
 | `c4a0bfb` | **2.4/2.6/2.7** Adjuntos no ejecutables, throttle en portal, helmet + rate limit |
 | `d5a53de` | **2.5/2.8** Credenciales de red cifradas (+SECRET_ENC_KEY), DTOs en settings |
+| `8ab6d85` | **4.1/4.2** 3 índices medidos (309ms→0,15ms) y 5 GIN duplicados retirados |
+| `89a30f5` | **4.3/3.4** Secuencia para `abonado` + validación de entorno al arranque |
+| `11d0bbc` | **3.2/3.3** Errores de importación con contexto, no-empty activo, paginación |
 
-Tests: 14 → 66 (7 suites). Cobertura: sigue siendo ínfima fuera de estos módulos.
+Tests: 14 → 86 (9 suites). Cobertura: sigue siendo ínfima fuera de estos módulos.
 
 ---
 
@@ -187,7 +190,7 @@ Lo que puede descuadrar plata o perder documentos. Cada punto necesita prueba pr
   *Cómo*: `AllExceptionsFilter` + `PrismaExceptionFilter` (P2002→409, P2025→404,
   P2003→400) como `APP_FILTER`. Alto beneficio, riesgo bajo.
 
-- [ ] **3.2 Errores tragados.** 80 de 82 `catch` no relanzan. Muchos son best-effort
+- [x] **3.2 Errores tragados.** 80 de 82 `catch` no relanzan. Muchos son best-effort
   deliberado y comentado (red), pero hay pérdida real de información:
   `data/data.service.ts:125` descarta el mensaje y la fila real (`row: -1`) en la
   importación de equipos; `support-write.service.ts:163,177,183,270` y
@@ -195,11 +198,11 @@ Lo que puede descuadrar plata o perder documentos. Cada punto necesita prueba pr
   Además `eslint.config.mjs:38` lleva `allowEmptyCatch: true`, que apaga la única
   regla que lo detectaría — quitarlo y saldar la lista.
 
-- [ ] **3.3 Query params sin validar.** 153 `@Query('x')` y **cero** `@Query()` con
+- [x] **3.3 Query params sin validar.** 153 `@Query('x')` y **cero** `@Query()` con
   DTO → 60 `Number(...)` a mano en controllers. Un `?page=abc` produce `NaN` que
   llega a `skip:` de Prisma. *Cómo*: un `PaginationQueryDto` común y adoptarlo.
 
-- [ ] **3.4 Validación de entorno al arranque.** `ConfigModule` está registrado pero
+- [x] **3.4 Validación de entorno al arranque.** `ConfigModule` está registrado pero
   `ConfigService` **no se inyecta en ningún sitio**: 33 variables se leen con
   `process.env` en 44 puntos, muchas congeladas en propiedades de instancia. Arrancar
   sin `KAPSO_API_KEY` degrada en silencio. *Cómo*: esquema de validación al bootstrap.
@@ -214,7 +217,7 @@ Lo que puede descuadrar plata o perder documentos. Cada punto necesita prueba pr
 
 ## Bloque 4 — Capa de datos
 
-- [ ] **4.1 Índices que faltan** (verificados contra las queries reales):
+- [x] **4.1 Índices que faltan** (verificados contra las queries reales):
   `Transaction.cashAccountId` **sin ningún índice** siendo el filtro por defecto sobre
   499k filas; `AuditLog` sin índice de `createdAt` paginando por él; `Ticket` sin
   `[status,created]` ni `[type,created]` sobre 315k filas; `SubInvoice` sin nada que
@@ -223,13 +226,13 @@ Lo que puede descuadrar plata o perder documentos. Cada punto necesita prueba pr
   **36 FKs sin indexar**. *Cómo*: una migración por tanda, midiendo con `EXPLAIN` antes
   y después. Ya no hay excusa: las migraciones existen.
 
-- [ ] **4.2 Índices GIN duplicados.** Producción arrastra 5 pares exactos
+- [x] **4.2 Índices GIN duplicados.** Producción arrastra 5 pares exactos
   (`trgm_sub_first`, `trgm_sub_last1`, `trgm_sub_company`, `trgm_sub_doc`,
   `trgm_sub_phone`) creados a mano en la época de `optimize-search.sql`, redundantes
   con los que gestiona Prisma sobre las mismas columnas: ~3,5 MB y mantenimiento GIN
   doble en cada alta/edición. *Cómo*: `DROP INDEX` en una migración.
 
-- [ ] **4.3 `Subscriber.abonado` sin `@@unique`.** Tiene índice pero no restricción, y
+- [x] **4.3 `Subscriber.abonado` sin `@@unique`.** Tiene índice pero no restricción, y
   se genera con `max(abonado)+1`: nada impide duplicados. Verificar que no los haya
   hoy y añadir la restricción.
 

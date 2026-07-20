@@ -31,7 +31,8 @@
     "smoke:crud-guards": "ts-node prisma/smoke-crud-guards.ts",
     "db:reset-inventory": "ts-node prisma/reset-inventory-data.ts",
     "db:backup": "bash scripts/backup-db.sh",
-    "db:setup": "prisma generate && prisma migrate deploy && ts-node prisma/seed.ts && ts-node prisma/seed-inventory.ts && ts-node prisma/seed-sst.ts && ts-node prisma/seed-payroll.ts"
+    "db:setup": "prisma generate && prisma migrate deploy && ts-node prisma/seed.ts && ts-node prisma/seed-inventory.ts && ts-node prisma/seed-sst.ts && ts-node prisma/seed-payroll.ts",
+    "verificar:geocerca": "ts-node scripts/verificar-geocerca.ts"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"

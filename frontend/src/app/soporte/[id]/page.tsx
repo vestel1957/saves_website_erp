@@ -18,7 +18,6 @@ import { SignaturePad } from "@/components/support/SignaturePad";
 import { fmtDate } from "@/lib/format";
 import { mensajeDeError } from "@/lib/errores";
 import { CapturarGps } from "@/components/map/CapturarGps";
-import { UbicacionModal } from "@/components/map/UbicacionModal";
 import { MOTIVO_GEO, distMetros, pedirUbicacion } from "@/lib/geo";
 
 const fmtT = (d: string | null) => (d ? new Date(d).toLocaleString("es-CO") : "—");
@@ -90,7 +89,6 @@ export default function OrdenDetallePage() {
   const [eqModal, setEqModal] = useState(false);
   const [matModal, setMatModal] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
-  const [rutaOpen, setRutaOpen] = useState(false);
 
   /** Abre el PDF de la orden (endpoint autenticado → blob → pestaña nueva). */
   async function abrirPdf() {
@@ -225,9 +223,12 @@ export default function OrdenDetallePage() {
             {s.id && (
               <div className="flex flex-wrap gap-2 py-1">
                 {s.gpsLat && s.gpsLng && (
-                  <Button variant="secondary" size="sm" onClick={() => setRutaOpen(true)}>
+                  <Link
+                    href={`/mapa/ruta?abonado=${s.id}&nombre=${encodeURIComponent(s.name ?? "")}&volver=${encodeURIComponent(`/soporte/${id}`)}`}
+                    className="inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-border-default px-3 py-1.5 text-[12px] font-semibold text-text-secondary transition-colors hover:bg-surface-2"
+                  >
                     <Icon name="navigation" size={14} /> Cómo llegar
-                  </Button>
+                  </Link>
                 )}
                 <CapturarGps
                   subscriberId={s.id}
@@ -402,17 +403,6 @@ export default function OrdenDetallePage() {
 
       <AsignarEquipoModal open={eqModal} onClose={() => setEqModal(false)} onDone={reload} ticketId={id} />
       <ConsumirMaterialModal open={matModal} onClose={() => setMatModal(false)} onDone={reload} ticketId={id} />
-      {rutaOpen && s?.id && (
-        <UbicacionModal
-          open={rutaOpen}
-          onClose={() => setRutaOpen(false)}
-          subscriberId={s.id}
-          subscriberName={s.name}
-          actual={s.gpsLat && s.gpsLng ? { lat: Number(s.gpsLat), lng: Number(s.gpsLng) } : null}
-          onGuardado={reload}
-          irA="ruta"
-        />
-      )}
     </div>
   );
 }

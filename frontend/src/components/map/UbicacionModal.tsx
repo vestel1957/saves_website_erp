@@ -1,43 +1,23 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import dynamic from "next/dynamic";
+import { useRouter } from "next/navigation";
 import { Icon } from "@/components/Icon";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/Modal";
-import { useAuth } from "@/context/AuthProvider";
-import { mensajeDeError } from "@/lib/errores";
-import {
-  MOTIVO_GEO,
-  PRECISION_DUDOSA_M,
-  formatearDistancia,
-  pedirUbicacion,
-  type Punto,
-} from "@/lib/geo";
-import { formatearDuracion, type Ruta } from "@/lib/mapa";
-import { COLOR_ESTADO, type PuntoMapa } from "./Mapa";
+import { MOTIVO_GEO, PRECISION_DUDOSA_M, formatearDistancia, type Punto } from "@/lib/geo";
 import { useCapturaGps } from "./useCapturaGps";
-
-const Mapa = dynamic(() => import("./Mapa").then((m) => m.Mapa), {
-  ssr: false,
-  loading: () => <div className="h-full w-full animate-pulse rounded-lg bg-surface-2" />,
-});
-
-type Vista = "menu" | "ruta";
 
 /**
  * Ubicación del abonado: **cómo llegar** y **actualizar la coordenada**, en el
- * mismo sitio y preguntando cuál de las dos.
+ * mismo sitio y preguntando cuál de las dos. Son las dos únicas cosas que se
+ * hacen con la ubicación de un cliente, así que comparten botón — el pin del
+ * encabezado, la dirección de la tarjeta Contacto y el menú "Acciones" abren
+ * todos esto.
  *
- * Antes eran dos cosas sueltas y ninguna estaba bien: el pin del encabezado
- * lanzaba Google Maps en una pestaña nueva —sacando al usuario del sistema para
- * algo que el sistema ya sabe dibujar— y la captura vivía enterrada aparte. Son
- * las dos únicas cosas que se hacen con la ubicación de un cliente, así que
- * comparten botón.
- *
- * La ruta se traza DENTRO de la aplicación. El botón de navegación por voz sigue
- * existiendo, porque para conducir la app nativa es mejor que cualquier mapa
- * embebido, pero se abre solo si el técnico lo pide — no de golpe.
+ * La ruta NO se dibuja aquí: navega a `/mapa/ruta`. Estuvo dentro del modal y no
+ * servía — un trayecto en 288 px de alto no se lee, y de una ruta lo que se mira
+ * es por dónde va, no el número de kilómetros. Un modal es el sitio de una
+ * decisión corta; un mapa quiere la pantalla entera.
  */
 export function UbicacionModal({
   open,
@@ -46,7 +26,6 @@ export function UbicacionModal({
   subscriberName,
   actual,
   onGuardado,
-  irA = "menu",
 }: {
   open: boolean;
   onClose: () => void;
@@ -54,24 +33,13 @@ export function UbicacionModal({
   subscriberName?: string;
   actual?: Punto | null;
   onGuardado?: (p: Punto) => void;
-  /** `ruta` entra directo a trazar el camino, sin pasar por el menú: lo usa el
-   *  botón "Cómo llegar" de la orden, donde ya se sabe lo que se quiere. */
-  irA?: Vista;
 }) {
-  const { authFetch } = useAuth();
-  const [vista, setVista] = useState<Vista>(irA);
-  const [ruta, setRuta] = useState<Ruta | null>(null);
-  const [calculando, setCalculando] = useState(false);
-  const [errorRuta, setErrorRuta] = useState<string | null>(null);
-
+  const router = useRouter();
   const { disponible, buscando, guardando, pendiente, capturar, guardar, descartar } =
     useCapturaGps(subscriberId, actual);
 
   const cerrar = () => {
     descartar();
-    setVista(irA);
-    setRuta(null);
-    setErrorRuta(null);
     onClose();
   };
 
@@ -80,68 +48,17 @@ export function UbicacionModal({
     onClose();
   };
 
-  /** Pide MI posición y la ruta desde ahí hasta el cliente. */
-  const trazarRuta = useCallback(async () => {
-    setVista("ruta");
-    setErrorRuta(null);
-    setCalculando(true);
-    try {
-      const yo = await pedirUbicacion();
-      if (!yo.ok) {
-        setErrorRuta(`No se puede calcular la ruta sin saber dónde estás. ${MOTIVO_GEO[yo.motivo]}`);
-        return;
-      }
-      const res = await authFetch("/geo/route", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fromLat: yo.lat, fromLng: yo.lng, subscriberId }),
-      });
-      if (!res.ok) {
-        const cuerpo = await res.json().catch(() => null);
-        throw new Error(cuerpo?.message ?? `Error ${res.status}`);
-      }
-      setRuta((await res.json()) as Ruta);
-    } catch (e) {
-      setErrorRuta(mensajeDeError(e, "No se pudo calcular la ruta"));
-    } finally {
-      setCalculando(false);
-    }
-  }, [authFetch, subscriberId]);
-
-  // Abierto ya en modo ruta: se traza en cuanto se monta, sin un clic de más.
-  useEffect(() => {
-    if (open && irA === "ruta" && !ruta && !calculando && !errorRuta) void trazarRuta();
-  }, [open, irA, ruta, calculando, errorRuta, trazarRuta]);
-
-  const puntos: PuntoMapa[] = ruta
-    ? [
-        { id: "yo", tipo: "yo", lat: ruta.origen.lat, lng: ruta.origen.lng, titulo: "Estás aquí" },
-        {
-          id: "destino",
-          tipo: "abonado",
-          lat: ruta.destino.lat,
-          lng: ruta.destino.lng,
-          titulo: ruta.nombre ?? subscriberName ?? "Destino",
-          color: COLOR_ESTADO.CORTADO,
-        },
-      ]
-    : [];
-
-  const navExterna = ruta
-    ? `https://www.google.com/maps/dir/?api=1&origin=${ruta.origen.lat},${ruta.origen.lng}&destination=${ruta.destino.lat},${ruta.destino.lng}&travelmode=driving`
-    : actual
-      ? `https://www.google.com/maps/dir/?api=1&destination=${actual.lat},${actual.lng}&travelmode=driving`
-      : null;
+  const irARuta = () => {
+    const p = new URLSearchParams({ abonado: subscriberId });
+    if (subscriberName) p.set("nombre", subscriberName);
+    onClose();
+    router.push(`/mapa/ruta?${p}`);
+  };
 
   return (
-    <Modal
-      open={open}
-      onClose={cerrar}
-      title={vista === "ruta" ? "Cómo llegar" : "Ubicación del cliente"}
-      maxWidth={vista === "ruta" ? "max-w-2xl" : "max-w-md"}
-    >
-      {/* ─────────── Confirmación de una captura sospechosa ─────────── */}
+    <Modal open={open} onClose={cerrar} title="Ubicación del cliente" maxWidth="max-w-md">
       {pendiente ? (
+        /* ─── Confirmación de una captura sospechosa ─── */
         <div className="space-y-3">
           {pendiente.precisionMala && (
             <p className="rounded-lg border border-warning bg-warning-soft px-3 py-2 text-[12.5px] text-text-secondary">
@@ -171,71 +88,8 @@ export function UbicacionModal({
             </Button>
           </div>
         </div>
-      ) : vista === "ruta" ? (
-        /* ─────────── Ruta ─────────── */
-        <div className="space-y-3">
-          {calculando && (
-            <div className="flex items-center gap-2 text-[13px] text-text-secondary">
-              <Icon name="loader" size={15} className="animate-spin" />
-              Buscando tu ubicación y trazando la ruta…
-            </div>
-          )}
-
-          {errorRuta && (
-            <p className="rounded-lg border border-error bg-error-soft px-3 py-2 text-[12.5px] text-text-secondary">
-              {errorRuta}
-            </p>
-          )}
-
-          {ruta && (
-            <>
-              <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
-                <span className="text-[20px] font-bold text-text-primary">
-                  {formatearDistancia(ruta.distanceM)}
-                </span>
-                {ruta.durationS != null && (
-                  <span className="text-[13px] text-text-secondary">
-                    ≈ {formatearDuracion(ruta.durationS)} en carro
-                  </span>
-                )}
-                {ruta.nombre && (
-                  <span className="text-[12.5px] text-text-tertiary">hasta {ruta.nombre}</span>
-                )}
-              </div>
-
-              {ruta.aproximada && (
-                <p className="rounded-lg border border-warning bg-warning-soft px-3 py-2 text-[12.5px] text-text-secondary">
-                  No se pudo calcular el camino por carretera, así que la línea punteada es la
-                  distancia <strong>en línea recta</strong>. El recorrido real será mayor.
-                </p>
-              )}
-
-              <div className="h-72 overflow-hidden rounded-lg border border-border-subtle">
-                <Mapa puntos={puntos} ruta={ruta.geometry} rutaAproximada={ruta.aproximada} />
-              </div>
-            </>
-          )}
-
-          <div className="flex flex-wrap justify-end gap-2">
-            <Button variant="secondary" onClick={() => (irA === "ruta" ? cerrar() : setVista("menu"))}>
-              {irA === "ruta" ? "Cerrar" : "Volver"}
-            </Button>
-            {navExterna && (
-              // Explícito, nunca automático: para conducir, la app del móvil da
-              // voz y tráfico en vivo; un mapa embebido no.
-              <a
-                href={navExterna}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-brand px-3.5 py-2 text-[13px] font-semibold text-on-brand transition-colors hover:bg-brand-hover"
-              >
-                <Icon name="navigation" size={14} /> Navegar por voz
-              </a>
-            )}
-          </div>
-        </div>
       ) : (
-        /* ─────────── Menú: las dos únicas cosas que se hacen aquí ─────────── */
+        /* ─── Las dos únicas cosas que se hacen aquí ─── */
         <div className="space-y-3">
           <div className="rounded-lg border border-border-subtle bg-surface-2 px-3 py-2.5">
             {actual ? (
@@ -260,10 +114,10 @@ export function UbicacionModal({
             titulo="Cómo llegar"
             detalle={
               actual
-                ? "Traza la ruta desde donde estás hasta su domicilio, aquí mismo."
+                ? "Abre el mapa a pantalla completa con la ruta desde donde estás."
                 : "No disponible: primero hay que guardarle una ubicación."
             }
-            onClick={() => void trazarRuta()}
+            onClick={irARuta}
             disabled={!actual}
           />
 

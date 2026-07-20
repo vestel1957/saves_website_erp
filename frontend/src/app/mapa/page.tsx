@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { PageHeading } from "@/components/ui/PageHeading";
@@ -8,19 +8,15 @@ import { Icon } from "@/components/Icon";
 import { Input, Select } from "@/components/ui/Field";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { LoadError } from "@/components/ui/LoadError";
-import { toast } from "@/components/ui/Toast";
-import { mensajeDeError } from "@/lib/errores";
 import { useAuth } from "@/context/AuthProvider";
 import { useRequest } from "@/lib/useRequest";
 import { PERM } from "@/lib/auth";
 import type { BranchOpt } from "@/lib/network";
 import { COLOR_ESTADO, type PuntoMapa } from "@/components/map/Mapa";
-import { CENTRO_POR_DEFECTO, MOTIVO_GEO, formatearDistancia, pedirUbicacion } from "@/lib/geo";
+import { CENTRO_POR_DEFECTO } from "@/lib/geo";
 import {
   MOTIVO_PING,
-  formatearDuracion,
   haceCuanto,
-  type Ruta,
   type CoberturaGeo,
   type PuntoTecnico,
   type PuntosMapa,
@@ -69,7 +65,7 @@ function Chip({
 
 export default function MapaPage() {
   const router = useRouter();
-  const { loading: authLoading, can, authFetch } = useAuth();
+  const { loading: authLoading, can } = useAuth();
   const verTecnicos = can([PERM.AREA_GERENCIA, PERM.AREA_ADMINISTRACION, PERM.AREA_SISTEMAS]);
 
   const [q, setQ] = useState("");
@@ -102,39 +98,6 @@ export default function MapaPage() {
   });
 
   const cobertura = useRequest<CoberturaGeo>(() => "/geo/coverage", [], { saltar: authLoading });
-
-  // Ruta activa: se traza sobre este mismo mapa al pulsar "Cómo llegar" en un
-  // globo, en vez de mandar al usuario a una pestaña de Google Maps.
-  const [ruta, setRuta] = useState<Ruta | null>(null);
-  const [rutaCargando, setRutaCargando] = useState(false);
-
-  const comoLlegar = useCallback(
-    async (destino: { lat: number; lng: number }) => {
-      setRutaCargando(true);
-      try {
-        const yo = await pedirUbicacion();
-        if (!yo.ok) {
-          toast(`No se puede trazar la ruta. ${MOTIVO_GEO[yo.motivo]}`, "alert-circle");
-          return;
-        }
-        const res = await authFetch("/geo/route", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ fromLat: yo.lat, fromLng: yo.lng, toLat: destino.lat, toLng: destino.lng }),
-        });
-        if (!res.ok) {
-          const cuerpo = await res.json().catch(() => null);
-          throw new Error(cuerpo?.message ?? `Error ${res.status}`);
-        }
-        setRuta((await res.json()) as Ruta);
-      } catch (e) {
-        toast(mensajeDeError(e, "No se pudo calcular la ruta"), "alert-circle");
-      } finally {
-        setRutaCargando(false);
-      }
-    },
-    [authFetch],
-  );
 
   const marcadores = useMemo<PuntoMapa[]>(() => {
     const out: PuntoMapa[] = [];
@@ -195,17 +158,8 @@ export default function MapaPage() {
         });
       }
     }
-    if (ruta) {
-      out.push({
-        id: "yo",
-        tipo: "yo",
-        lat: ruta.origen.lat,
-        lng: ruta.origen.lng,
-        titulo: "Estás aquí",
-      });
-    }
     return out;
-  }, [puntos.data, tecnicos.data, capas, verTecnicos, ruta]);
+  }, [puntos.data, tecnicos.data, capas, verTecnicos]);
 
   if (authLoading) return <PageSkeleton />;
 
@@ -294,61 +248,15 @@ export default function MapaPage() {
         </p>
       )}
 
-      {(ruta || rutaCargando) && (
-        <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-brand bg-brand-soft px-3 py-2">
-          <Icon
-            name={rutaCargando ? "loader" : "navigation"}
-            size={15}
-            className={`text-brand ${rutaCargando ? "animate-spin" : ""}`}
-          />
-          {rutaCargando ? (
-            <span className="text-[12.5px] text-text-secondary">Buscando tu ubicación y trazando la ruta…</span>
-          ) : ruta ? (
-            <>
-              <span className="text-[15px] font-bold text-text-primary">
-                {formatearDistancia(ruta.distanceM)}
-              </span>
-              {ruta.durationS != null && (
-                <span className="text-[12.5px] text-text-secondary">
-                  ≈ {formatearDuracion(ruta.durationS)} en carro
-                </span>
-              )}
-              {ruta.aproximada && (
-                <span className="text-[12px] text-warning-text">
-                  en línea recta (no se pudo calcular el camino real)
-                </span>
-              )}
-              <a
-                href={`https://www.google.com/maps/dir/?api=1&origin=${ruta.origen.lat},${ruta.origen.lng}&destination=${ruta.destino.lat},${ruta.destino.lng}&travelmode=driving`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-[12.5px] font-semibold text-brand hover:underline"
-              >
-                Navegar por voz ↗
-              </a>
-              <button
-                type="button"
-                onClick={() => setRuta(null)}
-                className="ml-auto text-[12.5px] font-semibold text-text-tertiary hover:text-text-secondary"
-              >
-                Quitar ruta
-              </button>
-            </>
-          ) : null}
-        </div>
-      )}
-
       <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-border-subtle">
         {puntos.error ? (
           <LoadError message={puntos.error} onRetry={puntos.refrescar} />
         ) : (
           <Mapa
             puntos={marcadores}
-            ruta={ruta?.geometry ?? null}
-            rutaAproximada={ruta?.aproximada ?? false}
             centro={CENTRO_POR_DEFECTO}
             onAbrir={(href) => router.push(href)}
-            onComoLlegar={(d) => void comoLlegar(d)}
+            onComoLlegar={(d) => router.push(`/mapa/ruta?lat=${d.lat}&lng=${d.lng}&volver=${encodeURIComponent("/mapa")}`)}
           />
         )}
       </div>

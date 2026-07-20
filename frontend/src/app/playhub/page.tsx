@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/Button";
 import { Icon } from "@/components/Icon";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
+import { fmtDate } from "@/lib/format";
 
 type Row = { id: string; nameS: string | null; externalName: string | null; productId: string | null; productName: string | null; voucher: string | null; syncedAt: string | null; subscriberId: string | null; subscriberName: string | null; abonado: number | null };
 type List = { items: Row[]; total: number; page: number; pageSize: number; pages: number; byProduct: { product: string; count: number }[] };
@@ -26,8 +27,6 @@ export default function PlayhubPage() {
   }, [authFetch, page, search]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => { setPage(1); }, [search]);
-
-  const fmt = (s: string | null) => (s ? new Date(s).toLocaleDateString("es-CO") : "—");
 
   async function syncAll() {
     setSyncing(true);
@@ -84,7 +83,7 @@ export default function PlayhubPage() {
                 <td className="py-1.5 pr-3 font-mono text-[12px]">{r.nameS ?? "—"}</td>
                 <td className="py-1.5 pr-3">{r.productName ?? r.productId ?? "—"}</td>
                 <td className="py-1.5 pr-3 text-text-secondary">{r.voucher ?? "—"}</td>
-                <td className="py-1.5 pr-3 text-text-tertiary">{fmt(r.syncedAt)}</td>
+                <td className="py-1.5 pr-3 text-text-tertiary">{fmtDate(r.syncedAt)}</td>
               </tr>
             ))}
           </tbody>

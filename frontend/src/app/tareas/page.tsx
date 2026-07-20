@@ -13,6 +13,7 @@ import { Pagination } from "@/components/ui/Pagination";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
+import { fmtDate } from "@/lib/format";
 
 type Task = {
   id: string; legacyId: number; name: string | null; status: string; priority: string;
@@ -29,7 +30,6 @@ const PRIORITY_TONE: Record<string, "default" | "error" | "warning" | "info"> = 
   LOW: "default", MEDIUM: "info", HIGH: "warning", URGENT: "error",
 };
 
-const fmtDate = (d: string | null) => (d ? new Date(d).toLocaleDateString("es-CO") : "—");
 const toDateInput = (d: string | null | undefined) => (d ? new Date(d).toISOString().slice(0, 10) : "");
 
 /**

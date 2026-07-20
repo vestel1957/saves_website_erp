@@ -17,11 +17,11 @@ import { INVOICE_STATUS_LABEL, INVOICE_STATUS_TONE, cop } from "@/lib/subscriber
 import {
   type InvoiceList, type InvoiceRow, type BillingStats, RON_LABEL,
 } from "@/lib/billing";
+import { fmtDate } from "@/lib/format";
 
 const NuevaFacturaModal = dynamic(() => import("@/components/billing/NuevaFacturaModal").then((m) => m.NuevaFacturaModal), { ssr: false });
 const GenerarFacturasModal = dynamic(() => import("@/components/billing/GenerarFacturasModal").then((m) => m.GenerarFacturasModal), { ssr: false });
 
-const fmtDate = (d: string | null) => (d ? new Date(d).toLocaleDateString("es-CO") : "—");
 const isOverdue = (r: InvoiceRow) => r.balance > 0 && !!r.dueDate && new Date(r.dueDate).getTime() < Date.now();
 
 export default function FacturacionPage() {

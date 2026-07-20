@@ -1,9 +1,10 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  // El type-check se valida aparte (tsc); saltarlo en build evita picos de
-  // memoria que matan el build en este entorno. (Next 16 ya no corre ESLint en build.)
-  typescript: { ignoreBuildErrors: true },
+  // El build VALIDA TIPOS. Antes llevaba `typescript.ignoreBuildErrors: true` por
+  // picos de memoria que mataban el build en esta máquina; medido el 2026-07-20, ya
+  // no ocurre: 52 s y 1 GB de pico con el chequeo activado. Con `cpus: 1` y
+  // `workerThreads: false` el consumo se mantiene acotado.
   // Máquina compartida de 16 núcleos: limitar los workers de generación de páginas
   // evita el pico de memoria que el OOM-killer usaba para matar el build.
   // optimizePackageImports: adelgaza el registro central de iconos (lucide-react).

@@ -5,8 +5,7 @@ import { useRouter } from "next/navigation";
 import { Icon } from "@/components/Icon";
 import { cop } from "@/lib/subscribers";
 import { getPortalToken, clearPortalToken, portalFetch, type PortalMe } from "@/lib/portal";
-
-const fmt = (d: string | null) => (d ? new Date(d).toLocaleDateString("es-CO") : "—");
+import { fmtDate } from "@/lib/format";
 
 export default function PortalPage() {
   const router = useRouter();
@@ -77,7 +76,7 @@ export default function PortalPage() {
               <div key={inv.id} className="flex items-center justify-between px-4 py-3">
                 <div className="leading-tight">
                   <div className="text-[13px] font-semibold text-text-primary">Factura #{inv.tid}</div>
-                  <div className="text-[11.5px] text-text-tertiary">Emitida {fmt(inv.date)}{inv.dueDate ? ` · vence ${fmt(inv.dueDate)}` : ""}</div>
+                  <div className="text-[11.5px] text-text-tertiary">Emitida {fmtDate(inv.date)}{inv.dueDate ? ` · vence ${fmtDate(inv.dueDate)}` : ""}</div>
                 </div>
                 <div className="text-[14px] font-bold text-text-primary">{cop(inv.saldo)}</div>
               </div>

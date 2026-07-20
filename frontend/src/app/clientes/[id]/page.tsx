@@ -23,6 +23,7 @@ import { TICKET_STATUS_LABEL, TICKET_STATUS_TONE } from "@/lib/support";
 import { SERVICE_KIND_LABEL } from "@/lib/plans";
 import { PlayhubPanel } from "@/components/playhub/PlayhubPanel";
 import { CobranzaPanel } from "@/components/cobranzas/CobranzaPanel";
+import { fmtDate } from "@/lib/format";
 
 // Modales cargados bajo demanda: su JS NO entra en el chunk inicial de la
 // página (la más pesada de la app); se descarga al abrirlos por primera vez.
@@ -39,8 +40,6 @@ type Detail = any;
 const SERVICE_KIND_ICON: Record<string, string> = {
   INTERNET: "wifi", TV: "tv", PUNTOS: "tv", STREAMING: "play",
 };
-
-const fmtDate = (d: string | null) => (d ? new Date(d).toLocaleDateString("es-CO") : "—");
 
 const fmtBytes = (n: number) => {
   if (!n) return "0 B";

@@ -15,8 +15,8 @@ import { TICKET_STATUS_LABEL, TICKET_STATUS_TONE, TICKET_PRIORITIES, TICKET_PRIO
 import { AsignarEquipoModal } from "@/components/soporte/AsignarEquipoModal";
 import { ConsumirMaterialModal } from "@/components/soporte/ConsumirMaterialModal";
 import { SignaturePad } from "@/components/support/SignaturePad";
+import { fmtDate } from "@/lib/format";
 
-const fmt = (d: string | null) => (d ? new Date(d).toLocaleDateString("es-CO") : "—");
 const fmtT = (d: string | null) => (d ? new Date(d).toLocaleString("es-CO") : "—");
 const STATES = ["PENDIENTE", "REALIZANDO", "RESUELTO", "ANULADA"];
 const SERVICE_LABEL: Record<string, string> = { INTERNET: "Internet", TV: "TV", PUNTOS: "Puntos TV", STREAMING: "Streaming" };
@@ -184,7 +184,7 @@ export default function OrdenDetallePage() {
             <Badge label={TICKET_STATUS_LABEL[t.status] ?? t.status} tone={TICKET_STATUS_TONE[t.status] ?? "default"} />
             {t.priority && <Badge label={`Prioridad: ${t.priority}`} tone={TICKET_PRIORITY_TONE[t.priority] ?? "default"} />}
           </div>
-          <p className="text-[12px] text-text-tertiary">Creada {fmt(t.created)}{t.finalDate ? ` · Finalizada ${fmt(t.finalDate)}` : ""}{t.assigned ? ` · Técnico: ${t.assigned}` : ""}</p>
+          <p className="text-[12px] text-text-tertiary">Creada {fmtDate(t.created)}{t.finalDate ? ` · Finalizada ${fmtDate(t.finalDate)}` : ""}{t.assigned ? ` · Técnico: ${t.assigned}` : ""}</p>
         </div>
         <div className="flex flex-col items-end gap-2">
           <Button variant="secondary" size="sm" disabled={pdfBusy} onClick={abrirPdf}>

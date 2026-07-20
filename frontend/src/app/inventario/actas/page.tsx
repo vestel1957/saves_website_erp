@@ -10,11 +10,10 @@ import { DataTable } from "@/components/inventory/DataTable";
 import { Pagination } from "@/components/ui/Pagination";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { useAuth } from "@/context/AuthProvider";
+import { fmtDate } from "@/lib/format";
 
 type Acta = { id: string; date: string; from: string | null; to: string | null; observations: string | null; status: string; items: number };
 type ActaList = { items: Acta[]; total: number; page: number; pageSize: number; pages: number };
-
-const fmt = (d: string | null) => (d ? new Date(d).toLocaleDateString("es-CO") : "—");
 
 export default function ActasPage() {
   const { loading: authLoading, authFetch } = useAuth();
@@ -48,7 +47,7 @@ export default function ActasPage() {
           empty="No hay actas registradas."
           onRowClick={(r: Acta) => router.push(`/inventario/actas/${r.id}`)}
           columns={[
-            { key: "date", header: "Fecha", render: (r: Acta) => fmt(r.date) },
+            { key: "date", header: "Fecha", render: (r: Acta) => fmtDate(r.date) },
             { key: "from", header: "Origen", render: (r: Acta) => <span className="text-text-secondary">{r.from || "—"}</span> },
             { key: "to", header: "Destino", render: (r: Acta) => <span className="text-text-secondary">{r.to || "—"}</span> },
             { key: "items", header: "Ítems", align: "right", render: (r: Acta) => <Badge label={String(r.items)} tone="info" /> },

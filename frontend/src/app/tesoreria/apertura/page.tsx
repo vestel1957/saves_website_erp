@@ -12,9 +12,9 @@ import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import type { CashAccount } from "@/lib/cobranzas";
+import { fmtDate } from "@/lib/format";
 
 const today = () => new Date().toISOString().slice(0, 10);
-const fmt = (d: string | null) => (d ? new Date(d).toLocaleDateString("es-CO") : "—");
 
 type Suggest = {
   fondoFijo: number;
@@ -125,7 +125,7 @@ export default function AperturaPage() {
               {suggest?.existing && (
                 <div className="mb-3 flex items-start gap-2 rounded-lg bg-warning-soft px-3 py-2 text-[12px] text-warning-text">
                   <Icon name="alert-triangle" size={14} className="mt-0.5 shrink-0" />
-                  <span>Esta caja ya fue abierta el {fmt(date)} con base <b>{cop(suggest.existing.base)}</b>{suggest.existing.openedBy ? ` por ${suggest.existing.openedBy}` : ""}. Al guardar se actualizará.</span>
+                  <span>Esta caja ya fue abierta el {fmtDate(date)} con base <b>{cop(suggest.existing.base)}</b>{suggest.existing.openedBy ? ` por ${suggest.existing.openedBy}` : ""}. Al guardar se actualizará.</span>
                 </div>
               )}
               <div className="flex items-center justify-between py-1 text-[13px]">
@@ -135,7 +135,7 @@ export default function AperturaPage() {
               <div className="flex items-center justify-between py-1 text-[13px]">
                 <span className="text-text-secondary">
                   Arrastre día anterior
-                  {suggest?.carryoverFrom ? <span className="ml-1 text-text-tertiary">· cierre {fmt(suggest.carryoverFrom)}</span> : <span className="ml-1 text-text-tertiary">· sin cierre previo</span>}
+                  {suggest?.carryoverFrom ? <span className="ml-1 text-text-tertiary">· cierre {fmtDate(suggest.carryoverFrom)}</span> : <span className="ml-1 text-text-tertiary">· sin cierre previo</span>}
                 </span>
                 <span className={`font-semibold ${(suggest?.carryover ?? 0) > 0 ? "text-success-text" : "text-text-tertiary"}`}>+ {cop(suggest?.carryover ?? 0)}</span>
               </div>
@@ -172,7 +172,7 @@ export default function AperturaPage() {
             rows={data?.items ?? []}
             empty="Sin aperturas registradas."
             columns={[
-              { key: "date", header: "Fecha", render: (r: any) => fmt(r.date) },
+              { key: "date", header: "Fecha", render: (r: any) => fmtDate(r.date) },
               { key: "caja", header: "Caja", render: (r: any) => r.accountName ?? `Caja ${r.cashAccountId}` },
               { key: "base", header: "Base", align: "right", render: (r: any) => <span className="font-semibold text-text-primary">{cop(r.base)}</span> },
               { key: "by", header: "Abrió", render: (r: any) => <span className="text-text-secondary">{r.openedBy ?? "—"}</span> },

@@ -22,3 +22,24 @@ export function headerDate(d = new Date()): string {
     day: "numeric",
   });
 }
+
+// ── Fechas ──────────────────────────────────────────────────────────────────
+// Estaban replicadas ~31 veces, casi siempre con la MISMA línea. Ojo al consolidar:
+// conviven variantes que no son equivalentes (sólo fecha, fecha+hora, estilos
+// distintos), así que aquí van las dos canónicas y cada pantalla usa la que toca.
+
+/** Fecha corta es-CO. Nulo/vacío → guion largo, que es lo que espera la UI. */
+export function fmtDate(d: string | Date | null | undefined): string {
+  if (!d) return "—";
+  const fecha = d instanceof Date ? d : new Date(d);
+  return Number.isNaN(fecha.getTime()) ? "—" : fecha.toLocaleDateString("es-CO");
+}
+
+/** Fecha y hora es-CO, para hilos, auditoría y movimientos. */
+export function fmtDateTime(d: string | Date | null | undefined): string {
+  if (!d) return "—";
+  const fecha = d instanceof Date ? d : new Date(d);
+  return Number.isNaN(fecha.getTime())
+    ? "—"
+    : fecha.toLocaleString("es-CO", { dateStyle: "medium", timeStyle: "short" });
+}

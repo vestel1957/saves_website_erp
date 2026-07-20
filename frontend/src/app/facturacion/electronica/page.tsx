@@ -13,9 +13,9 @@ import { Modal } from "@/components/Modal";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { PERM } from "@/lib/auth";
+import { fmtDate } from "@/lib/format";
 
 const n = (v: number) => (v ?? 0).toLocaleString("es-CO");
-const fmt = (d: string | null) => (d ? new Date(d).toLocaleDateString("es-CO") : "—");
 
 type Tab = "sedes" | "historico" | "errores";
 type Branch = { id: string; name: string; subscribers: number; tv: number; internet: number };
@@ -201,7 +201,7 @@ export default function EfacturaPage() {
           {loading && !data ? <PageSkeleton /> : (
             <>
               <DataTable rows={data?.items ?? []} empty="Sin facturas electrónicas." columns={[
-                { key: "date", header: "Fecha", render: (r: any) => fmt(r.date) },
+                { key: "date", header: "Fecha", render: (r: any) => fmtDate(r.date) },
                 { key: "client", header: "Cliente", render: (r: any) => r.subscriberId ? <Link href={`/clientes/${r.subscriberId}`} className="text-brand hover:underline">{r.client}</Link> : <span>{r.client}</span> },
                 { key: "serv", header: "Servicio", render: (r: any) => <span className="text-text-secondary">{r.services ?? "—"}</span> },
                 { key: "type", header: "Tipo", render: (r: any) => <Badge label={r.type} tone="info" /> },
@@ -227,7 +227,7 @@ export default function EfacturaPage() {
           </div>
         ) : (
           <DataTable rows={errData.items} empty="Sin errores." columns={[
-            { key: "date", header: "Fecha", render: (r: any) => fmt(r.date) },
+            { key: "date", header: "Fecha", render: (r: any) => fmtDate(r.date) },
             { key: "client", header: "Cliente", render: (r: any) => r.subscriberId ? <Link href={`/clientes/${r.subscriberId}`} className="text-brand hover:underline">{r.client}</Link> : <span>{r.client}</span> },
             { key: "fact", header: "Factura", render: (r: any) => r.invoiceTid ? <span className="font-mono text-text-tertiary">#{r.invoiceTid}</span> : "—" },
             { key: "error", header: "Error", render: (r: any) => <span className="block max-w-[420px] text-[12px] text-error-text">{r.error ?? "Error sin detalle"}</span> },
@@ -245,7 +245,7 @@ export default function EfacturaPage() {
         {detail?.loading ? <p className="py-4 text-center text-[13px] text-text-tertiary">Cargando…</p> : detail && (
           <div className="flex flex-col gap-2 text-[13px]">
             <div className="flex justify-between border-b border-border-subtle py-1.5"><span className="text-text-tertiary">Cliente</span><span className="font-medium">{detail.subscriber?.name ?? "—"}</span></div>
-            <div className="flex justify-between border-b border-border-subtle py-1.5"><span className="text-text-tertiary">Fecha</span><span>{fmt(detail.date)}</span></div>
+            <div className="flex justify-between border-b border-border-subtle py-1.5"><span className="text-text-tertiary">Fecha</span><span>{fmtDate(detail.date)}</span></div>
             <div className="flex justify-between border-b border-border-subtle py-1.5"><span className="text-text-tertiary">Tipo / Servicio</span><span>{detail.type} · {detail.services ?? "—"}</span></div>
             <div className="flex justify-between border-b border-border-subtle py-1.5"><span className="text-text-tertiary">Factura</span><span className="font-mono">{detail.invoice ? `#${detail.invoice.tid}` : "—"}</span></div>
             <div className="flex justify-between border-b border-border-subtle py-1.5"><span className="text-text-tertiary">Cuenta Siigo</span><span>{detail.siigoAccount ?? "—"}</span></div>

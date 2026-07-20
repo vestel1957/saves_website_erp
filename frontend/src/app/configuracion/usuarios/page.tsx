@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Field, Input } from "@/components/ui/Field";
 import { SedesAccedeField } from "@/components/usuarios/SedesAccedeField";
+import { Modal } from "@/components/Modal";
 
 type RoleRef = { role: { key: string; name: string } };
 type User = {
@@ -457,54 +458,6 @@ function StatCard({ icon, label, value }: { icon: string; label: string; value: 
   );
 }
 
-function Modal({
-  title,
-  children,
-  onClose,
-  maxWidth = "max-w-md",
-}: {
-  title: string;
-  children: React.ReactNode;
-  onClose: () => void;
-  maxWidth?: string;
-}) {
-  // Cerrar con Escape (expectativa estándar de un modal).
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
-      onMouseDown={onClose}
-      role="dialog"
-      aria-modal="true"
-      aria-label={title}
-    >
-      <div
-        className={`max-h-[90vh] w-full ${maxWidth} overflow-y-auto rounded-2xl border border-border-subtle bg-surface p-5 shadow-xl`}
-        onMouseDown={(e) => e.stopPropagation()}
-      >
-        <div className="mb-4 flex items-center justify-between">
-          <h3 className="text-[15px] font-bold text-text-primary">{title}</h3>
-          <button
-            onClick={onClose}
-            aria-label="Cerrar"
-            className="flex h-7 w-7 items-center justify-center rounded-lg text-text-tertiary transition-colors hover:bg-surface-2"
-          >
-            <Icon name="x" size={16} />
-          </button>
-        </div>
-        {children}
-      </div>
-    </div>
-  );
-}
-
 /** Campo de contraseña con botón ver/ocultar. */
 function PasswordInput({
   value,
@@ -582,7 +535,7 @@ function CreateUserModal({
   }
 
   return (
-    <Modal title="Nuevo usuario" onClose={onClose}>
+    <Modal open title="Nuevo usuario" onClose={onClose}>
       <form onSubmit={submit} className="flex flex-col gap-3">
         <Field label="Nombre completo">
           <Input
@@ -722,7 +675,7 @@ function EditRolesModal({
     .filter((s) => checked.has(s.key) !== roleScreens.has(s.key)).length;
 
   return (
-    <Modal title={`Accesos de ${user.name}`} onClose={onClose}>
+    <Modal open title={`Accesos de ${user.name}`} onClose={onClose}>
       <div className="flex max-h-[26rem] flex-col gap-3 overflow-y-auto pr-1">
         {/* Rol base */}
         <div>
@@ -856,7 +809,7 @@ function EditUserModal({
   }
 
   return (
-    <Modal title={`Editar ${user.name}`} onClose={onClose}>
+    <Modal open title={`Editar ${user.name}`} onClose={onClose}>
       <form onSubmit={saveProfile} className="flex flex-col gap-3">
         <Field label="Nombre completo">
           <Input required value={name} onChange={(e) => setName(e.target.value)} />
@@ -968,7 +921,7 @@ function RoleBuilderModal({
   const title = mode === "edit" ? `Editar rol · ${source?.name}` : cloning ? `Clonar rol · ${source?.name}` : "Nuevo rol";
 
   return (
-    <Modal title={title} onClose={onClose} maxWidth="max-w-2xl">
+    <Modal open title={title} onClose={onClose} maxWidth="max-w-2xl">
       <div className="flex flex-col gap-3">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Nombre del rol" required>

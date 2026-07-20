@@ -14,6 +14,7 @@ import { TabBar } from "@/components/accounting/TabBar";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import { SedesAccedeField } from "@/components/usuarios/SedesAccedeField";
+import { fmtDate } from "@/lib/format";
 
 type TabKey = "datos" | "permisos";
 
@@ -25,7 +26,6 @@ const ROLE_LABELS: Record<string, string> = {
   "5": "Administrador",
 };
 
-const fmtDate = (d: string | null) => (d ? new Date(d).toLocaleDateString("es-CO") : "—");
 const fmtDateTime = (d: string | null) => (d ? new Date(d).toLocaleString("es-CO", { dateStyle: "short", timeStyle: "short" }) : "—");
 
 function Card({ title, icon, children }: { title: string; icon: string; children: React.ReactNode }) {

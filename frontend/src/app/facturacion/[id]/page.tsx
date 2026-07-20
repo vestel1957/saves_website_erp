@@ -15,8 +15,7 @@ import { PERM } from "@/lib/auth";
 import { INVOICE_STATUS_LABEL, INVOICE_STATUS_TONE, cop } from "@/lib/subscribers";
 import { INVOICE_KIND_LABEL, RON_LABEL } from "@/lib/billing";
 import { type AvailablePromotion, discountLabel, isFlatDiscount, isBeforeTaxDiscount } from "@/lib/promotions";
-
-const fmt = (d: string | null) => (d ? new Date(d).toLocaleDateString("es-CO") : "—");
+import { fmtDate } from "@/lib/format";
 
 export default function FacturaDetallePage() {
   const { id } = useParams<{ id: string }>();
@@ -158,7 +157,7 @@ export default function FacturaDetallePage() {
             {f.ron && <Badge label={RON_LABEL[f.ron] ?? f.ron} tone="default" />}
             <span className="text-[11px] text-text-tertiary">{INVOICE_KIND_LABEL[f.kind] ?? f.kind}</span>
           </div>
-          <p className="text-[12px] text-text-tertiary">Emitida {fmt(f.date)} · Vence {fmt(f.dueDate)}{f.branchRef ? ` · ${f.branchRef}` : ""}</p>
+          <p className="text-[12px] text-text-tertiary">Emitida {fmtDate(f.date)} · Vence {fmtDate(f.dueDate)}{f.branchRef ? ` · ${f.branchRef}` : ""}</p>
           <div className="mt-2 flex flex-wrap gap-2">
             <button onClick={openPdf} className="inline-flex items-center gap-1.5 rounded-lg border border-border-default px-3 py-1.5 text-[12px] font-medium text-text-secondary hover:bg-surface-2">
               <Icon name="file-text" size={14} /> Ver / imprimir PDF
@@ -275,7 +274,7 @@ export default function FacturaDetallePage() {
         rows={f.payments ?? []}
         empty="Sin pagos registrados."
         columns={[
-          { key: "date", header: "Fecha", render: (r: any) => fmt(r.date) },
+          { key: "date", header: "Fecha", render: (r: any) => fmtDate(r.date) },
           { key: "amount", header: "Monto", align: "right", render: (r: any) => <span className="font-semibold text-success-text">{cop(r.amount)}</span> },
           { key: "method", header: "Método", render: (r: any) => r.method ?? "—" },
           { key: "cat", header: "Categoría", render: (r: any) => r.category ?? "—" },

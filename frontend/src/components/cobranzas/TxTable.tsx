@@ -12,8 +12,7 @@ import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import { type TxRow, type TxList, TX_TYPE_LABEL, TX_TYPE_TONE } from "@/lib/treasury";
-
-const fmt = (d: string | null) => (d ? new Date(d).toLocaleDateString("es-CO") : "—");
+import { fmtDate } from "@/lib/format";
 
 /** Celda de comprobante: "Ver" si ya hay adjunto; si no, botón para subir (imagen/PDF). */
 function ComprobanteCell({ tx, onChange }: { tx: TxRow; onChange: () => void }) {
@@ -110,7 +109,7 @@ export function TxTable({
         rows={data?.items ?? []}
         empty={empty}
         columns={[
-          { key: "date", header: "Fecha", render: (r: TxRow) => fmt(r.date) },
+          { key: "date", header: "Fecha", render: (r: TxRow) => fmtDate(r.date) },
           { key: "type", header: "Tipo", render: (r: TxRow) => <Badge label={TX_TYPE_LABEL[r.type] ?? r.type} tone={TX_TYPE_TONE[r.type] ?? "info"} /> },
           { key: "payer", header: "Pagador / Beneficiario", render: (r: TxRow) => r.subscriberId
             ? <Link href={`/clientes/${r.subscriberId}`} className="font-medium text-brand hover:underline">{r.payer}</Link>

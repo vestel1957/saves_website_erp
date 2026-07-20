@@ -1,7 +1,11 @@
+"use client";
+
+import { cloneElement, isValidElement, useId } from "react";
 import type {
   InputHTMLAttributes,
   SelectHTMLAttributes,
   TextareaHTMLAttributes,
+  ReactElement,
   ReactNode,
 } from "react";
 
@@ -40,9 +44,26 @@ export function Textarea({ className = "", ...props }: TextareaHTMLAttributes<HT
   return <textarea className={`${control} ${className}`} {...props} />;
 }
 
+/** Props que este envoltorio inyecta en el control que envuelve. */
+type PropsInyectadas = {
+  id?: string;
+  "aria-describedby"?: string;
+  "aria-invalid"?: boolean;
+};
+
 /**
  * Envoltorio de campo: etiqueta + control + ayuda/error.
  * Unifica el patrón `label + input + hint` que se repetía en cada formulario.
+ *
+ * ACCESIBILIDAD — la razón de que esto no sea un simple `<div>`: la etiqueta se
+ * asocia al control con `htmlFor`/`id`. Sin eso, un lector de pantalla anuncia el
+ * campo sin decir qué es, y pulsar la etiqueta no enfoca el control. En todo el
+ * frontend no había NI UN `htmlFor` para 76 `<label>`, y el defecto estaba
+ * justamente aquí: arreglarlo en este componente asocia los 385 usos de golpe.
+ *
+ * El id se genera con `useId` salvo que el control ya traiga uno propio. La ayuda y
+ * el error se enlazan con `aria-describedby` para que también se lean, y un campo
+ * con error queda marcado `aria-invalid`.
  */
 export function Field({
   label,
@@ -57,19 +78,40 @@ export function Field({
   required?: boolean;
   children: ReactNode;
 }) {
+  const generado = useId();
+  const elemento = isValidElement(children) ? (children as ReactElement<PropsInyectadas>) : null;
+  const id = elemento?.props?.id ?? generado;
+  const idDescripcion = error || hint ? `${id}-desc` : undefined;
+
+  // Sólo se puede inyectar en un elemento React. Si `children` es un fragmento o
+  // texto suelto, se pinta tal cual y el campo queda como estaba: mejor eso que
+  // reventar por un caso no contemplado.
+  const controlado = elemento
+    ? cloneElement(elemento, {
+        id,
+        "aria-describedby":
+          [elemento.props["aria-describedby"], idDescripcion].filter(Boolean).join(" ") || undefined,
+        "aria-invalid": error ? true : elemento.props["aria-invalid"],
+      })
+    : children;
+
   return (
     <div>
       {label && (
-        <label className="mb-1 block text-[11px] font-semibold text-text-tertiary">
+        <label htmlFor={id} className="mb-1 block text-[11px] font-semibold text-text-tertiary">
           {label}
           {required && " *"}
         </label>
       )}
-      {children}
+      {controlado}
       {error ? (
-        <span className="mt-1 block text-[11px] text-error-text">{error}</span>
+        <span id={idDescripcion} className="mt-1 block text-[11px] text-error-text">
+          {error}
+        </span>
       ) : hint ? (
-        <span className="mt-1 block text-[11px] text-text-tertiary">{hint}</span>
+        <span id={idDescripcion} className="mt-1 block text-[11px] text-text-tertiary">
+          {hint}
+        </span>
       ) : null}
     </div>
   );

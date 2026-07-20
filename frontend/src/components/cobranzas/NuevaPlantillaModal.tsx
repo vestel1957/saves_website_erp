@@ -9,6 +9,7 @@ import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { SubscriberPicker, type PickedSub } from "@/components/cobranzas/SubscriberPicker";
 import { cop } from "@/lib/subscribers";
+import { mensajeDeError } from "@/lib/errores";
 
 type Item = { description: string; qty: number; price: number; taxRate: number };
 const emptyItem = (): Item => ({ description: "", qty: 1, price: 0, taxRate: 0 });
@@ -49,7 +50,7 @@ export function NuevaPlantillaModal({ open, onClose, onDone }: { open: boolean; 
       toast(`Plantilla #${d.tid} creada · ${cop(d.total)}`);
       setSub(null); setItems([emptyItem()]); setNotes("");
       onDone(); onClose();
-    } catch (e: any) { setErr(e.message); } finally { setSaving(false); }
+    } catch (e) { setErr(mensajeDeError(e)); } finally { setSaving(false); }
   }
 
   return (

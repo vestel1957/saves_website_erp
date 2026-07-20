@@ -9,6 +9,7 @@ import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { PERM } from "@/lib/auth";
+import { mensajeDeError } from "@/lib/errores";
 
 type Account = {
   id: string; role: string; companyName: string | null; username: string;
@@ -102,8 +103,8 @@ function AccountCard({ account, onUpdated, authFetch }: {
       onUpdated(d);
       setForm((f) => ({ ...f, accessKey: "" }));
       toast(d.ready ? "Cuenta guardada — lista para emitir" : "Cuenta guardada", "check");
-    } catch (e: any) {
-      toast(e.message ?? "Error al guardar", "alert-circle");
+    } catch (e) {
+      toast(mensajeDeError(e) ?? "Error al guardar", "alert-circle");
     } finally { setSaving(false); }
   }
 

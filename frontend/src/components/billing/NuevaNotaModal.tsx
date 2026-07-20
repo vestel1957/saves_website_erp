@@ -7,6 +7,7 @@ import { Input, Select, Field } from "@/components/ui/Field";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
+import { mensajeDeError } from "@/lib/errores";
 
 /**
  * Aplica una nota crédito (rebaja) o débito (recargo) sobre una factura.
@@ -61,7 +62,7 @@ export function NuevaNotaModal({
       toast(`Nota ${type === "CREDITO" ? "crédito" : "débito"} aplicada · nuevo total ${cop(d.newTotal)}`);
       onClose();
       onDone?.();
-    } catch (e: any) { setErr(e.message); } finally { setSaving(false); }
+    } catch (e) { setErr(mensajeDeError(e)); } finally { setSaving(false); }
   }
 
   return (

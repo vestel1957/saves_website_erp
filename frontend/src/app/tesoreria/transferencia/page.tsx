@@ -11,6 +11,7 @@ import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import type { CashAccount } from "@/lib/cobranzas";
+import { mensajeDeError } from "@/lib/errores";
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -68,7 +69,7 @@ export default function TransferenciaPage() {
       toast(`Transferencia de ${cop(d.amount)} registrada`, "check");
       setAmount("");
       setNote("");
-    } catch (e: any) { setErr(e.message); } finally { setSaving(false); }
+    } catch (e) { setErr(mensajeDeError(e)); } finally { setSaving(false); }
   }
 
   if (authLoading) return <PageSkeleton />;

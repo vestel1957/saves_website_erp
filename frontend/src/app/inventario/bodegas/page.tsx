@@ -15,6 +15,7 @@ import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
+import { mensajeDeError } from "@/lib/errores";
 
 type Warehouse = { id: string; title: string; extra: string | null; technicianRef: string | null; materials: number; value: number };
 
@@ -53,7 +54,7 @@ export default function BodegasPage() {
       toast(editing ? "Bodega actualizada" : "Bodega creada", "check");
       setOpen(false); setEditing(null); setTitle(""); setExtra("");
       void load();
-    } catch (e: any) { setErr(e.message); } finally { setSaving(false); }
+    } catch (e) { setErr(mensajeDeError(e)); } finally { setSaving(false); }
   }
 
   async function remove() {
@@ -67,8 +68,8 @@ export default function BodegasPage() {
       toast("Bodega eliminada", "check");
       setDelRow(null);
       void load();
-    } catch (e: any) {
-      toast(e.message, "alert-triangle");
+    } catch (e) {
+      toast(mensajeDeError(e), "alert-triangle");
     } finally { setDeleting(false); }
   }
 

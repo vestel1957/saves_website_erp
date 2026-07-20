@@ -15,6 +15,7 @@ import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import { SedesAccedeField } from "@/components/usuarios/SedesAccedeField";
 import { fmtDate } from "@/lib/format";
+import { mensajeDeError } from "@/lib/errores";
 
 type TabKey = "datos" | "permisos";
 
@@ -400,8 +401,8 @@ function PermisosCard({ staffId }: { staffId: string }) {
       setEditing(false);
       void reloadAudit();
       toast("Cambios guardados.", "check");
-    } catch (e: any) {
-      toast(e?.message || "No se pudieron guardar los cambios.", "alert-triangle");
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudieron guardar los cambios."), "alert-triangle");
     } finally {
       setSaving(false);
     }
@@ -435,7 +436,7 @@ function PermisosCard({ staffId }: { staffId: string }) {
       if (!res.ok) throw new Error(d?.message || "Error");
       setData(d); setTempPw(d.tempPassword ?? null); setAudit(null);
       toast("Acceso creado. Ya puedes asignarle roles y permisos.", "check");
-    } catch (e: any) { toast(e?.message || "No se pudo crear el acceso.", "alert-triangle"); }
+    } catch (e) { toast(mensajeDeError(e, "No se pudo crear el acceso."), "alert-triangle"); }
     finally { setBusyAcct(false); }
   }, [authFetch, staffId]);
 
@@ -448,7 +449,7 @@ function PermisosCard({ staffId }: { staffId: string }) {
       if (!res.ok) throw new Error(d?.message || "Error");
       setData(d); void reloadAudit();
       toast(d.account?.isActive ? "Acceso habilitado." : "Acceso inhabilitado.", "check");
-    } catch (e: any) { toast(e?.message || "No se pudo cambiar el estado.", "alert-triangle"); }
+    } catch (e) { toast(mensajeDeError(e, "No se pudo cambiar el estado."), "alert-triangle"); }
     finally { setBusyAcct(false); }
   }, [authFetch, staffId, account, reloadAudit]);
 
@@ -460,7 +461,7 @@ function PermisosCard({ staffId }: { staffId: string }) {
       if (!res.ok) throw new Error(d?.message || "Error");
       setData(d); setTempPw(d.tempPassword ?? null); void reloadAudit();
       toast("Contraseña restablecida.", "check");
-    } catch (e: any) { toast(e?.message || "No se pudo restablecer la contraseña.", "alert-triangle"); }
+    } catch (e) { toast(mensajeDeError(e, "No se pudo restablecer la contraseña."), "alert-triangle"); }
     finally { setBusyAcct(false); }
   }, [authFetch, staffId, reloadAudit]);
 
@@ -784,8 +785,8 @@ function EditarEmpleadoModal({
       toast("Empleado actualizado.", "check");
       onSaved();
       onClose();
-    } catch (e: any) {
-      toast(e?.message || "No se pudo actualizar el empleado.", "alert-triangle");
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudo actualizar el empleado."), "alert-triangle");
     } finally {
       setSaving(false);
     }

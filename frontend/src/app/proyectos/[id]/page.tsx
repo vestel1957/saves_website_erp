@@ -15,6 +15,7 @@ import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
+import { mensajeDeError } from "@/lib/errores";
 
 function statusTone(s: string): "default" | "success" | "error" | "warning" | "info" | "brand" {
   if (s === "Finished") return "success";
@@ -89,8 +90,8 @@ function HitoModal({
       toast(editing ? "Hito actualizado." : "Hito creado.", "check");
       onSaved();
       onClose();
-    } catch (e: any) {
-      toast(e?.message || "No se pudo guardar el hito.", "alert-triangle");
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudo guardar el hito."), "alert-triangle");
     } finally {
       setSaving(false);
     }
@@ -179,8 +180,8 @@ export default function ProyectoDetallePage() {
       if (!res.ok) throw new Error(d?.message || "Error");
       toast("Avance actualizado.");
       load();
-    } catch (e: any) {
-      toast(e?.message || "Error al actualizar el avance.", "alert-triangle");
+    } catch (e) {
+      toast(mensajeDeError(e, "Error al actualizar el avance."), "alert-triangle");
     } finally {
       setSaving(false);
     }
@@ -195,8 +196,8 @@ export default function ProyectoDetallePage() {
       toast("Hito eliminado.", "check");
       setDelHito(null);
       load();
-    } catch (e: any) {
-      toast(e?.message || "No se pudo eliminar el hito.", "alert-triangle");
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudo eliminar el hito."), "alert-triangle");
     } finally {
       setDeleting(false);
     }

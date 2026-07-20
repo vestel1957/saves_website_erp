@@ -15,6 +15,7 @@ import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { StatCard } from "@/components/ui/StatCard";
 import { useRequest } from "@/lib/useRequest";
+import { mensajeDeError } from "@/lib/errores";
 
 const ROLE_LABELS: Record<string, string> = {
   "2": "Cajero",
@@ -102,8 +103,8 @@ export default function EmpleadosPage() {
       setForm(emptyForm);
       await load();
       void authFetch("/staff/stats").then((r) => r.json()).then(setStats).catch(() => {});
-    } catch (e: any) {
-      toast(e?.message || "No se pudo crear el empleado.", "alert-triangle");
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudo crear el empleado."), "alert-triangle");
     } finally {
       setSaving(false);
     }

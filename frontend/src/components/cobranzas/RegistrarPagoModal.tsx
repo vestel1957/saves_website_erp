@@ -12,6 +12,7 @@ import { cop } from "@/lib/subscribers";
 import {
   type Debt, type CashAccount, PAY_METHODS, BANKS, isBankMethod, previewCascade,
 } from "@/lib/cobranzas";
+import { mensajeDeError } from "@/lib/errores";
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -40,7 +41,7 @@ export function RegistrarPagoModal({
     setDebt(null); setErr(null); setAmount(""); setNote(""); setMethod("Cash");
     void authFetch(`/treasury/subscribers/${subscriberId}/debt`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error("No se pudo cargar la deuda"))))
-      .then(setDebt).catch((e) => setErr(e.message));
+      .then(setDebt).catch((e) => setErr(mensajeDeError(e)));
     void authFetch(`/treasury/cash-accounts`)
       .then((r) => (r.ok ? r.json() : []))
       .then((a: CashAccount[]) => { setAccounts(a); if (a.length) setCashAccountId(String(a[0].id)); })
@@ -89,8 +90,8 @@ export function RegistrarPagoModal({
       }
       onDone();
       onClose();
-    } catch (e: any) {
-      setErr(e.message);
+    } catch (e) {
+      setErr(mensajeDeError(e));
     } finally {
       setSaving(false);
     }

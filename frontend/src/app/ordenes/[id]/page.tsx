@@ -14,6 +14,7 @@ import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
+import { mensajeDeError } from "@/lib/errores";
 
 function statusTone(status: string): "default" | "success" | "error" | "warning" {
   if (status === "recibido" || status === "finalizado") return "success";
@@ -88,7 +89,7 @@ export default function OrdenDetallePage() {
       if (!res.ok) throw new Error(d?.message || "No se pudo registrar el pago");
       toast(`Pago registrado · saldo ${cop(d.balance)}`, "check");
       setPayOpen(false); void load();
-    } catch (e: any) { toast(e.message, "alert-triangle"); } finally { setPaying(false); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setPaying(false); }
   }
 
   function openNote() {
@@ -108,7 +109,7 @@ export default function OrdenDetallePage() {
       if (!res.ok) throw new Error(d?.message || "No se pudo agregar la nota");
       toast(`Nota aplicada · nuevo total ${cop(d.total)}`, "check");
       setNoteOpen(false); void load();
-    } catch (e: any) { toast(e.message, "alert-triangle"); } finally { setNotesaving(false); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setNotesaving(false); }
   }
 
   async function removeNote(noteId: string) {
@@ -119,7 +120,7 @@ export default function OrdenDetallePage() {
       if (!res.ok) throw new Error(d?.message || "No se pudo eliminar la nota");
       toast(`Nota eliminada · nuevo total ${cop(d.total)}`, "check");
       void load();
-    } catch (e: any) { toast(e.message, "alert-triangle"); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); }
   }
 
   const submitReceive = async () => {
@@ -131,8 +132,8 @@ export default function OrdenDetallePage() {
       if (!res.ok) throw new Error(d?.message || "Error");
       toast("Recepción registrada");
       await load();
-    } catch (e: any) {
-      toast(e?.message || "No se pudo registrar la recepción", "alert-triangle");
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudo registrar la recepción"), "alert-triangle");
     } finally { setSaving(false); }
   };
 

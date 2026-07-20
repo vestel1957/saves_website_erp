@@ -14,6 +14,7 @@ import { Field, Input } from "@/components/ui/Field";
 import { SedesAccedeField } from "@/components/usuarios/SedesAccedeField";
 import { Modal } from "@/components/Modal";
 import { StatCard } from "@/components/ui/StatCard";
+import { mensajeDeError } from "@/lib/errores";
 
 type RoleRef = { role: { key: string; name: string } };
 type User = {
@@ -902,7 +903,7 @@ function RoleBuilderModal({
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "No se pudo guardar el rol");
       onSaved(data);
-    } catch (e: any) { setError(e.message); } finally { setSaving(false); }
+    } catch (e) { setError(mensajeDeError(e)); } finally { setSaving(false); }
   }
 
   const title = mode === "edit" ? `Editar rol · ${source?.name}` : cloning ? `Clonar rol · ${source?.name}` : "Nuevo rol";

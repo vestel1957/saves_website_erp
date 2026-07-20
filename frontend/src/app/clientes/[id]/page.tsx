@@ -24,6 +24,7 @@ import { SERVICE_KIND_LABEL } from "@/lib/plans";
 import { PlayhubPanel } from "@/components/playhub/PlayhubPanel";
 import { CobranzaPanel } from "@/components/cobranzas/CobranzaPanel";
 import { fmtDate } from "@/lib/format";
+import { mensajeDeError } from "@/lib/errores";
 
 // Modales cargados bajo demanda: su JS NO entra en el chunk inicial de la
 // página (la más pesada de la app); se descarga al abrirlos por primera vez.
@@ -196,7 +197,7 @@ export default function ClienteDetallePage() {
     void authFetch(`/subscribers/${id}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error("No encontrado"))))
       .then(setC)
-      .catch((e) => setErr(e.message));
+      .catch((e) => setErr(mensajeDeError(e)));
   }, [authFetch, id]);
 
   const loadFiles = useCallback(() => {
@@ -288,8 +289,8 @@ export default function ClienteDetallePage() {
       setStatement(null);
       setInvoices(null);
       reload();
-    } catch (e: any) {
-      toast(e.message ?? "No se pudo eliminar", "alert-circle");
+    } catch (e) {
+      toast(mensajeDeError(e) ?? "No se pudo eliminar", "alert-circle");
     }
   }
 
@@ -309,8 +310,8 @@ export default function ClienteDetallePage() {
       }
       toast("Archivo subido");
       loadFiles();
-    } catch (e: any) {
-      toast(e.message ?? "Error al subir", "alert-circle");
+    } catch (e) {
+      toast(mensajeDeError(e) ?? "Error al subir", "alert-circle");
     } finally {
       setUploading(false);
     }

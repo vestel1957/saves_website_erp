@@ -13,6 +13,7 @@ import { Modal } from "@/components/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
+import { mensajeDeError } from "@/lib/errores";
 
 const toLocalInput = (iso: string | null) => {
   if (!iso) return "";
@@ -80,7 +81,7 @@ export default function AgendaPage() {
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.message || "No se pudo guardar");
       toast(editing ? "Evento actualizado" : "Evento creado", "check");
       setEventModal(null); void loadEvents(); void loadStats();
-    } catch (e: any) { toast(e.message, "alert-triangle"); } finally { setSavingEv(false); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setSavingEv(false); }
   }
 
   async function doDeleteEvent() {
@@ -89,7 +90,7 @@ export default function AgendaPage() {
       const res = await authFetch(`/omni/events/${toDelete.id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("No se pudo eliminar");
       toast("Evento eliminado", "check"); setToDelete(null); void loadEvents(); void loadStats();
-    } catch (e: any) { toast(e.message, "alert-triangle"); setToDelete(null); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); setToDelete(null); }
   }
 
   const columns = [

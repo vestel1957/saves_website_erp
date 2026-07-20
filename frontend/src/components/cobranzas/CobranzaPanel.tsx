@@ -8,6 +8,7 @@ import { Input, Select, Field } from "@/components/ui/Field";
 import { Modal } from "@/components/Modal";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
+import { mensajeDeError } from "@/lib/errores";
 
 type Call = {
   id: string; callType: string | null; responseType: string | null; responseDetail: string | null;
@@ -66,7 +67,7 @@ export function CobranzaPanel({ subscriberId }: { subscriberId: string }) {
       if (!res.ok) throw new Error(d?.message || "No se pudo registrar");
       toast(isAgreement ? "Acuerdo registrado · cliente en COMPROMISO" : "Llamada registrada", "check");
       setOpen(false); void load();
-    } catch (e: any) { toast(e.message, "alert-triangle"); } finally { setSaving(false); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setSaving(false); }
   }
 
   async function remove(id: string) {

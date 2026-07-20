@@ -11,6 +11,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/components/ui/Toast";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { useAuth } from "@/context/AuthProvider";
+import { mensajeDeError } from "@/lib/errores";
 
 type Movil = { id: string; name: string | null; status: string; memberCount: number; members: string[]; createdBy: string | null };
 type Member = { id: string; employeeId: string; name: string | null; position: string | null; role: string | null };
@@ -43,7 +44,7 @@ function MembersModal({ movil, onClose, onChanged }: { movil: Movil | null; onCl
       const res = await authFetch(`/moviles/${movil.id}/members`, { method: "POST", body: JSON.stringify({ employeeId: pick }) });
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.message || "No se pudo agregar");
       setPick(""); toast("Técnico agregado", "check"); await load(); onChanged();
-    } catch (e: any) { toast(e.message, "alert-triangle"); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); }
   }
   async function remove(employeeId: string) {
     if (!movil) return;
@@ -51,7 +52,7 @@ function MembersModal({ movil, onClose, onChanged }: { movil: Movil | null; onCl
       const res = await authFetch(`/moviles/${movil.id}/members/${employeeId}`, { method: "DELETE" });
       if (!res.ok) throw new Error("No se pudo quitar");
       toast("Técnico quitado", "check"); await load(); onChanged();
-    } catch (e: any) { toast(e.message, "alert-triangle"); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); }
   }
 
   return (
@@ -103,7 +104,7 @@ export default function MovilesPage() {
       const res = await authFetch(editing ? `/moviles/${(edit as Movil).id}` : "/moviles", { method: editing ? "PATCH" : "POST", body: JSON.stringify({ name, status }) });
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.message || "No se pudo guardar");
       toast(editing ? "Móvil actualizada" : "Móvil creada", "check"); setEdit(null); void load();
-    } catch (e: any) { toast(e.message, "alert-triangle"); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); }
   }
 
   async function doDelete() {
@@ -112,7 +113,7 @@ export default function MovilesPage() {
       const res = await authFetch(`/moviles/${toDelete.id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("No se pudo eliminar");
       toast("Móvil eliminada", "check"); setToDelete(null); void load();
-    } catch (e: any) { toast(e.message, "alert-triangle"); setToDelete(null); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); setToDelete(null); }
   }
 
   if (authLoading || loading) return <PageSkeleton />;

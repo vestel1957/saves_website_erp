@@ -8,6 +8,7 @@ import { Icon } from "@/components/Icon";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { INVOICE_KIND_LABEL, INVOICE_RON_LABEL } from "@/lib/subscribers";
+import { mensajeDeError } from "@/lib/errores";
 
 const dateInput = (d?: string | null) => (d ? new Date(d).toISOString().slice(0, 10) : "");
 
@@ -52,8 +53,8 @@ export function EditarFacturaModal({
       toast(`Factura #${invoice.tid} actualizada`);
       onDone();
       onClose();
-    } catch (e: any) {
-      toast(e.message ?? "Error al guardar", "alert-circle");
+    } catch (e) {
+      toast(mensajeDeError(e) ?? "Error al guardar", "alert-circle");
     } finally {
       setSaving(false);
     }

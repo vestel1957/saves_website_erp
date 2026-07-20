@@ -65,6 +65,8 @@ if [[ "$OBJETIVO" == "todo" || "$OBJETIVO" == "frontend" ]]; then
   cd "$RAIZ/frontend"
   paso "frontend · lint"      npm run --silent lint
   paso "frontend · typecheck" npm run --silent typecheck
+  # Techo de `any`: falla si la deuda de tipado crece. Ver scripts/budget-any.sh.
+  paso "frontend · presupuesto any" "$RAIZ/scripts/budget-any.sh"
 fi
 
 cd "$RAIZ"

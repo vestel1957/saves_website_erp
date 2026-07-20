@@ -15,6 +15,7 @@ import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import { SubscriberPicker, type PickedSub } from "@/components/cobranzas/SubscriberPicker";
+import { mensajeDeError } from "@/lib/errores";
 
 type QuoteItem = { product: string; qty: number; price: number; taxRate: number };
 
@@ -108,8 +109,8 @@ export default function CotizacionesPage() {
       setOpen(false);
       resetForm();
       await load();
-    } catch (e: any) {
-      toast(e?.message || "Error al crear la cotización", "alert-triangle");
+    } catch (e) {
+      toast(mensajeDeError(e, "Error al crear la cotización"), "alert-triangle");
     } finally {
       setSaving(false);
     }
@@ -124,7 +125,7 @@ export default function CotizacionesPage() {
       if (!res.ok) throw new Error(d?.message || "No se pudo convertir");
       toast(`Factura #${d.tid} creada desde la cotización`, "check");
       void load();
-    } catch (e: any) { toast(e.message, "alert-triangle"); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); }
   }
 
   async function setQuoteStatus(r: any, status: string) {
@@ -132,7 +133,7 @@ export default function CotizacionesPage() {
       const res = await authFetch(`/omni/quotes/${r.id}/status`, { method: "PATCH", body: JSON.stringify({ status }) });
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.message || "No se pudo actualizar");
       toast("Estado actualizado", "check"); void load();
-    } catch (e: any) { toast(e.message, "alert-triangle"); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); }
   }
 
   const columns = [

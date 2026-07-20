@@ -10,6 +10,7 @@ import { toast } from "@/components/ui/Toast";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
+import { mensajeDeError } from "@/lib/errores";
 
 type ActaItem = { id: string; material: string; code: string | null; qty: number; price: number; value: number; received: boolean; receivedAt: string | null };
 type ActaDetail = {
@@ -48,8 +49,8 @@ export default function ActaDetallePage() {
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || "No se pudo recibir el ítem");
       toast("Ítem recibido", "check");
       await load();
-    } catch (e: any) {
-      toast(e?.message || "No se pudo recibir el ítem", "alert-triangle");
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudo recibir el ítem"), "alert-triangle");
     } finally {
       setReceivingItem(null);
     }
@@ -62,8 +63,8 @@ export default function ActaDetallePage() {
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || "No se pudo recibir el acta");
       toast("Acta recibida: stock acreditado en el destino", "check");
       await load();
-    } catch (e: any) {
-      toast(e?.message || "No se pudo recibir el acta", "alert-triangle");
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudo recibir el acta"), "alert-triangle");
     } finally {
       setReceiving(false);
     }

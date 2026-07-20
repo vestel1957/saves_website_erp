@@ -16,6 +16,7 @@ import {
   type WaTemplate, type WaCampaign, type WaCampaignReport,
   WA_SEND_STATUS, SUBSCRIBER_STATUSES,
 } from "@/lib/whatsapp";
+import { mensajeDeError } from "@/lib/errores";
 
 const fmt = (d: string | null) => (d ? new Date(d).toLocaleString("es-CO") : "—");
 
@@ -46,7 +47,7 @@ function ReportModal({ campaignId, onClose }: { campaignId: string | null; onClo
       if (!r.ok) throw new Error(d?.message || "No se pudo reintentar");
       toast(`Reencolados ${d.requeued} envíos fallidos`, "check");
       setTimeout(load, 800);
-    } catch (e: any) { toast(e.message, "alert-triangle"); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); }
   }
 
   const c = data?.campaign;
@@ -133,7 +134,7 @@ export default function MasivoPage() {
       toast(`Campaña lanzada a ${data.total} destinatarios`, "check");
       setName(""); setSearch("");
       setTimeout(load, 800);
-    } catch (e: any) { toast(e.message, "alert-triangle"); } finally { setLaunching(false); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setLaunching(false); }
   }
 
   if (authLoading || loading) return <PageSkeleton />;

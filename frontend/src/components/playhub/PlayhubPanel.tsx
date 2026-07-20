@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/Badge";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
+import { mensajeDeError } from "@/lib/errores";
 
 type CatalogItem = { code: string; name: string; assignable: boolean; category: string };
 type LocalSub = { id: string; productId: string | null; productName: string | null; voucher: string | null; syncedAt: string | null };
@@ -50,7 +51,7 @@ export function PlayhubPanel({ subscriberId, email }: { subscriberId: string; em
       if (!res.ok) throw new Error(d?.message || "No se pudo suscribir");
       toast(`Suscripción creada${d.voucher ? ` · voucher ${d.voucher}` : ""}`, "check");
       setProduct(""); void load();
-    } catch (e: any) { toast(e.message, "alert-triangle"); } finally { setBusy(false); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setBusy(false); }
   }
 
   async function doUnsub() {
@@ -61,7 +62,7 @@ export function PlayhubPanel({ subscriberId, email }: { subscriberId: string; em
       const d = await res.json();
       if (!res.ok) throw new Error(d?.message || "No se pudo cancelar");
       toast("Suscripción cancelada", "check"); setToUnsub(null); void load();
-    } catch (e: any) { toast(e.message, "alert-triangle"); setToUnsub(null); } finally { setBusy(false); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); setToUnsub(null); } finally { setBusy(false); }
   }
 
   async function action(path: string, okMsg: string) {
@@ -71,7 +72,7 @@ export function PlayhubPanel({ subscriberId, email }: { subscriberId: string; em
       const d = await res.json();
       if (!res.ok) throw new Error(d?.message || "Error");
       toast(okMsg, "check"); void load();
-    } catch (e: any) { toast(e.message, "alert-triangle"); } finally { setBusy(false); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setBusy(false); }
   }
 
   if (loading) return <div className="rounded-xl border border-border-subtle bg-surface p-8 text-center text-[13px] text-text-tertiary">Cargando PlayHub…</div>;

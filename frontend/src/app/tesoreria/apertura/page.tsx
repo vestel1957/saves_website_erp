@@ -13,6 +13,7 @@ import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import type { CashAccount } from "@/lib/cobranzas";
 import { fmtDate } from "@/lib/format";
+import { mensajeDeError } from "@/lib/errores";
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -84,7 +85,7 @@ export default function AperturaPage() {
       if (!res.ok) throw new Error(d?.message || "No se pudo abrir la caja");
       toast(`Caja abierta con base ${cop(d.base)}`, "check");
       void load();
-    } catch (e: any) { setErr(e.message); } finally { setSaving(false); }
+    } catch (e) { setErr(mensajeDeError(e)); } finally { setSaving(false); }
   }
 
   if (authLoading) return <PageSkeleton />;

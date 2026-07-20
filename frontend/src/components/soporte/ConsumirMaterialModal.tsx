@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/Field";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
+import { mensajeDeError } from "@/lib/errores";
 
 type Mat = { id: string; name: string; code: string | null; price: number; qty: number; warehouse: string | null };
 type Line = { material: Mat; qty: number };
@@ -61,7 +62,7 @@ export function ConsumirMaterialModal({ open, onClose, onDone, ticketId }: { ope
       if (!res.ok) throw new Error(d?.message || "No se pudo registrar el material");
       toast("Material registrado (stock descontado)");
       onDone(); onClose();
-    } catch (e: any) { setErr(e.message); } finally { setSaving(false); }
+    } catch (e) { setErr(mensajeDeError(e)); } finally { setSaving(false); }
   }
 
   return (

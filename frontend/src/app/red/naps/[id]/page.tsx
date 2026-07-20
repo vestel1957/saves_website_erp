@@ -14,6 +14,7 @@ import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { SubscriberPicker, type PickedSub } from "@/components/cobranzas/SubscriberPicker";
 import type { Nap, NapPort, Paged } from "@/lib/network";
+import { mensajeDeError } from "@/lib/errores";
 
 function InfoCell({ label, value, mono }: { label: string; value: React.ReactNode; mono?: boolean }) {
   return (
@@ -65,8 +66,8 @@ export default function NapDetailPage() {
       if (!res.ok) throw new Error(d?.message || "Error");
       toast("Puerto liberado");
       void loadPorts();
-    } catch (e: any) {
-      toast(e?.message || "No se pudo liberar", "alert-triangle");
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudo liberar"), "alert-triangle");
     }
   }, [authFetch, loadPorts]);
 
@@ -81,8 +82,8 @@ export default function NapDetailPage() {
       setAssignFor(null);
       setSub(null);
       void loadPorts();
-    } catch (e: any) {
-      toast(e?.message || "No se pudo asignar", "alert-triangle");
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudo asignar"), "alert-triangle");
     } finally {
       setSaving(false);
     }

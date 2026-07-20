@@ -9,6 +9,7 @@ import { Input, Select, Field } from "@/components/ui/Field";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { type WaTemplate, WA_VAR_SOURCES } from "@/lib/whatsapp";
+import { mensajeDeError } from "@/lib/errores";
 
 /** Sustituye los {{n}} del cuerpo por una etiqueta legible de cada variable. */
 function renderPreview(tpl: WaTemplate): string {
@@ -90,8 +91,8 @@ export function BulkWhatsappModal({
       setName("");
       onSent?.();
       onClose();
-    } catch (e: any) {
-      toast(e.message, "alert-triangle");
+    } catch (e) {
+      toast(mensajeDeError(e), "alert-triangle");
     } finally {
       setLaunching(false);
     }

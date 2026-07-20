@@ -10,6 +10,7 @@ import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { SubscriberPicker, type PickedSub } from "@/components/cobranzas/SubscriberPicker";
 import { cop } from "@/lib/subscribers";
+import { mensajeDeError } from "@/lib/errores";
 
 type Item = { productName?: string; description: string; qty: number; price: number; taxRate: number };
 const today = () => new Date().toISOString().slice(0, 10);
@@ -90,7 +91,7 @@ export function NuevaFacturaModal({
       toast(`Factura #${data.tid} creada · ${cop(data.total)}`);
       onDone?.();
       router.push(`/facturacion/${data.id}`);
-    } catch (e: any) { setErr(e.message); setSaving(false); }
+    } catch (e) { setErr(mensajeDeError(e)); setSaving(false); }
   }
 
   return (

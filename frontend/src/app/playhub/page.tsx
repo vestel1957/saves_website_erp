@@ -9,6 +9,7 @@ import { Icon } from "@/components/Icon";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { fmtDate } from "@/lib/format";
+import { mensajeDeError } from "@/lib/errores";
 
 type Row = { id: string; nameS: string | null; externalName: string | null; productId: string | null; productName: string | null; voucher: string | null; syncedAt: string | null; subscriberId: string | null; subscriberName: string | null; abonado: number | null };
 type List = { items: Row[]; total: number; page: number; pageSize: number; pages: number; byProduct: { product: string; count: number }[] };
@@ -36,7 +37,7 @@ export default function PlayhubPage() {
       if (!res.ok) throw new Error(d?.message || "No se pudo sincronizar");
       toast(`Sincronizados ${d.synced}/${d.total} clientes${d.failed ? ` · ${d.failed} con error` : ""}`, "check");
       load();
-    } catch (e: any) { toast(e.message, "alert-triangle"); } finally { setSyncing(false); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setSyncing(false); }
   }
 
   return (

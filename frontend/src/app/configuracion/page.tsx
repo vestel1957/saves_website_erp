@@ -12,6 +12,7 @@ import { Modal } from "@/components/Modal";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
+import { mensajeDeError } from "@/lib/errores";
 
 type Tab = "Empresa" | "Sedes" | "Cajas" | "Geografía";
 
@@ -88,8 +89,8 @@ function EmpresaTab() {
       if (!res.ok) throw new Error(d?.message || "Error");
       setCompany(d);
       toast("Empresa actualizada");
-    } catch (e: any) {
-      toast(e?.message || "No se pudo guardar", "x");
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudo guardar"), "x");
     } finally {
       setSaving(false);
     }
@@ -187,8 +188,8 @@ function SedesTab() {
       toast("Sede actualizada");
       setEditing(null);
       await load();
-    } catch (e: any) {
-      toast(e?.message || "No se pudo guardar", "x");
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudo guardar"), "x");
     } finally {
       setSaving(false);
     }

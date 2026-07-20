@@ -16,6 +16,7 @@ import { AsignarEquipoModal } from "@/components/soporte/AsignarEquipoModal";
 import { ConsumirMaterialModal } from "@/components/soporte/ConsumirMaterialModal";
 import { SignaturePad } from "@/components/support/SignaturePad";
 import { fmtDate } from "@/lib/format";
+import { mensajeDeError } from "@/lib/errores";
 
 const fmtT = (d: string | null) => (d ? new Date(d).toLocaleString("es-CO") : "—");
 const STATES = ["PENDIENTE", "REALIZANDO", "RESUELTO", "ANULADA"];
@@ -116,7 +117,7 @@ export default function OrdenDetallePage() {
       const url = URL.createObjectURL(new Blob([await res.blob()], { type: "application/pdf" }));
       window.open(url, "_blank", "noopener,noreferrer");
       setTimeout(() => URL.revokeObjectURL(url), 60000);
-    } catch (e: any) { toast(e.message, "alert-triangle"); } finally { setPdfBusy(false); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setPdfBusy(false); }
   }
 
   const reload = useCallback(() => {
@@ -136,7 +137,7 @@ export default function OrdenDetallePage() {
       const d = await res.json();
       if (!res.ok) throw new Error(d?.message || "Error");
       toast(okMsg); reload();
-    } catch (e: any) { toast(e.message, "alert-triangle"); } finally { setBusy(false); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setBusy(false); }
   }
 
   async function documentar() {
@@ -155,7 +156,7 @@ export default function OrdenDetallePage() {
         if (!res.ok) throw new Error(d?.message || "No se pudo subir la foto");
         toast(geo ? "Foto subida con ubicación" : "Foto subida (sin ubicación; requiere HTTPS)");
         setReply(""); setSolucion(""); setPhoto(null); reload();
-      } catch (e: any) { toast(e.message, "alert-triangle"); } finally { setBusy(false); }
+      } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setBusy(false); }
       return;
     }
     // Solo texto → hilo normal.

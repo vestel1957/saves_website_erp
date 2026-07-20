@@ -17,6 +17,7 @@ import { cop } from "@/lib/subscribers";
 import { SubscriberPicker, type PickedSub } from "@/components/cobranzas/SubscriberPicker";
 import { StatCard } from "@/components/ui/StatCard";
 import { useRequest } from "@/lib/useRequest";
+import { mensajeDeError } from "@/lib/errores";
 
 const STATUS_OPTS = ["Waiting", "Pending", "Progress", "Finished", "Terminated"];
 const PRIORITY_OPTS = ["Low", "Medium", "High", "Urgent"];
@@ -117,8 +118,8 @@ export default function ProyectosPage() {
       resetForm();
       load();
       loadStats();
-    } catch (e: any) {
-      toast(e?.message || "Error al crear el proyecto.", "alert-triangle");
+    } catch (e) {
+      toast(mensajeDeError(e, "Error al crear el proyecto."), "alert-triangle");
     } finally {
       setSaving(false);
     }

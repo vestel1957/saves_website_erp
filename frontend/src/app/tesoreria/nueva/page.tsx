@@ -11,6 +11,7 @@ import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import { type CashAccount, PAY_METHODS, BANKS, isBankMethod } from "@/lib/cobranzas";
 import { SubscriberPicker, type PickedSub } from "@/components/cobranzas/SubscriberPicker";
+import { mensajeDeError } from "@/lib/errores";
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -89,8 +90,8 @@ export default function NuevaTransaccionPage() {
       }
       toast(`${type === "Income" ? "Ingreso" : "Egreso"} registrado: ${cop(amt)}`, "check");
       router.push(type === "Income" ? "/tesoreria/ingresos" : "/tesoreria/egresos");
-    } catch (e: any) {
-      setErr(e?.message || "No se pudo registrar el movimiento");
+    } catch (e) {
+      setErr(mensajeDeError(e, "No se pudo registrar el movimiento"));
     } finally {
       setSaving(false);
     }

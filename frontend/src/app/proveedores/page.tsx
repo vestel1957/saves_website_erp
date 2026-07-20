@@ -14,6 +14,7 @@ import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/format";
 import { useRequest } from "@/lib/useRequest";
+import { mensajeDeError } from "@/lib/errores";
 
 const CATEGORY_LABEL: Record<number, string> = { 1: "Productos", 2: "Servicios" };
 
@@ -79,8 +80,8 @@ export default function ProveedoresPage() {
       setForm(EMPTY_FORM);
       setEditingId(null);
       await load();
-    } catch (e: any) {
-      toast(e?.message || "No se pudo guardar el proveedor", "alert-triangle");
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudo guardar el proveedor"), "alert-triangle");
     } finally {
       setSaving(false);
     }
@@ -102,7 +103,7 @@ export default function ProveedoresPage() {
       const d = await res.json();
       if (!res.ok) throw new Error(d?.message || "No se pudo eliminar");
       toast("Proveedor eliminado"); setToDelete(null); await load();
-    } catch (e: any) { toast(e.message, "alert-triangle"); setToDelete(null); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); setToDelete(null); }
   }
 
   async function showStatement(r: any) {

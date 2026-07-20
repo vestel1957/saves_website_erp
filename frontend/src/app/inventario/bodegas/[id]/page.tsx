@@ -15,6 +15,7 @@ import { LoadError } from "@/components/ui/LoadError";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import { StatCard } from "@/components/ui/StatCard";
+import { useRequest } from "@/lib/useRequest";
 
 type Warehouse = { id: string; title: string; extra: string | null; technicianRef: string | null; materials: number; value: number };
 
@@ -32,9 +33,6 @@ export default function BodegaMaterialesPage() {
   const { loading: authLoading, authFetch } = useAuth();
 
   const [wh, setWh] = useState<Warehouse | null>(null);
-  const [data, setData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState(false);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
 
@@ -46,28 +44,19 @@ export default function BodegaMaterialesPage() {
     } catch { /* la tabla igual puede cargar */ }
   }, [authFetch, id]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setErr(false);
-    try {
+  // Carga con cancelación. El estado de error lo aporta el propio hook, así que
+  // desaparece el `err` local: antes había que acordarse de resetearlo a mano.
+  const { data, cargando: loading, error: err, refrescar: load } = useRequest<any>(
+    () => {
       const params = new URLSearchParams({ warehouseId: String(id), page: String(page), pageSize: "25" });
       if (search.trim()) params.set("search", search.trim());
-      const r = await authFetch(`/inventory/materials?${params.toString()}`);
-      if (!r.ok) throw new Error();
-      setData(await r.json());
-    } catch {
-      setErr(true);
-    } finally {
-      setLoading(false);
-    }
-  }, [authFetch, id, page, search]);
+      return `/inventory/materials?${params.toString()}`;
+    },
+    [id, page, search],
+    { debounceMs: search ? 300 : 0, saltar: authLoading },
+  );
 
   useEffect(() => { if (!authLoading) void loadWh(); }, [authLoading, loadWh]);
-  useEffect(() => {
-    if (authLoading) return;
-    const t = setTimeout(load, search ? 300 : 0);
-    return () => clearTimeout(t);
-  }, [authLoading, load, search]);
 
   if (authLoading) return <PageSkeleton />;
 

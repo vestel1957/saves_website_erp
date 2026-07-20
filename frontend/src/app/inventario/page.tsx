@@ -16,6 +16,7 @@ import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import { StatCard } from "@/components/ui/StatCard";
+import { mensajeDeError } from "@/lib/errores";
 
 const emptyForm = { name: "", code: "", categoryId: "", warehouseId: "", price: "", cost: "", taxRate: "", qty: "", alert: "", description: "" };
 
@@ -57,7 +58,7 @@ export default function MaterialPage() {
       if (!res.ok) throw new Error(d?.message || "No se pudo importar");
       toast(`Importados ${d.created} material(es)${d.skipped ? ` · ${d.skipped} omitidos` : ""}`, "check");
       await load();
-    } catch (e: any) { toast(e.message, "alert-triangle"); } finally { setImporting(false); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setImporting(false); }
   }
   const [form, setForm] = useState<any>(emptyForm);
   const [saving, setSaving] = useState(false);
@@ -116,8 +117,8 @@ export default function MaterialPage() {
         qty: m.qty ?? "", alert: m.alert ?? "", description: m.description ?? "",
       });
       setModalOpen(true);
-    } catch (e: any) {
-      toast(e?.message || "No se pudo cargar el material", "alert-triangle");
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudo cargar el material"), "alert-triangle");
     }
   }
 
@@ -149,8 +150,8 @@ export default function MaterialPage() {
       setEditing(null);
       setForm(emptyForm);
       await load();
-    } catch (e: any) {
-      toast(e?.message || "No se pudo guardar", "alert-triangle");
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudo guardar"), "alert-triangle");
     } finally {
       setSaving(false);
     }
@@ -166,8 +167,8 @@ export default function MaterialPage() {
       toast("Material eliminado", "check");
       setDelRow(null);
       await load();
-    } catch (e: any) {
-      toast(e?.message || "No se pudo eliminar", "alert-triangle");
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudo eliminar"), "alert-triangle");
     } finally {
       setDeleting(false);
     }

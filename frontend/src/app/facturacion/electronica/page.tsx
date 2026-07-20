@@ -15,6 +15,7 @@ import { useAuth } from "@/context/AuthProvider";
 import { PERM } from "@/lib/auth";
 import { fmtDate } from "@/lib/format";
 import { useRequest } from "@/lib/useRequest";
+import { mensajeDeError } from "@/lib/errores";
 
 const n = (v: number) => (v ?? 0).toLocaleString("es-CO");
 
@@ -100,8 +101,8 @@ export default function EfacturaPage() {
       else toast(`Reintento OK: ${d.dianNumber ?? "factura emitida"}`, "check");
       void loadErrors();
       refreshStats();
-    } catch (e: any) {
-      toast(e.message ?? "Error al reintentar", "alert-circle");
+    } catch (e) {
+      toast(mensajeDeError(e) ?? "Error al reintentar", "alert-circle");
     } finally {
       setRetryingId(null);
     }
@@ -124,8 +125,8 @@ export default function EfacturaPage() {
       if (d.failed) msg += ` (${d.failed} con error)`;
       toast(msg, d.failed ? "alert-triangle" : "check");
       loadBranches();
-    } catch (e: any) {
-      toast(e.message ?? "Error al emitir la sede", "alert-circle");
+    } catch (e) {
+      toast(mensajeDeError(e) ?? "Error al emitir la sede", "alert-circle");
     } finally {
       setEmittingBranch(null);
     }

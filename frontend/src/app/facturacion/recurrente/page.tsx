@@ -16,6 +16,7 @@ import { NuevaPlantillaModal } from "@/components/cobranzas/NuevaPlantillaModal"
 import { cop } from "@/lib/subscribers";
 import { StatCard } from "@/components/ui/StatCard";
 import { useRequest } from "@/lib/useRequest";
+import { mensajeDeError } from "@/lib/errores";
 
 export default function RecurrentePage() {
   const { loading: authLoading, authFetch } = useAuth();
@@ -51,7 +52,7 @@ export default function RecurrentePage() {
       const d = await res.json();
       if (!res.ok) throw new Error(d?.message || "Error");
       toast(`Factura #${d.tid} generada · ${cop(d.total)}`);
-    } catch (e: any) { toast(e.message, "alert-triangle"); } finally { setBusy(null); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setBusy(null); }
   }
 
   async function remove(id: string) {
@@ -62,7 +63,7 @@ export default function RecurrentePage() {
       if (!res.ok) throw new Error("No se pudo eliminar");
       toast("Plantilla eliminada");
       loadStats(); load();
-    } catch (e: any) { toast(e.message, "alert-triangle"); } finally { setBusy(null); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setBusy(null); }
   }
 
   if (authLoading) return <PageSkeleton />;

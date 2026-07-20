@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/Button";
 import { Input, Select, Field } from "@/components/ui/Field";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
+import { mensajeDeError } from "@/lib/errores";
 
 const INSTALL_TYPES = ["FTTH", "EOC", "HFC", "Radioenlace", "Otro"];
 
@@ -65,7 +66,7 @@ export function AsignarEquipoModal({ open, onClose, onDone, ticketId }: { open: 
       if (!res.ok) throw new Error(d?.message || "No se pudo asignar el equipo");
       toast(`Equipo ${d.mac} asignado`);
       onDone(); onClose();
-    } catch (e: any) { setErr(e.message); } finally { setSaving(false); }
+    } catch (e) { setErr(mensajeDeError(e)); } finally { setSaving(false); }
   }
 
   return (

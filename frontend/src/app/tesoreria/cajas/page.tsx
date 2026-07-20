@@ -13,6 +13,7 @@ import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import type { CashAccount } from "@/lib/cobranzas";
+import { mensajeDeError } from "@/lib/errores";
 
 type Category = { id: string; name: string };
 
@@ -56,7 +57,7 @@ function CajaModal({ caja, onClose, onDone }: { caja: CashAccount | "new" | null
       if (!res.ok) throw new Error(data?.message || "No se pudo guardar");
       toast(editing ? "Caja actualizada" : "Caja creada", "check");
       onDone(); onClose();
-    } catch (e: any) { setErr(e.message); } finally { setSaving(false); }
+    } catch (e) { setErr(mensajeDeError(e)); } finally { setSaving(false); }
   }
 
   return (
@@ -121,7 +122,7 @@ export default function CajasPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "No se pudo eliminar");
       toast("Caja eliminada", "check"); setToDelete(null); void load();
-    } catch (e: any) { toast(e.message, "alert-triangle"); setToDelete(null); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); setToDelete(null); }
   }
 
   async function createCat() {
@@ -132,7 +133,7 @@ export default function CajasPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "No se pudo crear");
       setNewCat(""); toast("Categoría creada", "check"); void load();
-    } catch (e: any) { toast(e.message, "alert-triangle"); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); }
   }
 
   async function renameCat(c: Category) {
@@ -143,7 +144,7 @@ export default function CajasPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "No se pudo renombrar");
       toast("Categoría renombrada", "check"); void load();
-    } catch (e: any) { toast(e.message, "alert-triangle"); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); }
   }
 
   async function doDeleteCat() {
@@ -153,7 +154,7 @@ export default function CajasPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "No se pudo eliminar");
       toast("Categoría eliminada", "check"); setCatToDelete(null); void load();
-    } catch (e: any) { toast(e.message, "alert-triangle"); setCatToDelete(null); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); setCatToDelete(null); }
   }
 
   if (authLoading || loading) return <PageSkeleton />;

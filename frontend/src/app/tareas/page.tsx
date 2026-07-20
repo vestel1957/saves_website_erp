@@ -16,6 +16,7 @@ import { useAuth } from "@/context/AuthProvider";
 import { fmtDate } from "@/lib/format";
 import { StatCard } from "@/components/ui/StatCard";
 import { useRequest } from "@/lib/useRequest";
+import { mensajeDeError } from "@/lib/errores";
 
 type Task = {
   id: string; legacyId: number; name: string | null; status: string; priority: string;
@@ -132,8 +133,8 @@ export default function TareasPage() {
       toast(editing ? "Tarea actualizada." : "Tarea creada.", "check");
       setOpen(false); setEditing(null); setForm(emptyForm);
       await load(); loadStats();
-    } catch (e: any) {
-      toast(e?.message || "No se pudo guardar la tarea.", "alert-triangle");
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudo guardar la tarea."), "alert-triangle");
     } finally {
       setSaving(false);
     }
@@ -145,8 +146,8 @@ export default function TareasPage() {
       const res = await authFetch(`/tasks/${t.id}`, { method: "PATCH", body: JSON.stringify({ status: next }) });
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.message || "Error");
       await load(); loadStats();
-    } catch (e: any) {
-      toast(e?.message || "No se pudo cambiar el estado.", "alert-triangle");
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudo cambiar el estado."), "alert-triangle");
     }
   }
 
@@ -159,8 +160,8 @@ export default function TareasPage() {
       toast("Tarea eliminada.", "check");
       setDelRow(null);
       await load(); loadStats();
-    } catch (e: any) {
-      toast(e?.message || "No se pudo eliminar.", "alert-triangle");
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudo eliminar."), "alert-triangle");
     } finally {
       setDeleting(false);
     }

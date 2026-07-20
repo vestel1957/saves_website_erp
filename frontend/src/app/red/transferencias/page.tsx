@@ -14,6 +14,7 @@ import { Modal } from "@/components/Modal";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { useRequest } from "@/lib/useRequest";
+import { mensajeDeError } from "@/lib/errores";
 
 function statusTone(s: string): "default" | "success" | "warning" | "info" | "error" {
   if (s === "Recibida" || s === "Aprobada" || s === "Completada" || s === "Confirmada") return "success";
@@ -146,8 +147,8 @@ export default function TransferenciasPage() {
       setOpen(false);
       resetForm();
       void load();
-    } catch (e: any) {
-      toast(e?.message || "No se pudo crear la transferencia", "alert-triangle");
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudo crear la transferencia"), "alert-triangle");
     } finally {
       setSaving(false);
     }
@@ -180,8 +181,8 @@ export default function TransferenciasPage() {
       toast(`Despachada · ${d?.dispatched ?? 0} equipos en tránsito${d?.skipped ? ` (${d.skipped} omitidos)` : ""}`);
       setDetail(null);
       void load();
-    } catch (e: any) {
-      toast(e?.message || "No se pudo aprobar", "alert-triangle");
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudo aprobar"), "alert-triangle");
     } finally {
       setActing(false);
     }
@@ -197,8 +198,8 @@ export default function TransferenciasPage() {
       toast(`Recepción confirmada · ${d?.received ?? 0} equipos en bodega destino`);
       setDetail(null);
       void load();
-    } catch (e: any) {
-      toast(e?.message || "No se pudo confirmar la recepción", "alert-triangle");
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudo confirmar la recepción"), "alert-triangle");
     } finally {
       setActing(false);
     }
@@ -217,8 +218,8 @@ export default function TransferenciasPage() {
       toast("Transferencia rechazada");
       setDetail(null);
       void load();
-    } catch (e: any) {
-      toast(e?.message || "No se pudo rechazar", "alert-triangle");
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudo rechazar"), "alert-triangle");
     } finally {
       setActing(false);
     }

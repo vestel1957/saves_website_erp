@@ -10,6 +10,7 @@ import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import { type CashAccount, PAY_METHODS, BANKS, isBankMethod } from "@/lib/cobranzas";
 import { SubscriberPicker, type PickedSub } from "@/components/cobranzas/SubscriberPicker";
+import { mensajeDeError } from "@/lib/errores";
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -109,7 +110,7 @@ export function EgresoModal({ open, onClose, onDone }: { open: boolean; onClose:
       }
       toast(`Egreso registrado: ${cop(amt)}`);
       onDone(); onClose();
-    } catch (e: any) { setErr(e.message); } finally { setSaving(false); }
+    } catch (e) { setErr(mensajeDeError(e)); } finally { setSaving(false); }
   }
 
   return (
@@ -198,7 +199,7 @@ export function IngresoLibreModal({ open, onClose, onDone }: { open: boolean; on
       }
       toast(`Ingreso registrado: ${cop(amt)}`);
       onDone(); onClose();
-    } catch (e: any) { setErr(e.message); } finally { setSaving(false); }
+    } catch (e) { setErr(mensajeDeError(e)); } finally { setSaving(false); }
   }
 
   return (
@@ -281,7 +282,7 @@ export function EditarMovimientoModal({
       if (!res.ok) throw new Error(data?.message || "No se pudo editar");
       toast("Movimiento actualizado");
       onDone(); onClose();
-    } catch (e: any) { setErr(e.message); } finally { setSaving(false); }
+    } catch (e) { setErr(mensajeDeError(e)); } finally { setSaving(false); }
   }
 
   return (
@@ -366,7 +367,7 @@ export function CierreCajaModal({ open, onClose, onDone }: { open: boolean; onCl
       else if (data.motivo === "ya-cerrado") toast("Esta caja ya estaba cerrada ese día");
       else toast("Sin excedente: no había efectivo que arrastrar");
       onDone();
-    } catch (e: any) { setErr(e.message); } finally { setSaving(false); }
+    } catch (e) { setErr(mensajeDeError(e)); } finally { setSaving(false); }
   }
 
   return (
@@ -483,7 +484,7 @@ export function AnularModal({ tx, onClose, onDone }: { tx: { id: string; payer: 
       if (!res.ok) throw new Error(data?.message || "No se pudo anular");
       toast("Transacción anulada");
       onDone(); onClose();
-    } catch (e: any) { setErr(e.message); } finally { setSaving(false); }
+    } catch (e) { setErr(mensajeDeError(e)); } finally { setSaving(false); }
   }
 
   return (

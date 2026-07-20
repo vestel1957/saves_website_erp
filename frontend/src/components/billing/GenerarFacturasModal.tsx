@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Field, Input, Select } from "@/components/ui/Field";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
+import { mensajeDeError } from "@/lib/errores";
 
 type PlanRow = { subscriberId: string; action: "BILL" | "SKIP" | "FAIL"; reason?: string; error?: string; total?: number };
 type RunResult = {
@@ -81,8 +82,8 @@ export function GenerarFacturasModal({
         onDone();
         onClose();
       }
-    } catch (e: any) {
-      toast(e?.message || "No se pudo ejecutar la corrida.", "alert-triangle");
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudo ejecutar la corrida."), "alert-triangle");
     } finally {
       setBusy(false);
     }

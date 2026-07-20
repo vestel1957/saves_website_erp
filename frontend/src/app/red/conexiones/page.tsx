@@ -16,6 +16,7 @@ import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { SubscriberPicker, type PickedSub } from "@/components/cobranzas/SubscriberPicker";
 import { useRequest } from "@/lib/useRequest";
+import { mensajeDeError } from "@/lib/errores";
 
 export default function ConexionesPage() {
   const { loading: authLoading, authFetch } = useAuth();
@@ -76,8 +77,8 @@ export default function ConexionesPage() {
         if (!res.ok) throw new Error(d?.message || "Error");
         toast("Puerto liberado");
         void load();
-      } catch (e: any) {
-        toast(e?.message || "No se pudo liberar", "alert-triangle");
+      } catch (e) {
+        toast(mensajeDeError(e, "No se pudo liberar"), "alert-triangle");
       }
     },
     [authFetch, load],
@@ -102,8 +103,8 @@ export default function ConexionesPage() {
       setAssignFor(null);
       setSub(null);
       void load();
-    } catch (e: any) {
-      toast(e?.message || "No se pudo asignar", "alert-triangle");
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudo asignar"), "alert-triangle");
     } finally {
       setSaving(false);
     }

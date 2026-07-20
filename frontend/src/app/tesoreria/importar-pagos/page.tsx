@@ -11,6 +11,7 @@ import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
+import { mensajeDeError } from "@/lib/errores";
 
 type Row = { id: string; rowNumber: number; documento: string; amount: number; method: string; reference: string | null; date: string | null; status: string; message: string | null };
 type Batch = {
@@ -65,7 +66,7 @@ export default function ImportarPagosPage() {
       if (fileRef.current) fileRef.current.value = "";
       toast(`Archivo cargado · ${d.totalRows} fila(s)`, "check");
       void loadList();
-    } catch (e: any) { toast(e.message, "alert-triangle"); } finally { setBusy(false); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setBusy(false); }
   }
 
   async function process() {
@@ -79,7 +80,7 @@ export default function ImportarPagosPage() {
       setCurrent(d);
       toast(`Procesado · ${d.appliedRows} aplicado(s), ${d.errorRows + d.notFoundRows} con problema`, "check");
       void loadList();
-    } catch (e: any) { toast(e.message, "alert-triangle"); } finally { setBusy(false); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setBusy(false); }
   }
 
   async function discard(id: string) {

@@ -12,6 +12,7 @@ import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
+import { mensajeDeError } from "@/lib/errores";
 
 type Row = { product: string; qty: string; price: string; taxRate: string };
 
@@ -90,8 +91,8 @@ export default function NuevaOrdenPage() {
       if (!res.ok) throw new Error(d?.message || "Error");
       toast("Orden creada");
       router.push("/ordenes/" + d.id);
-    } catch (e: any) {
-      toast(e?.message || "No se pudo crear la orden", "alert-triangle");
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudo crear la orden"), "alert-triangle");
     } finally { setSaving(false); }
   };
 

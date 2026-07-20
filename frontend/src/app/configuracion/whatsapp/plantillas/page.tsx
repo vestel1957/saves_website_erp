@@ -14,6 +14,7 @@ import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { useAuth } from "@/context/AuthProvider";
 import { PERM } from "@/lib/auth";
 import { type WaTemplate, type WaTemplateVar, WA_VAR_SOURCES } from "@/lib/whatsapp";
+import { mensajeDeError } from "@/lib/errores";
 
 const LANGS = [
   { value: "es", label: "Español" },
@@ -63,7 +64,7 @@ function TemplateModal({ tpl, onClose, onDone }: { tpl: WaTemplate | "new" | nul
       if (!res.ok) throw new Error(data?.message || "No se pudo guardar");
       toast(editing ? "Plantilla actualizada" : "Plantilla creada", "check");
       onDone(); onClose();
-    } catch (e: any) { setErr(e.message); } finally { setSaving(false); }
+    } catch (e) { setErr(mensajeDeError(e)); } finally { setSaving(false); }
   }
 
   return (
@@ -124,7 +125,7 @@ export default function PlantillasPage() {
       const res = await authFetch(`/admin/whatsapp/templates/${toDelete.id}`, { method: "DELETE" });
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.message || "No se pudo eliminar");
       toast("Plantilla eliminada", "check"); setToDelete(null); void load();
-    } catch (e: any) { toast(e.message, "alert-triangle"); setToDelete(null); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); setToDelete(null); }
   }
 
   if (authLoading || loading) return <PageSkeleton />;

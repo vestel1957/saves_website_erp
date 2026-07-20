@@ -19,6 +19,7 @@ import {
 } from "@/lib/billing";
 import { fmtDate } from "@/lib/format";
 import { useRequest } from "@/lib/useRequest";
+import { mensajeDeError } from "@/lib/errores";
 
 const NuevaFacturaModal = dynamic(() => import("@/components/billing/NuevaFacturaModal").then((m) => m.NuevaFacturaModal), { ssr: false });
 const GenerarFacturasModal = dynamic(() => import("@/components/billing/GenerarFacturasModal").then((m) => m.GenerarFacturasModal), { ssr: false });
@@ -139,7 +140,7 @@ export default function FacturacionPage() {
       if (!res.ok) { toast(d?.message ?? "No se pudo enviar", "x"); return; }
       if (d.sent) toast(`Factura #${tid} enviada por WhatsApp`, "check");
       else toast("WhatsApp no está configurado — se registró en el log", "send");
-    } catch (e: any) { toast(e.message ?? "Error enviando WhatsApp", "x"); }
+    } catch (e) { toast(mensajeDeError(e) ?? "Error enviando WhatsApp", "x"); }
     finally { setSendingId(null); }
   }
 
@@ -151,7 +152,7 @@ export default function FacturacionPage() {
       if (!res.ok) { toast(d?.message ?? "No se pudo enviar", "x"); return; }
       if (d.sent) toast(`Factura #${tid} enviada por correo`, "check");
       else toast(d?.error === "SMTP no configurado" ? "Correo no configurado — revisa Ajustes" : (d?.error ?? "No se pudo enviar el correo"), "send");
-    } catch (e: any) { toast(e.message ?? "Error enviando correo", "x"); }
+    } catch (e) { toast(mensajeDeError(e) ?? "Error enviando correo", "x"); }
     finally { setSendingId(null); }
   }
 
@@ -172,7 +173,7 @@ export default function FacturacionPage() {
       if (d.dryRun) toast(`DRY-RUN: nota crédito de #${r.tid} construida, no se envió a la DIAN.`, "info");
       else toast(`Nota crédito de #${r.tid} emitida: ${d.dianNumber}`, "check");
       load();
-    } catch (e: any) { toast(e.message ?? "Error al emitir la nota crédito", "alert-circle"); }
+    } catch (e) { toast(mensajeDeError(e) ?? "Error al emitir la nota crédito", "alert-circle"); }
     finally { setEmittingId(null); }
   }
 
@@ -190,8 +191,8 @@ export default function FacturacionPage() {
       if (d.dryRun) toast(`DRY-RUN: payload de #${r.tid} construido, no se envió a la DIAN.`, "info");
       else toast(`Factura #${r.tid} emitida ante la DIAN: ${d.dianNumber}`, "check");
       load();
-    } catch (e: any) {
-      toast(e.message ?? "Error al emitir", "alert-circle");
+    } catch (e) {
+      toast(mensajeDeError(e) ?? "Error al emitir", "alert-circle");
     } finally {
       setEmittingId(null);
     }
@@ -224,7 +225,7 @@ export default function FacturacionPage() {
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
       toast(`${rows.length} factura(s) exportada(s)`, "check");
-    } catch (e: any) { toast(e.message ?? "Error al exportar", "x"); }
+    } catch (e) { toast(mensajeDeError(e) ?? "Error al exportar", "x"); }
     finally { setExporting(false); }
   }
 

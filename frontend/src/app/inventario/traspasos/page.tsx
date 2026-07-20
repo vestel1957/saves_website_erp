@@ -13,6 +13,7 @@ import { Modal } from "@/components/Modal";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
+import { mensajeDeError } from "@/lib/errores";
 
 function statusTone(s: string): "default" | "success" | "warning" | "info" | "error" {
   if (s === "Recibida") return "success";
@@ -175,8 +176,8 @@ export default function TraspasosPage() {
       setNewOpen(false);
       resetForm();
       await loadActas();
-    } catch (e: any) {
-      toast(e?.message || "No se pudo realizar el traspaso");
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudo realizar el traspaso"));
     } finally {
       setSubmitting(false);
     }
@@ -208,8 +209,8 @@ export default function TraspasosPage() {
       if (!res.ok) throw new Error(d?.message || "Error");
       await refreshDetail(detail.id);
       if (d?.status === "Recibida") { toast("Acta recibida completa · material acreditado en destino"); await loadActas(); }
-    } catch (e: any) {
-      toast(e?.message || "No se pudo recibir el ítem");
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudo recibir el ítem"));
     } finally {
       setReceivingItem(null);
     }
@@ -226,8 +227,8 @@ export default function TraspasosPage() {
       toast("Acta recibida · material acreditado en destino");
       setDetail(null);
       await loadActas();
-    } catch (e: any) {
-      toast(e?.message || "No se pudo recibir");
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudo recibir"));
     } finally {
       setReceiving(false);
     }

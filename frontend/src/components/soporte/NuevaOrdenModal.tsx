@@ -8,6 +8,7 @@ import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { SubscriberPicker, type PickedSub } from "@/components/cobranzas/SubscriberPicker";
 import { TICKET_TYPES as TIPOS } from "@/lib/support";
+import { mensajeDeError } from "@/lib/errores";
 
 export function NuevaOrdenModal({ open, onClose, onDone, fixedSub }: { open: boolean; onClose: () => void; onDone: () => void; fixedSub?: PickedSub | null }) {
   const { authFetch } = useAuth();
@@ -41,7 +42,7 @@ export function NuevaOrdenModal({ open, onClose, onDone, fixedSub }: { open: boo
       if (!res.ok) throw new Error(d?.message || "No se pudo crear la orden");
       toast(`Orden #${d.code} creada`);
       onDone(); onClose();
-    } catch (e: any) { setErr(e.message); } finally { setSaving(false); }
+    } catch (e) { setErr(mensajeDeError(e)); } finally { setSaving(false); }
   }
 
   return (

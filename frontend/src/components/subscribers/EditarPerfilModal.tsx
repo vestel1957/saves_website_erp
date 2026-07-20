@@ -7,6 +7,7 @@ import { Input, Field } from "@/components/ui/Field";
 import { Icon } from "@/components/Icon";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
+import { mensajeDeError } from "@/lib/errores";
 
 /** Campos editables del perfil (contacto/identidad). */
 type Form = {
@@ -69,8 +70,8 @@ export function EditarPerfilModal({
       toast("Perfil actualizado");
       onDone();
       onClose();
-    } catch (e: any) {
-      toast(e.message ?? "Error al guardar", "alert-circle");
+    } catch (e) {
+      toast(mensajeDeError(e) ?? "Error al guardar", "alert-circle");
     } finally {
       setSaving(false);
     }

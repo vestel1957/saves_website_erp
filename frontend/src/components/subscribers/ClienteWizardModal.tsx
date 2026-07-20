@@ -7,6 +7,7 @@ import { Input, Select, Field } from "@/components/ui/Field";
 import { Icon } from "@/components/Icon";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
+import { mensajeDeError } from "@/lib/errores";
 
 /* Catálogos de valores fijos (tomados literal del legacy customers/edit.php) */
 const CUSTOMER_TYPES = ["Natural", "Juridico", "Gubernamental", "Militar"];
@@ -203,8 +204,8 @@ export function ClienteWizardModal({
       toast(mode === "edit" ? "Cliente actualizado" : `Cliente creado (abonado ${out.abonado ?? ""})`);
       onDone(out.id ?? subscriberId);
       onClose();
-    } catch (e: any) {
-      toast(e.message ?? "Error al guardar", "alert-circle");
+    } catch (e) {
+      toast(mensajeDeError(e) ?? "Error al guardar", "alert-circle");
     } finally {
       setSaving(false);
     }

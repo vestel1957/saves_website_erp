@@ -14,6 +14,7 @@ import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import type { Nap, Paged, BranchOpt, VlanOpt } from "@/lib/network";
 import { useRequest } from "@/lib/useRequest";
+import { mensajeDeError } from "@/lib/errores";
 
 export default function NapsPage() {
   const { loading: authLoading, authFetch } = useAuth();
@@ -200,8 +201,8 @@ function CreateNapModal({ open, branch, onClose, onCreated }: { open: boolean; b
       if (!res.ok) throw new Error(d?.message || "No se pudo crear la NAP");
       toast(`NAP "${d.name}" creada con ${d.ports} puertos`);
       onCreated();
-    } catch (e: any) {
-      setErr(e?.message || "No se pudo crear la NAP");
+    } catch (e) {
+      setErr(mensajeDeError(e, "No se pudo crear la NAP"));
     } finally {
       setSaving(false);
     }

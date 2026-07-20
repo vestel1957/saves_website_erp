@@ -13,6 +13,7 @@ import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import { type TxRow, type TxList, TX_TYPE_LABEL, TX_TYPE_TONE } from "@/lib/treasury";
 import { fmtDate } from "@/lib/format";
+import { mensajeDeError } from "@/lib/errores";
 
 /** Celda de comprobante: "Ver" si ya hay adjunto; si no, botón para subir (imagen/PDF). */
 function ComprobanteCell({ tx, onChange }: { tx: TxRow; onChange: () => void }) {
@@ -37,7 +38,7 @@ function ComprobanteCell({ tx, onChange }: { tx: TxRow; onChange: () => void }) 
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.message || "No se pudo subir");
       toast("Comprobante adjuntado", "check");
       onChange();
-    } catch (e: any) { toast(e.message, "alert-triangle"); } finally { setBusy(false); }
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setBusy(false); }
   }
 
   if (tx.attach) {

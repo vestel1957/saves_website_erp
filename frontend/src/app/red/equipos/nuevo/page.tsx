@@ -10,6 +10,7 @@ import { Input, Select, Textarea, Field } from "@/components/ui/Field";
 import { toast } from "@/components/ui/Toast";
 import { EquipmentLabelModal, type LabelEquip } from "@/components/red/EquipmentLabelModal";
 import { useAuth } from "@/context/AuthProvider";
+import { mensajeDeError } from "@/lib/errores";
 
 const BRANDS = ["Bestcom", "Huawei", "Cisco", "Mikrotik", "ZTE", "Ubiquiti", "TP-link", "V-sol", "Grandstream", "Otro"];
 const STATES = ["Disponible", "Bueno", "Malo", "Depurado"];
@@ -44,7 +45,7 @@ export default function IngresoEquipoPage() {
       // Muestra la etiqueta QR para imprimir de inmediato; al cerrar vuelve a la lista.
       setCreated({ code: d.code, brand, mac: mac || null, serial: serial || null });
       setSaving(false);
-    } catch (e: any) { setErr(e.message); setSaving(false); }
+    } catch (e) { setErr(mensajeDeError(e)); setSaving(false); }
   }
 
   return (

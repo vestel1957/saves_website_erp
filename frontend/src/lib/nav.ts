@@ -173,6 +173,7 @@ const crm: NavItem[] = [
   { icon: "users-round", label: "Grupos de clientes", href: "/clientes/grupos" },
   { icon: "hand-coins", label: "Cobranza / Acuerdos", href: "/cobranza" },
   { icon: "headphones", label: "Soporte técnico", href: "/soporte" },
+  { icon: "map-pin", label: "Geo-cerca de cierres", href: "/soporte/geocerca" },
 ];
 
 // PERSONAS / PROYECTOS — equipo interno, proyectos y tareas.

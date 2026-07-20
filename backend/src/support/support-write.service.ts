@@ -1,11 +1,12 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Type } from 'class-transformer';
-import { IsArray, IsIn, IsInt, IsOptional, IsString, Min, MinLength, ValidateNested } from 'class-validator';
+import { IsArray, IsIn, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
 import { Prisma, TicketStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { MikrotikService } from '../network/mikrotik.service';
 import { parsePoint } from '../geo/geo.util';
+import { GeofenceService, type ResultadoCerca } from './geofence.service';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -29,6 +30,12 @@ export class PriorityDto {
 export class UpdateStatusDto {
   @IsIn(['PENDIENTE', 'REALIZANDO', 'RESUELTO', 'ANULADA']) status!: TicketStatus;
   @IsOptional() @IsString() finalDate?: string;
+  // --- Geo-cerca del cierre (ver geofence.policy.ts) ---
+  @IsOptional() @IsNumber() @Min(-90) @Max(90) lat?: number;
+  @IsOptional() @IsNumber() @Min(-180) @Max(180) lng?: number;
+  @IsOptional() @IsNumber() @Min(0) accuracyM?: number;
+  /** Motivo para cerrar estando fuera del radio. */
+  @IsOptional() @IsString() @MaxLength(500) justificacion?: string;
 }
 export class AssignDto {
   @IsOptional() @IsString() assigned?: string; // técnico
@@ -81,6 +88,7 @@ export class SupportWriteService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly mikrotik: MikrotikService,
+    private readonly geofence: GeofenceService,
   ) {}
 
   /** Técnicos disponibles (Staff operativos). */
@@ -122,9 +130,23 @@ export class SupportWriteService {
     if (dto.status === 'RESUELTO' && process.env.TICKET_REQUIRE_SIGNATURE !== 'false' && !t.signatureName) {
       throw new BadRequestException('No se puede cerrar la orden sin la firma de quien recibe. Registra la firma primero.');
     }
+
+    // Geo-cerca: un técnico no cierra una visita a domicilio sin haber estado
+    // allí. Lanza si hay que frenar el cierre; sólo aplica al pasar a RESUELTO
+    // (ANULADA no: anular una orden es justamente decir que no se hizo).
+    const cerca =
+      dto.status === 'RESUELTO'
+        ? await this.geofence.evaluar({ type: t.type, subscriberId: t.subscriberId }, dto, user)
+        : null;
+
     const data: Prisma.TicketUpdateInput = { status: dto.status };
-    if (dto.status === 'RESUELTO') data.finalDate = dto.finalDate ? dateOnly(dto.finalDate) : dateOnly();
+    if (dto.status === 'RESUELTO') {
+      data.finalDate = dto.finalDate ? dateOnly(dto.finalDate) : dateOnly();
+      if (cerca) Object.assign(data, cerca.datos);
+    }
     await this.prisma.ticket.update({ where: { id }, data });
+
+    if (cerca) await this.registrarCierreGeo(id, t.code, t.subscriberId, cerca, user);
 
     // --- Cascada al resolver: ajusta el estado del cliente + Mikrotik según el tipo
     // de orden (porta Tickets.php). Las operaciones Mikrotik respetan su gate dry-run.
@@ -133,6 +155,67 @@ export class SupportWriteService {
       cascade = await this.applyCloseCascade({ subscriberId: t.subscriberId, type: t.type }, user);
     }
     return { id, status: dto.status, cascade };
+  }
+
+  /**
+   * Efectos del cierre georreferenciado: deja el rastro del técnico, georreferencia
+   * al abonado si no lo estaba, y anota en el hilo cuando se cerró fuera de rango.
+   *
+   * Nada de esto puede tumbar el cierre: la orden YA se guardó. Si falla anotar
+   * el punto, se pierde el apunte, no el trabajo del técnico.
+   */
+  private async registrarCierreGeo(
+    ticketId: string,
+    ticketCode: number | null,
+    subscriberId: string | null,
+    cerca: ResultadoCerca,
+    user?: AuthUser,
+  ) {
+    const { datos, georreferenciar, veredicto } = cerca;
+
+    if (datos.closeLat != null && datos.closeLng != null && user) {
+      await this.prisma.geoPing
+        .create({
+          data: {
+            userId: user.id, userName: user.name,
+            lat: datos.closeLat, lng: datos.closeLng,
+            accuracy: datos.closeAccuracyM,
+            reason: 'ticket.close',
+            refType: 'ticket', refId: ticketId,
+          },
+        })
+        .catch(() => undefined);
+    }
+
+    // El cliente no tenía coordenada y ahora sí: cada cierre en campo va
+    // llenando el mapa, que es lo que hará que la cerca sirva de verdad.
+    if (georreferenciar && subscriberId) {
+      await this.prisma.subscriber
+        .update({
+          where: { id: subscriberId },
+          data: {
+            gpsLat: georreferenciar.lat.toFixed(6),
+            gpsLng: georreferenciar.lng.toFixed(6),
+          },
+        })
+        .catch(() => undefined);
+    }
+
+    // Un cierre fuera de rango tiene que verse en la propia orden, no sólo en un
+    // informe que nadie abre.
+    if (veredicto.accion === 'permitir-justificado' || veredicto.accion === 'permitir-marcado') {
+      const dist = Math.round(veredicto.distanciaM);
+      const quien = user?.name ?? 'Sistema';
+      const motivo =
+        veredicto.accion === 'permitir-justificado'
+          ? ` Motivo: ${datos.closeGeoReason}`
+          : ' (registrado en modo observación, sin bloquear).';
+      await this.noteOnThread(
+        ticketCode,
+        subscriberId,
+        `⚠ Cierre fuera del rango permitido: ${quien} estaba a ${dist} m del domicilio (máximo ${veredicto.radioM} m).${motivo}`,
+      ).catch(() => undefined);
+    }
   }
 
   /** ¿Auto-cobrar en la cascada de cierre? Ajuste `tickets.cascadeBilling` (o env TICKET_CASCADE_BILLING). */

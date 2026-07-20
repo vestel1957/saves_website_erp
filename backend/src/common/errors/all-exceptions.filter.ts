@@ -29,7 +29,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const res = ctx.getResponse<Response>();
     const req = ctx.getRequest<Request>();
 
-    const { status, message, error } = this.traducir(exception);
+    const { status, message, error, extra } = this.traducir(exception);
 
     // 5xx es un fallo nuestro: traza completa. 4xx es de uso: una línea basta.
     const donde = `${req?.method} ${req?.originalUrl ?? req?.url}`;
@@ -50,12 +50,22 @@ export class AllExceptionsFilter implements ExceptionFilter {
       statusCode: status,
       error,
       message,
+      // Campos extra que la excepción haya adjuntado (p.ej. `code: 'GEOFENCE'`
+      // con la distancia). Sin esto, el filtro aplanaba el cuerpo a
+      // message/error y el frontend no podía distinguir un error de negocio
+      // accionable de un fallo cualquiera: sólo le quedaba comparar textos.
+      ...extra,
       path: req?.originalUrl ?? req?.url,
       timestamp: new Date().toISOString(),
     });
   }
 
-  private traducir(exception: unknown): { status: number; message: string | string[]; error: string } {
+  private traducir(exception: unknown): {
+    status: number;
+    message: string | string[];
+    error: string;
+    extra?: Record<string, unknown>;
+  } {
     // Las excepciones de Nest ya traen su status y su forma: se respetan tal cual
     // para no romper los mensajes que el frontend ya muestra.
     if (exception instanceof HttpException) {
@@ -64,11 +74,17 @@ export class AllExceptionsFilter implements ExceptionFilter {
       if (typeof cuerpo === 'string') {
         return { status, message: cuerpo, error: HttpStatus[status] ?? 'Error' };
       }
-      const c = cuerpo as { message?: string | string[]; error?: string };
+      const { message, error, statusCode, ...extra } = cuerpo as {
+        message?: string | string[];
+        error?: string;
+        statusCode?: number;
+        [k: string]: unknown;
+      };
       return {
         status,
-        message: c.message ?? exception.message,
-        error: c.error ?? (HttpStatus[status] ?? 'Error'),
+        message: message ?? exception.message,
+        error: error ?? (HttpStatus[status] ?? 'Error'),
+        extra: Object.keys(extra).length ? extra : undefined,
       };
     }
 

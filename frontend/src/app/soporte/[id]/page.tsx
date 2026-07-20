@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/Button";
 import { Input, Select, Textarea } from "@/components/ui/Field";
 import { toast } from "@/components/ui/Toast";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
+import { Modal } from "@/components/Modal";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import { TICKET_STATUS_LABEL, TICKET_STATUS_TONE, TICKET_PRIORITIES, TICKET_PRIORITY_TONE } from "@/lib/support";
@@ -89,6 +90,11 @@ export default function OrdenDetallePage() {
   const [eqModal, setEqModal] = useState(false);
   const [matModal, setMatModal] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
+  /** Bloqueo de la geo-cerca pendiente de justificar. */
+  const [cerca, setCerca] = useState<{
+    estado: string; razon: string; message: string; distanciaM?: number; radioM?: number;
+  } | null>(null);
+  const [motivo, setMotivo] = useState("");
 
   /** Abre el PDF de la orden (endpoint autenticado → blob → pestaña nueva). */
   async function abrirPdf() {
@@ -120,6 +126,49 @@ export default function OrdenDetallePage() {
       if (!res.ok) throw new Error(d?.message || "Error");
       toast(okMsg); reload();
     } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setBusy(false); }
+  }
+
+  /**
+   * Cambia el estado de la orden. Al cerrarla (RESUELTO) adjunta la ubicación:
+   * el servidor comprueba que el técnico esté en el domicilio (geo-cerca).
+   *
+   * Se manda SIEMPRE que se pueda, aunque el cliente no tenga coordenada
+   * guardada: en ese caso el propio cierre lo georreferencia.
+   */
+  async function cambiarEstado(nuevo: string, justificacion?: string) {
+    const etiqueta = TICKET_STATUS_LABEL[nuevo] ?? nuevo;
+    let geo: Record<string, number> = {};
+    if (nuevo === "RESUELTO") {
+      setBusy(true);
+      const yo = await pedirUbicacion().finally(() => setBusy(false));
+      if (yo.ok) geo = { lat: yo.lat, lng: yo.lng, accuracyM: yo.accuracy };
+    }
+
+    setBusy(true);
+    try {
+      const res = await authFetch(`/support/tickets/${id}/status`, {
+        method: "POST",
+        body: JSON.stringify({ status: nuevo, ...geo, ...(justificacion ? { justificacion } : {}) }),
+      });
+      const d = await res.json();
+      if (!res.ok) {
+        // 422 con code GEOFENCE = la orden no se cerró porque el técnico no está
+        // donde debería. No es un error a secas: se le ofrece justificar.
+        if (res.status === 422 && d?.code === "GEOFENCE") {
+          setCerca({ estado: nuevo, ...d });
+          return;
+        }
+        throw new Error(d?.message || "Error");
+      }
+      setCerca(null);
+      setMotivo("");
+      toast(`Estado: ${etiqueta}`);
+      reload();
+    } catch (e) {
+      toast(mensajeDeError(e), "alert-triangle");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function documentar() {
@@ -185,7 +234,7 @@ export default function OrdenDetallePage() {
           <div className="flex flex-wrap items-center justify-end gap-1.5">
             {STATES.filter((x) => x !== t.status).map((x) => (
               <Button key={x} variant={x === "ANULADA" ? "danger" : "secondary"} size="sm" disabled={busy}
-                onClick={() => post(`/support/tickets/${id}/status`, { status: x }, `Estado: ${TICKET_STATUS_LABEL[x] ?? x}`)}>
+                onClick={() => void cambiarEstado(x)}>
                 {TICKET_STATUS_LABEL[x] ?? x}
               </Button>
             ))}
@@ -403,6 +452,71 @@ export default function OrdenDetallePage() {
 
       <AsignarEquipoModal open={eqModal} onClose={() => setEqModal(false)} onDone={reload} ticketId={id} />
       <ConsumirMaterialModal open={matModal} onClose={() => setMatModal(false)} onDone={reload} ticketId={id} />
+
+      {/* Geo-cerca: la orden NO se cerró. O se acerca al domicilio, o explica por qué no. */}
+      <Modal
+        open={!!cerca}
+        onClose={() => { setCerca(null); setMotivo(""); }}
+        title="No se pudo cerrar la orden"
+        maxWidth="max-w-md"
+      >
+        {cerca && (
+          <div className="space-y-3">
+            <p className="rounded-lg border border-warning bg-warning-soft px-3 py-2 text-[12.5px] leading-relaxed text-text-secondary">
+              {cerca.message}
+            </p>
+
+            {cerca.razon === "sin-ubicacion" ? (
+              <>
+                <p className="text-[12.5px] text-text-tertiary">
+                  Esta orden es de las que se atienden en el domicilio del cliente, así que hace
+                  falta tu ubicación para cerrarla. Revisa que el GPS esté encendido y que el
+                  navegador tenga permiso.
+                </p>
+                <div className="flex justify-end gap-2">
+                  <Button variant="secondary" onClick={() => setCerca(null)}>Cancelar</Button>
+                  <Button onClick={() => void cambiarEstado(cerca.estado)} disabled={busy}>
+                    {busy ? "Ubicando…" : "Reintentar"}
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-[12.5px] text-text-secondary">
+                  Si estás en el domicilio y el GPS no agarra bien, acércate a una ventana o sal un
+                  momento y reintenta. Si de verdad tienes que cerrarla desde donde estás, escribe
+                  el motivo: queda registrado en la orden y lo revisa administración.
+                </p>
+                <Textarea
+                  rows={3}
+                  placeholder="Ej.: el cliente confirmó por teléfono que ya tiene servicio; la casa no aparece en el GPS…"
+                  value={motivo}
+                  onChange={(e) => setMotivo(e.target.value)}
+                />
+                <div className="flex flex-wrap justify-end gap-2">
+                  <Button variant="secondary" onClick={() => { setCerca(null); setMotivo(""); }}>
+                    Cancelar
+                  </Button>
+                  <Button variant="secondary" onClick={() => void cambiarEstado(cerca.estado)} disabled={busy}>
+                    Reintentar ubicación
+                  </Button>
+                  <Button
+                    onClick={() => void cambiarEstado(cerca.estado, motivo.trim())}
+                    disabled={busy || motivo.trim().length < 10}
+                  >
+                    Cerrar con este motivo
+                  </Button>
+                </div>
+                {motivo.trim().length > 0 && motivo.trim().length < 10 && (
+                  <p className="text-right text-[11px] text-text-tertiary">
+                    Explica un poco más (mínimo 10 caracteres).
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

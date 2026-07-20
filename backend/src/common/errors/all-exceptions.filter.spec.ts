@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, HttpException, HttpStatus, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { AllExceptionsFilter } from './all-exceptions.filter';
 
@@ -97,5 +97,27 @@ describe('AllExceptionsFilter', () => {
     filtro.catch(new Error('boom'), host as never);
     expect(res.status).not.toHaveBeenCalled();
     expect(res.end).toHaveBeenCalled();
+  });
+
+  it('conserva los campos extra que adjunta una excepción de negocio', () => {
+    // La geo-cerca manda `code`/`distanciaM` para que el frontend pueda ofrecer
+    // justificar en vez de sólo enseñar un texto de error.
+    const { host, json } = contexto();
+    filtro.catch(
+      new HttpException(
+        { code: 'GEOFENCE', message: 'Estás lejos', distanciaM: 2944, radioM: 100 },
+        HttpStatus.UNPROCESSABLE_ENTITY,
+      ),
+      host as never,
+    );
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        statusCode: 422,
+        message: 'Estás lejos',
+        code: 'GEOFENCE',
+        distanciaM: 2944,
+        radioM: 100,
+      }),
+    );
   });
 });

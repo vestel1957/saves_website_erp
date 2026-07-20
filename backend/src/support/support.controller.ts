@@ -8,6 +8,7 @@ import { extname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Response } from 'express';
 import { SupportService } from './support.service';
+import { GeofenceService } from './geofence.service';
 import {
   SupportWriteService, CreateTicketDto, UpdateStatusDto, AssignDto, PriorityDto, SignatureDto, ThreadDto, AttachDto,
   AssignEquipmentDto, ConsumeMaterialsDto,
@@ -31,7 +32,19 @@ export class SupportController {
   constructor(
     private readonly support: SupportService,
     private readonly write: SupportWriteService,
+    private readonly geofence: GeofenceService,
   ) {}
+
+  /**
+   * Informe de la geo-cerca: cierres fuera de rango. Restringido a quien manda —
+   * es un informe sobre el desempeño de personas concretas.
+   */
+  @Get('geofence-report')
+  @RequireArea('gerencia', 'administracion', 'sistemas')
+  geofenceReport(@Query('dias') dias?: string) {
+    const d = Number(dias);
+    return this.geofence.informe(Number.isFinite(d) && d > 0 && d <= 365 ? d : undefined);
+  }
 
   @Get('stats') stats() { return this.support.stats(); }
   @Get('filter-options') filterOptions() { return this.support.filterOptions(); }

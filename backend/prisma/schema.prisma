@@ -4599,6 +4599,21 @@ model Ticket {
   materials         TicketMaterial[] // material consumido en la orden (descuenta stock)
   createdAt         DateTime         @default(now())
 
+  // --- Geo-cerca del cierre (ver GeofenceService) ---
+  /// Dónde estaba el funcionario al pasar la orden a RESUELTO.
+  closeLat          Float?
+  closeLng          Float?
+  /// Error en metros que reportó su GPS. Sin esto la distancia no significa
+  /// nada: 180 m con ±300 m de error no prueba que estuviera lejos.
+  closeAccuracyM    Float?
+  /// Metros entre el funcionario y la coordenada del abonado al cerrar.
+  closeDistanceM    Float?
+  /// `true` cumplió la cerca · `false` la incumplió y cerró justificando ·
+  /// `null` no aplicaba (orden remota, cliente sin coordenada, usuario exento).
+  closeGeoOk        Boolean?
+  /// Motivo escrito por quien cerró estando fuera de rango. Es lo que se audita.
+  closeGeoReason    String?
+
   @@index([subscriberId])
   @@index([code])
   @@index([status])
@@ -4607,6 +4622,7 @@ model Ticket {
   @@index([assigned, created]) // filtro por técnico + orden (evita scan de ~314k filas)
   @@index([status, created]) // listado por defecto (status + orden por fecha): 309ms -> ~1ms
   @@index([priority, created]) // filtro por prioridad + orden
+  @@index([closeGeoOk, finalDate]) // informe de cierres fuera de rango
 }
 
 /// Material consumido en una orden de servicio. Al registrarse descuenta stock de la

@@ -39,51 +39,59 @@ certificate (Let's Encrypt)** → marcar el dominio → **Get it free**.
 
 ---
 
-## 4) Reverse proxy (nginx) en Plesk
+## 4) Reverse proxy — **Apache**, no nginx  ✅ HECHO (2026-07-19)
 
-Subdominio → **Apache & nginx Settings**:
+> ⚠️ Este servidor **no usa nginx**: el servicio está caído y Plesk no lo gestiona
+> (no existe `/etc/nginx/plesk.conf.d/vhosts/`). Apache es dueño de 80/443. Un
+> `vhost_nginx.conf` aquí **no lo lee nadie**.
 
-1. **Desmarcar** “Smart static files processing” y “Serve static files directly
-   by nginx” (así nginx no intenta servir archivos y pasa todo a los proxies).
-2. En **Additional nginx directives**, pegar:
+Las directivas van en **los dos** archivos del vhost — Plesk incluye `vhost.conf`
+solo en el vhost HTTP y `vhost_ssl.conf` solo en el HTTPS:
 
-```nginx
-# API (NestJS, prefijo /api) — sin barra final en proxy_pass: conserva /api
-location /api/ {
-    proxy_pass http://127.0.0.1:3061;
-    proxy_http_version 1.1;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_read_timeout 60s;
-    client_max_body_size 30m;   # subir archivos (documentos, import Excel)
-}
+- `/var/www/vhosts/system/app.saves.com.co/conf/vhost.conf`
+- `/var/www/vhosts/system/app.saves.com.co/conf/vhost_ssl.conf`
 
-# Frontend (Next.js)
-location / {
-    proxy_pass http://127.0.0.1:3060;
-    proxy_http_version 1.1;
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection "upgrade";
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-}
+```apache
+<IfModule mod_proxy.c>
+    ProxyRequests Off
+    ProxyPreserveHost On
+    ProxyTimeout 60
+
+    RequestHeader set X-Forwarded-Proto "https"
+
+    # API (NestJS :3061) — primero, gana sobre "/"
+    ProxyPass        /api/  http://127.0.0.1:3061/api/
+    ProxyPassReverse /api/  http://127.0.0.1:3061/api/
+
+    # Frontend (Next.js :3060)
+    ProxyPass        /  http://127.0.0.1:3060/
+    ProxyPassReverse /  http://127.0.0.1:3060/
+</IfModule>
 ```
 
-3. **Apply**.
+Aplicar (requiere sudo):
 
-> Si Plesk se queja de *duplicate location "/"*, además **desactiva “Proxy mode”**
-> (el reenvío a Apache) en esa misma pantalla y vuelve a aplicar.
+```bash
+sudo plesk sbin httpdmng --reconfigure-domain app.saves.com.co
+sudo apachectl configtest && sudo systemctl reload apache2
+```
+
+`httpdmng` **respeta** `vhost.conf`/`vhost_ssl.conf` (a diferencia de
+`vhost_nginx.conf`, que regenera). Comprobar que quedaron incluidos:
+
+```bash
+sudo grep -n "vhost.*conf" /var/www/vhosts/system/app.saves.com.co/conf/last_httpd.conf
+```
+
+**Síntoma de que falta esto:** la URL responde 200 pero muestra la *"Domain Default
+page"* de Plesk. Si solo pusiste `vhost.conf`, HTTP funciona y **HTTPS sigue en la
+página de Plesk**.
 
 ---
 
-## 5) Avisarme para el switch del frontend (lo hago yo)
+## 5) Switch del frontend  ✅ HECHO (2026-07-19)
 
-El frontend hoy apunta a `http://89.117.146.226:3061/api` (IP). Cuando el
-subdominio ya resuelva con SSL, yo cambio en `frontend/.env.local`:
+En `frontend/.env.local`:
 
 ```
 NEXT_PUBLIC_API_URL=https://app.saves.com.co/api

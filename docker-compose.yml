@@ -1,34 +1,47 @@
+# Base de datos para DESARROLLO LOCAL.
+#
+# PRODUCCIÓN NO USA ESTO. El servidor corre PostgreSQL directamente en el sistema
+# (localhost:5432, base `saves_vestel`), con pm2 y Plesk delante. Este fichero sirve
+# sólo para levantar una base equivalente en la máquina de un desarrollador.
+#
+# Antes describía Postgres 16 con usuario/clave `nexus` y un pgAdmin con
+# `admin/admin`: un entorno que no existe en ninguna parte y que, de levantarse,
+# exponía una consola de base de datos sin contraseña real.
+#
+# La versión mayor (14) coincide con la de producción A PROPÓSITO: `pg_restore` se
+# niega a cargar un dump en un servidor de versión distinta, así que con Postgres 16
+# no se podría probar aquí un backup real.
+#
+# Uso:
+#   docker compose up -d
+#   cd backend && cp .env.example .env     # apuntar DATABASE_URL al puerto 5544
+#   npx prisma migrate deploy              # reproduce el esquema completo
+#
+# Cargar datos reales de un respaldo:
+#   pg_restore -h localhost -p 5544 -U saves -d saves_vestel --no-owner \
+#     --no-privileges backend/backups/nexus_<fecha>.dump
+
 services:
   db:
-    image: postgres:16-alpine
-    container_name: nexus-postgres
+    image: postgres:14-alpine
+    container_name: saves-postgres-dev
     restart: unless-stopped
     environment:
-      POSTGRES_USER: nexus
-      POSTGRES_PASSWORD: nexus
-      POSTGRES_DB: nexus
+      POSTGRES_USER: saves
+      # Sólo desarrollo local: esta base nunca debe salir de la máquina.
+      POSTGRES_PASSWORD: saves-dev-local
+      POSTGRES_DB: saves_vestel
     ports:
-      - "5544:5432"
+      # 5544 y no 5432 para no chocar con un Postgres ya instalado en el sistema.
+      # Enlazado a 127.0.0.1: sin eso, Docker abre el puerto a toda la red.
+      - "127.0.0.1:5544:5432"
     volumes:
-      - nexus_pgdata:/var/lib/postgresql/data
+      - saves_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U nexus -d nexus"]
+      test: ["CMD-SHELL", "pg_isready -U saves -d saves_vestel"]
       interval: 5s
       timeout: 5s
       retries: 10
 
-  pgadmin:
-    image: dpage/pgadmin4:latest
-    container_name: nexus-pgadmin
-    restart: unless-stopped
-    environment:
-      PGADMIN_DEFAULT_EMAIL: admin@nexus.dev
-      PGADMIN_DEFAULT_PASSWORD: admin
-      PGADMIN_CONFIG_SERVER_MODE: "False"
-    ports:
-      - "5050:80"
-    depends_on:
-      - db
-
 volumes:
-  nexus_pgdata:
+  saves_pgdata:

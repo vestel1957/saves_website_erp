@@ -43,3 +43,15 @@ export function fmtDateTime(d: string | Date | null | undefined): string {
     ? "—"
     : fecha.toLocaleString("es-CO", { dateStyle: "medium", timeStyle: "short" });
 }
+
+// ── Moneda ──────────────────────────────────────────────────────────────────
+
+/**
+ * Pesos colombianos, sin decimales. Es la forma que usa todo el ERP (52 ficheros).
+ *
+ * OJO: `lib/payroll.ts` exporta otro `cop` que produce un formato DISTINTO
+ * ("$1.234" con toLocaleString, en vez del formato de moneda de Intl). No se unifica
+ * a la ligera porque cambiaría el aspecto de las nóminas impresas; queda anotado.
+ */
+export const cop = (n: number): string =>
+  new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 }).format(n || 0);

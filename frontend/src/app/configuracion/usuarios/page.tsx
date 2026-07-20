@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/Button";
 import { Field, Input } from "@/components/ui/Field";
 import { SedesAccedeField } from "@/components/usuarios/SedesAccedeField";
 import { Modal } from "@/components/Modal";
+import { StatCard } from "@/components/ui/StatCard";
 
 type RoleRef = { role: { key: string; name: string } };
 type User = {
@@ -440,20 +441,6 @@ function RoleCard({
           )}
         </div>
       )}
-    </div>
-  );
-}
-
-function StatCard({ icon, label, value }: { icon: string; label: string; value: number }) {
-  return (
-    <div className="flex items-center gap-3 rounded-xl border border-border-subtle bg-surface p-4">
-      <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-soft">
-        <Icon name={icon} size={18} className="text-brand" />
-      </span>
-      <div className="flex flex-col leading-tight">
-        <span className="text-[22px] font-bold text-text-primary">{value}</span>
-        <span className="text-[12px] text-text-tertiary">{label}</span>
-      </div>
     </div>
   );
 }

@@ -15,10 +15,10 @@ import { useAuth } from "@/context/AuthProvider";
 import { VincularClienteModal } from "@/components/network/VincularClienteModal";
 import { rxTone, runTone } from "@/lib/olt";
 import type { InvOnu, OltRow, OltMode, Paged } from "@/lib/olt";
+import { useRequest } from "@/lib/useRequest";
 
 export default function InventarioOnusPage() {
   const { loading: authLoading, authFetch } = useAuth();
-  const [data, setData] = useState<Paged<InvOnu> | null>(null);
   const [olts, setOlts] = useState<OltRow[]>([]);
   const [mode, setMode] = useState<OltMode | null>(null);
   const [search, setSearch] = useState("");
@@ -28,7 +28,6 @@ export default function InventarioOnusPage() {
   const [cliente, setCliente] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const [loading, setLoading] = useState(true);
   const [link, setLink] = useState<InvOnu | null>(null);
 
   const live = !!mode?.live;
@@ -39,18 +38,22 @@ export default function InventarioOnusPage() {
     void authFetch("/network/olt/mode").then((r) => r.json()).then(setMode).catch(() => {});
   }, [authLoading, authFetch]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
-    if (search.trim()) qs.set("search", search.trim());
-    if (oltId) qs.set("oltId", oltId);
-    if (estado) qs.set("estado", estado);
-    if (senal) qs.set("senal", senal);
-    if (cliente) qs.set("cliente", cliente);
-    try { setData(await (await authFetch(`/network/olt/inventory?${qs}`)).json()); } finally { setLoading(false); }
-  }, [authFetch, page, pageSize, search, oltId, estado, senal, cliente]);
+  // Carga con cancelación: al teclear se aborta la petición en vuelo, para que
+  // una respuesta lenta no pise a otra más nueva. Ver lib/useRequest.
+  const { data, cargando: loading, error, refrescar: load } = useRequest<Paged<InvOnu>>(
+    () => {
+      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+      if (search.trim()) qs.set("search", search.trim());
+      if (oltId) qs.set("oltId", oltId);
+      if (estado) qs.set("estado", estado);
+      if (senal) qs.set("senal", senal);
+      if (cliente) qs.set("cliente", cliente);
+      return `/network/olt/inventory?${qs}`;
+    },
+    [page, pageSize, search, oltId, estado, senal, cliente],
+    { debounceMs: search ? 350 : 0, saltar: authLoading },
+  );
 
-  useEffect(() => { if (!authLoading) { const t = setTimeout(load, search ? 350 : 0); return () => clearTimeout(t); } }, [authLoading, load]);
   useEffect(() => { setPage(1); }, [search, oltId, estado, senal, cliente, pageSize]);
 
   const onuAction = async (action: "reboot" | "delete", o: InvOnu) => {

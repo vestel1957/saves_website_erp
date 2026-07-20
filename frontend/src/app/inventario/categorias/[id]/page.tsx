@@ -13,6 +13,7 @@ import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { LoadError } from "@/components/ui/LoadError";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
+import { StatCard } from "@/components/ui/StatCard";
 
 type Category = { id: string; title: string; extra: string | null; materials: number; value: number };
 
@@ -24,18 +25,6 @@ const COLUMNS = [
   { key: "qty", header: "Stock", align: "right" as const, render: (r: any) => r.low ? <Badge label={`${r.qty ?? 0} · Bajo`} tone="error" /> : <span>{r.qty ?? 0}</span> },
   { key: "value", header: "Valor", align: "right" as const, render: (r: any) => <span className="font-semibold">{cop(r.value ?? 0)}</span> },
 ];
-
-function StatCard({ label, value, icon }: { label: string; value: string; icon: string }) {
-  return (
-    <div className="flex items-center gap-3 rounded-xl border border-border-subtle bg-surface px-4 py-3 shadow-sm">
-      <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-soft text-brand"><Icon name={icon} size={17} /></span>
-      <div className="flex flex-col leading-tight">
-        <span className="text-[11px] font-medium text-text-tertiary">{label}</span>
-        <span className="text-[17px] font-bold text-text-primary">{value}</span>
-      </div>
-    </div>
-  );
-}
 
 export default function CategoriaMaterialesPage() {
   const { id } = useParams<{ id: string }>();

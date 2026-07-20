@@ -14,6 +14,7 @@ import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { fmtDate } from "@/lib/format";
+import { StatCard } from "@/components/ui/StatCard";
 
 type Task = {
   id: string; legacyId: number; name: string | null; status: string; priority: string;
@@ -39,18 +40,6 @@ const toDateInput = (d: string | null | undefined) => (d ? new Date(d).toISOStri
  */
 const stripHtml = (s: string | null) =>
   (s ?? "").replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
-
-function StatCard({ label, value, icon, tone = "text-text-primary" }: { label: string; value: string; icon: string; tone?: string }) {
-  return (
-    <div className="flex items-center gap-3 rounded-xl border border-border-subtle bg-surface px-4 py-3 shadow-sm">
-      <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-soft text-brand"><Icon name={icon} size={17} /></span>
-      <div className="flex flex-col leading-tight">
-        <span className="text-[11px] font-medium text-text-tertiary">{label}</span>
-        <span className={`text-[18px] font-bold ${tone}`}>{value}</span>
-      </div>
-    </div>
-  );
-}
 
 const emptyForm = { name: "", status: "DUE", priority: "MEDIUM", start: "", dueDate: "", description: "", orderId: "", assigneeId: "" };
 

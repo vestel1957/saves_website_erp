@@ -13,17 +13,16 @@ import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { EquipmentLabelModal, type LabelEquip } from "@/components/red/EquipmentLabelModal";
 import { useAuth } from "@/context/AuthProvider";
 import type { Equip, Paged } from "@/lib/network";
+import { useRequest } from "@/lib/useRequest";
 
 export default function EquiposPage() {
   const { loading: authLoading, authFetch } = useAuth();
-  const [data, setData] = useState<Paged<Equip> | null>(null);
   const [warehouses, setWarehouses] = useState<{ id: string; name: string }[]>([]);
   const [search, setSearch] = useState("");
   const [assigned, setAssigned] = useState("");
   const [warehouseId, setWarehouseId] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const [loading, setLoading] = useState(true);
   const [label, setLabel] = useState<LabelEquip | null>(null);
 
   // Prefill de búsqueda desde ?q= (p.ej. al escanear el QR de un sticker).
@@ -34,16 +33,20 @@ export default function EquiposPage() {
 
   useEffect(() => { if (!authLoading) void authFetch("/network/warehouses").then((r) => r.json()).then(setWarehouses).catch(() => {}); }, [authLoading, authFetch]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
-    if (search.trim()) qs.set("search", search.trim());
-    if (assigned) qs.set("assigned", assigned);
-    if (warehouseId) qs.set("warehouseId", warehouseId);
-    try { setData(await (await authFetch(`/network/equipment?${qs}`)).json()); } finally { setLoading(false); }
-  }, [authFetch, page, pageSize, search, assigned, warehouseId]);
+  // Carga con cancelación: al teclear se aborta la petición en vuelo, para que
+  // una respuesta lenta no pise a otra más nueva. Ver lib/useRequest.
+  const { data, cargando: loading, error, refrescar: load } = useRequest<Paged<Equip>>(
+    () => {
+      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+      if (search.trim()) qs.set("search", search.trim());
+      if (assigned) qs.set("assigned", assigned);
+      if (warehouseId) qs.set("warehouseId", warehouseId);
+      return `/network/equipment?${qs}`;
+    },
+    [page, pageSize, search, assigned, warehouseId],
+    { debounceMs: search ? 350 : 0, saltar: authLoading },
+  );
 
-  useEffect(() => { if (!authLoading) { const t = setTimeout(load, search ? 350 : 0); return () => clearTimeout(t); } }, [authLoading, load]);
   useEffect(() => { setPage(1); }, [search, assigned, warehouseId, pageSize]);
 
   if (authLoading) return <PageSkeleton />;

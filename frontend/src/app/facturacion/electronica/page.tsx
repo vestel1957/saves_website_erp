@@ -14,6 +14,7 @@ import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { PERM } from "@/lib/auth";
 import { fmtDate } from "@/lib/format";
+import { useRequest } from "@/lib/useRequest";
 
 const n = (v: number) => (v ?? 0).toLocaleString("es-CO");
 
@@ -33,12 +34,10 @@ export default function EfacturaPage() {
 
   // Histórico
   const [stats, setStats] = useState<any>(null);
-  const [data, setData] = useState<any>(null);
   const [search, setSearch] = useState("");
   const [type, setType] = useState("");
   const [all, setAll] = useState("1");
   const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(true);
   const [detail, setDetail] = useState<any>(null);
 
   // Errores
@@ -58,14 +57,19 @@ export default function EfacturaPage() {
     void authFetch("/einvoice/branches").then((r) => (r.ok ? r.json() : [])).then(setBranches).catch(() => {});
   }, [authFetch]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const qs = new URLSearchParams({ page: String(page), pageSize: "25" });
-    if (search.trim()) qs.set("search", search.trim());
-    if (type) qs.set("type", type);
-    if (all) qs.set("all", all);
-    try { setData(await (await authFetch(`/einvoice?${qs}`)).json()); } finally { setLoading(false); }
-  }, [authFetch, page, search, type, all]);
+  // Carga con cancelación: al teclear se aborta la petición en vuelo, para que
+  // una respuesta lenta no pise a otra más nueva. Ver lib/useRequest.
+  const { data, cargando: loading, error, refrescar: load } = useRequest<any>(
+    () => {
+      const qs = new URLSearchParams({ page: String(page), pageSize: "25" });
+      if (search.trim()) qs.set("search", search.trim());
+      if (type) qs.set("type", type);
+      if (all) qs.set("all", all);
+      return `/einvoice?${qs}`;
+    },
+    [page, search, type, all],
+    { debounceMs: search ? 350 : 0, saltar: authLoading },
+  );
 
   useEffect(() => { if (!authLoading && tab === "historico") { const t = setTimeout(load, search ? 350 : 0); return () => clearTimeout(t); } }, [authLoading, tab, load, search]);
   useEffect(() => { setPage(1); }, [search, type, all]);

@@ -114,8 +114,9 @@ export const INVOICE_RON_TONE: Record<string, "success" | "error" | "warning" | 
   DEPURADO: "default", RETIRADO: "default", EVENTO: "default", DADO_DE_BAJA: "default",
 };
 
-export const cop = (n: number) =>
-  new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 }).format(n || 0);
+// La implementación vive en `lib/format.ts`; se reexporta para no tocar los 52
+// ficheros que ya la importan desde aquí.
+export { cop } from "./format";
 
 /** Solo dígitos, normalizando a formato internacional Colombia (57 + 10 dígitos). */
 export function toE164Co(phone?: string | null): string | null {

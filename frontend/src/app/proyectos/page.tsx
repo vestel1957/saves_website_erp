@@ -15,6 +15,7 @@ import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import { SubscriberPicker, type PickedSub } from "@/components/cobranzas/SubscriberPicker";
+import { StatCard } from "@/components/ui/StatCard";
 
 const STATUS_OPTS = ["Waiting", "Pending", "Progress", "Finished", "Terminated"];
 const PRIORITY_OPTS = ["Low", "Medium", "High", "Urgent"];
@@ -30,18 +31,6 @@ function statusTone(s: string): "default" | "success" | "error" | "warning" | "i
   if (s === "Progress") return "info";
   if (s === "Terminated" || s === "Waiting") return "warning";
   return "default";
-}
-
-function StatCard({ label, value, tone = "text-text-primary", icon }: { label: string; value: string; tone?: string; icon: string }) {
-  return (
-    <div className="flex items-center gap-3 rounded-xl border border-border-subtle bg-surface px-4 py-3 shadow-sm">
-      <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-soft text-brand"><Icon name={icon} size={17} /></span>
-      <div className="flex flex-col leading-tight">
-        <span className="text-[11px] font-medium text-text-tertiary">{label}</span>
-        <span className={`text-[17px] font-bold ${tone}`}>{value}</span>
-      </div>
-    </div>
-  );
 }
 
 function ProgressBar({ value }: { value: number }) {

@@ -12,9 +12,9 @@ import { Modal } from "@/components/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
+import { cop } from "@/lib/format";
 
 const CATEGORY_LABEL: Record<number, string> = { 1: "Productos", 2: "Servicios" };
-const cop = (n: number) => new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 }).format(n || 0);
 
 const EMPTY_FORM = {
   name: "",

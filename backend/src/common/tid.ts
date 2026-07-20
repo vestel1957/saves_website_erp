@@ -30,6 +30,8 @@ export const TID_SEQ = {
    *  menos deja de fabricar duplicados nuevos por concurrencia. */
   subscriberAbonado: '"Subscriber_abonado_seq"',
   quote: '"Quote_tid_seq"',
+  /** Consecutivo de asiento contable (`JournalEntry.number`, columna @unique). */
+  journalEntry: '"JournalEntry_number_seq"',
 } as const;
 
 export type TidSequence = (typeof TID_SEQ)[keyof typeof TID_SEQ];

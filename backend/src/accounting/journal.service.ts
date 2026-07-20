@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PeriodsService } from './periods.service';
 import { CreateJournalEntryDto } from './dto/accounting.dto';
 import { num, round2 } from '../common/money';
+import { nextTid, TID_SEQ } from '../common/tid';
 
 
 /** Línea de asiento para contabilización (usada por asientos manuales y automáticos). */
@@ -124,8 +125,10 @@ export class JournalService {
     }
 
     const entry = await this.prisma.$transaction(async (tx) => {
-      const last = await tx.journalEntry.findFirst({ orderBy: { number: 'desc' }, select: { number: true } });
-      const number = (last?.number ?? 0) + 1;
+      // Secuencia, no `último + 1`: `number` es @unique y dos asientos simultáneos
+      // leían el mismo último valor. En la contabilización automática ese fallo se
+      // traga (safePost), así que dejaría la factura sin asiento en silencio.
+      const number = await nextTid(tx, TID_SEQ.journalEntry);
       return tx.journalEntry.create({
         data: {
           number, date: input.date, periodId: period?.id ?? null,
@@ -173,8 +176,10 @@ export class JournalService {
     await this.periods.assertOpenForDate(original.date);
 
     const reversal = await this.prisma.$transaction(async (tx) => {
-      const last = await tx.journalEntry.findFirst({ orderBy: { number: 'desc' }, select: { number: true } });
-      const number = (last?.number ?? 0) + 1;
+      // Secuencia, no `último + 1`: `number` es @unique y dos asientos simultáneos
+      // leían el mismo último valor. En la contabilización automática ese fallo se
+      // traga (safePost), así que dejaría la factura sin asiento en silencio.
+      const number = await nextTid(tx, TID_SEQ.journalEntry);
       const rev = await tx.journalEntry.create({
         data: {
           number, date: new Date(), periodId: original.periodId, type: original.type, status: 'POSTED',

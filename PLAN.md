@@ -49,8 +49,12 @@ que falle antes y pase después. Ya se hizo así con `collect()`
 | `9dcbe9b` | **1.4** Misma carrera en abonos de órdenes y devoluciones |
 | `d8dc03d` | **5.1** `scripts/verify.sh` — la única verificación real hasta que haya remoto |
 | `24c6923` | **3.1** Filtro global de excepciones con traducción de Prisma |
+| `19bac12` | Asignación de sedes por usuario (alta + permisos) — desbloquea 2.1 |
+| `2a33547` | **2.1** Acceso por sede en clientes, facturas y tickets (+ masivas, ⌘K, chatbot) |
+| `c4a0bfb` | **2.4/2.6/2.7** Adjuntos no ejecutables, throttle en portal, helmet + rate limit |
+| `d5a53de` | **2.5/2.8** Credenciales de red cifradas (+SECRET_ENC_KEY), DTOs en settings |
 
-Tests: 14 → 48 (5 suites). Cobertura: sigue siendo ínfima fuera de estos módulos.
+Tests: 14 → 66 (7 suites). Cobertura: sigue siendo ínfima fuera de estos módulos.
 
 ---
 
@@ -110,7 +114,7 @@ Lo que puede descuadrar plata o perder documentos. Cada punto necesita prueba pr
 
 ## Bloque 2 — Autorización y seguridad
 
-- [ ] **2.1 `sedesAccede` fuera de tesorería.** El campo existe (`schema.prisma:695`)
+- [x] **2.1 `sedesAccede` fuera de tesorería.** El campo existe (`schema.prisma:695`)
   y su **única** lectura en todo el backend es `treasury/caja-scope.ts:55`.
   `subscribers.service.ts:129 list`, `:214 detail`, billing, support, orders y
   network consultan por id sin filtrar por sede: cualquier funcionario con el área
@@ -134,7 +138,7 @@ Lo que puede descuadrar plata o perder documentos. Cada punto necesita prueba pr
   `http://89.117.146.226:3060`. Encadena con 2.4. *Cómo*: TLS delante de 3060/3061 +
   cookie `HttpOnly; Secure; SameSite`. Requiere que el token deje de leerse desde JS.
 
-- [ ] **2.4 XSS almacenado por adjuntos.** El `fileFilter` valida el MIME **declarado
+- [x] **2.4 XSS almacenado por adjuntos.** El `fileFilter` valida el MIME **declarado
   por el cliente** (`support.controller.ts:78`) mientras el nombre en disco toma la
   extensión del `originalname` (`:76`): un `payload.html` enviado como `image/png`
   queda servido como HTML por `res.sendFile()` en el origen de la API. Afecta a
@@ -143,21 +147,21 @@ Lo que puede descuadrar plata o perder documentos. Cada punto necesita prueba pr
   *Cómo*: `Content-Disposition: attachment` + `X-Content-Type-Options: nosniff`, y
   derivar la extensión del MIME validado, no del nombre que manda el cliente.
 
-- [ ] **2.5 Credenciales de red en texto plano.** `Mikrotik.password`
+- [x] **2.5 Credenciales de red en texto plano.** `Mikrotik.password`
   (`schema.prisma:4274`) y `Olt.password` (`:4295`) se guardan tal cual. GenieACS sí
   usa `secret-box` (AES-256-GCM) — el patrón correcto ya existe en el repo.
   *Cómo*: cifrar con `secret-box` + migración que reencripte lo existente.
 
-- [ ] **2.6 Portal del abonado.** Login = número de abonado (secuencial) + documento,
+- [x] **2.6 Portal del abonado.** Login = número de abonado (secuencial) + documento,
   **sin throttling** (`portal/portal.controller.ts:15`), a diferencia de
   `auth.controller.ts:23`. Enumerar abonados y probar cédulas es directo.
   *Cómo*: reutilizar `LoginThrottleGuard`.
 
-- [ ] **2.7 `helmet` + rate limiting global.** No están en dependencias. El único
+- [x] **2.7 `helmet` + rate limiting global.** No están en dependencias. El único
   freno es el login (10/5min, en memoria por proceso). PDFs, exportaciones a Excel y
   cortes masivos son fuerza-bruteables.
 
-- [ ] **2.8 Endpoints con `@Body` sin DTO.** 12 en total. El crítico es
+- [x] **2.8 Endpoints con `@Body` sin DTO.** 12 en total. El crítico es
   `PUT /settings` (`settings.controller.ts:16`), que escribe pares clave/valor
   arbitrarios — y de ahí salen los gates `network.mikrotikLive` / `network.oltLive`.
   Con `whitelist: true`, un tipo no-clase **no se valida ni se filtra**.

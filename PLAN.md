@@ -56,6 +56,8 @@ que falle antes y pase después. Ya se hizo así con `collect()`
 | `8ab6d85` | **4.1/4.2** 3 índices medidos (309ms→0,15ms) y 5 GIN duplicados retirados |
 | `89a30f5` | **4.3/3.4** Secuencia para `abonado` + validación de entorno al arranque |
 | `11d0bbc` | **3.2/3.3** Errores de importación con contexto, no-empty activo, paginación |
+| `72a3891` | **6.1/6.4/6.5** Build valida tipos, a11y en Field y Modal, formateadores únicos |
+| `0496924` | **6.3/6.7** Cancelación de peticiones (`useRequest`) y ui/ ordenado |
 
 Tests: 14 → 86 (9 suites). Cobertura: sigue siendo ínfima fuera de estos módulos.
 
@@ -284,7 +286,7 @@ hace sostenible el resto.
 
 ## Bloque 6 — Frontend
 
-- [ ] **6.1 Retirar `ignoreBuildErrors`.** `next.config.mjs:5` tiene
+- [x] **6.1 Retirar `ignoreBuildErrors`.** `next.config.mjs:5` tiene
   `typescript: { ignoreBuildErrors: true }`: el build **no valida tipos**. Mientras
   esté, `strict: true` es decorativo.
 
@@ -293,7 +295,7 @@ hace sostenible el resto.
   Sin esto `tsc` no detecta que el backend renombró un campo. Empezar por las 6
   páginas peores (168 `any` concentrados).
 
-- [ ] **6.3 Capa de datos con cancelación.** **0 `AbortController`** en todo el
+- [x] **6.3 Capa de datos con cancelación.** **0 `AbortController`** en todo el
   frontend: en cada listado con filtros, una respuesta vieja puede sobrescribir a una
   nueva (`clientes/page.tsx:45-69` es el patrón). Adoptar SWR/TanStack Query sobre
   `authFetch` elimina de un golpe las carreras, los 143 `set-state-in-effect`, los 56
@@ -301,13 +303,13 @@ hace sostenible el resto.
   Alternativa mínima: adoptar `lib/usePaginatedList.ts`, que **ya está escrito y no lo
   usa nadie**, añadiéndole cancelación y estado de error.
 
-- [ ] **6.4 Accesibilidad.** `htmlFor`: **0 ocurrencias** en 76 `<label>`. El defecto
+- [x] **6.4 Accesibilidad.** `htmlFor`: **0 ocurrencias** en 76 `<label>`. El defecto
   está en el wrapper `components/ui/Field.tsx:47-70`, así que **arreglar un archivo**
   (con `useId()`) asocia ~76 etiquetas de golpe. Después: `role="dialog"` + focus trap
   en `components/Modal.tsx`, y `aria-label` en los botones icon-only (34 para 221
   botones).
 
-- [ ] **6.5 Consolidar duplicados.** `StatCard` definido 7 veces, `fmtDate` 31 veces,
+- [x] **6.5 Consolidar duplicados.** `StatCard` definido 7 veces, `fmtDate` 31 veces,
   `Row` 5, `Card` 2, moneda con 4 implementaciones, `Modal` duplicado. Existe
   `lib/format.ts` y casi nadie lo usa. Mover a `lib/format.ts` y `components/ui/`.
 
@@ -315,7 +317,7 @@ hace sostenible el resto.
   `clientes/[id]` (956), `empleados/[id]` (935). La técnica ya está probada en el
   repo: `reportes` pasó de 703 a 110 líneas en `3c81957`.
 
-- [ ] **6.7 Recolocar lo mal ubicado.** `PageHeading` vive en `components/accounting/`
+- [x] **6.7 Recolocar lo mal ubicado.** `PageHeading` vive en `components/accounting/`
   y lo importan 82 archivos de todos los dominios; `DataTable` en
   `components/inventory/` con 66 consumidores. Mover a `components/ui/`.
 

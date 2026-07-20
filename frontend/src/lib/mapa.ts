@@ -68,3 +68,23 @@ export function haceCuanto(min: number): string {
   const m = min % 60;
   return m ? `hace ${h} h ${m} min` : `hace ${h} h`;
 }
+
+export type Ruta = {
+  origen: { lat: number; lng: number };
+  destino: { lat: number; lng: number };
+  nombre: string | null;
+  geometry: { lat: number; lng: number }[];
+  distanceM: number;
+  durationS: number | null;
+  /** La ruta real no se pudo calcular: esto es la línea recta. */
+  aproximada: boolean;
+};
+
+/** "6 min" / "1 h 12 min" */
+export function formatearDuracion(s: number): string {
+  const min = Math.max(1, Math.round(s / 60));
+  if (min < 60) return `${min} min`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m ? `${h} h ${m} min` : `${h} h`;
+}

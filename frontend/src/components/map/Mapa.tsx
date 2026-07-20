@@ -22,6 +22,8 @@ export type PuntoMapa = {
   href?: string;
   /** Círculo de incertidumbre en metros (precisión del GPS). */
   radioM?: number;
+  /** Ofrece "Cómo llegar" en el globo (requiere `onComoLlegar`). */
+  rutaHasta?: boolean;
 };
 
 /** Color por estado del abonado. El mapa se lee de un vistazo o no sirve. */
@@ -60,7 +62,11 @@ function popupHtml(p: PuntoMapa): string {
   const boton = p.href
     ? `<a href="${esc(p.href)}" data-mapa-href="${esc(p.href)}" style="display:inline-block;margin-top:8px;font-size:12px;font-weight:600;color:${esc(p.color ?? COLOR_NAP)};text-decoration:none">Abrir ficha →</a>`
     : "";
-  const comoLlegar = `<a href="https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lng}" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin-top:8px;margin-left:12px;font-size:12px;font-weight:600;color:#586576;text-decoration:none">Cómo llegar ↗</a>`;
+  // "Cómo llegar" traza la ruta DENTRO del mapa; ya no lanza una pestaña de
+  // Google Maps. Se marca con data-* y lo recoge el manejador de `popupopen`.
+  const comoLlegar = p.rutaHasta
+    ? `<a href="#" data-mapa-ruta="${p.lat},${p.lng}" style="display:inline-block;margin-top:8px;margin-left:12px;font-size:12px;font-weight:600;color:#586576;text-decoration:none">Cómo llegar</a>`
+    : "";
   return `<div style="min-width:170px"><div style="font-weight:700;font-size:13px;color:#0d1526;margin-bottom:4px">${esc(p.titulo)}</div>${filas}${boton}${comoLlegar}</div>`;
 }
 
@@ -78,13 +84,20 @@ function popupHtml(p: PuntoMapa): string {
  */
 export function Mapa({
   puntos,
+  ruta,
+  rutaAproximada = false,
   centro,
   zoom = 13,
   alto = "100%",
   ajustarA = true,
   onAbrir,
+  onComoLlegar,
 }: {
   puntos: PuntoMapa[];
+  /** Línea del trayecto a dibujar (origen → destino). */
+  ruta?: { lat: number; lng: number }[] | null;
+  /** La ruta es la línea recta, no el camino real: se dibuja punteada. */
+  rutaAproximada?: boolean;
   centro?: { lat: number; lng: number };
   zoom?: number;
   alto?: string;
@@ -92,6 +105,8 @@ export function Mapa({
   ajustarA?: boolean;
   /** Navegación interna al pulsar "Abrir ficha" (evita recargar la SPA entera). */
   onAbrir?: (href: string) => void;
+  /** Pulsación de "Cómo llegar" en un globo. */
+  onComoLlegar?: (destino: { lat: number; lng: number }) => void;
 }) {
   const divRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -100,15 +115,20 @@ export function Mapa({
   // El manejador se guarda en una ref para que el mapa (creado una sola vez) use
   // siempre el último sin tener que recrearse cuando la página lo redefine.
   const onAbrirRef = useRef(onAbrir);
+  const onComoLlegarRef = useRef(onComoLlegar);
   useEffect(() => {
     onAbrirRef.current = onAbrir;
+    onComoLlegarRef.current = onComoLlegar;
   });
 
   // Firma del conjunto: decide si hay que reencuadrar. Sin esto, el mapa vuelve
   // al encuadre general cada vez que el usuario lo ha movido a mano.
   const firma = useMemo(
-    () => puntos.map((p) => `${p.id}:${p.lat}:${p.lng}`).join("|"),
-    [puntos],
+    () =>
+      puntos.map((p) => `${p.id}:${p.lat}:${p.lng}`).join("|") +
+      "#" +
+      (ruta ? `${ruta.length}:${ruta[0]?.lat},${ruta[0]?.lng}>${ruta[ruta.length - 1]?.lat},${ruta[ruta.length - 1]?.lng}` : ""),
+    [puntos, ruta],
   );
 
   // --- Creación del mapa (una sola vez) ---
@@ -143,14 +163,23 @@ export function Mapa({
     // Los globos son HTML plano (los pinta Leaflet, no React): la navegación
     // interna se engancha por delegación al abrirse el globo.
     map.on("popupopen", (e: L.PopupEvent) => {
-      const el = (e.popup.getElement() as HTMLElement | undefined)?.querySelector<HTMLAnchorElement>(
-        "[data-mapa-href]",
-      );
-      el?.addEventListener("click", (ev) => {
-        const href = el.getAttribute("data-mapa-href");
+      const raiz = e.popup.getElement() as HTMLElement | undefined;
+
+      const ficha = raiz?.querySelector<HTMLAnchorElement>("[data-mapa-href]");
+      ficha?.addEventListener("click", (ev) => {
+        const href = ficha.getAttribute("data-mapa-href");
         if (href && onAbrirRef.current) {
           ev.preventDefault();
           onAbrirRef.current(href);
+        }
+      });
+
+      const llegar = raiz?.querySelector<HTMLAnchorElement>("[data-mapa-ruta]");
+      llegar?.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        const [lat, lng] = (llegar.getAttribute("data-mapa-ruta") ?? "").split(",").map(Number);
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+          onComoLlegarRef.current?.({ lat, lng });
         }
       });
     });
@@ -196,6 +225,23 @@ export function Mapa({
     if (!map || !capa) return;
     capa.clearLayers();
 
+    if (ruta && ruta.length > 1) {
+      const linea = ruta.map((p) => [p.lat, p.lng] as [number, number]);
+      // Trazo doble: uno grueso claro debajo y el de color encima. Sobre el mapa
+      // de calles una línea suelta se confunde con las propias vías.
+      L.polyline(linea, { color: "#ffffff", weight: 9, opacity: 0.9 }).addTo(capa);
+      L.polyline(linea, {
+        color: "#0e7490",
+        weight: 5,
+        opacity: 0.95,
+        // Punteada = "esto no es el camino real, es la línea recta". Enseñar una
+        // recta como si fuera la ruta haría calcular mal el tiempo de llegada.
+        dashArray: rutaAproximada ? "1 10" : undefined,
+        lineCap: "round",
+        lineJoin: "round",
+      }).addTo(capa);
+    }
+
     for (const p of puntos) {
       const color =
         p.color ??
@@ -238,14 +284,20 @@ export function Mapa({
       }
     }
 
-    if (ajustarA && puntos.length) {
-      const b = L.latLngBounds(puntos.map((p) => [p.lat, p.lng] as [number, number]));
-      map.fitBounds(b, { padding: [40, 40], maxZoom: 17 });
+    // Con una ruta activa se encuadra SOLO la ruta. Si se metieran también los
+    // ~1.600 abonados del mapa, pedir "cómo llegar" alejaría la vista a toda la
+    // ciudad y el trayecto quedaría en un hilo de dos píxeles.
+    const paraEncuadrar: [number, number][] =
+      ruta && ruta.length > 1
+        ? ruta.map((p) => [p.lat, p.lng] as [number, number])
+        : puntos.map((p) => [p.lat, p.lng] as [number, number]);
+    if (ajustarA && paraEncuadrar.length) {
+      map.fitBounds(L.latLngBounds(paraEncuadrar), { padding: [40, 40], maxZoom: 17 });
     }
     // `firma` es lo que decide un repintado real; `puntos` cambia de identidad en
     // cada render aunque el contenido sea idéntico.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [firma, ajustarA]);
+  }, [firma, ajustarA, rutaAproximada]);
 
   return (
     <div className="relative h-full w-full">

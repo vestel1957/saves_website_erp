@@ -49,6 +49,26 @@ export class SetSubscriberLocationDto {
   source?: string;
 }
 
+/** Ruta desde donde está el funcionario hasta un destino. */
+export class RouteDto {
+  @IsNumber() @Min(-90) @Max(90)
+  fromLat!: number;
+
+  @IsNumber() @Min(-180) @Max(180)
+  fromLng!: number;
+
+  @IsOptional() @IsNumber() @Min(-90) @Max(90)
+  toLat?: number;
+
+  @IsOptional() @IsNumber() @Min(-180) @Max(180)
+  toLng?: number;
+
+  /** Destino por abonado: se leen sus coordenadas guardadas en el servidor, que
+   * es lo habitual y evita que el cliente tenga que mandarlas de vuelta. */
+  @IsOptional() @IsString() @MaxLength(40)
+  subscriberId?: string;
+}
+
 /** Filtros del mapa. */
 export class MapQueryDto {
   @IsOptional() @IsString() @MaxLength(80)

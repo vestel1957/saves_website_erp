@@ -25,7 +25,7 @@ import { PlayhubPanel } from "@/components/playhub/PlayhubPanel";
 import { CobranzaPanel } from "@/components/cobranzas/CobranzaPanel";
 import { fmtDate } from "@/lib/format";
 import { mensajeDeError } from "@/lib/errores";
-import { CapturarGps } from "@/components/map/CapturarGps";
+import { UbicacionModal } from "@/components/map/UbicacionModal";
 
 // Modales cargados bajo demanda: su JS NO entra en el chunk inicial de la
 // página (la más pesada de la app); se descarga al abrirlos por primera vez.
@@ -102,9 +102,13 @@ function CopyBtn({ text }: { text?: string | null }) {
 }
 
 /** Fila de contacto accionable: se oculta si no hay valor. */
-function ContactRow({ icon, value, href, copy }: { icon: string; value?: string | null; href?: string | null; copy?: boolean }) {
+function ContactRow({ icon, value, href, onClick, copy }: { icon: string; value?: string | null; href?: string | null; onClick?: () => void; copy?: boolean }) {
   if (!value) return null;
-  const content = href ? (
+  const content = onClick ? (
+    <button type="button" onClick={onClick} className="truncate text-left text-text-primary hover:text-brand hover:underline">
+      {value}
+    </button>
+  ) : href ? (
     <a href={href} target={href.startsWith("http") ? "_blank" : undefined} rel="noreferrer" className="truncate text-text-primary hover:text-brand hover:underline">
       {value}
     </a>
@@ -121,8 +125,8 @@ function ContactRow({ icon, value, href, copy }: { icon: string; value?: string 
 }
 
 /** Botón-ícono para acciones rápidas del encabezado. */
-function QuickAction({ icon, label, href, tone }: { icon: string; label: string; href?: string | null; tone?: "wa" }) {
-  const disabled = !href;
+function QuickAction({ icon, label, href, onClick, tone }: { icon: string; label: string; href?: string | null; onClick?: () => void; tone?: "wa" }) {
+  const disabled = !href && !onClick;
   const base = "inline-flex h-9 w-9 items-center justify-center rounded-lg border transition-colors";
   const cls = disabled
     ? `${base} border-border-subtle text-text-tertiary opacity-40`
@@ -130,6 +134,13 @@ function QuickAction({ icon, label, href, tone }: { icon: string; label: string;
       ? `${base} border-success-soft bg-success-soft text-success-text hover:brightness-95`
       : `${base} border-border-default text-text-secondary hover:bg-surface-2`;
   if (disabled) return <span title={`${label} no disponible`} className={cls}><Icon name={icon} size={16} /></span>;
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} title={label} aria-label={label} className={cls}>
+        <Icon name={icon} size={16} />
+      </button>
+    );
+  }
   return (
     <a href={href!} target="_blank" rel="noreferrer" title={label} className={cls}>
       <Icon name={icon} size={16} />
@@ -184,6 +195,7 @@ export default function ClienteDetallePage() {
   const [mkOpen, setMkOpen] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
   const [ordenOpen, setOrdenOpen] = useState(false);
+  const [gpsOpen, setGpsOpen] = useState(false);
   const [tab, setTab] = useState<"resumen" | "facturas" | "cuenta" | "cobranza" | "ordenes" | "equipos" | "playhub" | "historial" | "archivos">("resumen");
   const [files, setFiles] = useState<any[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -374,7 +386,6 @@ export default function ClienteDetallePage() {
   const wa = waLink(c.phone1) ?? waLink(c.phone2);
   const tel = c.phone1 ? `tel:${c.phone1}` : c.phone2 ? `tel:${c.phone2}` : null;
   const mail = c.email ? `mailto:${c.email}` : null;
-  const map = c.gps ? `https://www.google.com/maps/search/?api=1&query=${c.gps.lat},${c.gps.lng}` : null;
 
   const anti = antiguedad(c.entryDate);
 
@@ -460,7 +471,7 @@ export default function ClienteDetallePage() {
             <QuickAction icon="message-circle" label="WhatsApp" href={wa} tone="wa" />
             <QuickAction icon="phone" label="Llamar" href={tel} />
             <QuickAction icon="mail" label="Correo" href={mail} />
-            <QuickAction icon="map-pin" label="Ver en mapa" href={map} />
+            <QuickAction icon="map-pin" label="Ubicación y cómo llegar" onClick={() => setGpsOpen(true)} />
             <Button onClick={() => setPayOpen(true)}>
               <Icon name="dollar-sign" size={15} /> Registrar pago
             </Button>
@@ -483,6 +494,9 @@ export default function ClienteDetallePage() {
                   </MenuItem>
                   <MenuItem onClick={() => { close(); setOrdenOpen(true); }}>
                     <Icon name="wrench" size={15} /> Nueva orden
+                  </MenuItem>
+                  <MenuItem onClick={() => { close(); setGpsOpen(true); }}>
+                    <Icon name="map-pin" size={15} /> Ubicación y cómo llegar
                   </MenuItem>
                   <MenuItem onClick={() => { close(); setEditOpen(true); }}>
                     <Icon name="pencil" size={15} /> Editar
@@ -520,6 +534,16 @@ export default function ClienteDetallePage() {
       )}
 
       {payOpen && <RegistrarPagoModal subscriberId={id} open={payOpen} onClose={() => setPayOpen(false)} onDone={reload} />}
+      {gpsOpen && (
+        <UbicacionModal
+          open={gpsOpen}
+          onClose={() => setGpsOpen(false)}
+          subscriberId={c.id}
+          subscriberName={c.name}
+          actual={c.gps ? { lat: Number(c.gps.lat), lng: Number(c.gps.lng) } : null}
+          onGuardado={reload}
+        />
+      )}
       {mkOpen && <MikrotikModal subscriberId={id} subscriberName={c.name} open={mkOpen} onClose={() => setMkOpen(false)} onDone={reload} />}
       {planOpen && (
         <CambiarPlanModal
@@ -612,19 +636,7 @@ export default function ClienteDetallePage() {
               <ContactRow icon="phone" value={c.phone1} href={c.phone1 ? `tel:${c.phone1}` : null} copy />
               <ContactRow icon="phone" value={c.phone2} href={c.phone2 ? `tel:${c.phone2}` : null} copy />
               <ContactRow icon="mail" value={c.email} href={mail} copy />
-              <ContactRow icon="map-pin" value={[c.addressLine, c.neighborhood].filter(Boolean).join(" · ") || null} href={map} />
-              {/* Georreferenciación: sin coordenada el cliente no existe en el mapa,
-                  y hoy es el caso de 9 de cada 10. Se avisa en vez de callar. */}
-              <div className="flex flex-wrap items-center gap-2 py-1">
-                <CapturarGps
-                  subscriberId={c.id}
-                  actual={c.gps ? { lat: Number(c.gps.lat), lng: Number(c.gps.lng) } : null}
-                  onGuardado={reload}
-                />
-                {!c.gps && (
-                  <span className="text-[11.5px] text-text-tertiary">Sin ubicación en el mapa</span>
-                )}
-              </div>
+              <ContactRow icon="map-pin" value={[c.addressLine, c.neighborhood].filter(Boolean).join(" · ") || null} onClick={() => setGpsOpen(true)} />
               <ContactRow icon="cake" value={c.birthDate ? fmtDate(c.birthDate) : null} />
               {c.estrato != null && <Row label="Estrato" value={c.estrato} />}
               {!c.phone1 && !c.phone2 && !c.email && !c.addressLine && (

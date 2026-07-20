@@ -4,7 +4,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { exigirSedeSuscriptor, sedesDe, whereSedeSuscriptor } from '../common/sede-scope';
 import { assertPoint, distMeters, parsePoint } from './geo.util';
-import { MapQueryDto, PingDto, SetSubscriberLocationDto } from './dto/geo.dto';
+import { MapQueryDto, PingDto, RouteDto, SetSubscriberLocationDto } from './dto/geo.dto';
+import { RoutingService } from './routing.service';
 
 /** Tope de pines devueltos. Ver `points()` para por qué existe. */
 const MAX_PUNTOS = 5000;
@@ -36,7 +37,45 @@ const SI = (v: string | undefined, pordefecto: boolean) =>
 
 @Injectable()
 export class GeoService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly routing: RoutingService,
+  ) {}
+
+  /**
+   * Ruta por carretera desde donde está el funcionario hasta el destino.
+   *
+   * El destino se puede dar por coordenadas o por abonado; en el segundo caso se
+   * leen del servidor, que es la fuente buena — si el cliente mandara las suyas,
+   * bastaría con cambiarlas para pedir rutas a puntos arbitrarios.
+   */
+  async route(user: AuthUser, dto: RouteDto) {
+    let destino: { lat: number; lng: number } | null = null;
+    let nombre: string | null = null;
+
+    if (dto.subscriberId) {
+      await exigirSedeSuscriptor(this.prisma, user, dto.subscriberId);
+      const sub = await this.prisma.subscriber.findUnique({
+        where: { id: dto.subscriberId },
+        select: { gpsLat: true, gpsLng: true, abonado: true, ...NOMBRE },
+      });
+      if (!sub) throw new NotFoundException('Abonado no encontrado.');
+      destino = parsePoint(sub.gpsLat, sub.gpsLng);
+      if (!destino) {
+        throw new BadRequestException(
+          'Este abonado todavía no tiene ubicación guardada, así que no se puede trazar la ruta.',
+        );
+      }
+      nombre = nombreDe(sub);
+    } else if (dto.toLat != null && dto.toLng != null) {
+      destino = this.validar(dto.toLat, dto.toLng);
+    }
+    if (!destino) throw new BadRequestException('Falta el destino de la ruta.');
+
+    const origen = this.validar(dto.fromLat, dto.fromLng);
+    const ruta = await this.routing.route(origen, destino);
+    return { origen, destino, nombre, ...ruta };
+  }
 
   /**
    * Puntos del mapa: abonados y cajas NAP que tienen coordenadas utilizables.

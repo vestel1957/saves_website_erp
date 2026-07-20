@@ -18,6 +18,7 @@ import { SignaturePad } from "@/components/support/SignaturePad";
 import { fmtDate } from "@/lib/format";
 import { mensajeDeError } from "@/lib/errores";
 import { CapturarGps } from "@/components/map/CapturarGps";
+import { UbicacionModal } from "@/components/map/UbicacionModal";
 import { MOTIVO_GEO, distMetros, pedirUbicacion } from "@/lib/geo";
 
 const fmtT = (d: string | null) => (d ? new Date(d).toLocaleString("es-CO") : "—");
@@ -89,6 +90,7 @@ export default function OrdenDetallePage() {
   const [eqModal, setEqModal] = useState(false);
   const [matModal, setMatModal] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
+  const [rutaOpen, setRutaOpen] = useState(false);
 
   /** Abre el PDF de la orden (endpoint autenticado → blob → pestaña nueva). */
   async function abrirPdf() {
@@ -213,16 +215,20 @@ export default function OrdenDetallePage() {
             {/* Coordenadas */}
             <div className="flex gap-2 py-0.5 text-[13px]">
               <span className="shrink-0 font-semibold text-text-secondary">Coordenadas:</span>
-              {s.gpsLat && s.gpsLng ? (
-                <a href={`https://www.google.com/maps/search/?api=1&query=${s.gpsLat},${s.gpsLng}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-brand hover:underline">
-                  <Icon name="map-pin" size={12} /> {s.gpsLat}, {s.gpsLng} · Abrir en Maps
-                </a>
-              ) : <span className="text-text-primary">No registradas</span>}
+              <span className="text-text-primary">
+                {s.gpsLat && s.gpsLng ? `${s.gpsLat}, ${s.gpsLng}` : "No registradas"}
+              </span>
             </div>
-            {/* El mejor momento para georreferenciar a un abonado es este: el
-                técnico está literalmente en la puerta atendiendo su orden. */}
+            {/* Las dos cosas que hace el técnico con la ubicación de una orden:
+                llegar hasta ella, y —ya que está en la puerta— dejarla marcada.
+                La ruta se dibuja dentro del sistema, no en una pestaña aparte. */}
             {s.id && (
-              <div className="py-0.5">
+              <div className="flex flex-wrap gap-2 py-1">
+                {s.gpsLat && s.gpsLng && (
+                  <Button variant="secondary" size="sm" onClick={() => setRutaOpen(true)}>
+                    <Icon name="navigation" size={14} /> Cómo llegar
+                  </Button>
+                )}
                 <CapturarGps
                   subscriberId={s.id}
                   actual={s.gpsLat && s.gpsLng ? { lat: Number(s.gpsLat), lng: Number(s.gpsLng) } : null}
@@ -396,6 +402,17 @@ export default function OrdenDetallePage() {
 
       <AsignarEquipoModal open={eqModal} onClose={() => setEqModal(false)} onDone={reload} ticketId={id} />
       <ConsumirMaterialModal open={matModal} onClose={() => setMatModal(false)} onDone={reload} ticketId={id} />
+      {rutaOpen && s?.id && (
+        <UbicacionModal
+          open={rutaOpen}
+          onClose={() => setRutaOpen(false)}
+          subscriberId={s.id}
+          subscriberName={s.name}
+          actual={s.gpsLat && s.gpsLng ? { lat: Number(s.gpsLat), lng: Number(s.gpsLng) } : null}
+          onGuardado={reload}
+          irA="ruta"
+        />
+      )}
     </div>
   );
 }

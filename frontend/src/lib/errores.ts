@@ -7,7 +7,7 @@
  * reventaría dentro del propio manejador de errores.
  */
 export function mensajeDeError(e: unknown, porDefecto = "Ocurrió un error inesperado"): string {
-  if (e instanceof Error && mensajeDeError(e)) return mensajeDeError(e);
+  if (e instanceof Error && e.message.trim()) return e.message;
   if (typeof e === "string" && e.trim()) return e;
   return porDefecto;
 }

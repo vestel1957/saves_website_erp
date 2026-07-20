@@ -81,9 +81,14 @@ export class SupportController {
       fileFilter: (_req, file, cb) => cb(null, mimeAceptado(file.mimetype, MIMES_IMAGEN)),
     }),
   )
-  attach(@Param('id') id: string, @UploadedFile() file: MulterFile, @Body() dto: AttachDto) {
+  attach(
+    @Param('id') id: string,
+    @UploadedFile() file: MulterFile,
+    @Body() dto: AttachDto,
+    @CurrentUser() user: AuthUser,
+  ) {
     if (!file) throw new BadRequestException('Sube una imagen en el campo "file".');
-    return this.write.addAttachment(id, file, dto);
+    return this.write.addAttachment(id, file, dto, user);
   }
 
   /** Sirve la imagen adjunta de una entrada del hilo (inline, para preview autenticado vía blob). */

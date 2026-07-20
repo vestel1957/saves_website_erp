@@ -356,15 +356,15 @@ model JournalEntry {
 /// dejaba un `log.warn` y se devolvía null, así que podía haber facturas sin asiento y
 /// nadie sabía CUÁLES. Aquí queda el rastro y el `payload` necesario para reintentar.
 model PendingPosting {
-  id         String   @id @default(cuid())
+  id         String    @id @default(cuid())
   sourceType String // SALES_INVOICE | CUSTOMER_PAYMENT | PURCHASE_BILL | ...
   sourceId   String
   payload    Json // argumentos originales del post*, para reintentar sin el documento
   error      String
-  attempts   Int      @default(1)
+  attempts   Int       @default(1)
   resolvedAt DateTime? // no se borra al resolverse: queda la traza de que falló
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
   @@unique([sourceType, sourceId]) // un pendiente por documento; reintentar suma intentos
   @@index([resolvedAt])
@@ -4766,10 +4766,10 @@ model BusinessGoal {
 /// peor: el `preparePending` quedaba en un worker y el "SÍ" podía llegar a otro.
 /// `convKey` es la clave del motor: `<transporte>:<telefono>`, p.ej. `kapso:5730011…`.
 model ChatbotSession {
-  id        String   @id @default(cuid())
-  convKey   String   @unique
+  id        String    @id @default(cuid())
+  convKey   String    @unique
   /// Historial de turnos (`Turn[]` del motor), ya recortado a `maxHistory`.
-  history   Json     @default("[]")
+  history   Json      @default("[]")
   /// Acción de escritura a la espera de un SÍ/NO (`StoredPending`). Null = ninguna.
   /// Serializable a propósito: guarda herramienta + input resuelto, no un closure.
   pending   Json?
@@ -4855,4 +4855,40 @@ model ApiKey {
   revokedAt     DateTime?
 
   @@index([active])
+}
+
+/// Huella de posición de un funcionario, grabada SIEMPRE a raíz de una acción
+/// suya (abrir/cerrar una orden, subir evidencia, capturar el GPS de un cliente).
+///
+/// No es un rastreador: el navegador no puede seguir a nadie con la pestaña
+/// cerrada, y aunque pudiera, seguir a un empleado todo el día es otra cosa —
+/// legal y laboralmente— que saber dónde estaba cuando tocó una orden. Aquí solo
+/// se guarda el punto del momento en que hizo algo en el sistema, con el motivo
+/// al lado, que es lo que sirve para auditar una visita y para pintar el "último
+/// punto conocido" de cada técnico en el mapa.
+model GeoPing {
+  id        String   @id @default(cuid())
+  /// Usuario del stack nuevo que originó el punto.
+  userId    String
+  userName  String
+  /// Staff (empleado legacy) equivalente, cuando se pudo resolver por email/nombre.
+  staffId   String?
+  lat       Float
+  lng       Float
+  /// Precisión reportada por el navegador, en metros. Un valor alto (>100) suele
+  /// significar que el punto viene de la IP o del wifi, no del GPS: no sirve para
+  /// afirmar que el técnico estaba en el domicilio.
+  accuracy  Float?
+  /// Qué acción lo generó: `ticket.open`, `ticket.close`, `ticket.attach`,
+  /// `subscriber.capture`, `manual`.
+  reason    String
+  /// Entidad tocada (nº de orden, id de abonado…), para poder saltar a ella.
+  refType   String?
+  refId     String?
+  createdAt DateTime @default(now())
+
+  /// El mapa pregunta "último punto de cada técnico" y la auditoría "recorrido de
+  /// este técnico hoy": ambas son (userId, createdAt desc).
+  @@index([userId, createdAt])
+  @@index([createdAt])
 }

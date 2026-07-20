@@ -58,6 +58,7 @@ export const screenKey = (href: string) => "screen" + href.replace(/\//g, ".");
 const principal: NavItem[] = [
   { icon: "gauge", label: "Inicio", href: "/inicio", public: true },
   { icon: "layout-dashboard", label: "Dashboard", href: "/dashboard" },
+  { icon: "map-pin", label: "Mapa", href: "/mapa" },
   { icon: "bar-chart-3", label: "Reportes", href: "/reportes" },
   { icon: "play", label: "Clientes PlayHub", href: "/playhub", iconClass: "text-error-text" },
   {

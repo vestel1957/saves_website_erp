@@ -25,6 +25,7 @@ import { PlayhubPanel } from "@/components/playhub/PlayhubPanel";
 import { CobranzaPanel } from "@/components/cobranzas/CobranzaPanel";
 import { fmtDate } from "@/lib/format";
 import { mensajeDeError } from "@/lib/errores";
+import { CapturarGps } from "@/components/map/CapturarGps";
 
 // Modales cargados bajo demanda: su JS NO entra en el chunk inicial de la
 // página (la más pesada de la app); se descarga al abrirlos por primera vez.
@@ -612,6 +613,18 @@ export default function ClienteDetallePage() {
               <ContactRow icon="phone" value={c.phone2} href={c.phone2 ? `tel:${c.phone2}` : null} copy />
               <ContactRow icon="mail" value={c.email} href={mail} copy />
               <ContactRow icon="map-pin" value={[c.addressLine, c.neighborhood].filter(Boolean).join(" · ") || null} href={map} />
+              {/* Georreferenciación: sin coordenada el cliente no existe en el mapa,
+                  y hoy es el caso de 9 de cada 10. Se avisa en vez de callar. */}
+              <div className="flex flex-wrap items-center gap-2 py-1">
+                <CapturarGps
+                  subscriberId={c.id}
+                  actual={c.gps ? { lat: Number(c.gps.lat), lng: Number(c.gps.lng) } : null}
+                  onGuardado={reload}
+                />
+                {!c.gps && (
+                  <span className="text-[11.5px] text-text-tertiary">Sin ubicación en el mapa</span>
+                )}
+              </div>
               <ContactRow icon="cake" value={c.birthDate ? fmtDate(c.birthDate) : null} />
               {c.estrato != null && <Row label="Estrato" value={c.estrato} />}
               {!c.phone1 && !c.phone2 && !c.email && !c.addressLine && (

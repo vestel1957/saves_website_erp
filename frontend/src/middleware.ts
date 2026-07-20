@@ -85,6 +85,10 @@ const ROUTE_AREA: [RegExp, string[]][] = [
   // (administración) aprueba/despacha, caja recibe. Regla específica ANTES de /red.
   [/^\/red\/transferencias(\/|$)/, ["tecnicos", "administracion", "caja"]],
   [/^\/red(\/|$)/, ["tecnicos"]],
+  // El mapa lo usan tanto el técnico (a dónde voy) como administración y caja
+  // (dónde está el cliente). La capa de "dónde está cada técnico" se filtra
+  // aparte, dentro de la página y en el backend: no todo el que ve el mapa la ve.
+  [/^\/mapa(\/|$)/, ["gerencia", "administracion", "contabilidad", "tecnicos", "sistemas", "caja"]],
   [/^\/mikrotik(\/|$)/, ["tecnicos"]],
   [/^\/configuracion(\/|$)/, ["sistemas"]],
   [/^\/clientes(\/|$)/, ["administracion", "caja"]],

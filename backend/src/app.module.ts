@@ -40,6 +40,7 @@ import { PortalModule } from './portal/portal.module';
 import { PromotionsModule } from './promotions/promotions.module';
 import { AccountingModule } from './accounting/accounting.module';
 import { SearchModule } from './search/search.module';
+import { GeoModule } from './geo/geo.module';
 
 @Module({
   imports: [
@@ -89,6 +90,7 @@ import { SearchModule } from './search/search.module';
     SettingsModule,
     PublicApiModule,
     SearchModule,
+    GeoModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

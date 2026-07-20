@@ -17,6 +17,8 @@ import { ConsumirMaterialModal } from "@/components/soporte/ConsumirMaterialModa
 import { SignaturePad } from "@/components/support/SignaturePad";
 import { fmtDate } from "@/lib/format";
 import { mensajeDeError } from "@/lib/errores";
+import { CapturarGps } from "@/components/map/CapturarGps";
+import { MOTIVO_GEO, distMetros, pedirUbicacion } from "@/lib/geo";
 
 const fmtT = (d: string | null) => (d ? new Date(d).toLocaleString("es-CO") : "—");
 const STATES = ["PENDIENTE", "REALIZANDO", "RESUELTO", "ANULADA"];
@@ -48,26 +50,6 @@ function KV({ label, children }: { label: string; children: React.ReactNode }) {
       <span className="min-w-0 break-words text-text-primary">{children ?? "—"}</span>
     </div>
   );
-}
-
-/** Captura la ubicación del dispositivo. Devuelve null si el navegador la bloquea (p.ej. HTTP) o el usuario niega. */
-function getGeo(): Promise<{ lat: string; lng: string } | null> {
-  return new Promise((resolve) => {
-    if (typeof navigator === "undefined" || !navigator.geolocation) return resolve(null);
-    navigator.geolocation.getCurrentPosition(
-      (p) => resolve({ lat: p.coords.latitude.toFixed(6), lng: p.coords.longitude.toFixed(6) }),
-      () => resolve(null),
-      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 },
-    );
-  });
-}
-
-/** Distancia aproximada en metros entre dos coordenadas (haversine). */
-function distMeters(aLat: number, aLng: number, bLat: number, bLng: number): number {
-  const R = 6371000, rad = (d: number) => (d * Math.PI) / 180;
-  const dLat = rad(bLat - aLat), dLng = rad(bLng - aLng);
-  const s = Math.sin(dLat / 2) ** 2 + Math.cos(rad(aLat)) * Math.cos(rad(bLat)) * Math.sin(dLng / 2) ** 2;
-  return Math.round(R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s)));
 }
 
 /** Preview autenticado de la foto del hilo (fetch como blob, ya que el endpoint pide token). */
@@ -146,15 +128,17 @@ export default function OrdenDetallePage() {
     if (photo) {
       setBusy(true);
       try {
-        const geo = await getGeo();
+        const geo = await pedirUbicacion();
         const fd = new FormData();
         fd.append("file", photo);
         if (msg) fd.append("message", msg);
-        if (geo) { fd.append("lat", geo.lat); fd.append("lng", geo.lng); }
+        if (geo.ok) { fd.append("lat", String(geo.lat)); fd.append("lng", String(geo.lng)); }
         const res = await authFetch(`/support/tickets/${id}/attach`, { method: "POST", body: fd });
         const d = await res.json();
         if (!res.ok) throw new Error(d?.message || "No se pudo subir la foto");
-        toast(geo ? "Foto subida con ubicación" : "Foto subida (sin ubicación; requiere HTTPS)");
+        // El motivo importa: "requiere HTTPS" era la excusa fija, pero lo normal
+        // es que el técnico haya denegado el permiso o esté bajo techo sin GPS.
+        toast(geo.ok ? "Foto subida con ubicación" : `Foto subida sin ubicación. ${MOTIVO_GEO[geo.motivo]}`);
         setReply(""); setSolucion(""); setPhoto(null); reload();
       } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setBusy(false); }
       return;
@@ -235,6 +219,17 @@ export default function OrdenDetallePage() {
                 </a>
               ) : <span className="text-text-primary">No registradas</span>}
             </div>
+            {/* El mejor momento para georreferenciar a un abonado es este: el
+                técnico está literalmente en la puerta atendiendo su orden. */}
+            {s.id && (
+              <div className="py-0.5">
+                <CapturarGps
+                  subscriberId={s.id}
+                  actual={s.gpsLat && s.gpsLng ? { lat: Number(s.gpsLat), lng: Number(s.gpsLng) } : null}
+                  onGuardado={reload}
+                />
+              </div>
+            )}
             {/* Servicios contratados */}
             <KV label="Servicios contratados">{serviciosStr || "Sin servicios registrados"}</KV>
             {/* Equipo asignado */}
@@ -363,7 +358,7 @@ export default function OrdenDetallePage() {
                     <a href={`https://www.google.com/maps/search/?api=1&query=${h.geoLat},${h.geoLng}`} target="_blank" rel="noopener noreferrer" className="mt-1 inline-flex items-center gap-1 text-[11px] text-brand hover:underline">
                       <Icon name="map-pin" size={11} /> Ubicación de la foto
                       {s?.gpsLat && s?.gpsLng && (() => {
-                        const d = distMeters(Number(h.geoLat), Number(h.geoLng), Number(s.gpsLat), Number(s.gpsLng));
+                        const d = distMetros({ lat: Number(h.geoLat), lng: Number(h.geoLng) }, { lat: Number(s.gpsLat), lng: Number(s.gpsLng) });
                         return <span className={d <= 150 ? "text-success-text" : "text-warning-text"}>· a ~{d} m del cliente</span>;
                       })()}
                     </a>

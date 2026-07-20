@@ -5,6 +5,7 @@ import { Prisma, TicketStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { MikrotikService } from '../network/mikrotik.service';
+import { parsePoint } from '../geo/geo.util';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -288,7 +289,12 @@ export class SupportWriteService {
   }
 
   /** Agrega una entrada al hilo con una foto adjunta (evidencia) y, si el dispositivo la dio, su geolocalización. */
-  async addAttachment(id: string, file: { filename: string; originalname: string }, dto: AttachDto) {
+  async addAttachment(
+    id: string,
+    file: { filename: string; originalname: string },
+    dto: AttachDto,
+    user?: AuthUser,
+  ) {
     const t = await this.prisma.ticket.findUnique({ where: { id } });
     if (!t) throw new NotFoundException('Orden no encontrada');
     if (t.code == null) throw new BadRequestException('La orden no tiene número');
@@ -300,6 +306,29 @@ export class SupportWriteService {
         geoLat: dto.lat?.trim() || null, geoLng: dto.lng?.trim() || null,
       },
     });
+
+    // La foto ya venía geo-etiquetada; lo que faltaba era que ese punto contara
+    // como "dónde está este técnico". Se graba aquí, en el servidor, y no con una
+    // llamada extra desde el móvil: el técnico está en la calle, muchas veces con
+    // una barra de señal, y una segunda petición se pierde justo cuando más
+    // importa. Si la coordenada no es utilizable, no se inventa un punto.
+    if (user) {
+      const p = parsePoint(dto.lat, dto.lng);
+      if (p) {
+        await this.prisma.geoPing
+          .create({
+            data: {
+              userId: user.id, userName: user.name,
+              lat: p.lat, lng: p.lng,
+              reason: 'ticket.attach',
+              refType: 'ticket', refId: id,
+            },
+          })
+          // Nunca hacer que se pierda la evidencia por no poder anotar el punto.
+          .catch(() => undefined);
+      }
+    }
+
     return { ok: true, id: th.id };
   }
 

@@ -11,8 +11,13 @@ import { decryptSecret, encryptSecret } from '../common/secret-box';
  *
  * Porta las funciones de producción del legacy
  * (`Customers_model.php::activar_estado_usuario` / `desactivar_estado_usuario`):
- *   CORTE:      cerrar sesión PPP activa → deshabilitar secret → mover IP de ACTIVOS a MOROSOS
- *   RECONEXIÓN: habilitar secret → quitar de MOROSOS → agregar a ACTIVOS
+ *   CORTE:      cerrar sesión PPP activa → mover IP de ACTIVOS a MOROSOS (el secret NO se toca)
+ *   RECONEXIÓN: quitar de MOROSOS → agregar a ACTIVOS → habilitar secret si quedó deshabilitado
+ *
+ * Quien bloquea es la regla de firewall `chain=forward action=drop` sobre la
+ * address-list MOROSOS (en src y dst), igual que `Clientgroup::cortar_usuarios_multiple`
+ * del legacy, que nunca deshabilita el secret. La reconexión sí sigue habilitando el
+ * secret para sanar a los ~1.150 clientes cortados con el mecanismo viejo (disabled=yes).
  *
  * Resolución de router: por sede (branch.legacyId == mikrotik.sedeLegacy) y tecnología
  * de instalación; si no hay match exacto se usa el marcado como `isDefault`.
@@ -221,9 +226,12 @@ export class MikrotikService {
           await api.comm('/ppp/active/remove', { '.id': active[0]['.id'] });
           steps.push('sesión PPP activa cerrada');
         }
-        await api.comm('/ppp/secret/set', { '.id': secret['.id'], disabled: 'yes' });
-        steps.push('secret deshabilitado (disabled=yes)');
 
+        // El secret NO se deshabilita: el corte lo hace la regla de firewall
+        // `drop src/dst-address-list=MOROSOS`, presente en los 8 routers.
+        // El cliente reconecta y recibe la misma IP (remote-address es fijo en
+        // el secret, verificado: ~8.480 de 8.505), así que la entrada en MOROSOS
+        // sigue siendo válida y queda bloqueado.
         const ip = secret['remote-address'] || active[0]?.['address'] || sub.ipRemote || '';
         if (ip) {
           const inAct = await api.comm('/ip/firewall/address-list/print', { '?list': ADDRESS_LIST_ACTIVE, '?comment': comment });
@@ -258,11 +266,13 @@ export class MikrotikService {
       }
       if (!ip) ip = sub.ipRemote || '';
 
-      if (secrets[0]?.['.id']) {
-        await api.comm('/ppp/secret/set', { '.id': secrets[0]['.id'], disabled: 'no' });
-        steps.push('secret habilitado (disabled=no)');
-      } else {
+      if (!secrets[0]?.['.id']) {
         steps.push(`secret '${name}' no existe en el router`);
+      } else if (secrets[0]['disabled'] === 'true') {
+        // Compatibilidad: cortes viejos (legacy y primeras versiones de este
+        // módulo) dejaron el secret en disabled=yes. Al reconectar lo sanamos.
+        await api.comm('/ppp/secret/set', { '.id': secrets[0]['.id'], disabled: 'no' });
+        steps.push('secret habilitado (venía deshabilitado por un corte anterior)');
       }
 
       const inMor = await api.comm('/ip/firewall/address-list/print', { '?list': ADDRESS_LIST_DEBTOR, '?comment': comment });
@@ -384,7 +394,7 @@ export class MikrotikService {
       res.steps = [
         `connect ${routerInfo.host}`,
         `/ppp/active/getall ?name=${name}  → /ppp/active/remove`,
-        `/ppp/secret/set ?name=${name} disabled=yes`,
+        `(el secret NO se modifica)`,
         `address-list ${ADDRESS_LIST_ACTIVE} remove (comment=${comment})`,
         `address-list ${ADDRESS_LIST_DEBTOR} add/set (comment=${comment})`,
         ...others.map((o) => `[${o.name}] address-list ${ADDRESS_LIST_DEBTOR} add (comment=${comment})`),
@@ -453,7 +463,7 @@ export class MikrotikService {
     if (!this.live) {
       res.steps = [
         `connect ${routerInfo.host}`,
-        `/ppp/secret/set ?name=${name} disabled=no`,
+        `/ppp/secret/set ?name=${name} disabled=no (solo si venía deshabilitado)`,
         `address-list ${ADDRESS_LIST_DEBTOR} remove (comment=${comment})`,
         `address-list ${ADDRESS_LIST_ACTIVE} add/set (comment=${comment})`,
         ...others.map((o) => `[${o.name}] address-list ${ADDRESS_LIST_DEBTOR} remove (comment=${comment})`),

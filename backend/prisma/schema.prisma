@@ -3337,6 +3337,7 @@ model SubInvoice {
   @@index([kind])
   @@index([subscriberId, status]) // listado clientes filtro cuenta=debe/aldia (semi-join): 1043ms -> 2ms
   @@index([status, subscriberId]) // listado clientes filtro deuda (groupBy status): 2019ms -> 32ms
+  @@index([status, dueDate]) // cartera vencida (status + vencimiento): 58ms -> ~2ms
 }
 
 /// Ítem de factura (legacy `invoice_items`).
@@ -3436,6 +3437,7 @@ model Transaction {
   @@index([category])
   @@index([date])
   @@index([type, date])
+  @@index([cashAccountId, date]) // movimientos y arqueo de UNA caja por fecha: 73ms -> ~2ms
   @@index([supplierId])
   @@index([supplyOrderId])
   @@index([stockReturnId])
@@ -4603,6 +4605,7 @@ model Ticket {
   @@index([type])
   @@index([created])
   @@index([assigned, created]) // filtro por técnico + orden (evita scan de ~314k filas)
+  @@index([status, created]) // listado por defecto (status + orden por fecha): 309ms -> ~1ms
   @@index([priority, created]) // filtro por prioridad + orden
 }
 

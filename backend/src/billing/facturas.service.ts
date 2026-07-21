@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
@@ -60,6 +60,16 @@ export type GeneratePlanRow = {
 /** Escritura de facturación (Cobranza): crear factura, generar en lote y notas C/D. */
 @Injectable()
 export class FacturasService {
+  /**
+   * Cerrojo de una sola corrida de facturación que ESCRIBE a la vez. Evita que el
+   * cron del día 1 y un disparo manual (o dos manuales) lean `alreadyBilled` antes
+   * de que el otro escriba y generen la mensualidad DOS veces al mismo abonado.
+   * Un flag en memoria basta porque pm2 corre `instances: 1` (un solo proceso) y el
+   * event loop hace atómico el "comprobar y marcar". Si algún día se escala a más de
+   * una instancia, esto debe pasar a un advisory lock de Postgres.
+   */
+  private billingRunning = false;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly posting: PostingService,
@@ -170,6 +180,28 @@ export class FacturasService {
       throw new BadRequestException('asIfUnbilled solo se permite junto con dryRun.');
     }
 
+    // Serializar solo las corridas que escriben. dryRun no toca la BD → puede correr
+    // en paralelo sin riesgo. El "comprobar y marcar" es atómico (no hay await entre
+    // medias) porque el event loop es de un solo hilo.
+    if (!dryRun) {
+      if (this.billingRunning) {
+        throw new ConflictException('Ya hay una generación de facturas en curso. Espera a que termine para evitar facturas duplicadas.');
+      }
+      this.billingRunning = true;
+    }
+    try {
+      return await this.generateLocked(dto, user, { dryRun, asIfUnbilled });
+    } finally {
+      if (!dryRun) this.billingRunning = false;
+    }
+  }
+
+  /** Cuerpo real de la generación. Se llama SIEMPRE bajo el cerrojo de `generate`. */
+  private async generateLocked(
+    dto: GenerateInvoicesDto,
+    user: AuthUser,
+    { dryRun, asIfUnbilled }: { dryRun: boolean; asIfUnbilled: boolean },
+  ) {
     const invoiceDate = dateOnly(dto.invoiceDate);
     const dueDate = dto.dueDays ? addDays(invoiceDate, dto.dueDays) : dueOnDay(invoiceDate, await this.billingDueDay());
     const monthStart = new Date(Date.UTC(invoiceDate.getUTCFullYear(), invoiceDate.getUTCMonth(), 1));

@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
@@ -79,6 +79,8 @@ type Tx = Prisma.TransactionClient;
  */
 @Injectable()
 export class CobranzasService {
+  private readonly logger = new Logger('CobranzasService');
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly posting: PostingService,
@@ -407,13 +409,31 @@ export class CobranzasService {
     // Reconexión automática tras el pago (paridad legacy: al pagar se reactiva).
     // Best-effort: nunca rompe el recaudo. Solo si el cliente estaba CORTADO. Respeta
     // el modo de red (dry-run salvo interruptor de Configuración encendido).
+    //
+    // El fallo NO se traga: reconnect() no lanza cuando el router está caído, devuelve
+    // ok=false. Antes se ignoraba, así que el cliente pagaba y quedaba cortado sin que
+    // nadie se enterara. Ahora se detecta, se registra a nivel error (con el detalle ya
+    // persistido en MikrotikActionLog para reintentar desde Red) y se propaga en la
+    // respuesta para que quien registra el pago vea en el acto que quedó cortado.
+    let reconnect: { attempted: boolean; ok: boolean; message?: string } = { attempted: false, ok: true };
     try {
       const fresh = await this.prisma.subscriber.findUnique({ where: { id: dto.subscriberId }, select: { status: true } });
       if (fresh?.status === 'CORTADO') {
-        await this.mikrotik.reconnect(dto.subscriberId, user);
+        const rr = await this.mikrotik.reconnect(dto.subscriberId, user);
+        reconnect = { attempted: true, ok: rr.ok, message: rr.message };
+        if (!rr.ok) {
+          this.logger.error(
+            `Recaudo ${result.receiptId}: el abonado ${dto.subscriberId} PAGÓ pero la reconexión falló (${rr.error ?? rr.message}). Sigue CORTADO — reintentar desde Red (auditado en MikrotikActionLog).`,
+          );
+        }
       }
-    } catch { /* el pago ya quedó registrado; la reconexión puede reintentarse manual */ }
-    return result;
+    } catch (e) {
+      reconnect = { attempted: true, ok: false, message: (e as Error).message };
+      this.logger.error(
+        `Recaudo ${result.receiptId}: error al reconectar al abonado ${dto.subscriberId} tras el pago: ${(e as Error).message}. Puede seguir cortado.`,
+      );
+    }
+    return { ...result, reconnect };
   }
 
   /** Anular una transacción: soft-delete + Voiding + reversa del saldo de la factura. */

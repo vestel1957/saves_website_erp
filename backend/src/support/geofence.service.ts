@@ -2,7 +2,7 @@ import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { parsePoint } from '../geo/geo.util';
-import { detectarSenales, type Senal } from './spoof.policy';
+import { detectarSenales, normalizarIp, type Senal } from './spoof.policy';
 import {
   TIPOS_DE_CAMPO_POR_DEFECTO,
   evaluarCierre,
@@ -344,18 +344,66 @@ export class GeofenceService {
     });
   }
 
-  /** IPs públicas de oficina con su coordenada. Formato "ip@lat,lng;ip@lat,lng". */
-  private async oficinas(): Promise<{ ip: string; lat: number; lng: number }[]> {
+  /** IPs públicas exactas de las oficinas, separadas por coma. */
+  async oficinas(): Promise<string[]> {
     const crudo = process.env.OFFICE_IPS ?? (await this.ajuste(K_OFICINAS));
     if (!crudo?.trim()) return [];
-    return crudo
-      .split(';')
-      .flatMap((par) => {
-        const [ip, coord] = par.split('@');
-        const [lat, lng] = (coord ?? '').split(',').map(Number);
-        if (!ip?.trim() || !Number.isFinite(lat) || !Number.isFinite(lng)) return [];
-        return [{ ip: ip.trim(), lat, lng }];
-      });
+    return crudo.split(',').map((x) => normalizarIp(x)).filter(Boolean);
+  }
+
+  async guardarOficinas(ips: string[], user?: AuthUser): Promise<{ ips: string[] }> {
+    const limpias = [...new Set(ips.map((x) => normalizarIp(x)).filter(Boolean))];
+    await this.prisma.appSetting.upsert({
+      where: { key: K_OFICINAS },
+      create: { key: K_OFICINAS, value: limpias.join(','), group: 'security', updatedBy: user?.name },
+      update: { value: limpias.join(','), updatedBy: user?.name },
+    });
+    return { ips: limpias };
+  }
+
+  /**
+   * IPs desde las que se ha escrito en el sistema, con quién y cuánto.
+   *
+   * Existe porque nadie sabe de memoria la IP pública de su oficina — y menos si
+   * es dinámica. En vez de pedir un dato que hay que ir a buscar, se enseña lo
+   * que el sistema ya vio y se marca con un clic. La auditoría ya guardaba la IP
+   * de cada escritura; sólo faltaba mirarla.
+   */
+  async ipsVistas(dias = 90) {
+    const desde = new Date(Date.now() - dias * 86400_000);
+    const filas = await this.prisma.auditLog.findMany({
+      where: { createdAt: { gte: desde }, ipAddress: { not: null } },
+      select: { ipAddress: true, createdAt: true, user: { select: { name: true } } },
+      orderBy: { createdAt: 'desc' },
+      take: 5000,
+    });
+
+    const marcadas = new Set(await this.oficinas());
+    const porIp = new Map<string, { escrituras: number; usuarios: Set<string>; ultima: Date }>();
+    for (const f of filas) {
+      const ip = normalizarIp(f.ipAddress!);
+      // Localhost es el propio servidor (tareas, scripts): nunca es una oficina.
+      if (ip === '127.0.0.1' || ip === '::1') continue;
+      const e = porIp.get(ip) ?? { escrituras: 0, usuarios: new Set<string>(), ultima: f.createdAt };
+      e.escrituras++;
+      if (f.user?.name) e.usuarios.add(f.user.name);
+      if (f.createdAt > e.ultima) e.ultima = f.createdAt;
+      porIp.set(ip, e);
+    }
+
+    return {
+      dias,
+      configuradas: [...marcadas],
+      ips: [...porIp.entries()]
+        .map(([ip, e]) => ({
+          ip,
+          escrituras: e.escrituras,
+          usuarios: [...e.usuarios],
+          ultima: e.ultima,
+          esOficina: marcadas.has(ip),
+        }))
+        .sort((a, b) => b.escrituras - a.escrituras),
+    };
   }
 
   private async ajuste(key: string): Promise<string | null> {

@@ -1,7 +1,7 @@
 import {
   detectarSenales,
   fotoEnOtroSitio,
-  ipContradice,
+  esIpDeOficina,
   precisionSospechosa,
   puntoRepetido,
   saltoImposible,
@@ -63,24 +63,24 @@ describe('saltoImposible', () => {
   });
 });
 
-describe('ipContradice', () => {
-  const oficinas = [{ ip: '190.14.238.10', lat: OFICINA.lat, lng: OFICINA.lng }];
+describe('esIpDeOficina', () => {
+  const oficinas = ['190.14.232.142'];
 
-  it('marca al que escribe desde el wifi de la oficina diciendo estar en la casa', () => {
-    expect(ipContradice('190.14.238.10', CASA, oficinas)).toBe(true);
+  it('marca al técnico que cierra desde el wifi de la oficina', () => {
+    expect(esIpDeOficina('190.14.232.142', oficinas)).toBe(true);
   });
 
-  it('no marca si de verdad está en la oficina', () => {
-    expect(ipContradice('190.14.238.10', OFICINA, oficinas)).toBe(false);
-  });
-
-  it('desde datos móviles (IP desconocida) no se puede concluir nada', () => {
-    expect(ipContradice('181.50.22.7', CASA, oficinas)).toBe(false);
-    expect(ipContradice(null, CASA, oficinas)).toBe(false);
+  it('desde datos móviles no concluye nada', () => {
+    expect(esIpDeOficina('181.50.22.7', oficinas)).toBe(false);
+    expect(esIpDeOficina(null, oficinas)).toBe(false);
   });
 
   it('tolera el prefijo IPv6-mapeado que mete el proxy', () => {
-    expect(ipContradice('::ffff:190.14.238.10', CASA, oficinas)).toBe(true);
+    expect(esIpDeOficina('::ffff:190.14.232.142', oficinas)).toBe(true);
+  });
+
+  it('sin oficinas configuradas no marca nada (es config opcional)', () => {
+    expect(esIpDeOficina('190.14.232.142', [])).toBe(false);
   });
 });
 
@@ -104,7 +104,7 @@ describe('detectarSenales', () => {
     anterior: { ...OFICINA, en: t(0) },
     puntosPrevios: [{ lat: 5.3401, lng: -72.3688 }],
     ip: '181.50.22.7',
-    oficinas: [{ ip: '190.14.238.10', lat: OFICINA.lat, lng: OFICINA.lng }],
+    oficinas: ['190.14.232.142'],
     fotos: [{ lat: 5.3409, lng: -72.3695 }],
   };
 
@@ -120,7 +120,7 @@ describe('detectarSenales', () => {
       punto: { ...CASA, accuracyM: 0, en: t(2) },
       anterior: { ...LEJOS, en: t(0) },
       puntosPrevios: [CASA],
-      ip: '190.14.238.10',
+      ip: '190.14.232.142',
       fotos: [OFICINA],
     });
     expect(senales).toEqual(
@@ -128,7 +128,7 @@ describe('detectarSenales', () => {
         'precision-perfecta',
         'punto-repetido',
         'salto-imposible',
-        'ip-contradice',
+        'desde-la-oficina',
         'foto-en-otro-sitio',
       ]),
     );

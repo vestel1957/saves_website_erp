@@ -39,6 +39,21 @@ export class SupportController {
    * Informe de la geo-cerca: cierres fuera de rango. Restringido a quien manda —
    * es un informe sobre el desempeño de personas concretas.
    */
+  /** IPs desde las que se ha escrito, para poder marcar cuáles son de oficina. */
+  @Get('known-ips')
+  @RequireArea('gerencia', 'administracion', 'sistemas')
+  knownIps(@Query('dias') dias?: string) {
+    const d = Number(dias);
+    return this.geofence.ipsVistas(Number.isFinite(d) && d > 0 && d <= 365 ? d : undefined);
+  }
+
+  /** Marca qué IPs son de oficina (lista completa, reemplaza la anterior). */
+  @Post('office-ips')
+  @RequireArea('gerencia', 'administracion', 'sistemas')
+  setOfficeIps(@Body() dto: { ips?: string[] }, @CurrentUser() user: AuthUser) {
+    return this.geofence.guardarOficinas(Array.isArray(dto?.ips) ? dto.ips : [], user);
+  }
+
   @Get('geofence-report')
   @RequireArea('gerencia', 'administracion', 'sistemas')
   geofenceReport(@Query('dias') dias?: string) {

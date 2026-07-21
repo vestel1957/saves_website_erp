@@ -6,6 +6,9 @@ import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
 import { Select } from "@/components/ui/Field";
 import { Badge } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
+import { toast } from "@/components/ui/Toast";
+import { mensajeDeError } from "@/lib/errores";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { LoadError } from "@/components/ui/LoadError";
 import { useAuth } from "@/context/AuthProvider";
@@ -45,7 +48,7 @@ const SENAL: Record<string, string> = {
   "precision-perfecta": "Precisión demasiado buena para un GPS real",
   "punto-repetido": "Coordenada calcada a otra anterior",
   "salto-imposible": "Se habría movido a una velocidad imposible",
-  "ip-contradice": "Escribió desde la red de la oficina",
+  "desde-la-oficina": "Cerró desde el wifi de la oficina",
   "foto-en-otro-sitio": "La foto de evidencia se tomó lejos",
 };
 
@@ -86,6 +89,134 @@ const MODO_TEXTO: Record<Informe["modo"], { label: string; tone: "warning" | "su
   },
 };
 
+type IpVista = {
+  ip: string;
+  escrituras: number;
+  usuarios: string[];
+  ultima: string;
+  esOficina: boolean;
+};
+
+/**
+ * Marcar qué IPs son de la oficina.
+ *
+ * Nadie sabe de memoria la IP pública de su oficina, y menos si es dinámica. En
+ * vez de pedir un dato que hay que ir a buscar, se enseña lo que el sistema ya
+ * registró en la auditoría y se marca con un clic.
+ */
+function PanelIps() {
+  const { authFetch } = useAuth();
+  const [abierto, setAbierto] = useState(false);
+  const [guardando, setGuardando] = useState(false);
+  const [marcadas, setMarcadas] = useState<Set<string> | null>(null);
+
+  const ips = useRequest<{ ips: IpVista[]; configuradas: string[] }>(
+    () => "/support/known-ips?dias=365",
+    [],
+    { saltar: !abierto },
+  );
+
+  // Sincroniza la selección la primera vez que llegan los datos.
+  const lista = ips.data?.ips ?? [];
+  const sel = marcadas ?? new Set(ips.data?.configuradas ?? []);
+
+  const alternar = (ip: string) => {
+    const s = new Set(sel);
+    if (s.has(ip)) s.delete(ip);
+    else s.add(ip);
+    setMarcadas(s);
+  };
+
+  const guardar = async () => {
+    setGuardando(true);
+    try {
+      const res = await authFetch("/support/office-ips", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ips: [...sel] }),
+      });
+      if (!res.ok) throw new Error(`Error ${res.status}`);
+      toast(`${sel.size} IP(s) marcadas como oficina`, "check");
+      ips.refrescar();
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudieron guardar"), "alert-circle");
+    } finally {
+      setGuardando(false);
+    }
+  };
+
+  if (!abierto) {
+    return (
+      <button
+        type="button"
+        onClick={() => setAbierto(true)}
+        className="mb-3 inline-flex items-center gap-1.5 text-[12.5px] font-semibold text-brand hover:underline"
+      >
+        <Icon name="settings" size={14} /> Marcar las IPs de la oficina
+      </button>
+    );
+  }
+
+  return (
+    <div className="mb-4 rounded-xl border border-border-subtle bg-surface p-4">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <p className="text-[13px] font-bold text-text-primary">IPs de la oficina</p>
+        <button
+          type="button"
+          onClick={() => setAbierto(false)}
+          className="text-[12px] text-text-tertiary hover:text-text-secondary"
+        >
+          Cerrar
+        </button>
+      </div>
+      <p className="mb-3 text-[12px] leading-relaxed text-text-secondary">
+        Un técnico que está de verdad en la casa de un cliente sale por datos móviles, no por el
+        wifi de la oficina. Marcando aquí las conexiones de tus locales, cerrar una visita desde
+        ellas queda señalado. Estas son las IPs desde las que ya se ha trabajado:
+      </p>
+
+      {ips.cargando && <p className="text-[12px] text-text-tertiary">Cargando…</p>}
+
+      <div className="space-y-1.5">
+        {lista.map((i) => (
+          <label
+            key={i.ip}
+            className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-border-subtle px-3 py-2 hover:bg-surface-2"
+          >
+            <input
+              type="checkbox"
+              checked={sel.has(i.ip)}
+              onChange={() => alternar(i.ip)}
+              className="h-4 w-4 accent-[var(--color-brand)]"
+            />
+            <span className="font-mono text-[12.5px] font-semibold text-text-primary">{i.ip}</span>
+            <span className="text-[11.5px] text-text-tertiary">
+              {i.escrituras} escritura{i.escrituras === 1 ? "" : "s"}
+              {i.usuarios.length > 0 && ` · ${i.usuarios.slice(0, 3).join(", ")}`}
+            </span>
+            <span className="ml-auto text-[11px] text-text-tertiary">{fmtDate(i.ultima)}</span>
+          </label>
+        ))}
+        {!ips.cargando && lista.length === 0 && (
+          <p className="text-[12px] text-text-tertiary">
+            Todavía no hay escrituras con IP pública registrada.
+          </p>
+        )}
+      </div>
+
+      <div className="mt-3 flex items-center justify-between gap-2">
+        <p className="text-[11.5px] leading-snug text-text-tertiary">
+          Ojo: como Vestel <em>es</em> el proveedor, tus clientes también salen por rangos tuyos.
+          Marca solo las IPs exactas de tus locales, nunca un rango entero.
+        </p>
+        <Button size="sm" onClick={() => void guardar()} disabled={guardando}>
+          {guardando ? "Guardando…" : "Guardar"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export default function GeocercaPage() {
   const { loading: authLoading } = useAuth();
   const [dias, setDias] = useState("30");
@@ -125,6 +256,8 @@ export default function GeocercaPage() {
         {modo.ayuda} Radio actual: <strong>{d.radioM} m</strong> (más el margen de error que reporte
         cada GPS).
       </p>
+
+      <PanelIps />
 
       <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
         <Tarjeta

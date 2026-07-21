@@ -22,8 +22,8 @@ export type Senal =
   | 'punto-repetido'
   /** Velocidad implícita absurda respecto del punto anterior. */
   | 'salto-imposible'
-  /** Escribe desde una IP de oficina pero dice estar lejos de ella. */
-  | 'ip-contradice'
+  /** Cerró una visita a domicilio desde el wifi de la oficina. */
+  | 'desde-la-oficina'
   /** La foto de evidencia de la misma orden se tomó en otro sitio. */
   | 'foto-en-otro-sitio';
 
@@ -31,7 +31,7 @@ export const EXPLICACION: Record<Senal, string> = {
   'precision-perfecta': 'La precisión reportada es demasiado buena para un GPS real.',
   'punto-repetido': 'Coordenada exactamente igual a una anterior, hasta el último decimal.',
   'salto-imposible': 'Habría tenido que moverse a una velocidad imposible desde su punto anterior.',
-  'ip-contradice': 'Escribió desde la red de la oficina pero dice estar lejos de ella.',
+  'desde-la-oficina': 'Cerró desde el wifi de la oficina, no desde datos móviles.',
   'foto-en-otro-sitio': 'La foto de evidencia de esta orden se tomó lejos del punto de cierre.',
 };
 
@@ -82,23 +82,30 @@ export function saltoImposible(
 }
 
 /**
- * Contradicción entre la red desde la que escribe y el punto que declara.
+ * ¿La petición salió del wifi de una oficina?
  *
- * Si la petición sale de la IP pública de la oficina, el teléfono está en el
- * wifi de la oficina — y entonces no puede estar a tres kilómetros. Es la única
- * comprobación que no depende de nada que el técnico controle desde su móvil.
+ * Un técnico que de verdad está en el domicilio de un cliente sale por datos
+ * móviles, no por la red interna de la empresa. Si cierra una visita a domicilio
+ * conectado al wifi de la oficina, o no estaba allí, o alguien cerró por él. Es
+ * la única señal que no depende de nada que el técnico controle desde el móvil:
+ * la IP la ve el servidor, no la manda el teléfono.
+ *
+ * NO necesita coordenadas — antes las pedía y era config de más para nada: basta
+ * con saber que la conexión es de oficina. Ojo con listar rangos enteros en una
+ * empresa que ES el ISP: los clientes también salen por sus rangos, así que aquí
+ * sólo valen IPs exactas.
  */
-export function ipContradice(
+export function esIpDeOficina(
   ip: string | null | undefined,
-  punto: { lat: number; lng: number },
-  oficinas: { ip: string; lat: number; lng: number }[],
-  radioM = 500,
+  oficinas: string[],
 ): boolean {
-  if (!ip) return false;
-  const limpia = ip.replace(/^::ffff:/, '').trim();
-  const oficina = oficinas.find((o) => o.ip === limpia);
-  if (!oficina) return false;
-  return distMeters(oficina.lat, oficina.lng, punto.lat, punto.lng) > radioM;
+  if (!ip || !oficinas.length) return false;
+  return oficinas.includes(normalizarIp(ip));
+}
+
+/** Quita el prefijo IPv6-mapeado (`::ffff:`) que mete el proxy. */
+export function normalizarIp(ip: string): string {
+  return ip.replace(/^::ffff:/, '').trim();
 }
 
 /**
@@ -122,7 +129,8 @@ export type EntradaSenales = {
   anterior: { lat: number; lng: number; en: Date } | null;
   puntosPrevios: { lat: number; lng: number }[];
   ip?: string | null;
-  oficinas: { ip: string; lat: number; lng: number }[];
+  /** IPs públicas exactas de las oficinas. */
+  oficinas: string[];
   fotos: { lat: number; lng: number }[];
 };
 
@@ -132,7 +140,7 @@ export function detectarSenales(e: EntradaSenales): Senal[] {
   if (precisionSospechosa(e.punto.accuracyM)) s.push('precision-perfecta');
   if (puntoRepetido(e.punto, e.puntosPrevios)) s.push('punto-repetido');
   if (saltoImposible(e.punto, e.anterior)) s.push('salto-imposible');
-  if (ipContradice(e.ip, e.punto, e.oficinas)) s.push('ip-contradice');
+  if (esIpDeOficina(e.ip, e.oficinas)) s.push('desde-la-oficina');
   if (fotoEnOtroSitio(e.punto, e.fotos)) s.push('foto-en-otro-sitio');
   return s;
 }

@@ -8,6 +8,11 @@ import { AuthUser } from '../auth/current-user.decorator';
 const cop = (n: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(n || 0);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// Todas las programadas se anclan a la hora de Colombia, no a la TZ del servidor.
+// Sin esto, "día 1 a las 02:00" se corría en la zona del SO: facturar o pasar a
+// cartera en la hora equivocada (incluso el día equivocado) es un riesgo fiscal.
+const TZ = 'America/Bogota';
+
 /**
  * Automatizaciones programadas — porta `Cronjob.php` del legacy saves-vestel:
  *   · RECURRING_BILLING → genera las facturas recurrentes del mes (desde el plan).
@@ -42,28 +47,28 @@ export class CronService {
   // Programadas
   // ------------------------------------------------------------------
   /** Día 1 de cada mes, 02:00 — factura recurrente del mes. */
-  @Cron('0 2 1 * *', { name: 'recurring-billing' })
+  @Cron('0 2 1 * *', { name: 'recurring-billing', timeZone: TZ })
   async scheduledRecurringBilling() {
     if (!this.enabled) return this.logger.log('[recurring-billing] omitido (CRONS_ENABLED != true)');
     await this.runRecurringBilling({ manual: false });
   }
 
   /** Todos los días 03:00 — Cortado (≥2 meses) → Cartera. */
-  @Cron('0 3 * * *', { name: 'cartera' })
+  @Cron('0 3 * * *', { name: 'cartera', timeZone: TZ })
   async scheduledCartera() {
     if (!this.enabled) return this.logger.log('[cartera] omitido (CRONS_ENABLED != true)');
     await this.runCartera({ manual: false });
   }
 
   /** Diario 04:00 — tasa de cambio (stub). */
-  @Cron(CronExpression.EVERY_DAY_AT_4AM, { name: 'exchange-rate' })
+  @Cron(CronExpression.EVERY_DAY_AT_4AM, { name: 'exchange-rate', timeZone: TZ })
   async scheduledExchangeRate() {
     if (!this.enabled) return;
     await this.runExchangeRate({ manual: false });
   }
 
   /** Diario 06:00 — recordatorios de cartera por correo. */
-  @Cron('0 6 * * *', { name: 'reminders' })
+  @Cron('0 6 * * *', { name: 'reminders', timeZone: TZ })
   async scheduledReminders() {
     if (!this.enabled) return this.logger.log('[reminders] omitido (CRONS_ENABLED != true)');
     await this.runReminders({ manual: false });
@@ -222,8 +227,14 @@ export class CronService {
         const res = await this.mail.sendTemplate('OVERDUE', email, {
           nombre: name, abonado: String(s.abonado ?? ''), deuda: cop(debt[s.id] ?? 0), empresa: company?.name ?? 'Vestel',
         });
-        await this.prisma.subscriber.update({ where: { id: s.id }, data: { lastEmailReminderAt: new Date() } });
-        if (res.sent) sent++; else failed++;
+        // Solo marcar el dedupe si el correo SALIÓ. Marcarlo también en el fallo
+        // suprimía el reintento 7 días: un SMTP con hipo dejaba al moroso sin aviso.
+        if (res.sent) {
+          await this.prisma.subscriber.update({ where: { id: s.id }, data: { lastEmailReminderAt: new Date() } });
+          sent++;
+        } else {
+          failed++;
+        }
         await sleep(120);
       }
       const detail = `recordatorios enviados: ${sent}${failed ? `, fallidos: ${failed}` : ''} (candidatos: ${subs.length})`;

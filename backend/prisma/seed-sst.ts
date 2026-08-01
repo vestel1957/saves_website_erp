@@ -2,14 +2,12 @@
  * SST seed. Idempotent — safe to run multiple times.
  * Run with:  npx ts-node prisma/seed-sst.ts
  *
- * Seeds SST permissions/roles (self-contained), an SST demo user, and a small
- * demo dataset (employee, risk matrix, EPP product, inspection template).
- *
- * Default SST login →  sst@bhdc.dev  /  sst123
+ * Seeds SST permissions and a small demo dataset (employee, risk matrix, EPP
+ * product, inspection template). Ya NO siembra roles ni usuario de demostración:
+ * ver la nota más abajo.
  */
 import { PrismaClient } from '@prisma/client';
-import { ALL_SST_PERMISSIONS, SST_ROLES } from '../src/auth/permissions.catalog';
-import { hashPassword } from '../src/auth/crypto.util';
+import { ALL_SST_PERMISSIONS } from '../src/auth/permissions.catalog';
 
 const prisma = new PrismaClient();
 
@@ -30,39 +28,11 @@ async function main() {
   });
   console.log(`✓ ${ALL_SST_PERMISSIONS.length} permisos SST`);
 
-  // ---- SST roles + role-permissions --------------------------------------
-  for (const r of SST_ROLES) {
-    const role = await prisma.role.upsert({
-      where: { key: r.key },
-      update: { name: r.name, description: r.description },
-      create: { key: r.key, name: r.name, description: r.description },
-    });
-    const perms = await prisma.permission.findMany({ where: { key: { in: r.permissions } } });
-    for (const perm of perms) {
-      await prisma.rolePermission.upsert({
-        where: { roleId_permissionId: { roleId: role.id, permissionId: perm.id } },
-        update: {},
-        create: { roleId: role.id, permissionId: perm.id },
-      });
-    }
-  }
-  console.log(`✓ ${SST_ROLES.length} roles SST`);
-
-  // ---- SST demo user -----------------------------------------------------
-  const adminRole = await prisma.role.findUnique({ where: { key: 'sst-admin' } });
-  const user = await prisma.user.upsert({
-    where: { email: 'sst@bhdc.dev' },
-    update: { name: 'Sofía SST', passwordHash: hashPassword('sst123'), isActive: true },
-    create: { email: 'sst@bhdc.dev', name: 'Sofía SST', passwordHash: hashPassword('sst123') },
-  });
-  if (adminRole) {
-    await prisma.userRole.upsert({
-      where: { userId_roleId: { userId: user.id, roleId: adminRole.id } },
-      update: {},
-      create: { userId: user.id, roleId: adminRole.id },
-    });
-  }
-  console.log('✓ usuario sst@bhdc.dev / sst123  (sst-admin)');
+  // Los roles SST (y su usuario de demostración) se retiraron el 2026-07-29:
+  // el módulo nunca se construyó y sus tres roles llevaban meses en el selector
+  // sin que nadie los pudiera usar. Los permisos siguen sembrándose porque las
+  // tablas SST sí existen en el esquema; cuando haya pantallas, los roles se
+  // diseñan contra ellas.
 
   // ---- demo employee -----------------------------------------------------
   const employee = await prisma.employee.upsert({

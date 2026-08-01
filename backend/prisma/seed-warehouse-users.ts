@@ -8,8 +8,10 @@
  *
  * Roles típicos de bodega (ya existen en el sistema):
  *   - 'warehouse-manager'  → jefe de bodega (crea OC, aprueba, ajustes, conteos…)
- *   - 'warehouse-clerk'    → auxiliar (movimientos, recepciones, solicitudes)
- *   - 'maintenance-technician' → técnico (ejecuta sus órdenes de trabajo)
+ *
+ * Los roles 'warehouse-clerk' y 'maintenance-technician' se retiraron el
+ * 2026-07-29: duplicaban al jefe de bodega en solo lectura y mandaban sobre un
+ * módulo de órdenes de trabajo que no existe.
  *   - 'auditor'            → solo lectura / consulta
  * (Lista completa de roles: src/auth/permissions.catalog.ts → ALL_ROLES)
  */
@@ -21,8 +23,6 @@ const prisma = new PrismaClient();
 // 👇 EDITA ESTO con tu equipo real antes de ejecutar.
 const USERS: { email: string; name: string; password: string; roleKey: string }[] = [
   { email: 'jefe.bodega@tuempresa.com', name: 'Jefe de Bodega', password: 'Cambiar123*', roleKey: 'warehouse-manager' },
-  { email: 'auxiliar1@tuempresa.com', name: 'Auxiliar de Bodega 1', password: 'Cambiar123*', roleKey: 'warehouse-clerk' },
-  { email: 'auxiliar2@tuempresa.com', name: 'Auxiliar de Bodega 2', password: 'Cambiar123*', roleKey: 'warehouse-clerk' },
 ];
 
 async function main() {

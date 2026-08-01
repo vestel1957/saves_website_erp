@@ -37,3 +37,7 @@ Thumbs.db
 # cobertura de tests
 coverage/
 **/coverage/
+
+# runtime
+backend/uploads/
+__pycache__/

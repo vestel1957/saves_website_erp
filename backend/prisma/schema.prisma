@@ -722,7 +722,57 @@ model User {
   workOrdersAssigned    WorkOrder[]         @relation("WorkOrderAssignee") // órdenes de trabajo asignadas (técnico)
   workOrdersCreated     WorkOrder[]         @relation("WorkOrderCreatedBy") // órdenes de trabajo creadas (jefe)
   warehousesResponsible Warehouse[]         @relation("WarehouseResponsible") // bodegas de las que es responsable
+  materialWarehousesManaged MaterialWarehouse[] @relation("MaterialWarehouseManager") // bodegas de material que tiene a cargo
+  // Bandeja de WhatsApp: conversaciones que tiene asignadas, las que cerró y los
+  // mensajes que escribió de su puño (los del bot no llevan autor).
+  waConvsAssigned       WhatsappConversation[] @relation("WhatsappConvAssignee")
+  waConvsResolved       WhatsappConversation[] @relation("WhatsappConvResolver")
+  waMessagesSent        WhatsappMessage[]      @relation("WhatsappMessageSender")
+  notifications         Notification[]
+  // Cargos de los que es encargado (call center, bodega…): a dónde van los avisos.
+  responsibilities      Responsibility[]
+  /// Teléfono al que le llegan los CÓDIGOS DE FIRMA (E.164 sin '+'). Campo propio y
+  /// no `whatsappPhone` a propósito: ése es la identidad del chatbot (hereda los
+  /// permisos RBAC de la cuenta y lo vincula sistemas), y el dueño del perfil no
+  /// puede tocarlo. Este lo pone y lo cambia el usuario desde /perfil.
+  signaturePhone        String?
+  /// Cuándo se comprobó que ese número recibe de verdad (código de prueba acertado).
+  /// Sin verificar se puede firmar igual — el freno es tener el teléfono, no el sello.
+  signaturePhoneVerifiedAt DateTime?
+  signatureOtps         SignatureOtp[]
   createdAt             DateTime            @default(now())
+}
+
+/// Código de un solo uso (OTP) que confirma una FIRMA (hoy: aprobar una orden de
+/// compra). Sale por WhatsApp al `signaturePhone` del firmante y muere al usarse.
+///
+/// El código NO se guarda: va hasheado con scrypt igual que una contraseña, así que
+/// ni con la base delante se puede firmar por otro. Las filas se conservan tras
+/// consumirse porque son el rastro de auditoría de la firma (a qué número salió,
+/// cuándo, cuántos intentos costó).
+model SignatureOtp {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Qué se está firmando: 'purchase.approve' | 'profile.verify'.
+  purpose    String
+  /// Id de lo firmado (la orden). null en la prueba del perfil, que no firma nada.
+  targetId   String?
+  codeHash   String
+  /// A dónde salió, tal cual se envió (E.164 sin '+'), para el rastro.
+  phone      String
+  /// 'whatsapp' hoy; queda explícito para no reescribir la tabla si mañana entra otro canal.
+  channel    String    @default("whatsapp")
+  /// true = no hubo envío real (gate de simulación apagado): la firma vale pero se marca.
+  simulated  Boolean   @default(false)
+  attempts   Int       @default(0)
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  // Buscar el código vivo de una firma concreta y limitar el reenvío.
+  @@index([userId, purpose, targetId, createdAt])
+  @@index([expiresAt])
 }
 
 model Role {
@@ -1678,8 +1728,11 @@ enum EmployeeDocumentKind {
   OTHER
 }
 
-/// Archivo adjunto a un empleado (PDF/imagen/Word). El binario vive en disco
-/// (uploads/employees/) y se descarga por endpoint autenticado, no público.
+/// SUPERADO por `StaffDocument` (2026-07-28). Se modeló para `Employee`, que
+/// quedó con 0 registros: los 115 empleados vivos están en `Staff`, así que estos
+/// documentos no se podían colgar de nadie. Nunca tuvo código ni filas.
+/// Se conserva por si el módulo de RRHH (`Employee`) llega a poblarse; si se
+/// decide que no, esta tabla y su enum se pueden borrar sin perder nada.
 model EmployeeDocument {
   id           String               @id @default(cuid())
   employeeId   String
@@ -2872,6 +2925,7 @@ model Subscriber {
   transactions        Transaction[]
   electronicInvoices  ElectronicInvoice[]
   oltOnus             OltOnu[]
+  provisionRequests   OltProvisionRequest[]
   ports               Port[]
   equipment           Equipment[]
   tickets             Ticket[]
@@ -2882,8 +2936,12 @@ model Subscriber {
   oltLogs             OltActionLog[]
   playhubSubs         PlayhubSubscription[]
   waMessages          WhatsappMessage[]
+  waConversations     WhatsappConversation[]
+  contactos           SubscriberContact[]
+  verificaciones      ChatAccessVerification[]
   waSends             WhatsappSend[]
   lastEmailReminderAt DateTime? // último recordatorio de cartera por correo (dedupe)
+  lastWaReminderAt    DateTime? // último recordatorio de cartera por WhatsApp (dedupe + rotación)
   paymentOrders       PaymentOrder[]
 
   createdAt DateTime @default(now())
@@ -2894,6 +2952,10 @@ model Subscriber {
   @@index([phone1])
   @@index([status])
   @@index([branchId])
+  // Rotación de los recordatorios por WhatsApp: se recorren los morosos por
+  // "hace más que no le escribimos" (nulls primero), tope diario por el límite
+  // de Meta. Sin este índice el orden se resuelve ordenando todos los candidatos.
+  @@index([lastWaReminderAt])
   // Búsqueda por texto (ILIKE '%tok%'): índices GIN trigram evitan el seq scan
   // sobre ~21k filas. Requiere la extensión pg_trgm (ya instalada).
   @@index([firstName(ops: raw("gin_trgm_ops"))], type: Gin)
@@ -2995,13 +3057,151 @@ model WhatsappMessage {
   phone        String // contraparte en E.164 (sin +)
   body         String      @db.Text
   hasAudio     Boolean     @default(false)
+  /// Nota de voz guardada en disco (`uploads/whatsapp-audio`), relativa a esa carpeta.
+  ///
+  /// Antes el audio se bajaba de Kapso, se transcribía en memoria y se tiraba: en la
+  /// bandeja quedaba un "(nota de voz)" que no se podía ni leer ni escuchar, y quien
+  /// atendía tenía que llamar al cliente para saber qué había dicho. El binario es
+  /// pequeño (una nota de voz de WhatsApp son decenas de KB en Opus) y es la única
+  /// copia: Meta borra el media a los 30 días.
+  audioPath    String?
+  /// MIME tal como lo entregó WhatsApp (normalmente `audio/ogg; codecs=opus`).
+  audioMime    String?
   subscriberId String?
   subscriber   Subscriber? @relation(fields: [subscriberId], references: [id], onDelete: SetNull)
+  /// Quién escribió, cuando lo escribió UNA PERSONA desde la bandeja. null en un
+  /// saliente = lo mandó el sistema (bot, alerta, campaña). Sin esto el hilo no
+  /// distingue "le respondió Ana" de "le contestó el bot", que es justo lo que hay
+  /// que saber al retomar una conversación escalada.
+  sentById     String?
+  sentBy       User?       @relation("WhatsappMessageSender", fields: [sentById], references: [id], onDelete: SetNull)
   createdAt    DateTime    @default(now())
 
   @@index([phone])
   @@index([subscriberId])
   @@index([createdAt])
+  /// El hilo se lee por teléfono y en orden cronológico: filtro + orden en un índice.
+  @@index([phone, createdAt])
+}
+
+/// Aviso dirigido a UNA persona, para la campanita.
+///
+/// Nace con la bandeja de WhatsApp pero no es de WhatsApp: `kind` y `link` son texto
+/// libre para que cualquier módulo avise sin tocar este modelo.
+///
+/// `groupKey` es lo que evita que la campanita se vuelva inútil: un cliente que manda
+/// seis mensajes seguidos es UN asunto, no seis avisos. Al notificar sobre una llave
+/// que ya tiene un aviso sin leer, se actualiza ese en vez de crear otro.
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind      String // whatsapp.mensaje | whatsapp.asignado | …
+  title     String
+  body      String?   @db.Text
+  /// Ruta del ERP a la que lleva al pulsarlo.
+  link      String?
+  /// Asunto al que pertenece (p. ej. `whatsapp:573001112233`).
+  groupKey  String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  /// La campanita pide "las mías, sin leer primero, recientes antes".
+  @@index([userId, readAt, createdAt])
+  @@index([userId, groupKey, readAt])
+}
+
+/// Encargado de un frente de trabajo: quién es el de call center, el de bodega, el
+/// de cartera.
+///
+/// Responde la pregunta que el RBAC NO responde. Los permisos dicen quién *puede*
+/// hacer algo —hoy 23 personas pueden abrir la bandeja de WhatsApp—, no quién
+/// *responde* por ello, y avisarle a los 23 equivale a no avisarle a nadie: un aviso
+/// sin dueño lo ignoran todos de buena fe. Aquí se le pone nombre al dueño.
+model Responsibility {
+  id     String @id @default(cuid())
+  /// Slug del cargo, validado contra el catálogo de `responsibilities.catalog.ts`.
+  /// Texto y no enum a propósito: sumar un cargo nuevo no debe costar una migración.
+  post   String
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// El titular del cargo. Los suplentes reciben el mismo aviso —para que nada se
+  /// caiga en vacaciones o en un turno—, pero de quien se espera respuesta es de él.
+  isPrimary      Boolean @default(false)
+  /// Además de la campanita, mandarle el aviso al WhatsApp del usuario. Exige que
+  /// tenga `whatsappPhone`; sin teléfono el aviso se queda en la campanita.
+  notifyWhatsapp Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  updatedBy String?
+
+  /// La misma persona no se nombra dos veces en el mismo cargo.
+  @@unique([post, userId])
+  /// Se consulta siempre igual: "los encargados de este cargo".
+  @@index([post])
+}
+
+/// Estado de una conversación en la bandeja de atención.
+enum WhatsappConvStatus {
+  BOT // la atiende el agente automático: nadie tiene que hacer nada
+  PENDIENTE // escalada a una persona y todavía sin dueño
+  ASIGNADA // alguien la tomó y está respondiendo
+  RESUELTA // atendida y cerrada; el bot vuelve a la conversación
+}
+
+/// Hilo de conversación con un número de WhatsApp: el índice de la bandeja.
+///
+/// Existe para no reconstruir la bandeja con un `groupBy` sobre WhatsappMessage cada
+/// vez que alguien la abre (esa tabla solo crece), y sobre todo porque los datos que
+/// hacen falta para ATENDER no son del mensaje sino de la conversación: quién la
+/// tiene, desde cuándo, si ya se resolvió.
+///
+/// `phone` en dígitos, igual que WhatsappMessage.phone. `convKey` es la llave del
+/// motor del bot (`kapso:<telefono>`, tal cual la arma el engine, sin normalizar):
+/// se guarda para poder silenciar al bot en ESA conversación sin adivinar el formato.
+model WhatsappConversation {
+  id            String             @id @default(cuid())
+  phone         String             @unique
+  convKey       String?
+  subscriberId  String?
+  subscriber    Subscriber?        @relation(fields: [subscriberId], references: [id], onDelete: SetNull)
+  status        WhatsappConvStatus @default(BOT)
+  /// Por qué llegó a una persona (lo que pidió el cliente, o "respondió un funcionario").
+  handoffReason String?
+  assignedToId  String?
+  assignedTo    User?              @relation("WhatsappConvAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  assignedAt    DateTime?
+  resolvedAt    DateTime?
+  resolvedById  String?
+  resolvedBy    User?              @relation("WhatsappConvResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
+  /// Último entrante: de aquí sale la ventana de 24 h de Meta. Fuera de ella no se
+  /// puede mandar texto libre, solo plantilla aprobada.
+  lastInboundAt DateTime?
+  lastMessageAt DateTime?
+  /// IN | OUT del último mensaje, para pintar la lista sin ir a buscarlo.
+  lastDirection String?
+  /// Recorte del último mensaje (vista previa de la lista).
+  preview       String?            @db.Text
+  /// Entrantes sin abrir desde la bandeja.
+  unread        Int                @default(0)
+  /// Orden cuya solución le estamos pidiendo confirmar al cliente (ver
+  /// TicketConfirmacionService). Mientras esté puesta, el siguiente mensaje del
+  /// cliente se interpreta de forma DETERMINISTA como "sí quedó" / "no quedó" en vez
+  /// de pasar por el modelo — igual que hacía SAM, pero sin dejarlo atrapado en un
+  /// bucle de "responda sí o no" si lo que escribe es otra cosa.
+  awaitingTicketId String?
+  /// Desde cuándo se espera. La espera caduca: si el cliente no contesta, el bot
+  /// vuelve a atenderlo con normalidad en vez de quedarse mudo para siempre.
+  awaitingSince    DateTime?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  @@index([status, lastMessageAt])
+  @@index([assignedToId, status])
+  @@index([lastMessageAt])
+  @@index([subscriberId])
 }
 
 enum WhatsappSendStatus {
@@ -3208,7 +3408,9 @@ model Plan {
   createdAt  DateTime    @default(now())
   updatedAt  DateTime    @updatedAt
 
-  services SubscriberService[]
+  services          SubscriberService[]
+  oltProfiles       PlanOltProfile[]
+  provisionRequests OltProvisionRequest[]
 
   @@index([kind])
   @@index([active])
@@ -3672,9 +3874,47 @@ model CalendarEvent {
   rel         Int? // 1=proyecto
   rid         Int? // id relacionado
   assignedBy  String? // asigno
+  priority    String    @default("Media") // Baja / Media / Alta / Urgente — mismo vocabulario que Ticket
 
   @@index([start])
   @@index([orderNo])
+}
+
+/// Pago fijo programado (2026-07-31): arriendo, servicios, vigilancia… Lo define
+/// CONTABILIDAD, queda atado a UNA caja y la cajera de esa caja registra su
+/// ejecución cada mes: el egreso cae al cierre de caja del día con su comprobante.
+model ScheduledPayment {
+  id            String                @id @default(cuid())
+  name          String // "Arriendo oficina Yopal"
+  category      String // categoría del egreso con la que cae al cierre
+  amount        Decimal               @db.Decimal(14, 2)
+  cashAccountId Int // CashAccount.legacyId de la caja dueña (mismo espacio de ids que Transaction.cashAccountId)
+  dayOfMonth    Int                   @default(1) // día del mes en que corresponde pagarlo
+  beneficiary   String? // a quién se le paga
+  note          String?
+  active        Boolean               @default(true)
+  createdById   String?
+  createdByName String?
+  created       DateTime              @default(now())
+  runs          ScheduledPaymentRun[]
+
+  @@index([cashAccountId, active])
+}
+
+/// Ejecución de un pago fijo: UNA por periodo (mes). Apunta al egreso que quedó
+/// en el cierre; el comprobante va adjunto a esa transacción (Transaction.attach).
+model ScheduledPaymentRun {
+  id             String           @id @default(cuid())
+  paymentId      String
+  payment        ScheduledPayment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  period         String // 'YYYY-MM' que cubre
+  amount         Decimal          @db.Decimal(14, 2)
+  transactionId  String? // Transaction.id del egreso creado
+  executedById   String?
+  executedByName String?
+  executedAt     DateTime         @default(now())
+
+  @@unique([paymentId, period])
 }
 
 /// Cotización (legacy `quotes`; estructura como factura, sin datos reales).
@@ -3757,6 +3997,12 @@ model Staff {
   createdAt  DateTime   @default(now())
   updatedAt  DateTime   @updatedAt
 
+  /// Órdenes de servicio asignadas a este funcionario (base del tablero de rendimiento).
+  tickets                 Ticket[]                 @relation("StaffTickets")
+
+  /// Hoja de vida, cédula, contrato y certificados de este funcionario.
+  documents               StaffDocument[]
+
   // Promociones que este funcionario tiene autorizadas para aplicar (m2m).
   promotions              Promotion[]              @relation("PromotionAssignees")
   promotionApplications   PromotionApplication[]
@@ -3764,6 +4010,48 @@ model Staff {
 
   @@index([role])
   @@index([areaId])
+}
+
+/// Tipos de documento de la carpeta de un funcionario.
+enum StaffDocumentKind {
+  CV // hoja de vida
+  IDENTITY // documento de identidad (cédula)
+  CONTRACT // contrato laboral
+  CERTIFICATE // certificados, exámenes médicos, cursos
+  OTHER
+}
+
+/// Documento adjunto a un funcionario (PDF, imagen o Word).
+///
+/// Cuelga de `Staff` y no de `Employee` a propósito: `Employee` es el modelo del
+/// módulo de RRHH y está vacío, mientras que los 115 empleados reales viven en
+/// `Staff`. Colgarlo del modelo "correcto en el papel" habría dado una carpeta de
+/// documentos que nadie podría usar.
+///
+/// El binario vive en disco (`uploads/staff/`) con un nombre derivado del MIME
+/// validado, nunca del nombre que manda el cliente (ver common/uploads.ts), y se
+/// descarga por endpoint autenticado: una hoja de vida trae cédula, dirección y
+/// teléfono, y no puede quedar servida como archivo estático público.
+model StaffDocument {
+  id           String            @id @default(cuid())
+  staffId      String
+  staff        Staff             @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  kind         StaffDocumentKind @default(OTHER)
+  /// Nombre con el que el usuario subió el archivo (para mostrar y descargar).
+  fileName     String
+  /// Nombre en disco (aleatorio + extensión derivada del MIME validado).
+  storedName   String
+  mimeType     String
+  size         Int // bytes
+  description  String?
+  /// Quién lo subió. Se guarda el nombre además del id: si la cuenta se borra,
+  /// el documento sigue diciendo quién lo cargó.
+  uploadedById String?
+  uploadedBy   String?
+  createdAt    DateTime          @default(now())
+
+  @@index([staffId, createdAt])
+  @@index([kind])
 }
 
 // ===== Promociones de facturación (legacy tabla `promos` de settings/promociones) =====
@@ -3942,8 +4230,18 @@ model MaterialWarehouse {
   legacyId      Int?       @unique
   title         String
   extra         String?
-  technicianRef String? // id_tecnico
+  technicianRef String? // id_tecnico -> Staff.username (bodega personal de un técnico)
+  /// Encargado de la bodega: es QUIEN RECIBE lo que entra aquí por traspaso, y el
+  /// único que puede firmar el acta. No se elige al emitir el traspaso, se lee de
+  /// aquí (por eso se administra en /inventario/bodegas).
+  ///
+  /// Sólo aplica a las bodegas generales: en una bodega de técnico manda
+  /// `technicianRef`, porque el dueño del material es el técnico.
+  managerId     String?
+  manager       User?      @relation("MaterialWarehouseManager", fields: [managerId], references: [id])
   materials     Material[]
+
+  @@index([managerId])
 }
 
 /// Material / producto de inventario (legacy `products`). Stock = qty por bodega (desnormalizado).
@@ -4000,6 +4298,16 @@ model MaterialActa {
   receivedBy          Int?
   receivedByName      String?
   receivedAt          DateTime?
+  /// Quien recibió, del stack nuevo (`receivedBy` es el id legacy).
+  receivedById        String?
+  /// Rastro de la firma de recepción: a qué WhatsApp salió el código, o si fue en
+  /// modo simulación. Lo arma `SignatureOtpService.rastro()` (propósito
+  /// `material.receive`); el código en sí vive en `SignatureOtp`, no aquí.
+  receivedSignature   String?
+  /// Cuándo y a qué número se le mandó el acta en PDF al designado (envío
+  /// automático al emitir). null = no se pudo mandar (sin celular o WhatsApp caído).
+  notifiedAt          DateTime?
+  notifiedTo          String?
   itemsCount          Int                @default(0)
   items               MaterialActaItem[]
   createdAt           DateTime           @default(now())
@@ -4023,37 +4331,82 @@ model MaterialActaItem {
 
 /// Orden de compra/servicio (legacy `purchase`). kind según supplier.category.
 model SupplyOrder {
-  id             String            @id @default(cuid())
-  legacyId       Int?              @unique
-  tid            Int               @unique
-  supplierId     String?
-  supplier       Supplier?         @relation(fields: [supplierId], references: [id])
-  supplierLegacy Int?
-  orderDate      DateTime?         @db.Date
-  dueDate        DateTime?         @db.Date
-  subtotal       Decimal           @default(0) @db.Decimal(18, 2)
-  shipping       Decimal           @default(0) @db.Decimal(18, 2)
-  discount       Decimal           @default(0) @db.Decimal(18, 2)
-  tax            Decimal           @default(0) @db.Decimal(18, 2)
-  total          Decimal           @default(0) @db.Decimal(18, 2)
-  paidAmount     Decimal           @default(0) @db.Decimal(18, 2)
-  status         String            @default("pendiente")
-  categoryRef    String? // idcat
-  warehouseRef   Int? // almacen_seleccionado
-  branchRef      String? // refer (sede)
-  notes          String?
-  itemsCount     Int               @default(0)
-  receivedBy     Int?
-  receivedAt     DateTime?
-  retentionType  String?
-  retention      Decimal           @default(0) @db.Decimal(18, 2)
-  kind           String            @default("compra") // compra | servicio
-  items          SupplyOrderItem[]
-  createdAt      DateTime          @default(now())
-  updatedAt      DateTime          @updatedAt
+  id              String             @id @default(cuid())
+  legacyId        Int?               @unique
+  tid             Int                @unique
+  supplierId      String?
+  supplier        Supplier?          @relation(fields: [supplierId], references: [id])
+  supplierLegacy  Int?
+  orderDate       DateTime?          @db.Date
+  dueDate         DateTime?          @db.Date
+  subtotal        Decimal            @default(0) @db.Decimal(18, 2)
+  shipping        Decimal            @default(0) @db.Decimal(18, 2)
+  discount        Decimal            @default(0) @db.Decimal(18, 2)
+  tax             Decimal            @default(0) @db.Decimal(18, 2)
+  total           Decimal            @default(0) @db.Decimal(18, 2)
+  paidAmount      Decimal            @default(0) @db.Decimal(18, 2)
+  status          String             @default("pendiente")
+  categoryRef     String? // idcat
+  warehouseRef    Int? // almacen_seleccionado
+  branchRef       String? // refer (sede)
+  notes           String?
+  itemsCount      Int                @default(0)
+  receivedBy      Int?
+  receivedAt      DateTime?
+  retentionType   String?
+  retention       Decimal            @default(0) @db.Decimal(18, 2)
+  kind            String             @default("compra") // compra | servicio
+  items           SupplyOrderItem[]
+  // Flujo de aprobación (legacy: eid/aid/a2id). Solo órdenes de la app (legacyId null)
+  // exigen aprobación para pagar/recibir; las migradas quedan como estaban.
+  createdById     String?
+  createdByName   String?
+  approvedById    String?
+  approvedByName  String?
+  approvedAt      DateTime?
+  approved2ById   String?
+  approved2ByName String?
+  approved2At     DateTime?
+  events          SupplyOrderEvent[]
+  files           SupplyOrderFile[]
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
 
   @@index([supplierId])
   @@index([status])
+}
+
+/// Bitácora de una orden de compra: creación, aprobaciones, recepciones, pagos,
+/// notas, ediciones. Es el rastro de auditoría que el legacy no tenía.
+model SupplyOrderEvent {
+  id         String      @id @default(cuid())
+  orderId    String
+  order      SupplyOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  action     String // CREAR | APROBAR | RECIBIR | PAGAR | NOTA | EDITAR | CANCELAR | FINALIZAR | ADJUNTO
+  fromStatus String?
+  toStatus   String?
+  detail     String?
+  userId     String?
+  userName   String?
+  createdAt  DateTime    @default(now())
+
+  @@index([orderId])
+}
+
+/// Adjunto de una orden de compra (factura del proveedor, cotización…).
+/// Binario en disco `uploads/orders/<orderId>/`, aquí solo la metadata.
+model SupplyOrderFile {
+  id             String      @id @default(cuid())
+  orderId        String
+  order          SupplyOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  originalName   String
+  storedName     String
+  mimeType       String
+  size           Int
+  uploadedByName String?
+  createdAt      DateTime    @default(now())
+
+  @@index([orderId])
 }
 
 model SupplyOrderItem {
@@ -4304,27 +4657,29 @@ model Mikrotik {
 
 /// OLT (legacy `olts`).
 model Olt {
-  id                 String   @id @default(cuid())
-  legacyId           Int?     @unique
+  id                 String                @id @default(cuid())
+  legacyId           Int?                  @unique
   name               String
   brand              String // marca
   ip                 String
-  port               String   @default("22")
-  tech               String   @default("GPON")
+  port               String                @default("22")
+  tech               String                @default("GPON")
   branchId           String?
-  branch             Branch?  @relation(fields: [branchId], references: [id])
+  branch             Branch?               @relation(fields: [branchId], references: [id])
   sedeLegacy         Int
   username           String
   password           String
-  isDefault          Boolean  @default(false)
-  online             Boolean  @default(false)
+  isDefault          Boolean               @default(false)
+  online             Boolean               @default(false)
   defaultLineProfile Int?
   defaultSrvProfile  Int?
   defaultVlan        Int?
   defaultGemport     Int?
   defaultUserVlan    Int?
   onus               OltOnu[]
-  createdAt          DateTime @default(now())
+  planProfiles       PlanOltProfile[]
+  provisionRequests  OltProvisionRequest[]
+  createdAt          DateTime              @default(now())
 
   @@index([branchId])
 }
@@ -4368,6 +4723,78 @@ model OltOnu {
 
   @@index([oltId])
   @@index([subscriberId])
+}
+
+/// Mapeo plan → parámetros de la OLT para el auto-aprovisionamiento.
+/// La VELOCIDAD del abonado se fija en el service-port vía traffic-table (índices
+/// inbound/outbound); esos índices NO son deducibles de la fibra (dependen del plan
+/// comercial que pagó el cliente), así que se declaran aquí. El resto (srv-profile,
+/// vlan, gemport, line-profile) puede quedar en null: el auto-alta lo deduce del
+/// modelo de la ONU (EquipmentID → srv-profile con ese nombre) y de los vecinos del
+/// puerto. `oltId` null = valores por defecto para TODAS las OLTs; una fila con
+/// `oltId` concreto SOBREESCRIBE ese default para esa OLT (los TID varían por equipo).
+model PlanOltProfile {
+  id          String   @id @default(cuid())
+  planId      String
+  plan        Plan     @relation(fields: [planId], references: [id], onDelete: Cascade)
+  oltId       String? // null = default para todas las OLTs; concreto = override
+  olt         Olt?     @relation(fields: [oltId], references: [id], onDelete: Cascade)
+  trafficIn   Int? // índice traffic-table `inbound` = columna RX = BAJADA del abonado
+  trafficOut  Int? // índice traffic-table `outbound` = columna TX = SUBIDA del abonado
+  lineprofile Int? // override; null = deducir del puerto
+  srvprofile  Int? // override; null = deducir del EquipmentID de la ONU
+  vlan        Int? // override; null = deducir del puerto
+  gemport     Int? // override; null = deducir del puerto
+  userVlan    Int? // override; null = usar vlan
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([planId, oltId])
+  @@index([planId])
+  @@index([oltId])
+}
+
+/// Cola de auto-alta semi-automática: registra la INTENCIÓN de autenticar una ONU
+/// (por SN) contra un abonado + plan. Un job vigila el autofind de las OLTs; cuando
+/// el SN aparece anunciándose, resuelve perfiles + velocidad y la autentica sola.
+/// La decisión humana (quién + qué plan) se toma aquí, al vender/instalar; la
+/// mecánica contra la OLT pasa después sin intervención. Los SN que aparecen SIN una
+/// solicitud en esta cola no se tocan nunca.
+model OltProvisionRequest {
+  id               String             @id @default(cuid())
+  sn               String // serial de la ONU (normalizado: mayúsculas, sin espacios)
+  subscriberId     String?
+  subscriber       Subscriber?        @relation(fields: [subscriberId], references: [id], onDelete: SetNull)
+  planId           String?
+  plan             Plan?              @relation(fields: [planId], references: [id], onDelete: SetNull)
+  oltId            String? // si se sabe la OLT; null = buscar el SN en todas
+  olt              Olt?               @relation(fields: [oltId], references: [id], onDelete: SetNull)
+  status           OltProvisionStatus @default(PENDING)
+  attempts         Int                @default(0)
+  lastError        String? // último aviso/fallo (mismatch, offline, sin plan mapeado…)
+  lastTriedAt      DateTime?
+  provisionedOnuId String? // OltOnu creado al autenticar
+  note             String? // nota libre del técnico
+  createdById      String?
+  createdByName    String?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  doneAt           DateTime?
+
+  @@index([sn])
+  @@index([status])
+  @@index([subscriberId])
+  @@index([oltId])
+}
+
+/// Estados de una solicitud de auto-alta (ver OltProvisionRequest).
+enum OltProvisionStatus {
+  PENDING // esperando que la ONU aparezca en autofind
+  PROVISIONING // el job la está autenticando ahora mismo
+  DONE // autenticada y con servicio verificado
+  REVIEW // autenticada pero con avisos (mismatch/offline) — requiere ojo humano
+  FAILED // falló el intento; se reintenta
+  CANCELLED // cancelada por un operador
 }
 
 /// VLAN por sede (legacy `vlans`).
@@ -4463,7 +4890,14 @@ model EquipmentWarehouse {
   legacyId    Int         @unique
   name        String // almacen
   description String? // descripcion
+  /// Sede a la que pertenece la bodega (`Branch.legacyId`), para acotar por sede igual
+  /// que las cajas (`CashAccount.branchLegacy`). El legacy no la tenía: se deduce del
+  /// nombre (ver `prisma/migrate-bodegas-equipos-sede-2026-07.ts`).
+  /// `null` = bodega sin sede (p. ej. "Depurados"): solo la mueve el jefe de bodega.
+  branchLegacy Int?
   equipment   Equipment[]
+
+  @@index([branchLegacy])
 }
 
 /// Equipo/CPE de inventario técnico (legacy `equipos`).
@@ -4524,10 +4958,26 @@ model EquipmentTransfer {
   approvedById      String? // aprueba/despacha (Jefe de bodega / inventario)
   approvedByName    String?
   approvedAt        DateTime?
-  receivedById      String? // recibe en la sede destino (caja)
+  receivedById      String? // recibe en la sede destino (caja) = firma de ENTRADA
   receivedByName    String?
   receivedAt        DateTime?
   rejectReason      String?
+  // --- Firma de SALIDA (solo transferencias ENTRE SEDES) -------------------
+  // Entre sedes la arma el jefe de bodega, pero el equipo no sale hasta que la
+  // cajera encargada de la sede ORIGEN firma la salida con un código OTP que le
+  // llega a su WhatsApp. Es la mitad de la cadena de custodia; la otra mitad es
+  // `received*` (la firma de ENTRADA, también con OTP).
+  //
+  // El código NO vive aquí: lo emite y lo consume `SignatureOtpService` (tabla
+  // `SignatureOtp`, propósitos `equipment.dispatch` / `equipment.receive`), que ya
+  // resuelve hash, intentos, vencimiento, envío y rastro. Aquí solo queda quién
+  // firmó, cuándo y con qué (`*Signature` = a qué WhatsApp salió el código, o si
+  // fue en modo simulación).
+  signedOutById     String? // firma la salida (cajera de la sede origen)
+  signedOutByName   String?
+  signedOutAt       DateTime?
+  signedOutSignature String? // rastro de la firma de salida
+  receivedSignature String? // rastro de la firma de entrada
   items             EquipmentTransferItem[]
 
   @@index([status])
@@ -4590,8 +5040,40 @@ model Ticket {
   finalDate         DateTime?        @db.Date // fecha_final
   invoiceLegacy     Int? // id_invoice
   invoiceBillLegacy Int? // id_factura
-  assigned          String? // asignado (técnico)
+  assigned          String? // asignado (técnico) — texto libre heredado del legacy
   par               Int?
+
+  // --- Atribución y tiempos reales (ver performance.service.ts) ---
+  /// Técnico resuelto a partir de `assigned`. Existe porque `assigned` es texto
+  /// libre: agregar rendimiento sobre un string es agregar sobre erratas. Se llena
+  /// al asignar y se rellenó hacia atrás cruzando `assigned` con `Staff.username`.
+  assignedStaffId String?
+  assignedStaff   Staff?    @relation("StaffTickets", fields: [assignedStaffId], references: [id])
+  /// Momento exacto de la asignación. `created` es `@db.Date` (sin hora), así que
+  /// no sirve para medir cuánto tarda un técnico: 0.51 días no es un dato.
+  assignedAt      DateTime?
+  /// Momento exacto del cierre, por lo mismo que `assignedAt` frente a `finalDate`.
+  resolvedAt      DateTime?
+
+  // --- Agendamiento (2026-07-31, ver support/agenda.service.ts) ---
+  // Hasta ahora NO existía fecha de agendamiento: `created` es la fecha en que se
+  // abrió la orden, no la del día en que se va a atender, y el panel del técnico
+  // tenía que fingir que "su cola abierta" era su agenda. La cajera agenda de
+  // verdad —reparte el día entre los técnicos y decide el ORDEN de las visitas—, así
+  // que eso necesita sus propios campos.
+  //
+  /// Día para el que está agendada. `null` = sin agendar (sigue siendo trabajo suyo,
+  /// pero nadie ha dicho cuándo). Es `date` y no `timestamp` a propósito: se agenda
+  /// el día, no la hora — ver la decisión de 2026-07-31.
+  scheduledFor    DateTime? @db.Date
+  /// Posición dentro del día PARA SU TÉCNICO: 1 es la primera visita. Se renumera
+  /// entera la columna en cada movimiento, así que no hay huecos ni empates.
+  scheduledSeq    Int?
+  /// Quién agendó y cuándo. La agenda es una instrucción de una persona a otra: si
+  /// el técnico pregunta "¿quién me puso esto de primero?", tiene que haber respuesta.
+  scheduledById   String?
+  scheduledByName String?
+  scheduledAt     DateTime?
   signatureName     String? // nombre_firma
   signatureCc       String? // cc_firma
   signatureRel      String? // parentesco_firma
@@ -4601,21 +5083,21 @@ model Ticket {
 
   // --- Geo-cerca del cierre (ver GeofenceService) ---
   /// Dónde estaba el funcionario al pasar la orden a RESUELTO.
-  closeLat          Float?
-  closeLng          Float?
+  closeLat       Float?
+  closeLng       Float?
   /// Error en metros que reportó su GPS. Sin esto la distancia no significa
   /// nada: 180 m con ±300 m de error no prueba que estuviera lejos.
-  closeAccuracyM    Float?
+  closeAccuracyM Float?
   /// Metros entre el funcionario y la coordenada del abonado al cerrar.
-  closeDistanceM    Float?
+  closeDistanceM Float?
   /// `true` cumplió la cerca · `false` la incumplió y cerró justificando ·
   /// `null` no aplicaba (orden remota, cliente sin coordenada, usuario exento).
-  closeGeoOk        Boolean?
+  closeGeoOk     Boolean?
   /// Motivo escrito por quien cerró estando fuera de rango. Es lo que se audita.
-  closeGeoReason    String?
+  closeGeoReason String?
   /// Señales de que la ubicación del cierre podría ser simulada (ver spoof.policy).
   /// Vacío = nada raro. No prueban nada por sí solas: son para mirar, no para acusar.
-  closeFlags        String[]         @default([])
+  closeFlags     String[] @default([])
 
   @@index([subscriberId])
   @@index([code])
@@ -4623,9 +5105,14 @@ model Ticket {
   @@index([type])
   @@index([created])
   @@index([assigned, created]) // filtro por técnico + orden (evita scan de ~314k filas)
+  @@index([assignedStaffId, created]) // tablero de rendimiento: métricas por técnico y periodo
   @@index([status, created]) // listado por defecto (status + orden por fecha): 309ms -> ~1ms
   @@index([priority, created]) // filtro por prioridad + orden
   @@index([closeGeoOk, finalDate]) // informe de cierres fuera de rango
+  // La agenda del día se lee siempre igual: "las de esta fecha, de este técnico, en
+  // su orden". El índice cubre las tres, así que la pantalla de la cajera no barre
+  // las 314k órdenes cada vez que pasa de un día al siguiente.
+  @@index([scheduledFor, assignedStaffId, scheduledSeq])
 }
 
 /// Material consumido en una orden de servicio. Al registrarse descuenta stock de la
@@ -4913,4 +5400,140 @@ model GeoPing {
   /// este técnico hoy": ambas son (userId, createdAt desc).
   @@index([userId, createdAt])
   @@index([createdAt])
+}
+
+/// Números de WhatsApp AUTORIZADOS a gestionar la cuenta de un abonado además del
+/// titular (el hijo, la esposa, el arrendatario que paga).
+///
+/// Nace de un problema real: el bot identifica al cliente por `Subscriber.phone1/2`,
+/// así que quien escribe desde otro celular cae en el agente público y no puede ni
+/// consultar su propia factura. Registrar el número suelto en la ficha NO sirve: el
+/// titular es uno solo y hay que poder saber QUIÉN autorizó a quién y revocarlo.
+///
+/// La autorización la da el TITULAR desde su propio WhatsApp (o un funcionario desde
+/// el ERP): un número en PENDIENTE no da acceso a nada hasta que alguien lo aprueba.
+model SubscriberContact {
+  id           String     @id @default(cuid())
+  subscriberId String
+  subscriber   Subscriber @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+
+  /// E.164 sin '+', como llega del webhook. Único: un celular gestiona UNA cuenta,
+  /// si no, al escribir no se sabría de qué cuenta hablar.
+  phone    String  @unique
+  name     String?
+  /// Parentesco o relación en palabras: "hijo", "esposa", "arrendatario".
+  relation String?
+
+  status     SubscriberContactStatus @default(PENDIENTE)
+  /// Quién lo autorizó: el teléfono del titular o el nombre del funcionario.
+  approvedBy String?
+  approvedAt DateTime?
+  /// Motivo que dio quien lo pidió, para que el titular sepa qué está aprobando.
+  note       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([subscriberId])
+  @@index([status])
+}
+
+enum SubscriberContactStatus {
+  /// Lo pidió alguien desde un número desconocido; no da acceso a nada todavía.
+  PENDIENTE
+  /// Autorizado: ese número es atendido como el abonado.
+  ACTIVO
+  /// Se le quitó el acceso. Se conserva la fila para dejar rastro de quién lo tuvo.
+  REVOCADO
+}
+
+/// Verificación de identidad de un número desconocido que dice ser (o representar) a
+/// un cliente.
+///
+/// El titular autorizando desde su propio WhatsApp sigue siendo la vía fuerte
+/// ([[SubscriberContact]]); esto es la vía para cuando el titular no tiene WhatsApp o
+/// no está disponible, y por eso NO da el mismo acceso:
+///
+///   BASICO   — acertó documento + nombre + teléfono del titular. Son datos que
+///              cualquiera puede leer en una factura, así que solo habilita lo que no
+///              hace daño si se equivocó de persona: estado del servicio, cuánto se
+///              debe en total, reportar una falla y pedir visita.
+///   COMPLETO — además tecleó el código que se le mandó al WhatsApp del titular. Eso
+///              ya prueba posesión del teléfono registrado, así que vale como el
+///              titular: facturas en PDF, pagos, cambios.
+///
+/// `expiraAt` existe porque un celular prestado no puede quedar verificado para
+/// siempre, e `intentos`/`bloqueadoHasta` porque sin freno se pueden ir tanteando
+/// cédulas hasta acertar.
+model ChatAccessVerification {
+  id           String      @id @default(cuid())
+  /// E.164 sin '+', tal como llega del webhook.
+  phone        String      @unique
+  subscriberId String?
+  subscriber   Subscriber? @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+
+  nivel        ChatAccessLevel @default(NINGUNO)
+  verificadoAt DateTime?
+  expiraAt     DateTime?
+
+  /// Código de un solo uso enviado al titular. Se guarda su hash, no el código.
+  otpHash     String?
+  otpExpiraAt DateTime?
+  otpIntentos Int       @default(0)
+
+  /// Intentos fallidos de validación por datos, para frenar el tanteo.
+  intentos       Int       @default(0)
+  bloqueadoHasta DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([subscriberId])
+  @@index([expiraAt])
+}
+
+enum ChatAccessLevel {
+  /// Sin verificar: se atiende como público.
+  NINGUNO
+  /// Datos correctos. Acceso acotado a lo que no expone la cuenta.
+  BASICO
+  /// Código confirmado desde el WhatsApp del titular. Acceso como el titular.
+  COMPLETO
+}
+
+/// Foto de un indicador en una fecha. Es la memoria histórica de la empresa.
+///
+/// POR QUÉ EXISTE: el ERP guarda ESTADOS ACTUALES, no fotos en el tiempo. Se intentó
+/// deducir el pasado del log de cambios (`SubscriberStatusHistory`) y falla al 12%:
+/// reconstruir "activos hoy" desde ahí da 5.321 cuando el real es 4.755. Un número
+/// con aspecto de exacto y ese desvío es peor que no tenerlo. Así que no se deduce:
+/// se fotografía cada noche y se guarda.
+///
+/// POR QUÉ EN FILAS Y NO EN COLUMNAS: hay métricas que SÍ se pueden reconstruir hacia
+/// atrás (facturación, recaudo, altas, órdenes — sus fuentes son fiables y auditables)
+/// y otras que NO (los estados del abonado). Con una fila por métrica, lo que no se
+/// puede reconstruir sencillamente NO EXISTE para esa fecha, y una consulta que no lo
+/// encuentra sabe que no hay dato. En una tabla ancha habría que rellenarlo con NULL o
+/// con cero, y un cero se lee como "ese día no hubo ninguno".
+model MetricPoint {
+  id      String   @id @default(cuid())
+  /// Día medido; si `periodo` = M, el primer día de ese mes.
+  fecha   DateTime @db.Date
+  /// D = día · M = mes. Los conteos DISTINTOS (abonados facturados en el mes) no se
+  /// pueden sumar día a día, así que viven con su propio periodo.
+  periodo String   @default("D")
+  /// Clave estable, con espacio de nombres: "abonados.activos", "cartera.total"…
+  metrica String
+  /// `Branch.id`, o cadena vacía para el consolidado de la empresa. Vacía y no NULL a
+  /// propósito: en Postgres dos NULL no chocan en un índice único, así que con NULL
+  /// se podrían colar filas duplicadas del consolidado.
+  sede    String   @default("")
+  valor   Float
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([fecha, periodo, metrica, sede])
+  @@index([metrica, fecha])
+  @@index([fecha])
 }

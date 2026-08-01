@@ -6,11 +6,9 @@
  * (configurable — rules live in data, not code), a demo payroll-manager user,
  * and a demo contract for the SST demo employee.
  *
- * Default payroll login →  nomina@bhdc.dev  /  nomina123
  */
 import { PrismaClient } from '@prisma/client';
-import { ALL_PAYROLL_PERMISSIONS, PAYROLL_ROLES } from '../src/auth/permissions.catalog';
-import { hashPassword } from '../src/auth/crypto.util';
+import { ALL_PAYROLL_PERMISSIONS } from '../src/auth/permissions.catalog';
 
 const prisma = new PrismaClient();
 
@@ -73,23 +71,10 @@ async function main() {
   }
   console.log(`✓ ${ALL_PAYROLL_PERMISSIONS.length} permisos de nómina`);
 
-  // ---- roles + role-permissions ------------------------------------------
-  for (const r of PAYROLL_ROLES) {
-    const role = await prisma.role.upsert({
-      where: { key: r.key },
-      update: { name: r.name, description: r.description },
-      create: { key: r.key, name: r.name, description: r.description },
-    });
-    const perms = await prisma.permission.findMany({ where: { key: { in: r.permissions } } });
-    for (const perm of perms) {
-      await prisma.rolePermission.upsert({
-        where: { roleId_permissionId: { roleId: role.id, permissionId: perm.id } },
-        update: {},
-        create: { roleId: role.id, permissionId: perm.id },
-      });
-    }
-  }
-  console.log(`✓ ${PAYROLL_ROLES.length} roles de nómina`);
+  // Los roles de nómina se retiraron el 2026-07-29: el módulo no tiene
+  // pantallas y sus dos roles llevaban meses en el selector sin poder usarse.
+  // Los permisos se siguen sembrando (el super-admin los necesita abajo);
+  // cuando existan las pantallas, los roles se diseñan contra ellas.
 
   // ---- mantener al super-admin con acceso total --------------------------
   const superAdmin = await prisma.role.findUnique({ where: { key: 'super-admin' } });
@@ -141,22 +126,6 @@ async function main() {
     });
   }
   console.log(`✓ ${CONCEPTS.length} conceptos de nómina`);
-
-  // ---- demo payroll-manager user ----------------------------------------
-  const mgrRole = await prisma.role.findUnique({ where: { key: 'payroll-manager' } });
-  const user = await prisma.user.upsert({
-    where: { email: 'nomina@bhdc.dev' },
-    update: { name: 'Nidia Nómina', passwordHash: hashPassword('nomina123'), isActive: true },
-    create: { email: 'nomina@bhdc.dev', name: 'Nidia Nómina', passwordHash: hashPassword('nomina123') },
-  });
-  if (mgrRole) {
-    await prisma.userRole.upsert({
-      where: { userId_roleId: { userId: user.id, roleId: mgrRole.id } },
-      update: {},
-      create: { userId: user.id, roleId: mgrRole.id },
-    });
-  }
-  console.log('✓ usuario nomina@bhdc.dev / nomina123  (payroll-manager)');
 
   // ---- demo contract for the SST demo employee --------------------------
   const employee = await prisma.employee.findUnique({ where: { docNumber: '1000000001' } });

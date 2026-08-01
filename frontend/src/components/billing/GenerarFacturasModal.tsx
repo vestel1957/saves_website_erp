@@ -10,7 +10,7 @@ import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { mensajeDeError } from "@/lib/errores";
 
-type PlanRow = { subscriberId: string; action: "BILL" | "SKIP" | "FAIL"; reason?: string; error?: string; total?: number };
+type PlanRow = { subscriberId: string; action: "BILL" | "SKIP" | "FAIL"; reason?: string; error?: string; total?: number; planDeUltimaFactura?: boolean };
 type RunResult = {
   targeted: number; generated: number; skipped: number; failed: number;
   dryRun?: boolean; invoiceDate?: string; dueDate?: string; plan?: PlanRow[];
@@ -125,6 +125,12 @@ export function GenerarFacturasModal({
               <Badge tone={preview.generated > 0 ? "success" : "default"} label={`${preview.generated} se facturarían`} />
               <Badge tone={preview.skipped > 0 ? "info" : "default"} label={`${preview.skipped} omitidos`} />
               {preview.failed > 0 && <Badge tone="error" label={`${preview.failed} con error`} />}
+              {(() => {
+                // Abonados sin servicio registrado cuyo plan se derivó de su última
+                // factura (hueco de la migración): se enseña para que no pase colado.
+                const n = (preview.plan ?? []).filter((p) => p.action === "BILL" && p.planDeUltimaFactura).length;
+                return n > 0 ? <Badge tone="warning" label={`${n} con plan de su última factura`} /> : null;
+              })()}
             </div>
 
             {/* Desglose de los omitidos/fallidos por motivo. */}

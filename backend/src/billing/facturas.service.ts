@@ -57,8 +57,13 @@ export type GeneratePlanRow = {
   total?: number;
   serviceCombo?: string | null;
   serviceTv?: string | null;
+  /** true = el plan no salió de SubscriberService sino de su última factura. */
+  planDeUltimaFactura?: boolean;
   items?: { productName: string | null; qty: number; price: number; taxRate: number; taxTotal: number }[];
 };
+
+/** Línea de servicio derivada (misma forma que SubscriberService en la corrida). */
+type ServicioDerivado = { kind: string; planName: string; price: number; taxRate: number };
 
 /** Escritura de facturación (Cobranza): crear factura, generar en lote y notas C/D. */
 @Injectable()
@@ -257,6 +262,78 @@ export class FacturasService {
     }
   }
 
+  /**
+   * Plan facturable de los abonados SIN fila en SubscriberService, derivado de sus
+   * facturas — la migración dejó ese hueco (los mismos clientes cuya ficha ya
+   * enseña el plan leído de la factura, ver `subscribers.service.ts`).
+   *
+   * NO es un clon de la última factura, por dos trampas reales de esos datos:
+   *   - La última factura puede ser un PRORRATEO de mes parcial ($8.145 cuando la
+   *     mensualidad es $77.000) y hasta omitir un servicio que sí tiene (la TV no
+   *     aparece en el prorrateo pero sí todos los meses anteriores).
+   *   - Los campos combo/television traen basura del legacy ("Diseno e Importacion
+   *     de Datos" por $476.000 NO es una mensualidad).
+   *
+   * Regla, en una consulta:
+   *   QUÉ planes: los ítems de sus últimas 2 facturas de mensualidad (facturas con
+   *     al menos un ítem que casa con el catálogo `Plan`, que además da el tipo).
+   *     2 y no 1 para que un prorrateo corto no borre un servicio; 2 y no más para
+   *     que un servicio retirado de verdad no reviva.
+   *   A QUÉ precio: el más repetido de ese plan en los últimos 6 meses (empate lo
+   *     gana el mayor: la mensualidad completa siempre supera al prorrateo). Sin
+   *     precio en 6 meses no se factura: cobrar de memoria vieja es peor que omitir.
+   *   Cliente NUEVO (el precio se vio UNA sola vez y por debajo del catálogo): esa
+   *     única vez es el prorrateo del alta, no la mensualidad → manda el precio de
+   *     catálogo del plan (con nombres duplicados en `Plan`, el mayor).
+   *
+   * `before` acota a facturas anteriores al mes (para asIfUnbilled).
+   */
+  private async planDeUltimaFactura(ids: string[], monthStart: Date, before?: Date): Promise<Map<string, ServicioDerivado[]>> {
+    const porAbonado = new Map<string, ServicioDerivado[]>();
+    if (!ids.length) return porAbonado;
+    const corte = before ? Prisma.sql`AND i."invoiceDate" < ${before}` : Prisma.empty;
+    const corte2 = before ? Prisma.sql`AND i2."invoiceDate" < ${before}` : Prisma.empty;
+    const ventana = new Date(Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() - 6, 1));
+
+    const filas = await this.prisma.$queryRaw<
+      { subscriberId: string; kind: string; name: string; price: Prisma.Decimal; taxRate: Prisma.Decimal | null; veces: bigint; planPrice: Prisma.Decimal | null }[]
+    >`
+      WITH con_plan AS (
+        SELECT i."subscriberId", i.id,
+               dense_rank() OVER (PARTITION BY i."subscriberId" ORDER BY i."invoiceDate" DESC, i.tid DESC) AS rk
+          FROM "SubInvoice" i
+         WHERE i."subscriberId" IN (${Prisma.join(ids)}) ${corte}
+           AND EXISTS (SELECT 1 FROM "SubInvoiceItem" it JOIN "Plan" pl
+                         ON lower(btrim(pl.name)) = lower(btrim(COALESCE(it."productName", it.description)))
+                       WHERE it."invoiceId" = i.id AND it.price > 0)
+      ),
+      candidatos AS (
+        SELECT DISTINCT c."subscriberId", pl.kind::text AS kind, pl.name
+          FROM con_plan c
+          JOIN "SubInvoiceItem" it ON it."invoiceId" = c.id
+          JOIN "Plan" pl ON lower(btrim(pl.name)) = lower(btrim(COALESCE(it."productName", it.description)))
+         WHERE c.rk <= 2 AND it.price > 0
+      )
+      SELECT DISTINCT ON (c."subscriberId", c.kind, c.name)
+             c."subscriberId", c.kind, c.name, it.price, it."taxRate", count(*) AS veces,
+             (SELECT max(p2.price) FROM "Plan" p2
+               WHERE lower(btrim(p2.name)) = lower(btrim(c.name))) AS "planPrice"
+        FROM candidatos c
+        JOIN "SubInvoice" i2 ON i2."subscriberId" = c."subscriberId"
+        JOIN "SubInvoiceItem" it ON it."invoiceId" = i2.id
+         AND lower(btrim(COALESCE(it."productName", it.description))) = lower(btrim(c.name))
+       WHERE it.price > 0 AND i2."invoiceDate" >= ${ventana} ${corte2}
+       GROUP BY c."subscriberId", c.kind, c.name, it.price, it."taxRate"
+       ORDER BY c."subscriberId", c.kind, c.name, count(*) DESC, it.price DESC`;
+    for (const f of filas) {
+      const arr = porAbonado.get(f.subscriberId) ?? [];
+      const esProrrateoDeAlta = Number(f.veces) <= 1 && num(f.planPrice) > num(f.price);
+      arr.push({ kind: f.kind, planName: f.name, price: esProrrateoDeAlta ? num(f.planPrice) : num(f.price), taxRate: num(f.taxRate) });
+      porAbonado.set(f.subscriberId, arr);
+    }
+    return porAbonado;
+  }
+
   /** Cuerpo real de la generación. Se llama SIEMPRE bajo el cerrojo de `generate`. */
   private async generateLocked(
     dto: GenerateInvoicesDto,
@@ -332,6 +409,14 @@ export class FacturasService {
     const curYm = `${invoiceDate.getUTCFullYear()}-${invoiceDate.getUTCMonth()}`;
     const ymOf = (d: Date | null | undefined) => (d ? `${d.getUTCFullYear()}-${d.getUTCMonth()}` : null);
 
+    // Respaldo para los abonados sin SubscriberService (hueco de la migración):
+    // su plan se deriva de sus facturas, igual que en la ficha. Solo se consulta
+    // para quienes de verdad lo necesitan y aún no tienen factura del mes.
+    const sinServicio = subs
+      .filter((s) => !s.services.length && !alreadyBilled.has(s.id))
+      .map((s) => s.id);
+    const planFactura = await this.planDeUltimaFactura(sinServicio, monthStart, asIfUnbilled ? monthStart : undefined);
+
     let generated = 0, skipped = 0, failed = 0;
     const plan: GeneratePlanRow[] = [];
     const bill = (row: GeneratePlanRow) => { plan.push(row); return row; };
@@ -346,8 +431,12 @@ export class FacturasService {
       // dentro del mes que se factura, NO se genera el mes completo (ese mes lo cubre
       // el flujo de reconexión/prorrateo) → evita el doble cobro al reactivado.
       if (s.previousStatus === 'RETIRADO' && ymOf(s.statusChangedAt) === curYm) { skip(s.id, 'REACTIVATED'); continue; }
-      // Sin servicios activos con precio → nada que cobrar este mes.
-      if (!s.services.length) { skip(s.id, 'NO_SERVICES'); continue; }
+      // Sin servicios activos con precio → se intenta el plan de sus facturas;
+      // si tampoco hay de dónde derivarlo, nada que cobrar este mes.
+      const servicios: { kind: string; planName: string | null; price: Prisma.Decimal | number | null; taxRate: Prisma.Decimal | number | null }[] =
+        s.services.length ? s.services : (planFactura.get(s.id) ?? []);
+      const deUltimaFactura = !s.services.length && servicios.length > 0;
+      if (!servicios.length) { skip(s.id, 'NO_SERVICES'); continue; }
 
       // ¿Mes de promoción gratis? → no se factura; se descuenta el contador una vez/mes.
       const promo = promoBySub.get(s.id);
@@ -368,7 +457,7 @@ export class FacturasService {
       // del servicio (internet 0, TV 19); precio = base sin IVA (computeTotals lo suma).
       let serviceCombo: string | null = null;
       let serviceTv: string | null = null;
-      const items: InvoiceItemDto[] = s.services.map((svc) => {
+      const items: InvoiceItemDto[] = servicios.map((svc) => {
         const name = svc.planName || svc.kind;
         if (svc.kind === 'INTERNET') serviceCombo = svc.planName ?? serviceCombo;
         if (svc.kind === 'TV') serviceTv = svc.planName ?? serviceTv;
@@ -378,6 +467,7 @@ export class FacturasService {
       const shape = {
         subscriberId: s.id, action: 'BILL' as const,
         subtotal, tax, total, serviceCombo, serviceTv,
+        ...(deUltimaFactura ? { planDeUltimaFactura: true } : {}),
         items: rows.map((r) => ({ productName: r.productName ?? null, qty: r.qty, price: r.price, taxRate: r.taxRate, taxTotal: r.taxTotal })),
       };
 

@@ -34,6 +34,9 @@ export const LIST_PROJECTION = [
   '_tags',
   'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Username',
   'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ExternalIPAddress',
+  // Respaldo de identidad: muchos CPEs no exponen el Username en el árbol WAN,
+  // pero el ISP configura el usuario del abonado como ConnectionRequestUsername.
+  'InternetGatewayDevice.ManagementServer.ConnectionRequestUsername',
 ];
 
 /**
@@ -133,7 +136,9 @@ export class GenieacsNbi {
         serial: did._SerialNumber ?? null,
         lastInform: d._lastInform ?? null,
         tags: Array.isArray(d._tags) ? d._tags : [],
-        pppUser: leaf(d, `${wanBase}.Username`) ?? null,
+        pppUser: leaf(d, `${wanBase}.Username`)
+          ?? leaf(d, 'InternetGatewayDevice.ManagementServer.ConnectionRequestUsername')
+          ?? null,
         wanIp: leaf(d, `${wanBase}.ExternalIPAddress`) ?? null,
       };
     });

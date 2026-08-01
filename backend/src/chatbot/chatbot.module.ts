@@ -10,14 +10,29 @@ import { ReportsModule } from '../reports/reports.module';
 import { DashboardModule } from '../dashboard/dashboard.module';
 import { PlansModule } from '../plans/plans.module';
 import { ConfigDataModule } from '../config/config.module';
+import { StaffModule } from '../staff/staff.module';
+import { OrdersModule } from '../orders/orders.module';
+import { EinvoiceModule } from '../einvoice/einvoice.module';
+import { CollectionsModule } from '../collections/collections.module';
+import { PromotionsModule } from '../promotions/promotions.module';
+import { ReturnsModule } from '../returns/returns.module';
+import { ProjectsModule } from '../projects/projects.module';
+import { GeoModule } from '../geo/geo.module';
+import { SearchModule } from '../search/search.module';
 import { ChatbotService } from './chatbot.service';
 import { ChatbotIdentityService } from './chatbot-identity.service';
 import { ChatbotLinkService } from './chatbot-link.service';
+import { SubscriberContactsService } from './subscriber-contacts.service';
+import { ChatAccessService } from './chat-access.service';
 import { ChatbotGateService } from './chatbot-gate.service';
 import { ChatbotSessionStore } from './chatbot-session.store';
 import { ChatbotUsageService } from './chatbot-usage.service';
+import { ChatbotActividadService } from './chatbot-actividad.service';
+import { ChatbotDocsService } from './chatbot-docs.service';
 import { ChatbotController } from './chatbot.controller';
 import { SavesTransport } from './saves-transport';
+import { TicketConfirmacionService } from './ticket-confirmacion.service';
+import { AvisosProactivosService } from './avisos-proactivos.service';
 import { InternoAbonadosToolset } from './toolsets/interno-abonados.toolset';
 import { InternoTicketsToolset } from './toolsets/interno-tickets.toolset';
 import { InternoRedToolset } from './toolsets/interno-red.toolset';
@@ -26,6 +41,13 @@ import { InternoCajaToolset } from './toolsets/interno-caja.toolset';
 import { InternoReportesToolset } from './toolsets/interno-reportes.toolset';
 import { ClienteToolset } from './toolsets/cliente.toolset';
 import { PublicoToolset } from './toolsets/publico.toolset';
+import { TramitesToolset } from './toolsets/tramites.toolset';
+import { InternoRrhhToolset } from './toolsets/interno-rrhh.toolset';
+import { InternoComprasToolset } from './toolsets/interno-compras.toolset';
+import { InternoFacturacionToolset } from './toolsets/interno-facturacion.toolset';
+import { InternoCobranzaToolset } from './toolsets/interno-cobranza.toolset';
+import { InternoOperacionToolset } from './toolsets/interno-operacion.toolset';
+import { InternoDatosToolset } from './toolsets/interno-datos.toolset';
 
 /**
  * Agente de WhatsApp con IA (multi-agente: interno / clientes / público).
@@ -49,16 +71,31 @@ import { PublicoToolset } from './toolsets/publico.toolset';
     DashboardModule,
     PlansModule,
     ConfigDataModule,
+    StaffModule,
+    OrdersModule,
+    EinvoiceModule,
+    CollectionsModule,
+    PromotionsModule,
+    ReturnsModule,
+    ProjectsModule,
+    GeoModule,
+    SearchModule,
   ],
   controllers: [ChatbotController],
   providers: [
     ChatbotService,
     ChatbotIdentityService,
     ChatbotLinkService,
+    SubscriberContactsService,
+    ChatAccessService,
     ChatbotGateService,
     ChatbotSessionStore,
     ChatbotUsageService,
+    ChatbotActividadService,
+    ChatbotDocsService,
     SavesTransport,
+    TicketConfirmacionService,
+    AvisosProactivosService,
     InternoAbonadosToolset,
     InternoTicketsToolset,
     InternoRedToolset,
@@ -67,6 +104,13 @@ import { PublicoToolset } from './toolsets/publico.toolset';
     InternoReportesToolset,
     ClienteToolset,
     PublicoToolset,
+    TramitesToolset,
+    InternoRrhhToolset,
+    InternoComprasToolset,
+    InternoFacturacionToolset,
+    InternoCobranzaToolset,
+    InternoOperacionToolset,
+    InternoDatosToolset,
   ],
 })
 export class ChatbotModule {}

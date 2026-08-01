@@ -1,15 +1,17 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { scopeDate } from '../common/date-scope';
 import {
   aporteEfectivo, esNotaSaldo, notaSaldo, proximoDiaHabil, rangoDia, SQL_NOTA_SALDO,
 } from './cierre-legacy';
-import { informeCierre } from './cierre-informe';
-import { cajasPermitidas, exigirAcceso } from './caja-scope';
+import { informeCierre, WOMPI_ID } from './cierre-informe';
+import { alcanceDe, cajasPermitidas, esCajera, exigirAcceso, exigirAccesoAlMovimiento } from './caja-scope';
+import { hoyEnColombia } from '../common/fecha-colombia';
 import { AuthUser } from '../auth/current-user.decorator';
 import { num, round2 } from '../common/money';
-import { paginacion } from '../common/pagination-params';
+import { conceptoFactura } from '../common/concepto-factura';
+import { orden, paginacion } from '../common/pagination-params';
 
 
 function subName(s: {
@@ -23,19 +25,40 @@ function subName(s: {
 }
 const SUB_SELECT = { firstName: true, secondName: true, lastName1: true, lastName2: true, companyName: true, fullName: true, id: true, abonado: true } as const;
 
+
 @Injectable()
 export class TreasuryService {
   constructor(private readonly prisma: PrismaService) {}
 
-  /** Resumen: ingresos vs egresos vigentes + top categorías de egreso. Por defecto AÑO ACTUAL. */
-  async stats(params: { from?: string; to?: string; all?: string }) {
-    const dateWhere: Prisma.TransactionWhereInput = { status: 'VIGENTE' };
-    const period = scopeDate(params.from, params.to, params.all);
+  /**
+   * Resumen: ingresos vs egresos vigentes + top categorías de egreso. Por defecto AÑO ACTUAL.
+   *
+   * Acotado a las cajas del usuario (igual que `list`): la cifra que corona la
+   * pantalla de Movimientos era la de TODA la empresa aunque la tabla de abajo
+   * viniera filtrada a la caja de la cajera, así que el total de otras sedes se
+   * leía en la primera línea. Sin `user` (procesos internos) no se acota.
+   */
+  async stats(params: { from?: string; to?: string; all?: string }, user?: AuthUser) {
+    // Mismo alcance que `list`: a la cajera la cifra le habla de SU caja y de HOY,
+    // no de los bancos de la empresa ni del año entero.
+    const cajera = user ? esCajera(user) : false;
+    let cajaWhere: Prisma.TransactionWhereInput = {};
+    if (cajera) {
+      const a = await alcanceDe(this.prisma, user!);
+      cajaWhere = { cashAccountId: a.caja != null ? a.caja : { in: [] } };
+    } else {
+      const permitidas = user ? await cajasPermitidas(this.prisma, user) : null;
+      if (permitidas) cajaWhere = { cashAccountId: { in: permitidas } };
+    }
+    const dateWhere: Prisma.TransactionWhereInput = { status: 'VIGENTE', ...cajaWhere };
+    const period = cajera && !params.from && !params.to && params.all !== '1'
+      ? rangoDia(hoyEnColombia())
+      : scopeDate(params.from, params.to, params.all);
     if (period) dateWhere.date = period;
     const [income, expense, anuladas, byCat] = await Promise.all([
       this.prisma.transaction.aggregate({ _sum: { credit: true }, _count: { _all: true }, where: { ...dateWhere, type: 'INCOME' } }),
       this.prisma.transaction.aggregate({ _sum: { debit: true }, _count: { _all: true }, where: { ...dateWhere, type: 'EXPENSE' } }),
-      this.prisma.transaction.count({ where: { status: 'ANULADA', ...(period ? { date: period } : {}) } }),
+      this.prisma.transaction.count({ where: { status: 'ANULADA', ...cajaWhere, ...(period ? { date: period } : {}) } }),
       this.prisma.transaction.groupBy({ by: ['category'], _sum: { debit: true }, where: { ...dateWhere, type: 'EXPENSE' }, orderBy: { _sum: { debit: 'desc' } }, take: 8 }),
     ]);
     const ingresos = num(income._sum.credit);
@@ -52,27 +75,33 @@ export class TreasuryService {
    * Puerta común de `detail`/`attachTransaction`/`getTransactionAttachment`: todos
    * reciben un id del cliente y antes lo servían sin comprobar nada, así que una
    * cajera podía leer (y adjuntar comprobantes a) movimientos de otra sede.
+   * La lógica vive en `caja-scope.ts` porque cobranzas la necesita igual para
+   * editar y anular.
    */
-  private async exigirAccesoAlMovimiento(id: string, user: AuthUser): Promise<void> {
-    const t = await this.prisma.transaction.findUnique({
-      where: { id },
-      select: { cashAccountId: true },
-    });
-    if (!t) throw new NotFoundException('Movimiento no encontrado');
-    if (t.cashAccountId != null) {
-      await exigirAcceso(this.prisma, user, t.cashAccountId);
-      return;
-    }
-    // Sin caja no hay nada contra lo que contrastar: se lo negamos a quien esté
-    // acotado y se lo permitimos a quien ve todas. Hoy no hay filas así, pero el
-    // schema lo permite y el lado seguro es no enseñar dinero ajeno.
-    if ((await cajasPermitidas(this.prisma, user)) !== null) {
-      throw new ForbiddenException('No tienes acceso a este movimiento.');
-    }
+  private exigirAccesoAlMovimiento(id: string, user: AuthUser): Promise<void> {
+    return exigirAccesoAlMovimiento(this.prisma, user, id);
   }
 
   /** Listado paginado de movimientos. Por defecto AÑO ACTUAL (override con from/to o all=1). */
-  async list(params: { search?: string; type?: string; category?: string; status?: string; from?: string; to?: string; all?: string; cashAccountId?: number; page?: number; pageSize?: number }, user: AuthUser) {
+  /**
+   * Columnas ordenables de la tabla de movimientos de caja.
+   *
+   * Fuera quedan dos por no poder ordenarlas como se muestran:
+   * `amount` (monto) es debit en los egresos y credit en los ingresos — un CASE
+   * que Prisma no expresa; y `payer` sale del nombre del suscriptor o, si no
+   * hay, de `payerName`, así que ordenar por uno solo apelotonaría las filas
+   * del otro tipo. Para el monto están los filtros de tipo + los totales.
+   */
+  private static readonly ORDEN_MOVIMIENTOS = {
+    date: 'date',
+    type: 'type',
+    cat: 'category',
+    fact: 'invoice.tid',
+    method: 'method',
+    status: 'status',
+  };
+
+  async list(params: { search?: string; type?: string; category?: string; status?: string; from?: string; to?: string; all?: string; cashAccountId?: number; page?: number; pageSize?: number; sortBy?: string; sortDir?: string }, user: AuthUser) {
     const { page, pageSize } = paginacion(params);
     const search = (params.search || '').trim();
 
@@ -87,13 +116,23 @@ export class TreasuryService {
       // cliente distingue "no hay movimientos" de "no te toca".
       await exigirAcceso(this.prisma, user, Number(params.cashAccountId));
       where.cashAccountId = Number(params.cashAccountId);
+    } else if (esCajera(user)) {
+      // La cajera consulta SU ventanilla. Los bancos compartidos son para que el
+      // CIERRE cuadre (esa regla sigue intacta en `cajasPermitidas`); en el listado
+      // libre le enseñaban los movimientos bancarios de toda la empresa.
+      const a = await alcanceDe(this.prisma, user);
+      where.cashAccountId = a.caja != null ? a.caja : { in: [] };
     } else {
       // Sin caja explícita, acotar a las que puede ver (null = sin límite).
       const permitidas = await cajasPermitidas(this.prisma, user);
       if (permitidas) where.cashAccountId = { in: permitidas };
     }
     // Por defecto AÑO ACTUAL (aplica también al buscar; usar all=1 para histórico).
-    const period = scopeDate(params.from, params.to, params.all);
+    // Para la cajera el defecto es HOY: su pregunta es "qué ha pasado en mi turno",
+    // y puede pedir otro periodo con los filtros de fecha.
+    const period = esCajera(user) && !params.from && !params.to && params.all !== '1'
+      ? rangoDia(hoyEnColombia())
+      : scopeDate(params.from, params.to, params.all);
     if (period) where.date = period;
     if (search) {
       where.OR = [
@@ -105,7 +144,7 @@ export class TreasuryService {
 
     const [rows, total] = await Promise.all([
       this.prisma.transaction.findMany({
-        where, orderBy: { date: 'desc' }, skip: (page - 1) * pageSize, take: pageSize,
+        where, orderBy: orden(params, TreasuryService.ORDEN_MOVIMIENTOS, { date: 'desc' }), skip: (page - 1) * pageSize, take: pageSize,
         include: { subscriber: { select: SUB_SELECT }, invoice: { select: { tid: true } } },
       }),
       this.prisma.transaction.count({ where }),
@@ -328,32 +367,103 @@ export class TreasuryService {
     };
   }
 
-  /** Datos para el PDF de recibo de caja (recibo + transacciones abonadas). */
+  /**
+   * Datos para el recibo de caja (el papel de 80 mm que sale al cobrar).
+   *
+   * Réplica de lo que armaba `Invoices::printinvoice()` en el legacy: el renglón NO
+   * dice "Abono a factura #123", dice el MES facturado y el número de cuenta
+   * (`julio CTA:123456`) — o el producto cuando la factura es fija —, y debajo van
+   * las facturas que el cliente sigue debiendo. Eso es lo que la cajera le lee al
+   * cliente cuando pregunta "¿y entonces qué me falta?".
+   */
   async receiptPdfData(id: string) {
+    const ITEM = { select: { productName: true }, take: 1, orderBy: { createdAt: 'asc' as const } };
     const r = await this.prisma.paymentReceipt.findUnique({
       where: { id },
       include: {
-        invoice: { include: { subscriber: { select: { firstName: true, lastName1: true, companyName: true, fullName: true, abonado: true, docNumber: true } } } },
-        transactions: { include: { transaction: { include: { invoice: { select: { tid: true } } } } } },
+        invoice: {
+          select: {
+            id: true, tid: true, status: true, discount: true, branchRef: true, subscriberId: true,
+            subscriber: {
+              select: {
+                ...SUB_SELECT, legacyId: true, docType: true, docNumber: true, email: true,
+              },
+            },
+          },
+        },
+        transactions: {
+          include: {
+            transaction: {
+              select: {
+                credit: true, method: true, category: true, invoiceId: true,
+                invoice: { select: { tid: true, kind: true, invoiceDate: true, items: ITEM } },
+              },
+            },
+          },
+        },
       },
     });
     if (!r) throw new NotFoundException('Recibo no encontrado');
-    const s = r.invoice?.subscriber;
-    const name = s ? (s.fullName || [s.firstName, s.lastName1].filter(Boolean).join(' ') || s.companyName || '—').trim() : '—';
+
+    const s = r.invoice?.subscriber ?? null;
     const items = r.transactions.map((rt) => ({
       tid: rt.transaction.invoice?.tid ?? null,
-      concept: rt.transaction.invoice?.tid ? `Abono a factura #${rt.transaction.invoice.tid}` : (rt.transaction.category || 'Abono'),
+      concept: rt.transaction.invoice
+        ? conceptoFactura(rt.transaction.invoice)
+        : rt.transaction.category || 'Abono',
       amount: num(rt.transaction.credit),
       method: rt.transaction.method,
     }));
+    const paid = round2(items.reduce((sum, i) => sum + i.amount, 0));
+
+    // Lo que le queda debiendo. El saldo suma TODAS las pendientes (incluida la que
+    // este recibo dejó a medias); el listado excluye las del recibo, que ya salieron
+    // arriba — mismo criterio que el `lista_a_excluir` del legacy.
+    const pagadas = new Set(
+      r.transactions.map((t) => t.transaction.invoiceId).filter((x): x is string => !!x),
+    );
+    const pendientes = r.invoice?.subscriberId
+      ? await this.prisma.subInvoice.findMany({
+          where: { subscriberId: r.invoice.subscriberId, status: { in: ['DUE', 'PARTIAL'] } },
+          select: {
+            id: true, tid: true, kind: true, invoiceDate: true, total: true, paidAmount: true,
+            items: ITEM,
+          },
+          orderBy: { invoiceDate: 'asc' },
+        })
+      : [];
+    const saldoDe = (i: { total: Prisma.Decimal; paidAmount: Prisma.Decimal }) =>
+      Math.max(0, round2(num(i.total) - num(i.paidAmount)));
+    const balance = round2(pendientes.reduce((sum, i) => sum + saldoDe(i), 0));
+
     return {
       number: String(r.legacyId ?? r.fileName ?? r.id.slice(-6)),
       date: r.date,
+      createdAt: r.createdAt,
+      branch: r.invoice?.branchRef ?? null,
       cashier: null as string | null,
+      cashierRole: null as string | null,
       method: items[0]?.method ?? null,
-      subscriber: s ? { name, abonado: s.abonado, docNumber: s.docNumber } : null,
+      subscriber: s
+        ? {
+            name: subName(s) ?? '—',
+            abonado: s.abonado,
+            docType: s.docType,
+            docNumber: s.docNumber,
+            email: s.email,
+            codigo: s.legacyId,
+          }
+        : null,
       items: items.map(({ tid, concept, amount }) => ({ tid, concept, amount })),
-      total: items.reduce((sum, i) => sum + i.amount, 0),
+      pending: pendientes
+        .filter((i) => !pagadas.has(i.id))
+        .map((i) => ({ tid: i.tid, concept: conceptoFactura(i), amount: saldoDe(i) })),
+      total: round2(paid + balance),
+      paid,
+      discount: num(r.invoice?.discount ?? 0),
+      balance,
+      status: r.invoice?.status ?? null,
+      terms: null as string | null,
     };
   }
 
@@ -369,11 +479,29 @@ export class TreasuryService {
     // Va con el arqueo pegado para que la pantalla se pinte con UNA sola llamada: la
     // cabecera del legacy (horas, cajero, efectivo) sale del arqueo y los bloques del
     // informe, y ambos deben ser del mismo instante o se contradicen entre sí.
-    const [informe, arqueo] = await Promise.all([
+    //
+    // `soloCaja` es el MISMO informe recalculado sin la pasarela en línea: es lo que
+    // pintan las gráficas del panel de la cajera, porque esa plata nunca pasa por su
+    // ventanilla y sumársela le enseña un recaudo que no es suyo (llegó a ser el 46% de
+    // un día). El informe de arriba se queda como está —tablas y PDF son el documento
+    // del legacy y tienen que cuadrar con el sistema viejo—, así que la pantalla tiene
+    // las dos cifras y usa cada una donde toca.
+    const [informe, soloCaja, arqueo] = await Promise.all([
       informeCierre(this.prisma, cashAccountId, d),
+      informeCierre(this.prisma, cashAccountId, d, { excluirBancos: [WOMPI_ID] }),
       this.arqueo(cashAccountId, d),
     ]);
-    return { ...informe, arqueo };
+    return {
+      ...informe,
+      arqueo,
+      soloCaja: {
+        cobranza: soloCaja.cobranza,
+        formaPago: soloCaja.formaPago,
+        servicios: soloCaja.servicios,
+        tipoServicio: soloCaja.tipoServicio,
+        meses: soloCaja.meses,
+      },
+    };
   }
 
   async cashClosePdfData(id: string, user: AuthUser) {
@@ -495,6 +623,65 @@ export class TreasuryService {
         period: r.period, count: Number(r.count), surplus: Number(r.surplus ?? 0),
       })),
     };
+  }
+
+  /**
+   * Serie diaria de una caja: ingresos, egresos y nº de pagos por día, terminando en
+   * `date`. Es lo que le da forma de tendencia al panel de la cajera — hasta ahora
+   * cada pantalla sólo sabía mirar UN día, así que no había manera de ver si hoy va
+   * flojo o normal sin abrir el cierre de ayer a mano.
+   *
+   * Deja fuera las dos patas del arrastre ('Saldo <fecha>'): son el mismo dinero
+   * pasando de un día al siguiente, y contarlas inflaría a la vez ingresos y egresos.
+   */
+  async cashDaily(cashAccountId: number, date: string, days: number, user: AuthUser) {
+    await exigirAcceso(this.prisma, user, cashAccountId);
+    const hasta = new Date(`${date}T00:00:00.000Z`);
+    if (Number.isNaN(hasta.getTime())) throw new NotFoundException('Fecha inválida');
+    const n = Math.min(Math.max(Math.trunc(days) || 14, 2), 90);
+    const desde = new Date(hasta.getTime() - (n - 1) * 86_400_000);
+    const desdeStr = desde.toISOString().slice(0, 10);
+    const hastaStr = hasta.toISOString().slice(0, 10);
+
+    // OJO con el `note IS NULL`: en SQL `NOT (NULL ~ '...')` es NULL, no true, así que
+    // sin esa rama se caerían del informe todos los movimientos sin nota — que son la
+    // mayoría.
+    //
+    // Y OJO con las fechas: `Transaction.date` es un `date` de Postgres, y atarle un
+    // Date de JS lo compara como timestamptz — o sea, convertido a la zona de la SESIÓN
+    // (aquí Europe/Berlin), con lo que el rango se corre un día y el primero se pierde.
+    // Por eso van como texto con `::date`: una fecha sin hora no tiene zona horaria.
+    const filas = await this.prisma.$queryRaw<
+      { dia: Date; ingresos: Prisma.Decimal | null; egresos: Prisma.Decimal | null; pagos: number }[]
+    >(Prisma.sql`
+      SELECT "date"::date AS dia,
+             SUM(CASE WHEN "type" = 'INCOME'  THEN credit ELSE 0 END) AS ingresos,
+             SUM(CASE WHEN "type" = 'EXPENSE' THEN debit  ELSE 0 END) AS egresos,
+             COUNT(*) FILTER (WHERE "type" = 'INCOME')::int AS pagos
+      FROM "Transaction"
+      WHERE "cashAccountId" = ${cashAccountId}
+        AND status = 'VIGENTE'
+        AND "date" BETWEEN ${desdeStr}::date AND ${hastaStr}::date
+        AND (note IS NULL OR NOT (${SQL_NOTA_SALDO}))
+      GROUP BY 1
+      ORDER BY 1
+    `);
+
+    // Los días sin movimiento no vienen en el GROUP BY, pero en una gráfica tienen que
+    // existir: un hueco y un cero no dicen lo mismo.
+    const porDia = new Map(filas.map((f) => [f.dia.toISOString().slice(0, 10), f]));
+    const items = Array.from({ length: n }, (_, i) => {
+      const d = new Date(desde.getTime() + i * 86_400_000);
+      const key = d.toISOString().slice(0, 10);
+      const f = porDia.get(key);
+      return {
+        date: key,
+        ingresos: round2(num(f?.ingresos ?? 0)),
+        egresos: round2(num(f?.egresos ?? 0)),
+        pagos: Number(f?.pagos ?? 0),
+      };
+    });
+    return { cashAccountId, desde: desde.toISOString().slice(0, 10), hasta: date, items };
   }
 
   categories() {

@@ -1,6 +1,10 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { orden } from '../common/pagination-params';
+import { AuthUser } from '../auth/current-user.decorator';
+import { sedesDeUsuario } from './bodega-scope';
+import { clavesDe, esTecnicoDeCampo, fichaDelUsuario } from '../common/tecnico-scope';
 
 function subName(s: {
   firstName: string | null; secondName: string | null; lastName1: string | null;
@@ -60,15 +64,30 @@ export class NetworkService {
     };
   }
 
-  async naps(params: { search?: string; branchId?: string; sort?: string; page?: number; pageSize?: number }) {
+  /**
+   * Columnas ordenables de la tabla de NAPs. `ports` muestra "registrados /
+   * totales": se ordena por los registrados, que es el dato que se mira para
+   * ver cuánto queda libre.
+   */
+  private static readonly ORDEN_NAPS = {
+    name: 'name',
+    vlan: (dir: 'asc' | 'desc') => [{ vlan: { vlan: dir } }, { name: 'asc' as const }],
+    addr: 'address',
+    ports: (dir: 'asc' | 'desc') => ({ ports: { _count: dir } }),
+  };
+
+  async naps(params: { search?: string; branchId?: string; sort?: string; page?: number; pageSize?: number; sortBy?: string; sortDir?: string }) {
     const page = Math.max(1, Number(params.page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(params.pageSize) || 25));
     const where: Prisma.NapWhereInput = {};
     if (params.branchId) where.branchId = params.branchId;
     if (params.search?.trim()) where.name = { contains: params.search.trim(), mode: 'insensitive' };
     // Orden: por VLAN (con NAPs sin VLAN al final) o alfabético por nombre (por defecto).
-    const orderBy: Prisma.NapOrderByWithRelationInput[] =
+    // `sort=vlan` es el conmutador viejo de la pantalla; la cabecera manda
+    // `sortBy`/`sortDir` y tiene prioridad si viene.
+    const porDefecto: Prisma.NapOrderByWithRelationInput[] =
       params.sort === 'vlan' ? [{ vlan: { vlan: 'asc' } }, { name: 'asc' }] : [{ name: 'asc' }];
+    const orderBy = orden(params, NetworkService.ORDEN_NAPS, porDefecto);
     const [rows, total] = await Promise.all([
       this.prisma.nap.findMany({ where, orderBy, skip: (page - 1) * pageSize, take: pageSize, include: { branch: { select: { name: true } }, vlan: { select: { vlan: true } }, _count: { select: { ports: true } } } }),
       this.prisma.nap.count({ where }),
@@ -102,12 +121,46 @@ export class NetworkService {
     return rows.map((b) => ({ id: b.id, name: b.name, naps: b._count.naps }));
   }
 
-  async equipment(params: { search?: string; status?: string; warehouseId?: string; assigned?: string; page?: number; pageSize?: number }) {
+  /**
+   * Columnas ordenables del inventario de equipos. `acs` (si está en GenieACS)
+   * se muestra como sí/no a partir de `genieacsId`: ordenar por ese campo
+   * agrupa igual, que es lo que se busca.
+   */
+  private static readonly ORDEN_EQUIPOS = {
+    code: 'code', brand: 'brand', mac: 'mac', serial: 'serial',
+    wh: 'warehouse.name', status: 'status', acs: 'genieacsId',
+    client: (dir: 'asc' | 'desc') => [
+      { subscriber: { firstName: dir } }, { subscriber: { lastName1: dir } },
+    ],
+  };
+
+  async equipment(params: { search?: string; status?: string; warehouseId?: string; assigned?: string; page?: number; pageSize?: number; sortBy?: string; sortDir?: string }, user?: AuthUser) {
     const page = Math.max(1, Number(params.page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(params.pageSize) || 25));
     const where: Prisma.EquipmentWhereInput = {};
     if (params.status) where.status = params.status;
     if (params.warehouseId) where.warehouseId = params.warehouseId;
+    // Una cajera solo ve el equipo que está en las bodegas de sus sedes (es lo que
+    // puede escoger para un traslado). Si pide otra bodega, se le ignora el filtro
+    // en vez de servírsela.
+    const sedes = user ? await sedesDeUsuario(this.prisma, user) : null;
+    if (sedes !== null) {
+      const suyas = await this.prisma.equipmentWarehouse.findMany({
+        where: { branchLegacy: { in: sedes } }, select: { id: true },
+      });
+      const ids = suyas.map((w) => w.id);
+      where.warehouseId = params.warehouseId && ids.includes(params.warehouseId) ? params.warehouseId : { in: ids };
+    }
+    // Un técnico de campo ve SOLO los equipos que están a su nombre (2026-07-31), no
+    // los de su bodega ni los de su sede. La bodega que pida en la query se ignora:
+    // su "bodega" es él mismo (ver `equipmentWarehouses`). Sin ficha de empleado no
+    // hay forma de saber cuáles son suyos, y entonces no ve ninguno.
+    if (esTecnicoDeCampo(user)) {
+      const ficha = await fichaDelUsuario(this.prisma, user!);
+      const claves = ficha ? clavesDe(ficha) : [];
+      delete where.warehouseId;
+      where.assignedRaw = claves.length ? { in: claves, mode: 'insensitive' } : '—sin-ficha-de-empleado—';
+    }
     if (params.assigned === 'yes') where.subscriberId = { not: null };
     if (params.assigned === 'no') where.subscriberId = null;
     if (params.search?.trim()) {
@@ -116,7 +169,7 @@ export class NetworkService {
       where.OR = [{ mac: { contains: s, mode: 'insensitive' } }, { serial: { contains: s, mode: 'insensitive' } }, { brand: { contains: s, mode: 'insensitive' } }, ...(Number.isFinite(n) ? [{ code: n }] : [])];
     }
     const [rows, total] = await Promise.all([
-      this.prisma.equipment.findMany({ where, orderBy: { code: 'desc' }, skip: (page - 1) * pageSize, take: pageSize, include: { warehouse: { select: { name: true } }, subscriber: { select: SUB } } }),
+      this.prisma.equipment.findMany({ where, orderBy: orden(params, NetworkService.ORDEN_EQUIPOS, { code: 'desc' }), skip: (page - 1) * pageSize, take: pageSize, include: { warehouse: { select: { name: true } }, subscriber: { select: SUB } } }),
       this.prisma.equipment.count({ where }),
     ]);
     return {
@@ -125,8 +178,29 @@ export class NetworkService {
     };
   }
 
-  warehouses() {
-    return this.prisma.equipmentWarehouse.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true } });
+  /**
+   * Bodegas de equipos para los selectores. Cada una dice de qué sede es, porque
+   * mover equipo de una sede a otra no lo puede hacer cualquiera (lo revalida
+   * `createTransfer`) y la pantalla tiene que poder avisarlo antes de intentarlo.
+   *
+   * A una cajera se le devuelven SOLO las de sus sedes: es la encargada de su sede,
+   * no del inventario de las demás.
+   */
+  async warehouses(user?: AuthUser) {
+    const sedes = user ? await sedesDeUsuario(this.prisma, user) : null;
+    const where = sedes === null ? {} : { branchLegacy: { in: sedes } };
+    const [rows, branches] = await Promise.all([
+      this.prisma.equipmentWarehouse.findMany({
+        where, orderBy: { name: 'asc' },
+        select: { id: true, name: true, branchLegacy: true },
+      }),
+      this.prisma.branch.findMany({ select: { legacyId: true, name: true } }),
+    ]);
+    const sede = new Map(branches.map((b) => [b.legacyId, b.name]));
+    return rows.map((w) => ({
+      ...w,
+      branchName: w.branchLegacy != null ? sede.get(w.branchLegacy) ?? null : null,
+    }));
   }
 
   /** Pools de IP por Mikrotik (IpUserMk): pool local/remoto y perfiles. */

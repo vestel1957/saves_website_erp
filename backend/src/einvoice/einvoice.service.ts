@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { orden } from '../common/pagination-params';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { scopeDate } from '../common/date-scope';
@@ -33,7 +34,17 @@ export class EinvoiceService {
     };
   }
 
-  async list(params: { search?: string; type?: string; from?: string; to?: string; all?: string; page?: number; pageSize?: number }) {
+  /** Columnas ordenables de la tabla de facturas electrónicas. */
+  private static readonly ORDEN_LISTA = {
+    date: 'date', type: 'type', dian: 'dianNumber', fact: 'invoice.tid',
+    serv: 'servicesBilled',
+    error: 'errorMessage',
+    client: (dir: 'asc' | 'desc') => [
+      { subscriber: { firstName: dir } }, { subscriber: { lastName1: dir } },
+    ],
+  };
+
+  async list(params: { search?: string; type?: string; from?: string; to?: string; all?: string; page?: number; pageSize?: number; sortBy?: string; sortDir?: string }) {
     const page = Math.max(1, Number(params.page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(params.pageSize) || 25));
     const where: Prisma.ElectronicInvoiceWhereInput = {};
@@ -50,7 +61,7 @@ export class EinvoiceService {
     }
     const [rows, total] = await Promise.all([
       this.prisma.electronicInvoice.findMany({
-        where, orderBy: { date: 'desc' }, skip: (page - 1) * pageSize, take: pageSize,
+        where, orderBy: orden(params, EinvoiceService.ORDEN_LISTA, { date: 'desc' }), skip: (page - 1) * pageSize, take: pageSize,
         include: { subscriber: { select: SUB }, invoice: { select: { tid: true } } },
       }),
       this.prisma.electronicInvoice.count({ where }),

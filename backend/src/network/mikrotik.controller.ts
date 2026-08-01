@@ -8,6 +8,7 @@ import { RequireArea } from '../auth/require-area.decorator';
 import { RequirePermissions } from '../auth/require-permissions.decorator';
 import { APP_PERMISSIONS } from '../auth/permissions.catalog';
 import { CurrentUser, AuthUser } from '../auth/current-user.decorator';
+import { ModuloRedGuard } from './modulo-red.guard';
 
 class RouterUpsertDto {
   @IsOptional() @IsString() name?: string;
@@ -31,7 +32,7 @@ class KickDto {
  * Espejo de OltController: CRUD + validación + lecturas/escrituras en vivo (dry-run).
  */
 @Controller('network/mikrotik')
-@UseGuards(JwtAuthGuard, AreaGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, AreaGuard, PermissionsGuard, ModuloRedGuard)
 @RequireArea('tecnicos', 'administracion')
 export class MikrotikController {
   constructor(private readonly mk: MikrotikAdminService) {}
@@ -53,8 +54,8 @@ export class MikrotikController {
   @Post(':id/test') test(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.mk.testRouter(id, user); }
   @Get(':id/system') system(@Param('id') id: string) { return this.mk.systemInfo(id); }
   @Get(':id/summary') summary(@Param('id') id: string) { return this.mk.summary(id); }
-  @Get(':id/secrets') secrets(@Param('id') id: string, @Query('search') search?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string) {
-    return this.mk.secrets(id, { search, page: Number(page), pageSize: Number(pageSize) });
+  @Get(':id/secrets') secrets(@Param('id') id: string, @Query('search') search?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string, @Query('sortBy') sortBy?: string, @Query('sortDir') sortDir?: string) {
+    return this.mk.secrets(id, { search, page: Number(page), pageSize: Number(pageSize), sortBy, sortDir });
   }
   @Get(':id/active') active(@Param('id') id: string) { return this.mk.active(id); }
   @Get(':id/ips') ips(@Param('id') id: string) { return this.mk.ips(id); }

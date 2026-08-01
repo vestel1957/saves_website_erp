@@ -35,7 +35,12 @@ const armar = () => {
   };
   const role = { findMany: jest.fn().mockResolvedValue([]) };
   const prisma = { branch, user, role };
-  return { svc: new AuthService(prisma as never), user, branch };
+  // El OTP de contraseñas no entra en estas pruebas (crear/editar usuario no pide
+  // código): basta un doble que estalle si alguien lo usa sin querer.
+  const passwordOtp = {
+    exigir: jest.fn(() => Promise.reject(new Error('no debería pedir código aquí'))),
+  };
+  return { svc: new AuthService(prisma as never, passwordOtp as never), user, branch };
 };
 
 describe('createUser · sedes de acceso', () => {

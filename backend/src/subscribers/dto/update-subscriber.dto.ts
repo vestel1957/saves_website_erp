@@ -35,6 +35,21 @@ export class UpdateInvoiceDto {
   notes?: string;
 }
 
+/** Estados del abonado (enum Prisma `SubscriberStatus`). */
+export const SUBSCRIBER_STATUSES = [
+  'ACTIVO', 'CARTERA', 'COMPROMISO', 'CORTADO', 'DEPURADO', 'EVENTO', 'EXONERADO',
+  'INSTALAR', 'POR_RETIRAR', 'REPORTADO', 'RETIRADO', 'SUSPENDIDO', 'INACTIVO',
+] as const;
+
+/** Cambio manual de estado del abonado (administrativo: no toca el router). */
+export class ChangeStatusDto {
+  @IsIn(SUBSCRIBER_STATUSES as unknown as string[])
+  status!: string;
+
+  @IsOptional() @IsString() @MaxLength(500)
+  note?: string;
+}
+
 const CUSTOMER_TYPES = ['Natural', 'Juridico', 'Gubernamental', 'Militar'];
 const SUSCRIPCIONES = ['Residencial', 'Corporativo', 'Dedicado'];
 

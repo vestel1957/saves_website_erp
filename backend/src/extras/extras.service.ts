@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { orden } from '../common/pagination-params';
 
 function subName(s: { firstName: string | null; lastName1: string | null; companyName: string | null; fullName: string | null } | null): string | null {
   if (!s) return null;
@@ -12,7 +13,15 @@ export class ExtrasService {
   constructor(private prisma: PrismaService) {}
 
   // --- PlayHub / IPTV ---
-  async playhub(params: { search?: string; page?: number; pageSize?: number }) {
+  /** Columnas ordenables de la tabla de PlayHub. */
+  private static readonly ORDEN_PLAYHUB = {
+    cliente: (dir: 'asc' | 'desc') => [
+      { subscriber: { firstName: dir } }, { subscriber: { lastName1: dir } },
+    ],
+    nameS: 'nameS', producto: 'productName', voucher: 'voucher', syncedAt: 'syncedAt',
+  };
+
+  async playhub(params: { search?: string; page?: number; pageSize?: number; sortBy?: string; sortDir?: string }) {
     const page = Math.max(1, Number(params.page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(params.pageSize) || 30));
     const where: Prisma.PlayhubSubscriptionWhereInput = {};
@@ -20,7 +29,7 @@ export class ExtrasService {
     if (s) where.OR = [{ nameS: { contains: s, mode: 'insensitive' } }, { productName: { contains: s, mode: 'insensitive' } }, { voucher: { contains: s, mode: 'insensitive' } }];
     const [rows, total, byProduct] = await Promise.all([
       this.prisma.playhubSubscription.findMany({
-        where, orderBy: { syncedAt: 'desc' }, skip: (page - 1) * pageSize, take: pageSize,
+        where, orderBy: orden(params, ExtrasService.ORDEN_PLAYHUB, { syncedAt: 'desc' }), skip: (page - 1) * pageSize, take: pageSize,
         include: { subscriber: { select: { firstName: true, lastName1: true, companyName: true, fullName: true, abonado: true, id: true } } },
       }),
       this.prisma.playhubSubscription.count({ where }),

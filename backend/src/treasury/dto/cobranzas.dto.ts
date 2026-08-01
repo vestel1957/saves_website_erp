@@ -105,22 +105,19 @@ export class TransferDto {
   note?: string;
 }
 
-/** Apertura de caja: base inicial de una caja en una fecha. */
+/**
+ * Apertura de caja. NO lleva base: la pone el servidor con el fondo fijo que
+ * administración le fijó a esa caja más el arrastre del cierre anterior. Quien abre
+ * sólo dice cuál y qué día — antes escribía la cifra a mano, que es justo lo que se
+ * quiso quitar.
+ */
 export class CashOpenDto {
-  @IsInt()
-  cashAccountId!: number;
-
-  @IsOptional() @IsString()
-  accountName?: string;
+  /** Omitido = la caja asignada a quien abre (el caso de la cajera). */
+  @IsOptional() @IsInt()
+  cashAccountId?: number;
 
   @IsDateString()
   date!: string;
-
-  @IsNumber() @Min(0)
-  base!: number;
-
-  @IsOptional() @IsString()
-  note?: string;
 }
 
 /**

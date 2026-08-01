@@ -37,6 +37,14 @@ export class RouterosClient {
   private wordQueue: string[] = [];
   private fatalError: Error | null = null;
   private connected = false;
+  /**
+   * Cola de comandos. La API de RouterOS sobre un socket NO multiplexa: las
+   * respuestas llegan sin etiqueta, en el orden en que se pidieron. Dos comm()
+   * en vuelo a la vez se roban las palabras del otro y ambos acaban en timeout
+   * (así se veían "0 morosos" en el resumen del router: un Promise.all de 4
+   * lecturas que se pisaban entre sí). Se serializan aquí, no en cada llamador.
+   */
+  private queue: Promise<unknown> = Promise.resolve();
 
   // ---- codificación de longitud (idéntica a encodeLength de PHP) ----
   private encodeLength(length: number): Buffer {
@@ -308,6 +316,16 @@ export class RouterosClient {
    *   - cualquier otra (incluye `.id`, `.proplist`) → atributo: `=clave=value`
    */
   async comm(command: string, params: Record<string, string> = {}, timeoutMs = 8000): Promise<RosRow[]> {
+    // Encadena: cada comando espera a que el anterior termine (bien o mal).
+    const run = this.queue.then(
+      () => this.commNow(command, params, timeoutMs),
+      () => this.commNow(command, params, timeoutMs),
+    );
+    this.queue = run.catch(() => undefined);
+    return run;
+  }
+
+  private async commNow(command: string, params: Record<string, string>, timeoutMs: number): Promise<RosRow[]> {
     if (!this.socket) throw new RouterosError('No conectado', 'SOCKET');
     const words: string[] = [command];
     for (const [k, v] of Object.entries(params)) {
@@ -320,7 +338,23 @@ export class RouterosClient {
       }
     }
     this.writeSentence(words);
-    return this.readReply(timeoutMs);
+    try {
+      return await this.readReply(timeoutMs);
+    } catch (e) {
+      // Un timeout deja a medias la respuesta del router: las palabras que
+      // lleguen tarde contaminarían el SIGUIENTE comando (devolvería datos de
+      // otro). La conexión queda inservible: se cierra en vez de mentir.
+      if (e instanceof RouterosError && e.code === 'TIMEOUT') {
+        this.fatalError = e;
+        this.socket?.destroy();
+        this.socket = null;
+        this.connected = false;
+        this.wordQueue = [];
+        this.buf = Buffer.alloc(0);
+        this.flushWaiters();
+      }
+      throw e;
+    }
   }
 
   get isConnected(): boolean {

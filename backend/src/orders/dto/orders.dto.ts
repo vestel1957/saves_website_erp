@@ -27,6 +27,31 @@ export class CreateOrderDto {
   @IsOptional() @IsNumber() @Min(0) retention?: number;
 }
 
+/** Edición de una orden PENDIENTE: cabecera y/o reemplazo de ítems. */
+export class UpdateOrderDto {
+  @IsOptional() @IsString() orderDate?: string;
+  @IsOptional() @IsString() dueDate?: string;
+  @IsOptional() @IsString() categoryRef?: string;
+  @IsOptional() @IsString() notes?: string;
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => OrderItemDto) items?: OrderItemDto[];
+}
+
+/** Cancelación con motivo (queda en la bitácora). */
+export class CancelOrderDto {
+  @IsOptional() @IsString() reason?: string;
+}
+
+/**
+ * Aprobación (1ª o 2ª firma). `otp` es el código que le llegó al WhatsApp del
+ * firmante; se pide con `POST /orders/:id/approve/otp`. Opcional en el DTO porque
+ * la exigencia es un ajuste (`signature.otpRequired`) y el error de "falta el
+ * código" tiene que salir del servicio, con su explicación, y no de un 400 pelado
+ * de validación.
+ */
+export class ApproveOrderDto {
+  @IsOptional() @IsString() otp?: string;
+}
+
 /** Nota (crédito/débito/retención) sobre una orden de compra ya creada. */
 export class AddNoteDto {
   @IsString() @IsIn(NOTE_TYPES as unknown as string[]) type!: string; // Nota Credito | Nota Debito | Retencion

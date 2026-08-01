@@ -28,6 +28,11 @@ export type MkAdminAction =
   | 'SYSTEM' | 'SECRETS' | 'ACTIVE' | 'PROFILES' | 'SUMMARY'
   | 'TOGGLE' | 'KICK';
 
+type SecretRow = {
+  id: string; name: string; profile: string; service: string;
+  remoteAddress: string; localAddress: string; disabled: boolean; comment: string;
+};
+
 @Injectable()
 export class MikrotikAdminService {
   private readonly logger = new Logger(MikrotikAdminService.name);
@@ -254,28 +259,50 @@ export class MikrotikAdminService {
     return { ok: r.ok, error: r.error, info: r.data ?? {} };
   }
 
-  /** Resumen de listas de acceso y contadores globales del router. */
+  /**
+   * Resumen de listas de acceso y contadores globales del router.
+   *
+   * Se piden con `count-only`: el router devuelve solo el total (=ret=) en vez
+   * de miles de filas (~100 ms contra ~350 ms trayendo 2.300 secrets).
+   *
+   * Nada de `.catch(() => [])` aquí: un fallo de lectura contado como 0 es
+   * indistinguible de "no hay morosos" y es justo lo que ocultaba el bug.
+   * Si una lectura falla, cae al catch de withApi y la vista avisa.
+   */
   async summary(id: string) {
     const mk = await this.resolve(id);
     const r = await this.withApi(mk, async (api) => {
-      const [secrets, active, activos, morosos] = await Promise.all([
-        api.comm('/ppp/secret/print', { '.proplist': '.id' }).catch(() => [] as RosRow[]),
-        api.comm('/ppp/active/print', { '.proplist': '.id' }).catch(() => [] as RosRow[]),
-        api.comm('/ip/firewall/address-list/print', { '.proplist': '.id', '?list': ADDRESS_LIST_ACTIVE }).catch(() => [] as RosRow[]),
-        api.comm('/ip/firewall/address-list/print', { '.proplist': '.id', '?list': ADDRESS_LIST_DEBTOR }).catch(() => [] as RosRow[]),
-      ]);
+      const count = async (path: string, query: RosRow = {}) => {
+        const rows = await api.comm(path, { 'count-only': '', ...query }, 15000);
+        const ret = rows[0]?.['ret'];
+        return ret !== undefined ? Number(ret) || 0 : rows.length;
+      };
       return {
-        secrets: secrets.length,
-        active: active.length,
-        activos: activos.length,
-        morosos: morosos.length,
+        secrets: await count('/ppp/secret/print'),
+        active: await count('/ppp/active/print'),
+        activos: await count('/ip/firewall/address-list/print', { '?list': ADDRESS_LIST_ACTIVE }),
+        morosos: await count('/ip/firewall/address-list/print', { '?list': ADDRESS_LIST_DEBTOR }),
       };
     });
     return { ok: r.ok, error: r.error, summary: r.data ?? { secrets: 0, active: 0, activos: 0, morosos: 0 } };
   }
 
   /** Secrets PPPoE (con filtro y paginado en memoria). */
-  async secrets(id: string, params: { search?: string; page?: number; pageSize?: number }) {
+  /**
+   * Columnas ordenables de la tabla de secrets. Aquí no hay SQL: las filas
+   * llegan enteras del router y se cortan en memoria, así que el orden se
+   * aplica sobre TODAS antes de partir la página.
+   */
+  private static readonly ORDEN_SECRETS: Record<string, (s: SecretRow) => string | number | boolean> = {
+    name: (x) => x.name,
+    profile: (x) => x.profile,
+    remote: (x) => x.remoteAddress,
+    service: (x) => x.service,
+    st: (x) => x.disabled,
+    comment: (x) => x.comment,
+  };
+
+  async secrets(id: string, params: { search?: string; page?: number; pageSize?: number; sortBy?: string; sortDir?: string }) {
     const mk = await this.resolve(id);
     const page = Math.max(1, Number(params.page) || 1);
     const pageSize = Math.min(200, Math.max(1, Number(params.pageSize) || 50));
@@ -297,7 +324,16 @@ export class MikrotikAdminService {
     }));
     const s = (params.search ?? '').trim().toLowerCase();
     if (s) rows = rows.filter((x) => `${x.name} ${x.remoteAddress} ${x.comment} ${x.profile}`.toLowerCase().includes(s));
-    rows.sort((a, b) => a.name.localeCompare(b.name));
+    const sacar = MikrotikAdminService.ORDEN_SECRETS[params.sortBy ?? ''] ?? ((x: SecretRow) => x.name);
+    const signo = params.sortDir === 'desc' ? -1 : 1;
+    rows.sort((a, b) => {
+      const va = sacar(a), vb = sacar(b);
+      if (typeof va === 'boolean' || typeof vb === 'boolean') return signo * (Number(va) - Number(vb));
+      if (typeof va === 'number' && typeof vb === 'number') return signo * (va - vb);
+      // Las IP y los nombres con número ordenan mejor con `numeric`.
+      const c = String(va).localeCompare(String(vb), 'es', { numeric: true, sensitivity: 'base' });
+      return c !== 0 ? signo * c : a.name.localeCompare(b.name);
+    });
     const total = rows.length;
     const items = rows.slice((page - 1) * pageSize, page * pageSize);
     return { ok: true, error: '', items, total, page, pageSize, pages: Math.ceil(total / pageSize) };

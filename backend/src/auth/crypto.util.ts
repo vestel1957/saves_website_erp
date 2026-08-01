@@ -1,9 +1,12 @@
-import { createHmac, randomBytes, scryptSync, timingSafeEqual } from 'crypto';
+import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from 'crypto';
 
 /**
  * Zero-dependency auth primitives built on Node's crypto.
  * - Passwords: scrypt with a per-user random salt, stored as `salt:hash` (hex).
  * - Tokens: compact HMAC-SHA256 signed token (JWT-shaped) — no external libs.
+ * - Compatibilidad legacy: hashes migrados de Aauth (vestel) se guardan como
+ *   `aauth:<salt>:<sha256hex>` donde salt = md5(id legacy) y hash = sha256(salt+clave).
+ *   Se aceptan en el login y se re-hashean a scrypt en el primer acceso exitoso.
  */
 
 const TOKEN_TTL_SECONDS = 60 * 60 * 12; // 12h
@@ -33,11 +36,23 @@ export function hashPassword(plain: string): string {
 }
 
 export function verifyPassword(plain: string, stored: string): boolean {
+  if (stored.startsWith('aauth:')) {
+    const [, salt, hash] = stored.split(':');
+    if (!salt || !hash) return false;
+    const derived = createHash('sha256').update(salt + plain).digest();
+    const expected = Buffer.from(hash, 'hex');
+    return derived.length === expected.length && timingSafeEqual(derived, expected);
+  }
   const [salt, hash] = stored.split(':');
   if (!salt || !hash) return false;
   const derived = scryptSync(plain, salt, 64);
   const expected = Buffer.from(hash, 'hex');
   return derived.length === expected.length && timingSafeEqual(derived, expected);
+}
+
+/** true si el hash guardado es del esquema legacy (Aauth) y conviene re-hashear a scrypt. */
+export function isLegacyHash(stored: string): boolean {
+  return stored.startsWith('aauth:');
 }
 
 const b64url = (input: Buffer | string): string =>

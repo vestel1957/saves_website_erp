@@ -1,18 +1,22 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../prisma/prisma.service';
+import { PAGO_APLICADO_EVENT, type PagoAplicadoEvent } from './treasury.events';
 import { AuthUser } from '../auth/current-user.decorator';
 import { PostingService } from '../accounting/posting.service';
-import { MikrotikService } from '../network/mikrotik.service';
+import { ReconexionService } from '../network/reconexion.service';
 import {
   CashAccountDto, CashCloseDto, CashOpenDto, CollectDto, EditTxDto, ExpenseDto,
   IncomeDto, TransferDto, TxCategoryDto, VoidTxDto,
 } from './dto/cobranzas.dto';
 import {
-  aporteEfectivo, CATEGORIA_SALDO, esNotaSaldo, notaSaldo, proximoDiaHabil, rangoDia,
-  sinElBarridoDelDia, whereArrastre, whereEfectivo,
+  aporteEfectivo, CATEGORIA_SALDO, esNotaSaldo, isoUTC, notaSaldo, proximoDiaHabil, rangoDia,
+  sinElBarridoDelDia, SQL_NOTA_SALDO, whereArrastre, whereEfectivo,
 } from './cierre-legacy';
-import { alcanceDe, exigirAcceso, puedeVer } from './caja-scope';
+import {
+  alcanceDe, esCajera, exigirAcceso, exigirAccesoAlMovimiento, exigirCajaDeEscritura, puedeVer,
+} from './caja-scope';
 import { num, round2 } from '../common/money';
 
 
@@ -71,6 +75,18 @@ function dateOnly(s: string): Date {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
 }
 
+/**
+ * El día de HOY en Colombia, como 'YYYY-MM-DD'.
+ *
+ * El servidor corre en UTC: `new Date().toISOString()` después de las 7 p.m. de
+ * Colombia ya cambió de día, así que un recaudo de la noche nacía con la fecha de
+ * mañana y no salía en el cierre de quien lo recibió. La caja cierra en hora de
+ * Colombia, no en UTC.
+ */
+function hoyColombia(): string {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
+}
+
 type Tx = Prisma.TransactionClient;
 
 /**
@@ -84,7 +100,8 @@ export class CobranzasService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly posting: PostingService,
-    private readonly mikrotik: MikrotikService,
+    private readonly reconexion: ReconexionService,
+    private readonly events: EventEmitter2,
   ) {}
 
   /**
@@ -160,14 +177,28 @@ export class CobranzasService {
    * Ingreso manual libre: INCOME no ligado a factura. Actualiza el saldo de la caja.
    * Equivale a `Transactions_model::save_trans` con pay_type=Income del legacy.
    */
+  /**
+   * La cajera solo administra EFECTIVO: consignaciones, cheques y demás los
+   * registra contabilidad. La UI ya no le ofrece otros métodos, pero la frontera
+   * de verdad es esta — un POST a mano no puede saltársela.
+   */
+  private exigirEfectivoSiEsCajera(user: AuthUser, method?: string | null) {
+    if (esCajera(user) && (method ?? 'Cash') !== 'Cash') {
+      throw new ForbiddenException('Como cajera solo puedes registrar movimientos en efectivo.');
+    }
+  }
+
   async createIncome(dto: IncomeDto, user: AuthUser) {
     const amount = round2(Number(dto.amount));
     if (!(amount > 0)) throw new BadRequestException('El monto debe ser mayor a cero');
+    this.exigirEfectivoSiEsCajera(user, dto.method);
+    // La caja no se toma tal cual del cliente: quien está acotado escribe en la suya.
+    const cashAccountId = await exigirCajaDeEscritura(this.prisma, user, dto.cashAccountId);
     if (dto.subscriberId) {
       const sub = await this.prisma.subscriber.findUnique({ where: { id: dto.subscriberId }, select: { id: true } });
       if (!sub) throw new NotFoundException('Cliente no encontrado');
     }
-    const when = dto.date ? dateOnly(dto.date) : dateOnly(new Date().toISOString());
+    const when = dto.date ? dateOnly(dto.date) : dateOnly(hoyColombia());
     const result = await this.prisma.$transaction(async (tx) => {
       const t = await tx.transaction.create({
         data: {
@@ -175,14 +206,14 @@ export class CobranzasService {
           payerName: dto.payerName ?? null, subscriberId: dto.subscriberId ?? null,
           method: dto.method,
           date: when,
-          cashAccountId: dto.cashAccountId ?? null, accountName: dto.accountName ?? null,
+          cashAccountId, accountName: dto.accountName ?? null,
           bankName: isBankMethod(dto.method) ? (dto.bankName ?? null) : null,
           ext: false, status: 'VIGENTE', note: dto.note ?? null, issuerUserId: null,
         },
       });
       // Subscriber antes que CashAccount (ver ORDEN DE BLOQUEO).
       if (dto.subscriberId) await this.recomputeSubscriber(tx, dto.subscriberId);
-      await this.recomputeCashBalance(tx, dto.cashAccountId);
+      await this.recomputeCashBalance(tx, cashAccountId);
       return { id: t.id, amount };
     });
     // Contabilización automática (idempotente; no rompe el flujo si falla). "Balance" no mueve efectivo.
@@ -200,6 +231,10 @@ export class CobranzasService {
    * de venta ligado a factura (esos se anulan y rehacen para no descuadrar cartera).
    */
   async editTransaction(id: string, dto: EditTxDto, user: AuthUser) {
+    // Sobre un movimiento de otra sede no se toca nada: ni sus campos…
+    await exigirAccesoAlMovimiento(this.prisma, user, id);
+    // …ni se lo puede mudar a una caja que no sea suya (el DTO trae `cashAccountId`).
+    if (dto.cashAccountId != null) await exigirAcceso(this.prisma, user, dto.cashAccountId);
     return this.prisma.$transaction(async (tx) => {
       const t = await tx.transaction.findUnique({ where: { id } });
       if (!t) throw new NotFoundException('Movimiento no encontrado');
@@ -267,12 +302,37 @@ export class CobranzasService {
     };
   }
 
-  /** Registrar recaudo: aplica el monto en cascada, crea transacciones + recibo. */
-  async collect(dto: CollectDto, user: AuthUser) {
+  /**
+   * Registrar recaudo: aplica el monto en cascada, crea transacciones + recibo y
+   * reconecta lo que corresponda (internet y/o TV).
+   *
+   * `opts.reconectar: false` lo usa el cargue de pagos, que reconecta al final en
+   * un solo lote: reconectar dentro del bucle abriría una sesión SSH/API por fila.
+   *
+   * `opts.cajaPropiaSiFalta` lo pone SOLO el endpoint interactivo: quien recauda a
+   * mano y no manda caja (la pantalla ya no le enseña el selector: sólo lo ve el
+   * superusuario) recauda contra la suya. El cargue de pagos NO lo pone — ese
+   * dinero lo recibió el corresponsal, no el operador que sube el archivo, y
+   * cargárselo a su caja le inflaría el arqueo con plata que nunca tocó.
+   */
+  async collect(dto: CollectDto, user: AuthUser, opts?: { reconectar?: boolean; cajaPropiaSiFalta?: boolean }) {
     const montoPedido = round2(Number(dto.amount));
     if (!(montoPedido > 0)) throw new BadRequestException('El monto debe ser mayor a cero');
 
-    const payDate = dto.date ? dateOnly(dto.date) : dateOnly(new Date().toISOString());
+    // El recaudo entra en la caja de quien lo registra si está acotado: así el pago
+    // aparece en SU cierre, y no puede empujarlo a la caja de otra sede.
+    const cashAccountId = await exigirCajaDeEscritura(
+      this.prisma, user, dto.cashAccountId, { propiaSiFalta: opts?.cajaPropiaSiFalta },
+    );
+    // El nombre de la caja lo pone el servidor cuando el cliente no lo manda: en las
+    // listas de movimientos la columna "Cuenta" sale de aquí, y desde que la cajera
+    // no elige caja el navegador ya no sabe cómo se llama la suya.
+    const accountName = dto.accountName ?? (cashAccountId != null
+      ? (await this.prisma.cashAccount.findUnique({
+          where: { legacyId: cashAccountId }, select: { holder: true },
+        }))?.holder ?? null
+      : null);
+    const payDate = dto.date ? dateOnly(dto.date) : dateOnly(hoyColombia());
 
     const result = await this.prisma.$transaction(async (tx) => {
       // Todo lo que sigue —leer saldos, repartir y escribir— va DENTRO de la
@@ -357,7 +417,7 @@ export class CobranzasService {
             type: 'INCOME', category: 'Sales', credit: amt, debit: 0,
             payerName: payer, subscriberId: sub.id,
             method: dto.method, date: payDate, invoiceId: inv.id,
-            cashAccountId: dto.cashAccountId ?? null, accountName: dto.accountName ?? null,
+            cashAccountId, accountName,
             bankName: isBankMethod(dto.method) ? (dto.bankName ?? null) : null,
             ext: false, status: 'VIGENTE',
             note: dto.note ?? `Pago de la factura #${inv.tid}`,
@@ -379,7 +439,7 @@ export class CobranzasService {
       }
 
       await this.recomputeSubscriber(tx, sub.id);
-      await this.recomputeCashBalance(tx, dto.cashAccountId);
+      await this.recomputeCashBalance(tx, cashAccountId);
 
       // Recibo de caja (materializado al pagar, no al imprimir como el legacy).
       const receipt = await tx.paymentReceipt.create({
@@ -407,37 +467,47 @@ export class CobranzasService {
       });
     }
     // Reconexión automática tras el pago (paridad legacy: al pagar se reactiva).
-    // Best-effort: nunca rompe el recaudo. Solo si el cliente estaba CORTADO. Respeta
-    // el modo de red (dry-run salvo interruptor de Configuración encendido).
+    // Devuelve INTERNET y TV, cada uno por su vía y solo al que le corresponda; ver
+    // `ReconexionService`. Best-effort: nunca rompe el recaudo, que ya está
+    // contabilizado, y respeta los gates de red (dry-run salvo LIVE encendido).
     //
-    // El fallo NO se traga: reconnect() no lanza cuando el router está caído, devuelve
+    // El fallo NO se traga: los equipos no lanzan cuando están caídos, devuelven
     // ok=false. Antes se ignoraba, así que el cliente pagaba y quedaba cortado sin que
     // nadie se enterara. Ahora se detecta, se registra a nivel error (con el detalle ya
-    // persistido en MikrotikActionLog para reintentar desde Red) y se propaga en la
-    // respuesta para que quien registra el pago vea en el acto que quedó cortado.
-    let reconnect: { attempted: boolean; ok: boolean; message?: string } = { attempted: false, ok: true };
-    try {
-      const fresh = await this.prisma.subscriber.findUnique({ where: { id: dto.subscriberId }, select: { status: true } });
-      if (fresh?.status === 'CORTADO') {
-        const rr = await this.mikrotik.reconnect(dto.subscriberId, user);
-        reconnect = { attempted: true, ok: rr.ok, message: rr.message };
-        if (!rr.ok) {
-          this.logger.error(
-            `Recaudo ${result.receiptId}: el abonado ${dto.subscriberId} PAGÓ pero la reconexión falló (${rr.error ?? rr.message}). Sigue CORTADO — reintentar desde Red (auditado en MikrotikActionLog).`,
-          );
-        }
-      }
-    } catch (e) {
-      reconnect = { attempted: true, ok: false, message: (e as Error).message };
-      this.logger.error(
-        `Recaudo ${result.receiptId}: error al reconectar al abonado ${dto.subscriberId} tras el pago: ${(e as Error).message}. Puede seguir cortado.`,
-      );
-    }
-    return { ...result, reconnect };
+    // persistido en MikrotikActionLog / GenieacsLog / OltActionLog para reintentar
+    // desde Red) y se propaga en la respuesta para que quien registra el pago vea en
+    // el acto que quedó cortado.
+    const reconexion = opts?.reconectar === false
+      ? null
+      : await this.reconexion.porPago(dto.subscriberId, user, `recibo ${result.receiptId}`);
+
+    // Aviso para quien quiera contárselo al cliente (hoy, el bot: ver
+    // AvisosProactivosService). Va por evento porque tesorería no conoce el canal de
+    // WhatsApp, y se emite DESPUÉS de que el dinero ya está contabilizado: un fallo
+    // avisando no puede tocar un recaudo que ya se hizo.
+    this.events.emit(PAGO_APLICADO_EVENT, {
+      subscriberId: dto.subscriberId,
+      monto: result.totalApplied,
+      reconexion: !reconexion || !reconexion.aplica ? 'no-aplica' : reconexion.ok ? 'reconectado' : 'fallo',
+    } satisfies PagoAplicadoEvent);
+
+    return {
+      ...result,
+      reconexion,
+      // Compatibilidad con la forma anterior de la respuesta (solo internet).
+      reconnect: reconexion
+        ? { attempted: reconexion.aplica, ok: reconexion.ok, message: reconexion.mensaje }
+        : { attempted: false, ok: true },
+    };
   }
 
   /** Anular una transacción: soft-delete + Voiding + reversa del saldo de la factura. */
   async voidTransaction(id: string, dto: VoidTxDto, user: AuthUser) {
+    // Sólo la propia caja. La comprobación va en la puerta pública y NO en
+    // `voidTransactionTx`, que también lo llama `FacturasService.voidInvoice` para
+    // reversar TODOS los pagos de una factura anulada: allá la autorización es la de
+    // anular la factura, y sus pagos pueden haber entrado por caja de otra sede.
+    await exigirAccesoAlMovimiento(this.prisma, user, id);
     return this.prisma.$transaction((tx) => this.voidTransactionTx(tx, id, dto, user));
   }
 
@@ -500,6 +570,9 @@ export class CobranzasService {
   /** Registrar un egreso/gasto de caja. */
   async createExpense(dto: ExpenseDto, user: AuthUser) {
     const amount = round2(Number(dto.amount));
+    this.exigirEfectivoSiEsCajera(user, dto.method);
+    // Igual que en el ingreso: quien está acotado sólo saca plata de SU caja.
+    const cashAccountId = await exigirCajaDeEscritura(this.prisma, user, dto.cashAccountId);
     // Igual que en el ingreso: se valida antes de crear. Si no, un id de cliente
     // inexistente revienta como violación de clave foránea (error 500 opaco) en
     // vez de un 404 legible.
@@ -507,7 +580,7 @@ export class CobranzasService {
       const sub = await this.prisma.subscriber.findUnique({ where: { id: dto.subscriberId }, select: { id: true } });
       if (!sub) throw new NotFoundException('Cliente no encontrado');
     }
-    const when = dto.date ? dateOnly(dto.date) : dateOnly(new Date().toISOString());
+    const when = dto.date ? dateOnly(dto.date) : dateOnly(hoyColombia());
     const result = await this.prisma.$transaction(async (tx) => {
       const t = await tx.transaction.create({
         data: {
@@ -516,13 +589,13 @@ export class CobranzasService {
           subscriberId: dto.subscriberId ?? null,
           method: dto.method,
           date: when,
-          cashAccountId: dto.cashAccountId ?? null, accountName: dto.accountName ?? null,
+          cashAccountId, accountName: dto.accountName ?? null,
           bankName: isBankMethod(dto.method) ? (dto.bankName ?? null) : null,
           ext: true, status: 'VIGENTE', note: dto.note ?? null,
           issuerUserId: null,
         },
       });
-      await this.recomputeCashBalance(tx, dto.cashAccountId);
+      await this.recomputeCashBalance(tx, cashAccountId);
       // Ojo: NO se recalcula el saldo del cliente. El egreso nace `ext: true` y
       // `recomputeSubscriber` solo suma movimientos `ext: false`, así que ligar el
       // cliente aquí es informativo (deja constancia de a quién se le pagó) y no
@@ -549,7 +622,18 @@ export class CobranzasService {
     const amount = round2(Number(dto.amount));
     if (amount <= 0) throw new BadRequestException('El monto debe ser mayor a cero.');
 
-    const date = dto.date ? dateOnly(dto.date) : dateOnly(new Date().toISOString());
+    // Las DOS patas tienen que ser cajas que el usuario pueda ver…
+    await exigirAcceso(this.prisma, user, dto.fromCashAccountId);
+    await exigirAcceso(this.prisma, user, dto.toCashAccountId);
+    // …y además, quien está acotado tiene que ser parte del traslado. Los bancos los
+    // ve todo el mundo (hacen falta para consolidar el cierre), así que sin esto una
+    // cajera podría mover plata de un banco de la empresa a otro sin tocar su caja.
+    const alcance = await alcanceDe(this.prisma, user);
+    if (!alcance.todas && dto.fromCashAccountId !== alcance.caja && dto.toCashAccountId !== alcance.caja) {
+      throw new ForbiddenException('Una transferencia tuya tiene que salir de tu caja o entrar en ella.');
+    }
+
+    const date = dto.date ? dateOnly(dto.date) : dateOnly(hoyColombia());
     const fromName = dto.fromAccountName ?? `Caja ${dto.fromCashAccountId}`;
     const toName = dto.toAccountName ?? `Caja ${dto.toCashAccountId}`;
     const baseNote = (dto.note ?? '').trim();
@@ -764,18 +848,77 @@ export class CobranzasService {
     return { id, deleted: true };
   }
 
-  /** Apertura de caja: registra la base inicial de una caja en una fecha. */
+  /**
+   * Abrir la caja del día. Un botón, sin formulario.
+   *
+   * La base NO la escribe quien abre: sale del fondo fijo que administración le fijó a
+   * esa caja (`CashAccount.fixedFund`, editable en Cajas y categorías) más el arrastre
+   * que dejó el cierre anterior. Antes venía en el body y la cajera podía teclear
+   * cualquier cifra — decidir con cuánto arranca una sede es de administración.
+   *
+   * No reabre: si el día ya está abierto devuelve el registro que hay y no toca nada.
+   * Reescribir la base de una caja ya abierta cambiaría, a mitad de jornada, la cifra
+   * contra la que se cuadra el cajón.
+   */
   async openCash(dto: CashOpenDto, user: AuthUser) {
+    const alcance = await alcanceDe(this.prisma, user);
+    const cashAccountId = dto.cashAccountId ?? alcance.caja;
+    if (cashAccountId == null) {
+      throw new BadRequestException('No tienes una caja asignada; pídesela a administración.');
+    }
+    await exigirAcceso(this.prisma, user, cashAccountId);
+
     const d = dateOnly(dto.date);
-    const o = await this.prisma.cashOpen.upsert({
-      where: { cashAccountId_date: { cashAccountId: dto.cashAccountId, date: d } },
-      create: {
-        cashAccountId: dto.cashAccountId, accountName: dto.accountName ?? null, date: d,
-        base: round2(dto.base), note: dto.note ?? null, openedBy: user.name || user.email,
-      },
-      update: { base: round2(dto.base), note: dto.note ?? null, accountName: dto.accountName ?? null },
+    const cuenta = await this.prisma.cashAccount.findUnique({
+      where: { legacyId: cashAccountId },
+      select: { holder: true },
     });
-    return { id: o.id, cashAccountId: o.cashAccountId, date: o.date, base: num(o.base), openedBy: o.openedBy };
+    if (!cuenta) throw new NotFoundException('Caja no encontrada');
+
+    const [ya, actividad] = await Promise.all([
+      this.prisma.cashOpen.findUnique({ where: { cashAccountId_date: { cashAccountId, date: d } } }),
+      this.actividadDelDia(cashAccountId, dto.date),
+    ]);
+    if (ya) {
+      return {
+        id: ya.id, cashAccountId, accountName: ya.accountName ?? cuenta.holder, date: ya.date,
+        base: num(ya.base), fondoFijo: null as number | null, carryover: null as number | null,
+        openedBy: ya.openedBy, openedAt: ya.openedAt, abierta: false, motivo: 'ya-abierta' as const,
+      };
+    }
+    // La caja ya está en jornada (movimientos de hoy, hechos aquí o en el legacy): no
+    // hay nada que abrir. Registrar ahora una apertura fecharía a media tarde algo que
+    // pasó en la mañana, y la haría parecer el momento en que arrancó la caja.
+    if (actividad.movimientos > 0) {
+      return {
+        id: null, cashAccountId, accountName: cuenta.holder, date: d,
+        base: null as number | null, fondoFijo: null as number | null, carryover: null as number | null,
+        openedBy: null, openedAt: null, abierta: false, motivo: 'ya-opera' as const,
+        movimientos: actividad.movimientos,
+      };
+    }
+
+    const [fondoFijo, { carryover }] = await Promise.all([
+      fondoFijoDe(this.prisma, cashAccountId),
+      this.getCarryover(cashAccountId, dto.date),
+    ]);
+    const base = round2(fondoFijo + carryover);
+
+    // upsert y no create: dos clics seguidos (o dos pestañas) chocarían con el índice
+    // único. `update: {}` deja intacta la apertura que ya existiera.
+    const o = await this.prisma.cashOpen.upsert({
+      where: { cashAccountId_date: { cashAccountId, date: d } },
+      create: {
+        cashAccountId, accountName: cuenta.holder, date: d,
+        base, note: null, openedBy: user.name || user.email,
+      },
+      update: {},
+    });
+    return {
+      id: o.id, cashAccountId, accountName: o.accountName, date: o.date,
+      base: num(o.base), fondoFijo, carryover,
+      openedBy: o.openedBy, openedAt: o.openedAt, abierta: true, motivo: null,
+    };
   }
 
   /** Apertura vigente de una caja en una fecha (o null). */
@@ -837,16 +980,24 @@ export class CobranzasService {
   }
 
   /**
-   * Sugerencia de apertura para una caja/fecha: fondo fijo + arrastre del día anterior.
+   * Estado de apertura de una caja en una fecha: con cuánto abriría (fondo fijo +
+   * arrastre) y, si ya está abierta, con qué base y quién la abrió.
+   *
+   * Es lo que el panel de la cajera necesita para decidir entre enseñar el botón o el
+   * "ya está abierta". La cifra la calcula aquí el servidor: al cliente sólo se le
+   * cuenta, nunca se le pregunta.
    *
    * OJO: el fondo fijo es una función PROPIA de SAVES (la apertura de caja no existe en
    * el legacy). El CIERRE no lo usa: allá la base es cero y se barre el efectivo entero.
    */
-  async cashOpenSuggest(cashAccountId: number, date: string) {
-    const [{ carryover, from }, existing, fondoFijo] = await Promise.all([
+  async cashOpenSuggest(cashAccountId: number, date: string, user: AuthUser) {
+    // Sin esto, una cajera podía preguntar por el fondo y el arrastre de otra sede.
+    await exigirAcceso(this.prisma, user, cashAccountId);
+    const [{ carryover, from }, existing, fondoFijo, actividad] = await Promise.all([
       this.getCarryover(cashAccountId, date),
       this.getCashOpen(cashAccountId, date),
       fondoFijoDe(this.prisma, cashAccountId),
+      this.actividadDelDia(cashAccountId, date),
     ]);
     return {
       fondoFijo,
@@ -854,23 +1005,63 @@ export class CobranzasService {
       carryoverFrom: from,
       base: round2(fondoFijo + carryover),
       existing,
+      /** Movimientos reales del día: > 0 ⇒ la caja ya está operando, la abriera quien la abriera. */
+      movimientos: actividad.movimientos,
+      /** Hora del primer movimiento, sólo si se creó en SAVES (lo migrado no tiene hora real). */
+      desde: actividad.desde,
+      /** Quién hizo ese primer movimiento (el `eid` del legacy resuelto a nombre). */
+      primero: actividad.primero,
     };
   }
 
-  /** Aperturas recientes (listado). */
-  async cashOpens(params: { page?: number; pageSize?: number }) {
-    const page = Math.max(1, Number(params.page) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number(params.pageSize) || 25));
-    const [rows, total] = await Promise.all([
-      this.prisma.cashOpen.findMany({ orderBy: { openedAt: 'desc' }, skip: (page - 1) * pageSize, take: pageSize }),
-      this.prisma.cashOpen.count(),
-    ]);
+  /**
+   * ¿Esta caja ya está operando hoy? Se responde con el LIBRO, no con el registro de
+   * apertura de SAVES.
+   *
+   * El legacy no tiene apertura de caja — sólo cierre (`cierres_caja`) —, así que una
+   * caja que arrancó allá no deja ningún rastro de "abierta" que copiar: lo que deja son
+   * movimientos, y esos sí llegan por la sincronización. Preguntar sólo por `CashOpen`
+   * era preguntar por algo que únicamente sabe este sistema, y por eso a una caja en
+   * plena jornada se le seguía ofreciendo el botón de abrir.
+   *
+   * Las patas 'Saldo <fecha>' quedan fuera a propósito: el arrastre es plata que el
+   * cierre anterior dejó en el cajón, no actividad de hoy. Si contara, una caja que se
+   * cierra todos los días aparecería "operando" cada mañana antes de que llegue nadie.
+   */
+  private async actividadDelDia(cashAccountId: number, date: string) {
+    // Como texto y con `::date`, no como Date de JS: `Transaction.date` es un `date` de
+    // Postgres y atarle un timestamp lo compara en la zona de la sesión (Europe/Berlin
+    // en este servidor), lo que corre el día entero — un día pedía el siguiente.
+    const dia = isoUTC(dateOnly(date));
+    const [fila] = await this.prisma.$queryRaw<
+      { movimientos: number; desde: Date | null; emisor: number | null }[]
+    >(Prisma.sql`
+      SELECT COUNT(*)::int AS movimientos,
+             -- Hora sólo de lo creado AQUI: en lo que llega del legacy, createdAt es la
+             -- hora a la que paso la sincronizacion, no la del movimiento.
+             MIN("createdAt") FILTER (WHERE "legacyId" IS NULL) AS desde,
+             -- Quien hizo el primero. Los ids del legacy son correlativos, asi que
+             -- ordenar por ellos ES el orden real del dia.
+             (array_agg("issuerUserId" ORDER BY "legacyId" ASC NULLS LAST, "createdAt" ASC)
+                FILTER (WHERE "issuerUserId" IS NOT NULL))[1] AS emisor
+      FROM "Transaction"
+      WHERE "cashAccountId" = ${cashAccountId}
+        AND status = 'VIGENTE'
+        AND "date" = ${dia}::date
+        AND (note IS NULL OR NOT (${SQL_NOTA_SALDO}))
+    `);
+
+    // `issuerUserId` es el `eid` del legacy, que cruza contra `Staff.legacyId`.
+    const emisorId = fila?.emisor ?? null;
+    const quien = emisorId != null
+      ? await this.prisma.staff.findFirst({ where: { legacyId: emisorId }, select: { name: true } })
+      : null;
+
     return {
-      items: rows.map((o) => ({
-        id: o.id, cashAccountId: o.cashAccountId, accountName: o.accountName,
-        date: o.date, base: num(o.base), openedBy: o.openedBy, openedAt: o.openedAt, note: o.note,
-      })),
-      total, page, pageSize, pages: Math.ceil(total / pageSize),
+      movimientos: Number(fila?.movimientos ?? 0),
+      desde: fila?.desde ?? null,
+      /** Quien registró el primer movimiento del día. null = se hizo en SAVES (no se sella el emisor). */
+      primero: quien?.name ?? null,
     };
   }
 

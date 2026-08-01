@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ordenSql } from '../common/pagination-params';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
@@ -24,7 +25,7 @@ import { decryptSecret, encryptSecret } from '../common/secret-box';
 
 export type OltAction =
   | 'TEST' | 'BOARDS' | 'ONUS' | 'AUTOFIND' | 'PROFILES' | 'SYSTEM'
-  | 'DETAIL' | 'FIND' | 'PROVISION' | 'REBOOT' | 'DELETE' | 'SYNC' | 'LINK';
+  | 'DETAIL' | 'FIND' | 'PROVISION' | 'REBOOT' | 'DELETE' | 'SYNC' | 'LINK' | 'DESC' | 'CATV';
 
 interface AuditMeta {
   sn?: string | null;
@@ -46,11 +47,37 @@ function subName(s: any): string | null {
   return p || (s.companyName || '').trim() || null;
 }
 
+/**
+ * Elige el srv-profile correcto para una ONU a partir de su EquipmentID.
+ *
+ * En esta planta hay un srv-profile con el NOMBRE EXACTO del modelo de cada ONU
+ * (autofind reporta EquipmentID "BCD-FD702XW-X-R410" y existe el srv-profile
+ * llamado "BCD-FD702XW-X-R410"). Elegir el que coincide evita el `match: mismatch`
+ * que deja al abonado registrado pero SIN servicio. Se compara normalizando
+ * (mayúsculas, sin signos) para tolerar guiones/espacios entre modelo y perfil.
+ *
+ * Si no hay coincidencia exacta se devuelve null a propósito: NO se adivina un
+ * genérico solo, porque un genérico con distinto número de puertos ETH vuelve a
+ * dar mismatch. En ese caso el auto-alta deja la solicitud en REVIEW para que un
+ * humano elija el perfil, en vez de dar de alta algo roto.
+ */
+export function pickSrvProfileByModel(
+  model: string,
+  srvList: { id: string; name: string }[],
+): { id: string; name: string } | null {
+  const norm = (s: string) => (s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const target = norm(model);
+  if (!target) return null;
+  return srvList.find((p) => norm(p.name) === target) ?? null;
+}
+
 @Injectable()
 export class OltService {
   private readonly logger = new Logger(OltService.name);
   private live = process.env.OLT_LIVE === 'true';
   private liveCheckedAt = 0;
+  private autoProvision = process.env.AUTO_PROVISION_ENABLED === 'true';
+  private autoProvisionCheckedAt = 0;
 
   constructor(private readonly prisma: PrismaService) {}
 
@@ -70,14 +97,40 @@ export class OltService {
       : process.env.OLT_LIVE === 'true';
   }
 
+  /** Gate del auto-alta: ajuste `network.oltAutoProvision` (cache 15s). AUTO_PROVISION_ENABLED lo fuerza. */
+  private async syncAutoProvision(): Promise<void> {
+    const now = Date.now();
+    if (now - this.autoProvisionCheckedAt < 15000) return;
+    this.autoProvisionCheckedAt = now;
+    const row = await this.prisma.appSetting.findUnique({ where: { key: 'network.oltAutoProvision' } });
+    this.autoProvision = row?.value === 'true' || row?.value === 'false'
+      ? row.value === 'true'
+      : process.env.AUTO_PROVISION_ENABLED === 'true';
+  }
+
   async mode() {
     await this.syncLive();
-    return { live: this.live, mode: this.live ? 'LIVE' : 'DRY_RUN', brands: OLT_BRANDS };
+    await this.syncAutoProvision();
+    return { live: this.live, mode: this.live ? 'LIVE' : 'DRY_RUN', autoProvision: this.autoProvision, brands: OLT_BRANDS };
   }
 
   // ------------------------------------------------------------------ //
   //  Resolución + sesión                                               //
   // ------------------------------------------------------------------ //
+
+  /**
+   * Deja en el log la transcripción SSH de una sesión que falló. Sin esto, los
+   * errores del CLI ("Reenter times…", prompts inesperados) solo se ven en la
+   * respuesta HTTP y se pierden: no hay forma de saber QUÉ pregunta del equipo
+   * quedó sin responder. Se recorta para no inundar el log.
+   */
+  private logSesionFallida(olt: { ip: string }, error: string, raw: string) {
+    const t = (raw || '').slice(-4000);
+    this.logger.warn(
+      `Sesión OLT ${olt.ip} falló: ${error}\n` +
+      `--- transcripción SSH (últimos ${t.length} car.) ---\n${t}\n--- fin ---`,
+    );
+  }
 
   private async resolveOlt(id: string) {
     const olt = await this.prisma.olt.findUnique({ where: { id } });
@@ -85,27 +138,135 @@ export class OltService {
     return olt;
   }
 
-  /** Abre driver conectado+preparado y ejecuta `fn`. Siempre desconecta. */
+  /**
+   * Sesiones SSH abiertas ahora mismo, por IP de OLT. Los Huawei aceptan pocas
+   * sesiones VTY simultáneas (típico 4-8) y solo las liberan por timeout de
+   * inactividad: si se agotan, NADIE entra al equipo — ni el sistema ni un
+   * técnico por consola. Serializamos por equipo para no llegar nunca a ese
+   * punto y REUTILIZAMOS una única sesión ya autenticada (pool): el costo de
+   * conexión (handshake legacy + banner + enable + config ≈ 4-6 s) se paga una
+   * vez y no en cada consulta. La sesión se cierra sola tras un rato ociosa.
+   */
+  private static readonly colaPorOlt = new Map<string, Promise<unknown>>();
+
+  /** Sesión SSH viva por IP de OLT, con temporizador de cierre por inactividad. */
+  private static readonly sesionPorOlt = new Map<string, { driver: OltDriver; timer: NodeJS.Timeout; lastUsed: number }>();
+  /** Ociosa este tiempo → se cierra (muy por debajo del idle-timeout VTY del equipo). */
+  private static readonly SESION_IDLE_MS = 90_000;
+
+  /**
+   * Caché de lecturas que casi nunca cambian (perfiles, tablas de tráfico,
+   * tableros, system info): evita una sesión SSH completa cada vez que se abre
+   * el modal de autenticar. Los botones "Refrescar" fuerzan lectura real.
+   */
+  private static readonly cacheLecturas = new Map<string, { at: number; data: any }>();
+  private static readonly CACHE_TTL_MS = 10 * 60_000;
+
+  private guardarSesion(ip: string, driver: OltDriver): void {
+    const previa = OltService.sesionPorOlt.get(ip);
+    if (previa) clearTimeout(previa.timer);
+    const timer = setTimeout(() => this.descartarSesion(ip), OltService.SESION_IDLE_MS);
+    timer.unref?.();
+    OltService.sesionPorOlt.set(ip, { driver, timer, lastUsed: Date.now() });
+  }
+
+  private descartarSesion(ip: string): void {
+    const s = OltService.sesionPorOlt.get(ip);
+    if (!s) return;
+    clearTimeout(s.timer);
+    OltService.sesionPorOlt.delete(ip);
+    try { s.driver.disconnect(); } catch { /* cerrando */ }
+  }
+
+  onModuleDestroy(): void {
+    for (const ip of [...OltService.sesionPorOlt.keys()]) this.descartarSesion(ip);
+  }
+
+  /** Devuelve la respuesta cacheada si está vigente; si no, ejecuta y cachea (solo éxitos). */
+  private async conCache<T extends { ok: boolean }>(key: string, refresh: boolean, fn: () => Promise<T>): Promise<T> {
+    if (!refresh) {
+      const hit = OltService.cacheLecturas.get(key);
+      if (hit && Date.now() - hit.at < OltService.CACHE_TTL_MS) return { ...hit.data, cached: true };
+    }
+    const data = await fn();
+    if (data.ok) OltService.cacheLecturas.set(key, { at: Date.now(), data });
+    return data;
+  }
+
+  /** Encola `fn` detrás de lo que ya esté corriendo contra esa misma OLT. */
+  private enFila<T>(ip: string, fn: () => Promise<T>): Promise<T> {
+    const previo = OltService.colaPorOlt.get(ip) ?? Promise.resolve();
+    const siguiente = previo.catch(() => {}).then(fn);
+    // La cola guarda la promesa "silenciada" para que un fallo no la rompa.
+    OltService.colaPorOlt.set(ip, siguiente.catch(() => {}));
+    return siguiente;
+  }
+
+  /**
+   * Ejecuta `fn` sobre una sesión conectada+preparada. Reutiliza la sesión del
+   * pool si sigue viva (probe con ENTER); si no, conecta una nueva. Tras un uso
+   * exitoso la sesión VUELVE al pool (no se desconecta); ante una excepción se
+   * descarta, porque el CLI pudo quedar en un submodo desconocido.
+   */
   private async withDriver<T>(
     olt: { id: string; brand: string; ip: string; port: string; username: string; password: string },
     fn: (driver: OltDriver) => Promise<T>,
   ): Promise<{ ok: boolean; error: string; raw: string; data: T | null }> {
-    const driver = createOltDriver(olt.brand, olt.ip, olt.port, olt.username, decryptSecret(olt.password));
-    const connected = await driver.connect();
-    if (!connected) {
-      const error = driver.getError();
-      driver.disconnect();
-      return { ok: false, error, raw: driver.getRawLog(), data: null };
-    }
-    try {
-      await driver.prepare();
-      const data = await fn(driver);
-      return { ok: data !== false, error: data === false ? driver.getError() : '', raw: driver.getRawLog(), data: data === false ? null : data };
-    } catch (e) {
-      return { ok: false, error: (e as Error).message, raw: driver.getRawLog(), data: null };
-    } finally {
-      driver.disconnect();
-    }
+    return this.enFila(olt.ip, async () => {
+      const pooled = OltService.sesionPorOlt.get(olt.ip);
+      let driver = pooled?.driver ?? null;
+      if (driver && pooled) {
+        // Usada hace <10 s y sin señales de muerte → se confía sin probe: en una
+        // ráfaga (listar → detalle → óptica) el probe es un viaje extra por
+        // consulta. Tras más tiempo ociosa sí se verifica con un ENTER.
+        const recienUsada = Date.now() - pooled.lastUsed < 10_000;
+        const usable = driver.isAlive() && (recienUsada || (await driver.probe()));
+        if (usable) {
+          driver.resetSession();
+        } else {
+          this.descartarSesion(olt.ip);
+          driver = null;
+        }
+      }
+      if (!driver) {
+        driver = createOltDriver(olt.brand, olt.ip, olt.port, olt.username, decryptSecret(olt.password));
+        const connected = await driver.connect();
+        if (!connected) {
+          const error = driver.getError();
+          driver.disconnect();
+          if (/Reenter times|maximum|too many|number of users/i.test(error)) {
+            this.logger.error(
+              `OLT ${olt.ip}: el equipo rechaza nuevas sesiones SSH (${error}). ` +
+              'Probablemente quedaron sesiones VTY colgadas; se liberan por timeout de inactividad.',
+            );
+          }
+          return { ok: false, error, raw: driver.getRawLog(), data: null };
+        }
+        await driver.prepare();
+      }
+      try {
+        const data = await fn(driver);
+        const error = data === false ? driver.getError() : '';
+        if (data === false) this.logSesionFallida(olt, error, driver.getRawLog());
+        // Éxito o fallo lógico (p.ej. "SN no encontrado"): el CLI quedó en el
+        // prompt de config y la sesión sirve para la próxima consulta. Pero si
+        // el CLI quedó atascado en una pregunta (reenter/prompt repetido), la
+        // sesión no es confiable y se descarta.
+        if (/Reenter times|prompt repetido|repitió la misma pregunta|falta un parámetro|pide un parámetro/i.test(error)) {
+          this.descartarSesion(olt.ip);
+          driver.disconnect();
+        } else {
+          this.guardarSesion(olt.ip, driver);
+        }
+        return { ok: data !== false, error, raw: driver.getRawLog(), data: data === false ? null : data };
+      } catch (e) {
+        const error = (e as Error).message;
+        this.logSesionFallida(olt, error, driver.getRawLog());
+        this.descartarSesion(olt.ip);
+        driver.disconnect();
+        return { ok: false, error, raw: driver.getRawLog(), data: null };
+      }
+    });
   }
 
   private async audit(action: OltAction, olt: { id: string; name: string } | null, ok: boolean, dryRun: boolean, detail: string, meta: AuditMeta = {}) {
@@ -219,16 +380,39 @@ export class OltService {
     return { ok, error };
   }
 
-  async boards(id: string, frame = 0) {
+  async boards(id: string, frame = 0, refresh = false) {
     const olt = await this.resolveOlt(id);
-    const r = await this.withDriver(olt, (d) => d.getBoards(frame));
-    return { ok: r.ok, error: r.error, boards: r.data ?? [], raw: r.raw };
+    return this.conCache(`${olt.id}:boards:${frame}`, refresh, async () => {
+      const r = await this.withDriver(olt, (d) => d.getBoards(frame));
+      return { ok: r.ok, error: r.error, boards: r.data ?? [], raw: r.raw };
+    });
   }
 
   async onus(id: string, frame = 0, slot: number | null, port: number | null) {
     const olt = await this.resolveOlt(id);
     const r = await this.withDriver(olt, (d) => d.getOnus(frame, slot, port));
-    return { ok: r.ok, error: r.error, onus: r.data ?? [], raw: r.raw };
+    const onus = (r.data ?? []) as any[];
+    // La OLT solo devuelve serial y estados; el abonado detrás de cada ONU vive
+    // en el inventario local (sync/vínculo). Se cruza por SN para que la lista
+    // diga de quién es cada ONU sin tener que abrir la ficha una por una.
+    if (onus.length) {
+      const sns = [...new Set(onus.map((o) => String(o.sn || '')).filter(Boolean))];
+      const locales = await this.prisma.oltOnu.findMany({
+        where: { oltId: olt.id, sn: { in: sns } },
+        select: { sn: true, description: true, clientName: true, subscriberId: true },
+      });
+      const porSn = new Map(locales.map((l) => [String(l.sn).toUpperCase(), l]));
+      for (const o of onus) {
+        const l = porSn.get(String(o.sn || '').toUpperCase());
+        o.client = l?.clientName ?? null;
+        o.subscriberId = l?.subscriberId ?? null;
+        // El comentario vivo de la OLT manda; la BD local solo complementa
+        // (antes se pisaba con la BD y las descripciones recién grabadas
+        // "desaparecían" hasta el siguiente sync).
+        o.description = o.description || l?.description || null;
+      }
+    }
+    return { ok: r.ok, error: r.error, onus, raw: r.raw };
   }
 
   async autofind(id: string) {
@@ -237,23 +421,93 @@ export class OltService {
     return { ok: r.ok, error: r.error, onus: r.data ?? [], raw: r.raw };
   }
 
-  async profiles(id: string) {
+  /**
+   * Velocidades disponibles = tablas de tráfico del equipo. Se devuelven con el
+   * PIR ya convertido a Mbps para poder etiquetarlas en la UI ("102,5 Mbps").
+   * OJO: no se infiere qué índice es subida y cuál bajada — en esta OLT no hay
+   * regla consistente (100M usa in=54/out=53, pero 300M usa in=70/out=73), así
+   * que la elección de cada sentido la hace el operador.
+   */
+  async trafficTables(id: string, refresh = false) {
     const olt = await this.resolveOlt(id);
-    const r = await this.withDriver(olt, (d) => d.getProfiles());
-    const data = r.data as { line: any[]; srv: any[] } | null;
-    return { ok: r.ok, error: r.error, line: data?.line ?? [], srv: data?.srv ?? [], raw: r.raw };
+    return this.conCache(`${olt.id}:traffic`, refresh, async () => {
+      const r = await this.withDriver(olt, (d) => d.getTrafficTables());
+      const tables = (r.data ?? []).map((t) => {
+        const pir = Number(t.pir);
+        const cir = Number(t.cir);
+        return {
+          ...t,
+          mbps: Number.isFinite(pir) ? Math.round((pir / 1024) * 10) / 10 : null,
+          cirMbps: Number.isFinite(cir) ? Math.round((cir / 1024) * 10) / 10 : null,
+        };
+      });
+      return { ok: r.ok, error: r.error, tables, raw: r.raw };
+    });
   }
 
-  async systemInfo(id: string) {
+  /**
+   * Qué VLAN / perfil / velocidad usan los abonados que ya están en ese puerto.
+   * Sirve para precargar el alta sin que el técnico se sepa la planta de memoria.
+   */
+  async sugerencia(id: string, frame: number, slot: number, port: number, _model?: string) {
+    // OJO: NO se elige el srv-profile por el nombre del modelo. Se probó y en esta
+    // planta el perfil "del modelo" (F680V9.0) deja la ONU en `config: failed`; el
+    // que sí aplica es el que usan las ONTs que están en `config: normal`. Por eso
+    // el srv-profile sugerido lo calcula `sugerenciaDePuerto` a partir de lo que
+    // YA funciona en el puerto, no del EquipmentID del autofind.
     const olt = await this.resolveOlt(id);
-    const r = await this.withDriver(olt, (d) => d.getSystemInfo());
-    return { ok: r.ok, error: r.error, info: r.data ?? {}, raw: r.raw };
+    const r = await this.withDriver(olt, (d) => d.sugerenciaDePuerto(frame, slot, port));
+    return { ok: r.ok, error: r.error, sugerencia: r.data ?? null };
   }
 
-  async slotSummary(id: string, frame = 0, slot: number) {
+  /**
+   * Service-ports de VARIOS puertos PON en una sola sesión SSH.
+   *
+   * Se usa para averiguar a qué velocidad está funcionando de verdad cada plan
+   * en la planta: con ~25 puertos se cubren cientos de abonados. Hacerlo con una
+   * sesión por puerto agotaría las VTY del equipo (que son 4-8).
+   */
+  async servicePortsDePuertos(id: string, puertos: { frame: number; slot: number; port: number }[]) {
     const olt = await this.resolveOlt(id);
-    const r = await this.withDriver(olt, (d) => d.getSlotSummary(frame, slot));
-    return { ok: r.ok, error: r.error, summary: r.data ?? {}, raw: r.raw };
+    const r = await this.withDriver(olt, async (d) => {
+      const salida: { frame: number; slot: number; port: number; filas: any[] }[] = [];
+      for (const p of puertos) {
+        const filas = await d.servicePortsDePuerto(p.frame, p.slot, p.port);
+        salida.push({ ...p, filas });
+      }
+      return salida;
+    });
+    return { ok: r.ok, error: r.error, puertos: (r.data as any[]) ?? [] };
+  }
+
+  async profiles(id: string, refresh = false) {
+    const olt = await this.resolveOlt(id);
+    return this.conCache(`${olt.id}:profiles`, refresh, async () => {
+      const r = await this.withDriver(olt, (d) => d.getProfiles());
+      const data = r.data as { line: any[]; srv: any[] } | null;
+      return { ok: r.ok, error: r.error, line: data?.line ?? [], srv: data?.srv ?? [], raw: r.raw };
+    });
+  }
+
+  async systemInfo(id: string, refresh = false) {
+    const olt = await this.resolveOlt(id);
+    return this.conCache(`${olt.id}:system`, refresh, async () => {
+      const r = await this.withDriver(olt, (d) => d.getSystemInfo());
+      return { ok: r.ok, error: r.error, info: r.data ?? {}, raw: r.raw };
+    });
+  }
+
+  /**
+   * Resumen de ocupación de un slot (ONUs por puerto). Recorre los 16 puertos
+   * por SSH, así que se cachea como las demás lecturas lentas; `refresh` fuerza
+   * el barrido real.
+   */
+  async slotSummary(id: string, frame = 0, slot: number, refresh = false) {
+    const olt = await this.resolveOlt(id);
+    return this.conCache(`${olt.id}:slotsum:${frame}/${slot}`, refresh, async () => {
+      const r = await this.withDriver(olt, (d) => d.getSlotSummary(frame, slot));
+      return { ok: r.ok, error: r.error, summary: r.data ?? {}, raw: r.raw };
+    });
   }
 
   async ontDetail(id: string, frame: number, slot: number, port: number, ontId: number) {
@@ -262,10 +516,98 @@ export class OltService {
     return { ok: r.ok, error: r.error, detail: r.data ?? {}, raw: r.raw };
   }
 
+  /** Óptica en vivo de una ONU: se pide aparte del detalle porque es lo lento. */
+  async ontOptical(id: string, frame: number, slot: number, port: number, ontId: number) {
+    const olt = await this.resolveOlt(id);
+    const r = await this.withDriver(olt, (d) => d.getOntOptical(frame, slot, port, ontId));
+    return { ok: r.ok, error: r.error, optical: r.data ?? {}, raw: r.raw };
+  }
+
   async findBySn(id: string, sn: string) {
     const olt = await this.resolveOlt(id);
     const r = await this.withDriver(olt, (d) => d.findBySn(sn));
     return { ok: r.ok, error: r.error, onu: r.data ?? {}, raw: r.raw };
+  }
+
+  /** F/S/P + ont-id a partir del bloque que devuelve findBySn. */
+  private fspDeOnu(onu: any): { frame: number; slot: number; port: number; ontId: number } | null {
+    const m = String(onu?.fsp || '').match(/(\d+)\s*\/\s*(\d+)\s*\/\s*(\d+)/);
+    const ontId = Number(onu?.ont_id);
+    if (!m || Number.isNaN(ontId)) return null;
+    return { frame: Number(m[1]), slot: Number(m[2]), port: Number(m[3]), ontId };
+  }
+
+  /**
+   * Estado del puerto CATV (RF) de una ONT buscada por SN. Es el corte de TV
+   * para ONTs combo SIN TR-069 (gestión OMCI): la palanca vive en la OLT.
+   * Lectura en vivo, sin gate.
+   */
+  async catvState(id: string, sn: string) {
+    const olt = await this.resolveOlt(id);
+    if (!sn) throw new BadRequestException('Debe indicar el SN de la ONT.');
+    const r = await this.withDriver(olt, async (d) => {
+      const onu = await d.findBySn(sn);
+      if (!onu) return false;
+      const pos = this.fspDeOnu(onu);
+      if (!pos) return { onu, ports: null, error: 'La ONT no reporta F/S/P u ont-id.' };
+      const ports = await d.getCatvPorts(pos.frame, pos.slot, pos.port, pos.ontId);
+      return { onu, ports: ports === false ? null : ports, error: ports === false ? d.getError() : '' };
+    });
+    if (!r.ok) return { ok: false, error: r.error, onu: null, ports: null };
+    const data = r.data as any;
+    return { ok: !data.error, error: data.error || '', onu: data.onu, ports: data.ports };
+  }
+
+  /** Corta/activa el puerto CATV de una ONT por SN (OMCI). Dry-run salvo OLT_LIVE=true. */
+  async setCatv(id: string, params: { sn: string; catvPort?: number | string; enable: boolean }, user?: AuthUser) {
+    await this.syncLive();
+    const olt = await this.resolveOlt(id);
+    const sn = String(params.sn ?? '').trim();
+    if (!sn) throw new BadRequestException('Debe indicar el SN de la ONT.');
+    const catvPort = Number(params.catvPort ?? 1) || 1;
+    const enable = params.enable === true;
+    const verb = enable ? 'ACTIVAR' : 'CORTAR';
+
+    if (!this.live) {
+      const commands = [`display ont info by-sn ${sn}`, 'interface gpon <f>/<s>', `ont port attribute <p> <ont-id> catv ${catvPort} operational-state ${enable ? 'on' : 'off'}`, 'quit'];
+      await this.audit('CATV', olt, true, true, `DRY-RUN ${verb} CATV SN ${sn}: ` + commands.join(' · '), { sn, user });
+      return { ok: true, dryRun: true, message: `DRY-RUN: no se contacta la OLT. Active OLT_LIVE=true para ejecutar.`, commands };
+    }
+
+    this.logger.warn(`${verb} CATV (LIVE) SN ${sn} en "${olt.name}" (${olt.ip})${user?.name ? ` — pedido por ${user.name}` : ''}`);
+    const r = await this.withDriver(olt, async (d) => {
+      const onu = await d.findBySn(sn);
+      if (!onu) return false;
+      const pos = this.fspDeOnu(onu);
+      if (!pos) { return { error: 'La ONT no reporta F/S/P u ont-id.' }; }
+      const res = await d.setCatvState({ frame: pos.frame, slot: pos.slot, port: pos.port, ont_id: pos.ontId, catvPort, enable });
+      if (!res) return false;
+      // Releer el estado: la confirmación de verdad es el LinkState del puerto.
+      // La OLT tarda 1-2 s en reflejar el cambio; una releída inmediata devuelve
+      // el estado VIEJO (pasó en vivo: corte OK auditado como "catv1=up"). Se
+      // reintenta hasta ver el estado esperado o agotar los intentos.
+      const esperado = enable ? 'up' : 'down';
+      let ports: any[] | null = null;
+      for (let i = 0; i < 4; i++) {
+        await new Promise((w) => setTimeout(w, i === 0 ? 900 : 1300));
+        const read = await d.getCatvPorts(pos.frame, pos.slot, pos.port, pos.ontId);
+        if (read !== false) {
+          ports = read;
+          const objetivo = read.find((x: any) => Number(x.portId) === catvPort);
+          if (objetivo?.linkState === esperado) break;
+        }
+      }
+      return { ...res, fsp: `${pos.frame}/${pos.slot}/${pos.port}:${pos.ontId}`, ports };
+    });
+    const res = r.data as any;
+    const fsp = res?.fsp ?? null;
+    const err = !r.ok ? r.error : res?.error;
+    const estado = res?.ports?.map((p: any) => `catv${p.portId}=${p.linkState}`).join(',') ?? 'sin lectura';
+    await this.audit('CATV', olt, r.ok && !res?.error, false,
+      r.ok && !res?.error ? `${verb} CATV SN ${sn} (${fsp}) → ${estado}` : `ERROR: ${err}`,
+      { sn, fsp, user });
+    if (!r.ok || res?.error) return { ok: false, dryRun: false, error: err, raw: r.raw };
+    return { ok: true, dryRun: false, message: res.message, fsp, ports: res.ports, raw: r.raw };
   }
 
   // ------------------------------------------------------------------ //
@@ -297,8 +639,101 @@ export class OltService {
     const r = await this.withDriver(olt, (d) => d.provisionOnu(params));
     const res = r.data as any;
     await this.audit('PROVISION', olt, r.ok, false, r.ok ? (res?.message ?? 'ONT agregada') : `ERROR: ${r.error}`, { sn: params.sn, fsp, user });
+    // Traza SIEMPRE la sesión de un alta, aunque el CLI no diera error: el fallo
+    // típico (config: failed / sin service-port) no es un error de comando y de
+    // otro modo no quedaría rastro para diagnosticar.
+    const v = res?.verificacion;
+    this.logger.log(
+      `AUTENTICAR resultado SN ${params.sn} fsp ${fsp} · lp=${params.lineprofile} sp=${params.srvprofile} ` +
+      `vlan=${params.vlan ?? '-'} gem=${params.gemport ?? '-'} rx=${params.traffic_in ?? '-'} tx=${params.traffic_out ?? '-'} · ` +
+      (v ? `verif: run=${v.run_state} config=${v.config_state} match=${v.match_state} sp=${v.servicePorts?.length ?? 0}` +
+           (v.avisos?.length ? ` · avisos: ${v.avisos.join(' | ')}` : '') : 'sin verificación') +
+      `\n--- transcripción SSH ---\n${(r.raw || '').slice(-4000)}\n--- fin ---`,
+    );
     if (!r.ok) return { ok: false, dryRun: false, error: r.error, raw: r.raw };
-    return { ok: true, dryRun: false, message: res.message, ontId: res.ont_id, commands: res.commands, raw: r.raw };
+    // Registrar el alta en el inventario local de una vez: el comentario y el
+    // vínculo F/S/P quedan visibles sin esperar al próximo sync del slot.
+    await this.upsertOnu(olt.id, {
+      sn: String(params.sn).trim().toUpperCase(),
+      frame: params.frame ?? 0, slot: params.slot, port: params.port,
+      ont_id: res.ont_id !== '' ? res.ont_id : undefined,
+      description: params.desc !== undefined && params.desc !== '' ? String(params.desc) : undefined,
+      run_state: v?.run_state, config_state: v?.config_state, match_state: v?.match_state,
+    }, new Date()).catch((e) => this.logger.warn(`No se pudo guardar la ONU recién autenticada en el inventario local: ${e.message}`));
+    return { ok: true, dryRun: false, message: res.message, ontId: res.ont_id, commands: res.commands, verificacion: res.verificacion ?? null, raw: r.raw };
+  }
+
+  /** Cambia el comentario (desc) de una ONU ya autorizada. Dry-run salvo OLT_LIVE=true. */
+  async setDescription(id: string, params: any, user?: AuthUser) {
+    await this.syncLive();
+    const olt = await this.resolveOlt(id);
+    const f = Number(params.frame ?? 0) || 0;
+    if (params.slot === undefined || params.port === undefined || params.ont_id === undefined) {
+      throw new BadRequestException('Faltan datos (slot/puerto/ont-id).');
+    }
+    const fsp = `${f}/${params.slot}/${params.port}:${params.ont_id}`;
+    const desc = String(params.desc ?? '').trim();
+
+    if (!this.live) {
+      const commands = [`interface gpon ${f}/${params.slot}`, `ont modify ${params.port} ${params.ont_id} desc "${desc}"`, 'quit'];
+      await this.audit('DESC', olt, true, true, `DRY-RUN comentario ${fsp}: ` + commands.join(' · '), { fsp, sn: params.sn ?? null, user });
+      return { ok: true, dryRun: true, message: `DRY-RUN: no se contacta la OLT. Active OLT_LIVE=true para ejecutar.`, commands };
+    }
+
+    const r = await this.withDriver(olt, (d) => d.setOnuDescription(params));
+    const res = r.data as any;
+    await this.audit('DESC', olt, r.ok, false, r.ok ? `Comentario ${fsp} → "${desc}"` : `ERROR: ${r.error}`, { fsp, sn: params.sn ?? null, user });
+    if (!r.ok) return { ok: false, dryRun: false, error: r.error, raw: r.raw };
+    // Reflejar el cambio en el inventario local sin esperar al próximo sync.
+    if (params.sn) {
+      await this.prisma.oltOnu.updateMany({
+        where: { oltId: olt.id, sn: String(params.sn).trim().toUpperCase() },
+        data: { description: desc || null },
+      });
+    }
+    return { ok: true, dryRun: false, message: res.message, desc: res.desc ?? desc, raw: r.raw };
+  }
+
+  /**
+   * Cambia la VELOCIDAD de una ONU ya autenticada (buscada por SN), reapuntando
+   * las traffic-tables de su service-port. Es el "subir/bajar megas" sin volver a
+   * dar de alta: no se toca el `ont add`, así que el abonado no pierde el enlace.
+   * Dry-run salvo OLT_LIVE=true.
+   */
+  async setSpeed(id: string, params: { sn: string; traffic_in?: number | null; traffic_out?: number | null }, user?: AuthUser) {
+    await this.syncLive();
+    const olt = await this.resolveOlt(id);
+    const sn = String(params.sn ?? '').trim();
+    if (!sn) throw new BadRequestException('Debe indicar el SN de la ONU.');
+
+    if (!this.live) {
+      const drv = new OltHuawei(olt.ip, olt.port, olt.username, decryptSecret(olt.password));
+      const commands = drv.buildSpeedCommands(params);
+      await this.audit('PROVISION', olt, true, true, `DRY-RUN velocidad SN ${sn}: ` + commands.join(' · '), { sn, user });
+      return { ok: true, dryRun: true, message: 'DRY-RUN: no se contacta la OLT. Active OLT_LIVE=true para aplicar la velocidad.', commands };
+    }
+
+    const r = await this.withDriver(olt, async (d) => {
+      const onu = await d.findBySn(sn);
+      if (!onu) return false;
+      const pos = this.fspDeOnu(onu);
+      if (!pos) { return { error: 'La ONT no reporta F/S/P u ont-id.' }; }
+      const res = await d.setServicePortSpeed({
+        frame: pos.frame, slot: pos.slot, port: pos.port, ontId: pos.ontId,
+        traffic_in: params.traffic_in ?? null, traffic_out: params.traffic_out ?? null,
+      });
+      if (!res) return false;
+      return { ...res, fsp: `${pos.frame}/${pos.slot}/${pos.port}:${pos.ontId}` };
+    });
+    const res = r.data as any;
+    const err = !r.ok ? r.error : res?.error;
+    await this.audit('PROVISION', olt, r.ok && !res?.error, false,
+      r.ok && !res?.error
+        ? `Velocidad SN ${sn} (${res.fsp}) → bajada tt ${params.traffic_in ?? '-'} / subida tt ${params.traffic_out ?? '-'}`
+        : `ERROR velocidad SN ${sn}: ${err}`,
+      { sn, fsp: res?.fsp ?? null, user });
+    if (!r.ok || res?.error) return { ok: false, dryRun: false, error: err, raw: r.raw };
+    return { ok: true, dryRun: false, message: res.message, fsp: res.fsp, antes: res.antes, despues: res.despues, commands: res.commands, raw: r.raw };
   }
 
   async reboot(id: string, params: any, user?: AuthUser) {
@@ -320,7 +755,12 @@ export class OltService {
     const verb = action === 'DELETE' ? 'delete' : 'reset';
 
     if (!this.live) {
-      const commands = [`interface gpon ${f}/${params.slot}`, `ont ${verb} ${params.port} ${params.ont_id}`, 'quit'];
+      const commands = [
+        ...(action === 'DELETE' ? ['undo service-port <los de esta ONT>'] : []),
+        `interface gpon ${f}/${params.slot}`,
+        `ont ${verb} ${params.port} ${params.ont_id}`,
+        'quit',
+      ];
       await this.audit(action, olt, true, true, `DRY-RUN ${action} ${fsp}: ` + commands.join(' · '), { fsp, sn: params.sn ?? null, user });
       return { ok: true, dryRun: true, message: `DRY-RUN: no se contacta la OLT. Active OLT_LIVE=true para ejecutar.`, commands };
     }
@@ -329,7 +769,7 @@ export class OltService {
     const res = r.data as any;
     await this.audit(action, olt, r.ok, false, r.ok ? (res?.message ?? action) : `ERROR: ${r.error}`, { fsp, sn: params.sn ?? null, user });
     if (!r.ok) return { ok: false, dryRun: false, error: r.error, raw: r.raw };
-    return { ok: true, dryRun: false, message: res.message, raw: r.raw };
+    return { ok: true, dryRun: false, message: res.message, servicePorts: res.servicePorts ?? [], raw: r.raw };
   }
 
   // ------------------------------------------------------------------ //
@@ -337,6 +777,110 @@ export class OltService {
   // ------------------------------------------------------------------ //
 
   /** Sincroniza un slot de una OLT hacia OltOnu (upsert por olt+sn). */
+  /**
+   * AUTO-VINCULADOR ONU↔abonado: casa la descripción que cada ONT trae en la
+   * OLT (formato SmartOLT `<usuario|abonado>_zone_<zona>_authd_<fecha>`, o el
+   * número de abonado pelado) contra la BD. Solo vincula cuando el match es
+   * ÚNICO e inequívoco; lo demás se reporta. No toca vínculos ya existentes.
+   * Requiere descripciones sincronizadas (correr sync de slots antes).
+   */
+  async autoLinkOnus(oltId?: string, user?: AuthUser) {
+    const where: Prisma.OltOnuWhereInput = {
+      subscriberId: null,
+      description: { not: null },
+      ...(oltId ? { oltId } : {}),
+    };
+    const onus = (await this.prisma.oltOnu.findMany({
+      where, select: { id: true, sn: true, description: true, oltId: true },
+    })).filter((o) => (o.description || '').trim() !== '');
+
+    const subs = await this.prisma.subscriber.findMany({
+      // fullName es un caché que puede venir null: para validar nombres se
+      // concatenan también las piezas reales (nombres/apellidos/razón social).
+      select: {
+        id: true, abonado: true, pppUsername: true, fullName: true,
+        firstName: true, secondName: true, lastName1: true, lastName2: true, companyName: true,
+      },
+    });
+    const norm = (s: string) => s.toUpperCase().replace(/[^A-Z0-9Ñ]/g, '');
+    const push = (m: Map<string, string[]>, k: string, id: string) => {
+      if (!k) return;
+      const arr = m.get(k) ?? [];
+      arr.push(id);
+      m.set(k, arr);
+    };
+    const byAbonado = new Map<string, string[]>();
+    const byPpp = new Map<string, string[]>();
+    const byName = new Map<string, string[]>();
+    const subById = new Map(subs.map((s) => [s.id, s]));
+    const nombreCompleto = (s: (typeof subs)[number]) =>
+      norm([s.fullName, s.firstName, s.secondName, s.lastName1, s.lastName2, s.companyName, s.pppUsername].filter(Boolean).join(''));
+    for (const s of subs) {
+      push(byAbonado, String(s.abonado), s.id);
+      if (s.pppUsername) push(byPpp, norm(s.pppUsername), s.id);
+      if (s.fullName) push(byName, norm(s.fullName), s.id);
+    }
+
+    let vinculadas = 0, ambiguas = 0, sinMatch = 0;
+    const muestraSinMatch: string[] = [];
+    for (const o of onus) {
+      // Identidad = lo que va antes de `_zone_...` (sufijo de SmartOLT/authd).
+      let ident = (o.description || '').trim();
+      const z = ident.toLowerCase().indexOf('_zone_');
+      if (z > 0) ident = ident.slice(0, z);
+      ident = ident.trim();
+      if (!ident) { sinMatch++; continue; }
+
+      let candidatos: string[] | undefined;
+      if (/^\d{2,7}$/.test(ident)) {
+        candidatos = byAbonado.get(ident);
+      } else {
+        candidatos = byPpp.get(norm(ident)) ?? byName.get(norm(ident));
+        // Formato dominante del legacy: `<abonado><nombre>` pegados
+        // ("1893Julieth", "52086Andrea"). Se toma el número y se VALIDA que el
+        // nombre que sigue aparezca en el nombre del abonado — sin esa
+        // validación un número cualquiera vincularía a ciegas.
+        if (!candidatos) {
+          const m = ident.match(/^(\d{2,7})(\D.+)$/);
+          if (m) {
+            // El número de abonado viene DUPLICADO en la BD (herencia del
+            // legacy, se repite entre sedes): el nombre que sigue al número es
+            // el desempate — se exige que UN solo candidato lo contenga.
+            const porNumero = byAbonado.get(m[1]) ?? [];
+            const frag = norm(m[2]);
+            if (porNumero.length >= 1 && frag) {
+              const validos = [...new Set(porNumero)].filter((id) => {
+                const sub = subById.get(id);
+                const nombre = sub ? nombreCompleto(sub) : '';
+                return nombre.includes(frag) || (frag.length >= 4 && nombre.includes(frag.slice(0, 6)));
+              });
+              if (validos.length === 1) candidatos = validos;
+            }
+          }
+        }
+      }
+
+      if (!candidatos || candidatos.length === 0) {
+        sinMatch++;
+        if (muestraSinMatch.length < 8) muestraSinMatch.push(`${o.sn}:"${ident}"`);
+        continue;
+      }
+      if (candidatos.length > 1 || new Set(candidatos).size > 1) { ambiguas++; continue; }
+      await this.prisma.oltOnu.update({
+        where: { id: o.id },
+        data: { subscriberId: candidatos[0], clientName: ident },
+      });
+      vinculadas++;
+    }
+
+    const olt = oltId ? await this.resolveOlt(oltId) : null;
+    const detalle = `Auto-vínculo ONU↔abonado: ${vinculadas} vinculadas, ${ambiguas} ambiguas, ${sinMatch} sin match de ${onus.length} con descripción` +
+      (muestraSinMatch.length ? ` — sin match ej.: ${muestraSinMatch.join(', ')}` : '');
+    await this.audit('LINK', olt, true, false, detalle, { user });
+    this.logger.log(detalle);
+    return { ok: true, examinadas: onus.length, vinculadas, ambiguas, sinMatch };
+  }
+
   async syncSlot(id: string, frame = 0, slot: number, user?: AuthUser) {
     const olt = await this.resolveOlt(id);
     const ts = new Date();
@@ -360,12 +904,11 @@ export class OltService {
   private async upsertOnu(oltId: string, onu: any, ts: Date) {
     const sn = (onu.sn ?? '').trim();
     if (sn === '') return;
-    const base = {
+    const base: Prisma.OltOnuUncheckedUpdateInput = {
       frame: onu.frame !== undefined ? Number(onu.frame) : 0,
       slot: onu.slot !== undefined && onu.slot !== '' ? Number(onu.slot) : null,
       port: onu.port !== undefined && onu.port !== '' ? Number(onu.port) : null,
       ontId: onu.ont_id !== undefined && onu.ont_id !== '' ? Number(onu.ont_id) : null,
-      description: onu.description ?? null,
       runState: onu.run_state ?? null,
       configState: onu.config_state ?? null,
       matchState: onu.match_state ?? null,
@@ -373,16 +916,36 @@ export class OltService {
       syncState: 'presente',
       lastSync: ts,
     };
+    // El comentario solo se toca si la lectura lo trajo: un driver que no lo
+    // parsea (u otra marca) no debe borrar el que ya está guardado.
+    if (onu.description !== undefined) base.description = onu.description || null;
     const existing = await this.prisma.oltOnu.findFirst({ where: { oltId, sn }, select: { id: true } });
     if (existing) {
       await this.prisma.oltOnu.update({ where: { id: existing.id }, data: base });
     } else {
-      await this.prisma.oltOnu.create({ data: { ...base, oltId, sn, firstSeen: ts } });
+      await this.prisma.oltOnu.create({ data: { ...(base as any), oltId, sn, firstSeen: ts } });
     }
   }
 
   /** Listado del inventario local con filtros (búsqueda/olt/estado/señal/cliente). */
-  async inventory(params: { search?: string; oltId?: string; estado?: string; senal?: string; cliente?: string; page?: number; pageSize?: number }) {
+  /**
+   * Columnas ordenables del inventario de ONUs. Va en SQL crudo (la consulta ya
+   * lo era por los filtros de señal, que castean texto a numérico), así que la
+   * lista blanca guarda el trozo de SQL: lo que llega del usuario solo ELIGE,
+   * nunca se interpola. `rx` se castea a numérico porque `rxPower` es texto y
+   * ordenarlo como texto pondría "-9" después de "-28".
+   */
+  private static readonly ORDEN_INVENTARIO: Record<string, string> = {
+    sn: 'o.sn',
+    olt: 'olt.name',
+    pos: 'o.slot',
+    client: 'o."clientName"',
+    rx: `NULLIF(regexp_replace(o."rxPower", '[^0-9.-]', '', 'g'), '')::numeric`,
+    run: 'o."runState"',
+    sync: 'o."syncState"',
+  };
+
+  async inventory(params: { search?: string; oltId?: string; estado?: string; senal?: string; cliente?: string; page?: number; pageSize?: number; sortBy?: string; sortDir?: string }) {
     const page = Math.max(1, Number(params.page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(params.pageSize) || 25));
     const conds: Prisma.Sql[] = [];
@@ -399,13 +962,21 @@ export class OltService {
     }
     const where = conds.length ? Prisma.sql`WHERE ${Prisma.join(conds, ' AND ')}` : Prisma.empty;
 
+    // El desempate por id evita que una ONU salga en dos páginas cuando hay
+    // empate (p. ej. media OLT con la misma señal).
+    const ordenar = ordenSql(
+      params, OltService.ORDEN_INVENTARIO,
+      'o."oltId" ASC, o.slot ASC NULLS LAST, o.port ASC NULLS LAST',
+      { desempate: 'o.id ASC' },
+    );
+
     const rows = await this.prisma.$queryRaw<any[]>`
       SELECT o.id, o."oltId", o.sn, o.description, o.frame, o.slot, o.port, o."ontId",
              o."runState", o."rxPower", o."syncState", o."subscriberId", o."clientName", o."lastSync",
              olt.name AS olt_name
       FROM "OltOnu" o LEFT JOIN "Olt" olt ON olt.id = o."oltId"
       ${where}
-      ORDER BY o."oltId" ASC, o.slot ASC NULLS LAST, o.port ASC NULLS LAST
+      ORDER BY ${Prisma.raw(ordenar)}
       LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}`;
     const totalRow = await this.prisma.$queryRaw<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM "OltOnu" o ${where}`;
     const total = totalRow[0]?.c ?? 0;

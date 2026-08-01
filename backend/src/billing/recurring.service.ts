@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { orden } from '../common/pagination-params';
 import { AuthUser } from '../auth/current-user.decorator';
 import { FacturasService } from './facturas.service';
 import { CreateRecurringDto } from './dto/recurring.dto';
@@ -44,7 +45,15 @@ export class RecurringService {
   }
 
   /** Listado paginado de plantillas. */
-  async list(params: { search?: string; page?: number; pageSize?: number }) {
+  /** Columnas ordenables de la tabla de facturación recurrente. */
+  private static readonly ORDEN_LISTA = {
+    tid: 'tid', rec: 'rec', total: 'total', estado: 'status',
+    sub: (dir: 'asc' | 'desc') => [
+      { subscriber: { firstName: dir } }, { subscriber: { lastName1: dir } },
+    ],
+  };
+
+  async list(params: { search?: string; page?: number; pageSize?: number; sortBy?: string; sortDir?: string }) {
     const page = Math.max(1, Number(params.page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(params.pageSize) || 25));
     const search = (params.search || '').trim();
@@ -63,7 +72,7 @@ export class RecurringService {
     }
     const [rows, total] = await Promise.all([
       this.prisma.recurringInvoice.findMany({
-        where, orderBy: { createdAt: 'desc' }, skip: (page - 1) * pageSize, take: pageSize,
+        where, orderBy: orden(params, RecurringService.ORDEN_LISTA, { createdAt: 'desc' }), skip: (page - 1) * pageSize, take: pageSize,
         include: { subscriber: { select: SUB_SELECT } },
       }),
       this.prisma.recurringInvoice.count({ where }),

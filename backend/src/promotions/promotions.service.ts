@@ -72,7 +72,6 @@ export class PromotionsService {
   private assigneeSelect = {
     id: true,
     name: true,
-    username: true,
     email: true,
   } as const;
 

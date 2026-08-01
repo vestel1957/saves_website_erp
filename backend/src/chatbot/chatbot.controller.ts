@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Put, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Param, Put, UseGuards } from '@nestjs/common';
 import { IsArray, IsBoolean, IsInt, IsOptional, IsString, Min } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/permissions.guard';
@@ -10,6 +10,8 @@ import { ChatbotLinkService } from './chatbot-link.service';
 import { ChatbotGateService } from './chatbot-gate.service';
 import { ChatbotSessionStore } from './chatbot-session.store';
 import { ChatbotUsageService } from './chatbot-usage.service';
+import { ChatbotActividadService } from './chatbot-actividad.service';
+import { PlansService } from '../plans/plans.service';
 
 export class LinkPhoneDto {
   @IsString() phone!: string;
@@ -27,6 +29,15 @@ export class AllowlistDto {
 export class BudgetDto {
   /** Tokens/día. 0 = sin tope. */
   @IsInt() @Min(0) dailyTokens!: number;
+}
+
+export class ConductaDto {
+  @IsBoolean() activa!: boolean;
+}
+
+export class PlanesDto {
+  /** Ids de los planes que el bot ofrece. Vacío = todos los activos. */
+  @IsArray() @IsOptional() @IsString({ each: true }) planIds?: string[];
 }
 
 /**
@@ -47,6 +58,8 @@ export class ChatbotController {
     private readonly gate: ChatbotGateService,
     private readonly store: ChatbotSessionStore,
     private readonly usage: ChatbotUsageService,
+    private readonly plans: PlansService,
+    private readonly actividad: ChatbotActividadService,
   ) {}
 
   /**
@@ -57,6 +70,35 @@ export class ChatbotController {
   @RequirePermissions(APP_PERMISSIONS.WHATSAPP_MANAGE)
   status() {
     return this.chatbot.status();
+  }
+
+  /**
+   * Qué ha hecho el bot: conversaciones, mensajes, solicitudes que registró, notas de
+   * voz y en qué se queda corto (las escaladas, con su motivo).
+   */
+  @Get('actividad')
+  @RequirePermissions(APP_PERMISSIONS.WHATSAPP_MANAGE)
+  actividadDelBot() {
+    return this.actividad.resumen();
+  }
+
+  /**
+   * Las dos conductas que el bot ejecuta solo: pedirle confirmación al cliente cuando
+   * se cierra su orden, y avisarle de lo que pasa con ella sin que pregunte.
+   *
+   * `avisosProactivos` es la única que le escribe a alguien que no escribió nada: nace
+   * apagada y se enciende aquí, a conciencia.
+   */
+  @Put('conductas/:cual')
+  @RequirePermissions(APP_PERMISSIONS.WHATSAPP_MANAGE)
+  conducta(
+    @Param('cual') cual: string,
+    @Body() dto: ConductaDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    const valida = cual === 'confirmarSolucion' || cual === 'avisosProactivos';
+    if (!valida) throw new BadRequestException('Conducta desconocida.');
+    return this.gate.setConducta(cual, dto.activa, user?.email ?? user?.name);
   }
 
   /**
@@ -91,6 +133,30 @@ export class ChatbotController {
   }
 
   /**
+   * Catálogo comercial: qué planes ofrece el bot a quien pregunta por WhatsApp, y
+   * cuáles hay activos para elegir. Vacío = ofrece todos (recortados).
+   */
+  @Get('planes')
+  @RequirePermissions(APP_PERMISSIONS.WHATSAPP_MANAGE)
+  async planes() {
+    const [todos, elegidos] = await Promise.all([
+      this.plans.list({ activeOnly: true }),
+      this.gate.planesPublicos(),
+    ]);
+    return {
+      elegidos,
+      planes: todos.map((p) => ({ id: p.id, name: p.name, kind: p.kind, price: Number(p.price), megas: p.megas })),
+    };
+  }
+
+  /** Fija los planes que el agente público puede ofrecer. Vacío = todos. */
+  @Put('planes')
+  @RequirePermissions(APP_PERMISSIONS.WHATSAPP_MANAGE)
+  setPlanes(@Body() dto: PlanesDto, @CurrentUser() user: AuthUser) {
+    return this.gate.setPlanesPublicos(dto.planIds ?? [], user?.email ?? user?.name);
+  }
+
+  /**
    * Conversaciones que esperan a una persona (el cliente pidió hablar con alguien).
    * Es una cola de trabajo: la más vieja primero. Mientras estén aquí el bot NO
    * responde en ese chat.
@@ -114,6 +180,13 @@ export class ChatbotController {
   @RequirePermissions(APP_PERMISSIONS.WHATSAPP_MANAGE)
   links_() {
     return this.links.list();
+  }
+
+  /** Funcionarios sin vincular, con el celular de su ficha de empleado como sugerencia. */
+  @Get('vinculos/candidatos')
+  @RequirePermissions(APP_PERMISSIONS.WHATSAPP_MANAGE)
+  candidatos() {
+    return this.links.candidatos();
   }
 
   /** Vincula (o cambia) el WhatsApp de un usuario para que el agente lo trate como funcionario. */

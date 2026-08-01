@@ -1,9 +1,16 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { orden } from '../common/pagination-params';
 import { Type } from 'class-transformer';
 import { IsArray, IsInt, IsOptional, IsString, Max, Min, MinLength } from 'class-validator';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
+import { SignatureOtpService } from '../common/signature/signature-otp.service';
+import { WhatsappService } from '../common/whatsapp/whatsapp.service';
+import { pdfToBuffer } from '../common/pdf/pdf-buffer';
+import { actaPdf, ActaPdfData } from '../common/pdf/pdf-docs';
+import { esJefeDeBodega, esSuperusuario, exigirBodegaDeSuSede, sedesDeUsuario } from './bodega-scope';
+import { clavesDe, esTecnicoDeCampo, fichaDelUsuario } from '../common/tecnico-scope';
 
 export class EquipTransferDto {
   @IsString() fromWarehouseId!: string;
@@ -16,6 +23,14 @@ export class AssignPortDto {
 }
 export class RejectTransferDto {
   @IsOptional() @IsString() reason?: string;
+}
+/** Código de firma (6 dígitos) para despachar o recibir entre sedes. */
+export class SignTransferDto {
+  @IsString() @MinLength(4) code!: string;
+}
+/** Recibir: el código solo hace falta cuando la transferencia cruza sedes. */
+export class ReceiveTransferDto {
+  @IsOptional() @IsString() code?: string;
 }
 
 /**
@@ -90,10 +105,61 @@ function subName(s: { firstName: string | null; lastName1: string | null; compan
 
 @Injectable()
 export class NetworkWriteService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger('NetworkWrite');
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly firma: SignatureOtpService,
+    private readonly whatsapp: WhatsappService,
+  ) {}
+
+  // ── Transferencias de equipos: sede y firmas ────────────────────────────────
+  //
+  // Reglas de negocio (2026-07-30, decisión del usuario):
+  //  · Una cajera es la encargada de SU sede: solo ve y mueve las bodegas de sus
+  //    sedes (`bodega-scope.ts`).
+  //  · Mandar equipo de una sede a OTRA es solo del encargado de bodega.
+  //  · Y en ese caso el equipo no se mueve con un clic: la cajera de la sede ORIGEN
+  //    firma la SALIDA con un código que le llega al WhatsApp, y quien recibe en la
+  //    sede DESTINO firma la ENTRADA con el suyo. Dentro de una misma sede el flujo
+  //    sigue como estaba (solicitud → aprueba el jefe → se recibe), sin código.
+
+  /** ¿Esta transferencia cruza sedes? Una bodega sin sede ("Depurados") cuenta como otra. */
+  private esEntreSedes(from: { branchLegacy: number | null }, to: { branchLegacy: number | null }): boolean {
+    return from.branchLegacy !== to.branchLegacy;
+  }
+
+  /** Nombre de sede por `Branch.legacyId`, para hablarle claro al usuario. */
+  private async nombreSede(legacyId: number | null): Promise<string> {
+    if (legacyId == null) return 'sin sede';
+    const b = await this.prisma.branch.findUnique({ where: { legacyId }, select: { name: true } });
+    return b?.name ?? `sede ${legacyId}`;
+  }
+
+  /** Las dos bodegas de una transferencia, con su sede. */
+  private async bodegasDe(t: { fromWarehouseId: string | null; toWarehouseId: string | null; fromWarehouse: string; toWarehouse: string }) {
+    const porId = async (id: string | null, legacy: string) => {
+      if (id) return this.prisma.equipmentWarehouse.findUnique({ where: { id } });
+      const n = Number(legacy);
+      return Number.isFinite(n) && n > 0 ? this.prisma.equipmentWarehouse.findUnique({ where: { legacyId: n } }) : null;
+    };
+    const [from, to] = await Promise.all([
+      porId(t.fromWarehouseId, t.fromWarehouse),
+      porId(t.toWarehouseId, t.toWarehouse),
+    ]);
+    return { from, to };
+  }
 
   /** Transferencias de equipos (actas). */
-  async transfers(params: { page?: number; pageSize?: number; search?: string; status?: string; warehouseId?: string }) {
+  /** Columnas ordenables de la tabla de transferencias de equipos. */
+  private static readonly ORDEN_TRANSFERS = {
+    date: 'date', from: 'fromWarehouseName', to: 'toWarehouseName',
+    status: 'status', obs: 'observations',
+    solicita: 'requestedByName', recibe: 'receivedByName',
+    items: (dir: 'asc' | 'desc') => ({ items: { _count: dir } }),
+  };
+
+  async transfers(params: { page?: number; pageSize?: number; search?: string; status?: string; warehouseId?: string; sortBy?: string; sortDir?: string }, user?: AuthUser) {
     const page = Math.max(1, Number(params.page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(params.pageSize) || 25));
 
@@ -122,45 +188,95 @@ export class NetworkWriteService {
         and.push({ id: '__none__' });
       }
     }
+    // Acotado por sede: una cajera solo ve las transferencias que tocan una bodega
+    // de sus sedes (las de otra sede no son asunto suyo, ni siquiera para mirar).
+    const sedes = user ? await sedesDeUsuario(this.prisma, user) : null;
+    if (sedes !== null) {
+      const suyas = sedes.length
+        ? await this.prisma.equipmentWarehouse.findMany({ where: { branchLegacy: { in: sedes } }, select: { id: true, legacyId: true } })
+        : [];
+      if (!suyas.length) {
+        and.push({ id: '__none__' }); // sin sede asignada: no ve ninguna
+      } else {
+        const ids = suyas.map((w) => w.id);
+        const legacies = suyas.map((w) => String(w.legacyId));
+        and.push({ OR: [
+          { fromWarehouseId: { in: ids } }, { toWarehouseId: { in: ids } },
+          // Las filas migradas del legacy no tienen `*WarehouseId`, solo el id viejo.
+          { fromWarehouse: { in: legacies } }, { toWarehouse: { in: legacies } },
+        ] });
+      }
+    }
+
     const where: Prisma.EquipmentTransferWhereInput = and.length ? { AND: and } : {};
 
     const [rows, total] = await Promise.all([
-      this.prisma.equipmentTransfer.findMany({ where, orderBy: { date: 'desc' }, skip: (page - 1) * pageSize, take: pageSize, include: { _count: { select: { items: true } } } }),
+      this.prisma.equipmentTransfer.findMany({ where, orderBy: orden(params, NetworkWriteService.ORDEN_TRANSFERS, { date: 'desc' }), skip: (page - 1) * pageSize, take: pageSize, include: { _count: { select: { items: true } } } }),
       this.prisma.equipmentTransfer.count({ where }),
     ]);
     // Resolver nombres de bodega (fromWarehouse/toWarehouse legacy id string)
     const whs = await this.prisma.equipmentWarehouse.findMany();
-    const byLegacy = new Map(whs.map((w) => [String(w.legacyId), w.name]));
+    const byLegacy = new Map(whs.map((w) => [String(w.legacyId), w]));
+    const byId = new Map(whs.map((w) => [w.id, w]));
+    const sedeNombres = new Map(
+      (await this.prisma.branch.findMany({ select: { legacyId: true, name: true } })).map((b) => [b.legacyId, b.name]),
+    );
+    const bodegaDe = (id: string | null, legacy: string) => (id ? byId.get(id) : undefined) ?? byLegacy.get(legacy);
     return {
-      items: rows.map((t) => ({
-        id: t.id, date: t.date,
-        from: t.fromWarehouseName ?? byLegacy.get(t.fromWarehouse) ?? t.fromWarehouse,
-        to: t.toWarehouseName ?? byLegacy.get(t.toWarehouse) ?? t.toWarehouse,
-        observations: t.observations, status: t.status ?? 'Emitida', items: t._count.items,
-        requestedBy: t.requestedByName, requestedAt: t.requestedAt,
-        approvedBy: t.approvedByName, approvedAt: t.approvedAt,
-        receivedBy: t.receivedByName, receivedAt: t.receivedAt,
-      })),
+      items: rows.map((t) => {
+        const from = bodegaDe(t.fromWarehouseId, t.fromWarehouse);
+        const to = bodegaDe(t.toWarehouseId, t.toWarehouse);
+        return {
+          id: t.id, date: t.date,
+          from: t.fromWarehouseName ?? from?.name ?? t.fromWarehouse,
+          to: t.toWarehouseName ?? to?.name ?? t.toWarehouse,
+          fromBranch: from?.branchLegacy != null ? sedeNombres.get(from.branchLegacy) ?? null : null,
+          toBranch: to?.branchLegacy != null ? sedeNombres.get(to.branchLegacy) ?? null : null,
+          // Las de entre sedes son las que van con firma: la pantalla las marca.
+          entreSedes: !!from && !!to && this.esEntreSedes(from, to),
+          observations: t.observations, status: t.status ?? 'Emitida', items: t._count.items,
+          requestedBy: t.requestedByName, requestedAt: t.requestedAt,
+          approvedBy: t.approvedByName, approvedAt: t.approvedAt,
+          signedOutBy: t.signedOutByName, signedOutAt: t.signedOutAt,
+          receivedBy: t.receivedByName, receivedAt: t.receivedAt,
+        };
+      }),
       total, page, pageSize, pages: Math.ceil(total / pageSize),
     };
   }
 
-  async transferDetail(id: string) {
+  async transferDetail(id: string, user?: AuthUser) {
     const t = await this.prisma.equipmentTransfer.findUnique({ where: { id }, include: { items: { include: { equipment: true } } } });
     if (!t) throw new NotFoundException('Transferencia no encontrada');
+    const { from, to } = await this.bodegasDe(t);
+    const entreSedes = !!from && !!to && this.esEntreSedes(from, to);
+
+    // Acotado por sede: la cajera solo abre las que tocan una bodega suya.
+    const sedes = user ? await sedesDeUsuario(this.prisma, user) : null;
+    if (sedes !== null) {
+      const suya = (w: typeof from) => !!w && w.branchLegacy != null && sedes.includes(w.branchLegacy);
+      if (!suya(from) && !suya(to)) throw new ForbiddenException('Esta transferencia no es de tu sede.');
+    }
+
     return {
       id: t.id, date: t.date, from: t.fromWarehouseName ?? t.fromWarehouse, to: t.toWarehouseName ?? t.toWarehouse,
+      fromBranch: await this.nombreSede(from?.branchLegacy ?? null),
+      toBranch: await this.nombreSede(to?.branchLegacy ?? null),
+      entreSedes,
       observations: t.observations, status: t.status ?? 'Emitida',
       requestedBy: t.requestedByName, requestedAt: t.requestedAt,
       approvedBy: t.approvedByName, approvedAt: t.approvedAt,
-      receivedBy: t.receivedByName, receivedAt: t.receivedAt, rejectReason: t.rejectReason,
+      signedOutBy: t.signedOutByName, signedOutAt: t.signedOutAt, signedOutSignature: t.signedOutSignature,
+      receivedBy: t.receivedByName, receivedAt: t.receivedAt, receivedSignature: t.receivedSignature,
+      rejectReason: t.rejectReason,
       items: t.items.map((it) => ({ id: it.id, code: it.equipment?.code, mac: it.equipment?.mac, serial: it.equipment?.serial, brand: it.equipment?.brand, status: it.equipment?.status })),
     };
   }
 
   /**
    * Solicita una transferencia de equipos. NO mueve el equipo: crea la solicitud
-   * en estado "Pendiente" con la lista de equipos, a la espera de aprobación.
+   * en estado "Pendiente" con la lista de equipos, a la espera de aprobación (dentro
+   * de la sede) o de la firma de salida de la cajera de origen (entre sedes).
    */
   async createTransfer(dto: EquipTransferDto, user: AuthUser) {
     if (dto.fromWarehouseId === dto.toWarehouseId) throw new BadRequestException('Bodega origen y destino deben ser distintas');
@@ -170,6 +286,19 @@ export class NetworkWriteService {
       this.prisma.equipmentWarehouse.findUnique({ where: { id: dto.toWarehouseId } }),
     ]);
     if (!from || !to) throw new NotFoundException('Bodega no encontrada');
+
+    // 1) Entre sedes SOLO el encargado de bodega. Da igual quién lo pida: una cajera
+    //    con varias sedes asignadas también podría cruzarlas, y no es su decisión.
+    if (this.esEntreSedes(from, to) && !esJefeDeBodega(user)) {
+      const [s1, s2] = await Promise.all([this.nombreSede(from.branchLegacy), this.nombreSede(to.branchLegacy)]);
+      throw new ForbiddenException(
+        `Enviar equipo de ${s1} a ${s2} es del encargado de bodega. Dentro de tu sede sí puedes moverlo.`,
+      );
+    }
+    // 2) Y la cajera solo mueve bodegas de SU sede (las dos puntas).
+    const sedes = await sedesDeUsuario(this.prisma, user);
+    exigirBodegaDeSuSede(sedes, from);
+    exigirBodegaDeSuSede(sedes, to);
 
     return this.prisma.$transaction(async (tx) => {
       const t = await tx.equipmentTransfer.create({
@@ -188,7 +317,17 @@ export class NetworkWriteService {
         count++;
       }
       if (!count) throw new BadRequestException('Ningún equipo válido en la bodega origen');
-      return { id: t.id, status: 'Pendiente', count };
+      return { id: t.id, status: 'Pendiente', count, entreSedes: this.esEntreSedes(from, to) };
+    }).then(async (r) => {
+      // Entre sedes el acta sale sola hacia quien tiene que firmar la SALIDA: es lo
+      // que convierte "hay una solicitud en el sistema" en "a la encargada de Yopal
+      // le llegó el papel". Fuera de la transacción: el PDF y Meta tardan.
+      if (!r.entreSedes) return r;
+      const envio = await this.enviarActaTransferencia(r.id, 'salida').catch((e) => {
+        this.logger.warn(`No se pudo enviar el acta de ${r.id}: ${(e as Error).message}`);
+        return { enviado: false as const, a: 0, motivo: 'Error al enviar el acta.' };
+      });
+      return { ...r, envio };
     });
   }
 
@@ -196,39 +335,260 @@ export class NetworkWriteService {
    * Aprueba/despacha una solicitud pendiente: el equipo SALE de la bodega origen
    * y queda "En tránsito" (sin bodega) hasta que caja confirme la recepción.
    * Reservado al Jefe de bodega (inventario).
+   *
+   * Solo DENTRO de una sede: si la transferencia cruza sedes, el que despacha no es
+   * quien aprueba sino la cajera encargada de la sede origen, firmando la salida
+   * (`firmarSalida`). Si no, el jefe de bodega podría sacar equipo de una sede sin
+   * que la responsable de esa sede se entere, que es justo lo que se quiso cerrar.
    */
   async approveTransfer(id: string, user: AuthUser) {
     const t = await this.prisma.equipmentTransfer.findUnique({ where: { id }, include: { items: true } });
     if (!t) throw new NotFoundException('Transferencia no encontrada');
     if (t.status !== 'Pendiente') throw new BadRequestException('La transferencia no está pendiente de aprobación');
+
+    // Antes que nada: si cruza sedes, esta ruta no es la suya. Va primero que el
+    // "no apruebes lo tuyo" porque las de entre sedes SIEMPRE las crea el jefe de
+    // bodega —es el único que puede—, y si no, el mensaje que le sale es el que no
+    // explica nada ("no puedes aprobar tu propia solicitud") en vez del que dice a
+    // quién le toca firmar.
+    const { from, to } = await this.bodegasDe(t);
+    if (from && to && this.esEntreSedes(from, to)) {
+      const sede = await this.nombreSede(from.branchLegacy);
+      throw new BadRequestException(
+        `Esta transferencia sale de ${sede}: la despacha la cajera encargada de esa sede firmando la salida con su código, no la aprobación de bodega.`,
+      );
+    }
+
     if (t.requestedById && t.requestedById === user.id) throw new BadRequestException('No puedes aprobar tu propia solicitud; debe aprobarla inventario');
     if (!t.toWarehouseId || !t.fromWarehouseId) throw new BadRequestException('La solicitud no tiene bodegas válidas (creada antes del flujo de aprobación)');
 
-    return this.prisma.$transaction(async (tx) => {
-      let dispatched = 0; const skipped: (number | undefined)[] = [];
-      for (const it of t.items) {
-        if (!it.equipmentId) { skipped.push(it.equipmentLegacy); continue; }
-        const eq = await tx.equipment.findUnique({ where: { id: it.equipmentId } });
-        // Revalida: el equipo debe seguir en la bodega origen al momento de despachar.
-        if (!eq || eq.warehouseId !== t.fromWarehouseId) { skipped.push(eq?.code ?? it.equipmentLegacy); continue; }
-        await tx.equipment.update({ where: { id: eq.id }, data: { warehouseId: null } }); // en tránsito
-        dispatched++;
-      }
-      if (!dispatched) throw new BadRequestException('Ningún equipo sigue disponible en la bodega origen');
-      await tx.equipmentTransfer.update({ where: { id }, data: { status: 'En tránsito', approvedById: user.id, approvedByName: user.name, approvedAt: new Date() } });
-      return { id, status: 'En tránsito', dispatched, skipped: skipped.length };
+    return this.despachar(id, t.items, t.fromWarehouseId, {
+      status: 'En tránsito', approvedById: user.id, approvedByName: user.name, approvedAt: new Date(),
     });
   }
 
   /**
-   * Confirma la recepción de una transferencia "En tránsito": el equipo ENTRA a
-   * la bodega destino. Reservado a caja (área caja) en la sede destino.
+   * Saca el equipo de la bodega origen y deja la transferencia "En tránsito".
+   * Es el paso común entre aprobar (dentro de la sede) y firmar la salida (entre
+   * sedes): mismo movimiento de inventario, distinta autoridad.
    */
-  async receiveTransfer(id: string, user: AuthUser) {
+  private async despachar(
+    id: string,
+    items: { equipmentId: string | null; equipmentLegacy: number }[],
+    fromWarehouseId: string,
+    datos: Prisma.EquipmentTransferUpdateInput,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      let dispatched = 0; const skipped: (number | undefined)[] = [];
+      for (const it of items) {
+        if (!it.equipmentId) { skipped.push(it.equipmentLegacy); continue; }
+        const eq = await tx.equipment.findUnique({ where: { id: it.equipmentId } });
+        // Revalida: el equipo debe seguir en la bodega origen al momento de despachar.
+        if (!eq || eq.warehouseId !== fromWarehouseId) { skipped.push(eq?.code ?? it.equipmentLegacy); continue; }
+        await tx.equipment.update({ where: { id: eq.id }, data: { warehouseId: null } }); // en tránsito
+        dispatched++;
+      }
+      if (!dispatched) throw new BadRequestException('Ningún equipo sigue disponible en la bodega origen');
+      await tx.equipmentTransfer.update({ where: { id }, data: datos });
+      return { id, status: 'En tránsito', dispatched, skipped: skipped.length };
+    });
+  }
+
+  // ── Firma de salida y de entrada (transferencias entre sedes) ───────────────
+
+  /**
+   * Comprueba que este usuario es quien tiene que firmar ese paso, y devuelve el
+   * contexto (bodegas, sede y detalle en prosa para el WhatsApp). Se usa igual al
+   * pedir el código que al firmar: pedirlo no puede ser más laxo que usarlo.
+   */
+  private async contextoDeFirma(id: string, paso: 'salida' | 'entrada', user: AuthUser) {
+    const t = await this.prisma.equipmentTransfer.findUnique({ where: { id }, include: { items: true } });
+    if (!t) throw new NotFoundException('Transferencia no encontrada');
+    const { from, to } = await this.bodegasDe(t);
+    if (!from || !to || !t.fromWarehouseId) throw new BadRequestException('La transferencia no tiene bodegas válidas.');
+    if (!this.esEntreSedes(from, to)) {
+      throw new BadRequestException('Esta transferencia es dentro de la misma sede: no lleva firma con código.');
+    }
+
+    const esperado = paso === 'salida' ? 'Pendiente' : 'En tránsito';
+    if (t.status !== esperado) {
+      throw new BadRequestException(
+        paso === 'salida'
+          ? `Esta transferencia ya no está esperando la firma de salida (está "${t.status}").`
+          : `Esta transferencia no está en tránsito (está "${t.status}"): no hay nada que recibir.`,
+      );
+    }
+
+    // Quién firma: la encargada de la sede de esa punta. El superusuario puede
+    // firmar en su lugar (misma válvula que las actas de material: una cajera de
+    // vacaciones no puede dejar el equipo colgado en tránsito).
+    const bodega = paso === 'salida' ? from : to;
+    const sedes = await sedesDeUsuario(this.prisma, user);
+    if (sedes === null) {
+      if (!esSuperusuario(user)) {
+        const sede = await this.nombreSede(bodega.branchLegacy);
+        throw new ForbiddenException(`Esta firma es de la cajera encargada de ${sede}.`);
+      }
+    } else {
+      exigirBodegaDeSuSede(sedes, bodega);
+    }
+
+    const sede = await this.nombreSede(bodega.branchLegacy);
+    const detalle =
+      paso === 'salida'
+        ? `la SALIDA de ${t.items.length} equipo(s) de ${from.name} (${sede}) hacia ${to.name}`
+        : `la RECEPCIÓN de ${t.items.length} equipo(s) de ${from.name} en ${to.name} (${sede})`;
+    return { t, from, to, sede, detalle };
+  }
+
+  /** Datos de la transferencia para el acta en PDF (misma que se descarga y se manda). */
+  async transferPdfData(id: string): Promise<ActaPdfData> {
+    const t = await this.prisma.equipmentTransfer.findUnique({
+      where: { id },
+      include: { items: { include: { equipment: true } } },
+    });
+    if (!t) throw new NotFoundException('Transferencia no encontrada');
+    const { from, to } = await this.bodegasDe(t);
+    const [sedeFrom, sedeTo] = await Promise.all([
+      this.nombreSede(from?.branchLegacy ?? null),
+      this.nombreSede(to?.branchLegacy ?? null),
+    ]);
+    return {
+      titulo: 'Acta de transferencia de equipos',
+      numero: t.legacyId ? String(t.legacyId) : t.id.slice(-6).toUpperCase(),
+      date: t.date,
+      status: t.status ?? 'Emitida',
+      from: t.fromWarehouseName ?? from?.name ?? t.fromWarehouse,
+      to: t.toWarehouseName ?? to?.name ?? t.toWarehouse,
+      fromBranch: sedeFrom, toBranch: sedeTo,
+      observations: t.observations,
+      columnaDerecha: 'Serial / MAC',
+      items: t.items.map((it) => ({
+        descripcion: `Equipo ${it.equipment?.code ?? it.equipmentLegacy}`,
+        detalle: it.equipment?.brand ?? null,
+        cantidad: it.equipment?.serial ?? it.equipment?.mac ?? '—',
+      })),
+      // "Entrega" es quien firmó la salida (la encargada de la sede origen); si aún
+      // no ha firmado, el renglón queda en blanco y el acta lo dice.
+      entrega: { nombre: t.signedOutByName, fecha: t.signedOutAt, nota: t.signedOutSignature },
+      recibe: { nombre: t.receivedByName, fecha: t.receivedAt, nota: t.receivedSignature },
+    };
+  }
+
+  /**
+   * Manda el acta en PDF a quien tiene que firmar el siguiente paso.
+   *
+   * A diferencia del material, aquí no hay un "encargado de bodega de equipos": el
+   * que firma es la cajera de esa sede, y pueden ser varias. Se les manda a todas
+   * las que podrían firmar —cualquiera puede hacerlo— y se reporta a cuántas llegó.
+   */
+  private async enviarActaTransferencia(id: string, paso: 'salida' | 'entrada') {
+    const data = await this.transferPdfData(id);
+    const t = await this.prisma.equipmentTransfer.findUnique({ where: { id } });
+    if (!t) return { enviado: false as const, a: 0 };
+    const { from, to } = await this.bodegasDe(t);
+    const bodega = paso === 'salida' ? from : to;
+    if (!bodega?.branchLegacy) return { enviado: false as const, a: 0, motivo: 'La bodega de esa punta no tiene sede.' };
+
+    // Quién puede firmar ese paso = cajeras activas de esa sede. Mismo criterio que
+    // autoriza la firma (`bodega-scope`), para no avisarle a quien luego no podría.
+    const cajeras = await this.prisma.user.findMany({
+      where: { isActive: true, roles: { some: { role: { key: 'area-caja' } } } },
+      select: { id: true, name: true, sedesAccede: true, cajaLegacyId: true },
+    });
+    const cuentas = await this.prisma.cashAccount.findMany({ select: { legacyId: true, branchLegacy: true } });
+    const sedeDeCaja = new Map(cuentas.filter((c) => c.legacyId != null).map((c) => [c.legacyId as number, c.branchLegacy]));
+    const destinatarias = cajeras.filter((c) => {
+      const sedes = new Set(c.sedesAccede ?? []);
+      const suya = c.cajaLegacyId != null ? sedeDeCaja.get(c.cajaLegacyId) : null;
+      if (suya != null && suya > 0) sedes.add(suya);
+      return sedes.has(bodega.branchLegacy!);
+    });
+    if (!destinatarias.length) return { enviado: false as const, a: 0, motivo: `Nadie tiene asignada la sede ${data.fromBranch}.` };
+
+    const pdf = await pdfToBuffer((res) => actaPdf(res, data));
+    const caption =
+      paso === 'salida'
+        ? `Sale equipo de ${data.from} (${data.fromBranch}) hacia ${data.to}: ${data.items.length} equipo(s). Para despacharlo, firma la SALIDA en el sistema (Inventario ▸ Transferencias de equipos).`
+        : `Va en camino a ${data.to} (${data.toBranch}): ${data.items.length} equipo(s). Cuando llegue, firma la RECEPCIÓN en el sistema.`;
+
+    let enviadas = 0;
+    for (const c of destinatarias) {
+      const { phone } = await this.firma.telefono(c.id);
+      if (!phone) continue;
+      if (await this.whatsapp.sendDocument(phone, pdf, `acta-equipos-${data.numero}.pdf`, caption)) enviadas++;
+    }
+    this.logger.log(`Acta de equipos ${data.numero} (${paso}) enviada a ${enviadas}/${destinatarias.length} encargada(s).`);
+    return {
+      enviado: enviadas > 0,
+      a: enviadas,
+      motivo: enviadas ? undefined : 'Ninguna encargada de esa sede tiene celular registrado; el acta queda en el sistema.',
+    };
+  }
+
+  /** Manda al WhatsApp del firmante el código para firmar la salida o la entrada. */
+  async pedirCodigoFirma(id: string, paso: 'salida' | 'entrada', user: AuthUser) {
+    const { detalle } = await this.contextoDeFirma(id, paso, user);
+    const r = await this.firma.pedir({
+      userId: user.id,
+      purpose: paso === 'salida' ? 'equipment.dispatch' : 'equipment.receive',
+      targetId: id,
+      detalle,
+    });
+    return { ...r, paso };
+  }
+
+  /**
+   * Firma la SALIDA: la cajera encargada de la sede origen confirma con su código
+   * que el equipo se va, y ahí sí sale de la bodega y queda en tránsito.
+   */
+  async firmarSalida(id: string, code: string, user: AuthUser) {
+    const { t } = await this.contextoDeFirma(id, 'salida', user);
+    const firma = await this.firma.firmar({ userId: user.id, purpose: 'equipment.dispatch', targetId: id, code });
+    const r = await this.despachar(id, t.items, t.fromWarehouseId!, {
+      status: 'En tránsito',
+      signedOutById: user.id, signedOutByName: user.name, signedOutAt: new Date(),
+      signedOutSignature: SignatureOtpService.rastro(firma),
+    });
+    // Ya firmada la salida, el acta —ahora con la primera firma puesta— viaja a la
+    // sede destino: quien recibe sabe qué esperar antes de que llegue la caja.
+    const envio = await this.enviarActaTransferencia(id, 'entrada').catch((e) => {
+      this.logger.warn(`No se pudo avisar a la sede destino de ${id}: ${(e as Error).message}`);
+      return { enviado: false as const, a: 0 };
+    });
+    return { ...r, firmadoPor: user.name, envio };
+  }
+
+  /**
+   * Confirma la recepción de una transferencia "En tránsito": el equipo ENTRA a
+   * la bodega destino. La firma quien recibe en la sede destino (caja).
+   *
+   * Entre sedes va con código: es la segunda mitad de la cadena de custodia (la
+   * primera es `firmarSalida`). Dentro de una misma sede se recibe como siempre,
+   * con un clic — ahí el equipo no cambió de responsable.
+   */
+  async receiveTransfer(id: string, user: AuthUser, code?: string) {
     const t = await this.prisma.equipmentTransfer.findUnique({ where: { id }, include: { items: true } });
     if (!t) throw new NotFoundException('Transferencia no encontrada');
     if (t.status !== 'En tránsito') throw new BadRequestException('La transferencia no está en tránsito');
     if (!t.toWarehouseId) throw new BadRequestException('La transferencia no tiene bodega destino válida');
+
+    const { from, to: destino } = await this.bodegasDe(t);
+    const entreSedes = !!from && !!destino && this.esEntreSedes(from, destino);
+
+    let rastro: string | null = null;
+    if (entreSedes) {
+      await this.contextoDeFirma(id, 'entrada', user); // valida quién puede firmar
+      if (!code) throw new BadRequestException('Esta recepción va firmada: pide el código y escríbelo para confirmar.');
+      rastro = SignatureOtpService.rastro(
+        await this.firma.firmar({ userId: user.id, purpose: 'equipment.receive', targetId: id, code }),
+      );
+    } else {
+      // Dentro de la sede no hay código, pero el acotado por sede sí aplica: nadie
+      // recibe en una bodega que no es suya.
+      const sedes = await sedesDeUsuario(this.prisma, user);
+      if (destino) exigirBodegaDeSuSede(sedes, destino);
+    }
 
     return this.prisma.$transaction(async (tx) => {
       const to = await tx.equipmentWarehouse.findUnique({ where: { id: t.toWarehouseId! } });
@@ -239,8 +599,11 @@ export class NetworkWriteService {
         await tx.equipment.update({ where: { id: it.equipmentId }, data: { warehouseId: to.id, warehouseLegacy: to.legacyId ?? 0 } });
         received++;
       }
-      await tx.equipmentTransfer.update({ where: { id }, data: { status: 'Recibida', receivedById: user.id, receivedByName: user.name, receivedAt: new Date() } });
-      return { id, status: 'Recibida', received };
+      await tx.equipmentTransfer.update({
+        where: { id },
+        data: { status: 'Recibida', receivedById: user.id, receivedByName: user.name, receivedAt: new Date(), receivedSignature: rastro },
+      });
+      return { id, status: 'Recibida', received, firmada: !!rastro };
     });
   }
 
@@ -256,14 +619,42 @@ export class NetworkWriteService {
     return { id, status: 'Rechazada' };
   }
 
-  /** Bodegas de equipos con conteo. */
-  async equipmentWarehouses() {
+  /**
+   * Bodegas de equipos con conteo.
+   *
+   * Un técnico de campo no ve las 12 bodegas de la empresa: ve UNA sola, la de los
+   * equipos que están a su nombre (2026-07-31). No es una bodega de verdad —el
+   * legacy nunca tuvo bodega por técnico, sólo por sede— sino la que corresponde a
+   * `Equipment.assignedRaw` = su username, que es el único vínculo equipo↔técnico
+   * que existe. Se devuelve con la misma forma que las reales para que la pantalla
+   * y el detalle (`/network/equipment`, que aplica el mismo recorte) no tengan que
+   * saber la diferencia.
+   */
+  async equipmentWarehouses(user?: AuthUser) {
+    if (esTecnicoDeCampo(user)) {
+      const ficha = await fichaDelUsuario(this.prisma, user!);
+      const claves = ficha ? clavesDe(ficha) : [];
+      const equipment = claves.length
+        ? await this.prisma.equipment.count({ where: { assignedRaw: { in: claves, mode: 'insensitive' } } })
+        : 0;
+      return [{
+        id: ficha?.id ?? 'sin-ficha',
+        name: 'Mis equipos',
+        description: ficha
+          ? 'Equipos que están a tu nombre'
+          : 'Tu usuario no está ligado a una ficha de empleado: pídele a administración que revise tu correo en Empleados.',
+        equipment,
+      }];
+    }
     const rows = await this.prisma.equipmentWarehouse.findMany({ orderBy: { name: 'asc' }, include: { _count: { select: { equipment: true } } } });
     return rows.map((w) => ({ id: w.id, name: w.name, description: w.description, equipment: w._count.equipment }));
   }
 
   /** Ingreso de equipo (alta). */
   async createEquipment(dto: CreateEquipmentDto, user: AuthUser) {
+    if (esTecnicoDeCampo(user)) {
+      throw new ForbiddenException('No puedes dar de alta equipos: tu acceso al inventario es de consulta sobre los que tienes asignados.');
+    }
     const wh = await this.prisma.equipmentWarehouse.findUnique({ where: { id: dto.warehouseId } });
     if (!wh) throw new NotFoundException('Bodega no encontrada');
     const max = await this.prisma.equipment.aggregate({ _max: { code: true } });
@@ -279,7 +670,20 @@ export class NetworkWriteService {
   }
 
   /** Conexiones (puertos) de una sede. */
-  async ports(params: { search?: string; status?: string; napId?: string; branchId?: string; page?: number; pageSize?: number }) {
+  /**
+   * Columnas ordenables de la tabla de conexiones. El orden por defecto es
+   * NAP + número de puerto, que es como se mira físicamente la caja.
+   */
+  private static readonly ORDEN_PUERTOS = {
+    nap: (dir: 'asc' | 'desc') => [{ nap: { name: dir } }, { port: 'asc' as const }],
+    port: 'port',
+    status: 'status',
+    client: (dir: 'asc' | 'desc') => [
+      { subscriber: { firstName: dir } }, { subscriber: { lastName1: dir } },
+    ],
+  };
+
+  async ports(params: { search?: string; status?: string; napId?: string; branchId?: string; page?: number; pageSize?: number; sortBy?: string; sortDir?: string }) {
     const page = Math.max(1, Number(params.page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(params.pageSize) || 25));
     // Filtros de alcance (sede/NAP/búsqueda) que aplican también al conteo de ocupación.
@@ -296,7 +700,7 @@ export class NetworkWriteService {
     // El estado filtra la tabla, pero NO el conteo (así siempre se ve el split ocupados/libres del alcance).
     const where: Prisma.PortWhereInput = params.status ? { ...scope, status: params.status } : scope;
     const [rows, total, ocupados, libres] = await Promise.all([
-      this.prisma.port.findMany({ where, orderBy: [{ napId: 'asc' }, { port: 'asc' }], skip: (page - 1) * pageSize, take: pageSize, include: { nap: true, subscriber: { select: { id: true, firstName: true, lastName1: true, companyName: true, fullName: true, abonado: true } } } }),
+      this.prisma.port.findMany({ where, orderBy: orden(params, NetworkWriteService.ORDEN_PUERTOS, [{ napId: 'asc' }, { port: 'asc' }]), skip: (page - 1) * pageSize, take: pageSize, include: { nap: true, subscriber: { select: { id: true, firstName: true, lastName1: true, companyName: true, fullName: true, abonado: true } } } }),
       this.prisma.port.count({ where }),
       this.prisma.port.count({ where: { ...scope, status: 'Ocupado' } }),
       this.prisma.port.count({ where: { ...scope, status: 'Disponible' } }),

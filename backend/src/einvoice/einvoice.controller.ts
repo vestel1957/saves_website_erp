@@ -43,8 +43,8 @@ export class EinvoiceController {
     return this.emit.emitCreditNote(invoiceId, dto.reason, dto.cause ?? 2, user);
   }
   @Get()
-  list(@Query('search') search?: string, @Query('type') type?: string, @Query('from') from?: string, @Query('to') to?: string, @Query('all') all?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string) {
-    return this.einvoice.list({ search, type, from, to, all, page: Number(page), pageSize: Number(pageSize) });
+  list(@Query('search') search?: string, @Query('type') type?: string, @Query('from') from?: string, @Query('to') to?: string, @Query('all') all?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string, @Query('sortBy') sortBy?: string, @Query('sortDir') sortDir?: string) {
+    return this.einvoice.list({ search, type, from, to, all, page: Number(page), pageSize: Number(pageSize), sortBy, sortDir });
   }
 
   // --- Emisión por sede: sedes → clientes → flags TV/Internet ---

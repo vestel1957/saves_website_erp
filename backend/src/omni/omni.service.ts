@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { orden } from '../common/pagination-params';
 import { Type } from 'class-transformer';
 import { IsArray, IsIn, IsInt, IsNumber, IsOptional, IsString, Min, MinLength, ValidateNested } from 'class-validator';
 import { Prisma } from '@prisma/client';
@@ -32,6 +33,8 @@ export class EventDto {
   @IsOptional() @IsString() end?: string;
   @IsOptional() allDay?: boolean;
   @IsOptional() @IsInt() orderNo?: number;
+  // Mismo vocabulario que la prioridad de las órdenes de soporte.
+  @IsOptional() @IsIn(['Baja', 'Media', 'Alta', 'Urgente']) priority?: string;
 }
 export class UpdateEventDto {
   @IsOptional() @IsString() title?: string;
@@ -40,6 +43,7 @@ export class UpdateEventDto {
   @IsOptional() @IsString() start?: string;
   @IsOptional() @IsString() end?: string;
   @IsOptional() allDay?: boolean;
+  @IsOptional() @IsIn(['Baja', 'Media', 'Alta', 'Urgente']) priority?: string;
 }
 export class QuoteStatusDto {
   @IsString() @IsIn(['draft', 'pending', 'sent', 'accepted', 'rejected', 'converted']) status!: string;
@@ -53,7 +57,13 @@ export class OmniService {
   ) {}
 
   // --- Eventos / agenda ---
-  async events(params: { from?: string; to?: string; page?: number; pageSize?: number }) {
+  /** Columnas ordenables de la tabla de la agenda. */
+  private static readonly ORDEN_EVENTOS = {
+    title: 'title', start: 'start', end: 'end', description: 'description',
+    orderNo: 'orderNo', assignedBy: 'assignedBy',
+  };
+
+  async events(params: { from?: string; to?: string; page?: number; pageSize?: number; sortBy?: string; sortDir?: string }) {
     const page = Math.max(1, Number(params.page) || 1);
     const pageSize = Math.min(200, Math.max(1, Number(params.pageSize) || 50));
     const where: Prisma.CalendarEventWhereInput = {};
@@ -63,11 +73,11 @@ export class OmniService {
       if (params.to) (where.start as any).lte = new Date(params.to);
     }
     const [rows, total] = await Promise.all([
-      this.prisma.calendarEvent.findMany({ where, orderBy: { start: 'desc' }, skip: (page - 1) * pageSize, take: pageSize }),
+      this.prisma.calendarEvent.findMany({ where, orderBy: orden(params, OmniService.ORDEN_EVENTOS, { start: 'desc' }), skip: (page - 1) * pageSize, take: pageSize }),
       this.prisma.calendarEvent.count({ where }),
     ]);
     return {
-      items: rows.map((e) => ({ id: e.id, orderNo: e.orderNo, title: e.title, description: e.description, color: e.color, start: e.start, end: e.end, allDay: e.allDay, assignedBy: e.assignedBy })),
+      items: rows.map((e) => ({ id: e.id, orderNo: e.orderNo, title: e.title, description: e.description, color: e.color, start: e.start, end: e.end, allDay: e.allDay, assignedBy: e.assignedBy, priority: e.priority })),
       total, page, pageSize, pages: Math.ceil(total / pageSize),
     };
   }
@@ -85,6 +95,7 @@ export class OmniService {
         title: dto.title ?? null, description: dto.description ?? null, color: dto.color ?? null,
         start: new Date(dto.start), end: dto.end ? new Date(dto.end) : null,
         allDay: dto.allDay ?? false, orderNo: dto.orderNo ?? null, assignedBy: user?.name ?? user?.email ?? null,
+        ...(dto.priority ? { priority: dto.priority } : {}),
       },
     });
     return { id: e.id };
@@ -100,6 +111,7 @@ export class OmniService {
     if (dto.start !== undefined) data.start = new Date(dto.start);
     if (dto.end !== undefined) data.end = dto.end ? new Date(dto.end) : null;
     if (dto.allDay !== undefined) data.allDay = dto.allDay;
+    if (dto.priority !== undefined) data.priority = dto.priority;
     await this.prisma.calendarEvent.update({ where: { id }, data });
     return { id, ok: true };
   }
@@ -165,14 +177,23 @@ export class OmniService {
   }
 
   // --- Cotizaciones ---
-  async quotes(params: { search?: string; page?: number; pageSize?: number }) {
+  /**
+   * Columnas ordenables de la tabla de cotizaciones. `client` no está: el
+   * nombre del cliente se resuelve después de la consulta (ver abajo), no es
+   * un campo de `Quote`.
+   */
+  private static readonly ORDEN_COTIZACIONES = {
+    tid: 'tid', total: 'total', status: 'status', date: 'createdAt',
+  };
+
+  async quotes(params: { search?: string; page?: number; pageSize?: number; sortBy?: string; sortDir?: string }) {
     const page = Math.max(1, Number(params.page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(params.pageSize) || 25));
     const where: Prisma.QuoteWhereInput = {};
     const search = (params.search || '').trim();
     if (search) { const n = Number(search); if (Number.isFinite(n)) where.tid = n; }
     const [rows, total] = await Promise.all([
-      this.prisma.quote.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (page - 1) * pageSize, take: pageSize }),
+      this.prisma.quote.findMany({ where, orderBy: orden(params, OmniService.ORDEN_COTIZACIONES, { createdAt: 'desc' }), skip: (page - 1) * pageSize, take: pageSize }),
       this.prisma.quote.count({ where }),
     ]);
     // Resolver nombres de cliente

@@ -1,6 +1,8 @@
 import { Global, Module } from '@nestjs/common';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { ProfileController } from './profile.controller';
+import { ProfileService } from './profile.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { PermissionsGuard } from './permissions.guard';
 import { LoginThrottleGuard } from './login-throttle.guard';
@@ -11,8 +13,8 @@ import { LoginThrottleGuard } from './login-throttle.guard';
  */
 @Global()
 @Module({
-  controllers: [AuthController],
-  providers: [AuthService, JwtAuthGuard, PermissionsGuard, LoginThrottleGuard],
+  controllers: [AuthController, ProfileController],
+  providers: [AuthService, ProfileService, JwtAuthGuard, PermissionsGuard, LoginThrottleGuard],
   exports: [AuthService, JwtAuthGuard, PermissionsGuard],
 })
 export class AuthModule {}

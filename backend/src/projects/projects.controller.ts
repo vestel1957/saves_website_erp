@@ -13,8 +13,8 @@ export class ProjectsController {
 
   @Get('stats') stats() { return this.projects.stats(); }
   @Get()
-  list(@Query('search') search?: string, @Query('status') status?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string) {
-    return this.projects.list({ search, status, page: Number(page), pageSize: Number(pageSize) });
+  list(@Query('search') search?: string, @Query('status') status?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string, @Query('sortBy') sortBy?: string, @Query('sortDir') sortDir?: string) {
+    return this.projects.list({ search, status, page: Number(page), pageSize: Number(pageSize), sortBy, sortDir });
   }
   @Get(':id') detail(@Param('id') id: string) { return this.projects.detail(id); }
   @Post() create(@Body() dto: CreateProjectDto) { return this.projects.create(dto); }

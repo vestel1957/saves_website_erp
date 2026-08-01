@@ -51,6 +51,8 @@ const posting = {
   postTreasuryExpense: async () => null,
 };
 const mikrotik = { reconnect: async () => null };
+// El emisor de eventos tampoco entra al humo: aquí sólo se mide la carrera sobre el dinero.
+const eventos = { emit: () => true };
 
 async function saldoReal(legacyId: number) {
   const agg = await prisma.transaction.aggregate({
@@ -61,7 +63,7 @@ async function saldoReal(legacyId: number) {
 }
 
 async function main() {
-  const svc = new CobranzasService(prisma as never, posting as never, mikrotik as never);
+  const svc = new CobranzasService(prisma as never, posting as never, mikrotik as never, eventos as never);
   const user = { id: 'u-test', name: 'Smoke', email: 'smoke@test', permissions: ['system.admin'], roles: [] };
 
   await prisma.transaction.deleteMany({});

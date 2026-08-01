@@ -22,6 +22,7 @@ export class TasksController {
       status: q.status, priority: q.priority, search: q.search,
       mine: q.mine === 'true', assignee: q.assignee, orderId: q.orderId, kind: q.kind,
       page: Number(q.page), pageSize: Number(q.pageSize),
+      sortBy: q.sortBy, sortDir: q.sortDir,
     }, user);
   }
 

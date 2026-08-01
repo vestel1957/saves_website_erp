@@ -1,7 +1,8 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException, OnApplicationBootstrap } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { normalizePhone } from '../phone.util';
 import { WhatsappService } from './whatsapp.service';
 import { WHATSAPP_STATUS_EVENT, type WhatsappStatusUpdate } from './whatsapp.types';
 import { CreateCampaignDto, TemplateDto, TemplateVariableDto } from './dto/campaign.dto';
@@ -24,9 +25,24 @@ function subName(s: SubRow): string {
   const person = [s.firstName, s.secondName, s.lastName1, s.lastName2].map((p) => (p || '').trim()).filter(Boolean).join(' ');
   return person || (s.companyName || '').trim() || 'Cliente';
 }
+/**
+ * Teléfono al que se le escribe por WhatsApp. Prefiere el que PARECE un móvil
+ * colombiano sobre el orden phone1→phone2: WhatsApp solo existe en móviles, y en
+ * la BD hay fichas con el fijo en phone1 y el celular en phone2 (24 al escribir
+ * esto) — con el orden a secas esas quedaban condenadas a FAILED.
+ *
+ * Si ninguno parece móvil se devuelve el primero que tenga pinta de teléfono, como
+ * siempre: hay números viejos guardados raro que sí funcionan, y decidir aquí que
+ * no se les escribe cambiaría en silencio el alcance de las campañas masivas.
+ * Quien necesite la garantía de móvil usa `esMovilColombiano`.
+ */
+export function esMovilColombiano(normalized: string | null): boolean {
+  return !!normalized && /^573\d{9}$/.test(normalized);
+}
+
 function subPhone(s: SubRow): string | null {
-  const p = (s.phone1 || s.phone2 || '').replace(/\D/g, '');
-  return p.length >= 7 ? p : null;
+  const candidatos = [s.phone1, s.phone2].map((p) => normalizePhone(p)).filter((p): p is string => !!p);
+  return candidatos.find(esMovilColombiano) ?? candidatos.find((p) => p.length >= 7) ?? null;
 }
 const copFmt = (n: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(n || 0);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -39,26 +55,95 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * webhook va actualizando.
  */
 @Injectable()
-export class WhatsappCampaignService {
+export class WhatsappCampaignService implements OnApplicationBootstrap {
   private readonly logger = new Logger('WhatsappCampaign');
   /** Pausa entre envíos (ms) para respetar el rate-limit de la Cloud API. */
   private readonly throttleMs = Number(process.env.WHATSAPP_THROTTLE_MS ?? 250);
+  /** Campañas ejecutándose en ESTE proceso (evita doble envío si se relanza una en curso). */
+  private readonly running = new Set<string>();
+  /** Backoff (ms) entre reintentos cuando Meta devuelve rate-limit. */
+  private static readonly RETRY_BACKOFF_MS = [5_000, 15_000, 45_000];
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly whatsapp: WhatsappService,
   ) {}
 
+  /**
+   * Reanuda campañas que quedaron a medias por un reinicio del backend: el
+   * procesamiento vive en memoria (`void runCampaign`), así que un restart de PM2
+   * dejaba la campaña en `running` con envíos QUEUED huérfanos para siempre.
+   */
+  onApplicationBootstrap() {
+    setTimeout(() => void this.resumeStuckCampaigns(), 10_000);
+  }
+
+  private async resumeStuckCampaigns() {
+    try {
+      const stuck = await this.prisma.whatsappCampaign.findMany({
+        where: { status: 'running', sends: { some: { status: 'QUEUED' } } },
+        select: { id: true, name: true },
+      });
+      for (const c of stuck) {
+        this.logger.warn(`Reanudando campaña interrumpida por reinicio: ${c.name} (${c.id})`);
+        void this.runCampaign(c.id).catch((e) => this.logger.error(`Campaña ${c.id}: ${e.message}`));
+      }
+      // Sin pendientes pero marcada running = terminó y no alcanzó a cerrarse.
+      const done = await this.prisma.whatsappCampaign.findMany({
+        where: { status: 'running', sends: { none: { status: 'QUEUED' } } },
+        select: { id: true },
+      });
+      for (const c of done) {
+        await this.recomputeCampaign(c.id);
+        await this.prisma.whatsappCampaign.update({
+          where: { id: c.id }, data: { status: 'done', finishedAt: new Date() },
+        });
+      }
+    } catch (e) {
+      this.logger.error(`No se pudieron reanudar campañas: ${(e as Error).message}`);
+    }
+  }
+
   // ---------- Plantillas ----------
 
-  listTemplates() {
-    return this.prisma.whatsappTemplate.findMany({ orderBy: { name: 'asc' } });
+  /**
+   * Plantillas locales + estado real en Meta (`metaStatus`): APPROVED/PENDING/
+   * REJECTED, 'NO_EXISTE' si la WABA no la tiene, o null si Meta no respondió.
+   * Solo las APPROVED pueden iniciar conversación.
+   */
+  async listTemplates() {
+    const [rows, meta] = await Promise.all([
+      this.prisma.whatsappTemplate.findMany({ orderBy: { name: 'asc' } }),
+      this.whatsapp.metaTemplateStatuses(),
+    ]);
+    return rows.map((t) => ({ ...t, metaStatus: meta ? (meta[t.name] ?? 'NO_EXISTE') : null }));
+  }
+
+  /** Valores de ejemplo por fuente de variable (Meta exige un sample por {{n}}). */
+  private exampleFor(v: TemplateVariableDto): string {
+    switch (v.source) {
+      case 'name': return 'Juan Pérez';
+      case 'firstName': return 'Juan';
+      case 'abonado': return '12345';
+      case 'phone': return '3110000000';
+      case 'deuda': return '$50.000';
+      default: return v.value?.trim() || 'ejemplo';
+    }
   }
 
   async createTemplate(dto: TemplateDto) {
     const name = dto.name.trim();
     const exists = await this.prisma.whatsappTemplate.findUnique({ where: { name } });
     if (exists) throw new BadRequestException('Ya existe una plantilla con ese nombre');
+    if (dto.submitToMeta) {
+      const vars = [...(dto.variables ?? [])].sort((a, b) => a.index - b.index);
+      const res = await this.whatsapp.createMetaTemplate({
+        name, language: dto.language?.trim() || 'es', category: dto.category,
+        bodyText: dto.bodyText, headerText: dto.headerText,
+        examples: vars.map((v) => this.exampleFor(v)),
+      });
+      if (!res.ok) throw new BadRequestException(`Meta rechazó la plantilla: ${res.error}`);
+    }
     return this.prisma.whatsappTemplate.create({
       data: {
         name, language: dto.language?.trim() || 'es', category: dto.category ?? null,
@@ -150,8 +235,16 @@ export class WhatsappCampaignService {
     return bodyText.replace(/\{\{(\d+)\}\}/g, (_m, n) => params[Number(n) - 1] ?? `{{${n}}}`);
   }
 
-  /** Crea la campaña + los envíos en cola y lanza el procesamiento asíncrono. */
-  async createCampaign(dto: CreateCampaignDto, user: AuthLike) {
+  /**
+   * Crea la campaña + los envíos en cola y lanza el procesamiento asíncrono.
+   *
+   * `autoStart: false` la deja creada y en cola sin arrancar, para quien necesite
+   * ESPERAR el resultado (el cron de recordatorios marca el dedupe solo sobre los
+   * que salieron de verdad, así que no puede soltar el envío y olvidarse). Ese
+   * llamador se encarga de invocar `runCampaign`; si no lo hace, la campaña queda
+   * `running` con envíos QUEUED y la reanuda `resumeStuckCampaigns` al arrancar.
+   */
+  async createCampaign(dto: CreateCampaignDto, user: AuthLike, opts: { autoStart?: boolean } = {}) {
     // La plantilla local es opcional (define las variables); si no, se usan las del dto.
     const template = dto.templateId
       ? await this.prisma.whatsappTemplate.findUnique({ where: { id: dto.templateId } })
@@ -181,12 +274,24 @@ export class WhatsappCampaignService {
     });
 
     // Procesamiento en background (no bloquea la respuesta HTTP).
-    void this.runCampaign(campaign.id).catch((e) => this.logger.error(`Campaña ${campaign.id}: ${e.message}`));
+    if (opts.autoStart !== false) {
+      void this.runCampaign(campaign.id).catch((e) => this.logger.error(`Campaña ${campaign.id}: ${e.message}`));
+    }
     return { campaignId: campaign.id, total: withPhone.length };
   }
 
   /** Procesa (o reanuda) los envíos QUEUED de una campaña con throttle. */
   async runCampaign(campaignId: string) {
+    if (this.running.has(campaignId)) return; // ya hay un loop enviando esta campaña
+    this.running.add(campaignId);
+    try {
+      await this.processCampaign(campaignId);
+    } finally {
+      this.running.delete(campaignId);
+    }
+  }
+
+  private async processCampaign(campaignId: string) {
     const campaign = await this.prisma.whatsappCampaign.findUnique({
       where: { id: campaignId }, include: { template: true },
     });
@@ -209,7 +314,7 @@ export class WhatsappCampaignService {
       const sub = q.subscriberId ? subMap.get(q.subscriberId) : undefined;
       const params = sub ? this.renderParams(vars, sub, debts[sub.id] ?? 0) : [];
       const body = bodyText ? this.renderBody(bodyText, params) : null;
-      const res = await this.whatsapp.sendTemplate(q.phone, campaign.templateName, campaign.language, params);
+      const res = await this.sendWithRetry(q.phone, campaign.templateName, campaign.language, params);
       await this.prisma.whatsappSend.update({
         where: { id: q.id },
         data: res.ok
@@ -223,6 +328,23 @@ export class WhatsappCampaignService {
     await this.prisma.whatsappCampaign.update({
       where: { id: campaignId }, data: { status: 'done', finishedAt: new Date() },
     });
+  }
+
+  /**
+   * Envía con reintento SOLO ante errores transitorios (rate-limit de Meta o fallo
+   * de red): antes un 429 marcaba el envío FAILED de una, y en campañas grandes eso
+   * quemaba la cola justo cuando Meta pedía bajar el ritmo. El backoff pausa el loop
+   * completo (es secuencial), que es exactamente lo que el rate-limit pide.
+   */
+  private async sendWithRetry(phone: string, templateName: string, language: string, params: string[]) {
+    let res = await this.whatsapp.sendTemplate(phone, templateName, language, params);
+    for (const backoff of WhatsappCampaignService.RETRY_BACKOFF_MS) {
+      if (res.ok || !res.retryable) return res;
+      this.logger.warn(`Rate-limit/transitorio enviando a ${phone} (${res.error}); reintento en ${backoff / 1000}s`);
+      await sleep(backoff);
+      res = await this.whatsapp.sendTemplate(phone, templateName, language, params);
+    }
+    return res;
   }
 
   /** Recalcula los contadores de una campaña a partir de sus envíos. */

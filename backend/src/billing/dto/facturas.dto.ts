@@ -7,6 +7,14 @@ export class InvoiceItemDto {
   @IsOptional() @IsString()
   productName?: string;
 
+  /**
+   * `Material.legacyId` (pid del legacy) cuando la línea salió del catálogo. Deja el
+   * rastro al producto que el legacy guardaba en `invoice_items.pid`; escribir a mano
+   * (texto libre) manda 0, como hasta ahora.
+   */
+  @IsOptional() @IsInt() @Min(0)
+  productId?: number;
+
   @IsString() @MinLength(1)
   description!: string;
 
@@ -30,6 +38,16 @@ export class CreateInvoiceDto {
 
   @IsOptional() @IsDateString()
   dueDate?: string;
+
+  /**
+   * Tipo de factura (el `tipo_factura` del legacy). Solo FIJA y RECURRENTE: las notas
+   * crédito/débito son el otro par del enum, pero cuelgan de una factura existente y
+   * se crean por `POST /billing/invoices/:id/notes` — emitirlas por aquí las dejaría
+   * huérfanas. Por defecto FIJA, que es lo que ofrecía primero el legacy y lo que se
+   * venía creando.
+   */
+  @IsOptional() @IsIn(['FIJA', 'RECURRENTE'])
+  kind?: 'FIJA' | 'RECURRENTE';
 
   @IsOptional() @IsString()
   notes?: string;

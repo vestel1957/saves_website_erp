@@ -90,38 +90,24 @@ export const DEFAULT_ROLES: { key: string; name: string; description: string; pe
       P.ASSETS_ASSIGN, // entregar/asignar material a un funcionario
     ],
   },
-  {
-    // Antes "Administrador de inventario". Degradado a SOLO LECTURA: el control
-    // total ahora es exclusivo del Jefe de bodega.
-    key: 'inventory-admin',
-    name: 'Consulta de inventario',
-    description: 'Solo lectura: consulta de todo el inventario sin poder modificar',
-    permissions: [
-      P.PRODUCTS_READ, P.WAREHOUSES_READ, P.STOCK_READ, P.KARDEX_READ,
-      P.PURCHASE_ORDERS_READ, P.ASSETS_READ,
-      P.MAINTENANCE_READ, P.MAINTENANCE_PLANS_READ, P.AREAS_READ, P.REPORTS_READ,
-    ],
-  },
-  {
-    key: 'maintenance-technician',
-    name: 'Técnico de mantenimiento',
-    description: 'Ejecuta órdenes de trabajo asignadas por el jefe: actualiza estado y registra el consumo de repuestos de su propia orden',
-    permissions: [
-      P.PRODUCTS_READ, P.WAREHOUSES_READ, P.STOCK_READ,
-      P.WORK_ORDERS_EXECUTE,
-      P.MAINTENANCE_READ, P.MAINTENANCE_PLANS_READ, P.AREAS_READ,
-    ],
-  },
-  {
-    // Degradado a SOLO LECTURA: ya no registra movimientos ni recepciones.
-    key: 'warehouse-clerk',
-    name: 'Auxiliar de bodega',
-    description: 'Solo consulta: existencias, productos y kardex (sin modificar)',
-    permissions: [
-      P.PRODUCTS_READ, P.WAREHOUSES_READ, P.STOCK_READ, P.KARDEX_READ,
-    ],
-  },
 ];
+
+// RETIRADOS el 2026-07-29, por decisión de negocio: el catálogo tenía 23 roles y
+// solo 12 con alguien asignado. Se fueron los que nadie usaba —bien porque
+// duplicaban a otro recortándole permisos, bien porque mandaban sobre un módulo
+// que no está construido—:
+//
+//   inventory-admin         duplicaba a auditor, acotado a inventario
+//   warehouse-clerk         duplicaba a warehouse-manager en solo lectura
+//   maintenance-technician  órdenes de trabajo: sin pantallas
+//   hr-assistant            duplicaba a hr-director en solo lectura
+//   payroll-manager         nómina: sin pantallas
+//   employee-self           portal del empleado: sin pantallas
+//   sst-admin / sst-coordinator / sst-inspector   SST: sin módulo
+//
+// El respaldo con sus permisos exactos está en prisma/_respaldo-roles-2026-07-29.json.
+// Si mañana se construye SST o Nómina, sus roles se diseñan de nuevo contra las
+// pantallas que existan, no contra las que se imaginaron.
 
 // ============================================================================
 //  APP-WIDE RBAC — permisos de todo el ERP (no solo inventario)
@@ -144,6 +130,10 @@ export const APP_PERMISSIONS = {
   // administración del sistema
   USERS_MANAGE: 'system.users.manage',
   WHATSAPP_MANAGE: 'system.whatsapp', // canal de mensajería de la empresa (Kapso)
+  // Atender la bandeja: ver los chats y responderlos. Aparte de WHATSAPP_MANAGE a
+  // propósito — contestarle a un cliente no debe exigir acceso a las credenciales
+  // del canal, ni a las campañas masivas.
+  WHATSAPP_INBOX: 'whatsapp.inbox',
   SYSTEM_ADMIN: 'system.admin',
   // áreas de acceso Vestel — cada permiso habilita una sección del sidebar.
   // El superusuario (SYSTEM_ADMIN) las cumple todas por el bypass del guard.
@@ -153,7 +143,7 @@ export const APP_PERMISSIONS = {
   AREA_TECNICOS: 'area.tecnicos',
   AREA_SISTEMAS: 'area.sistemas',
   // Caja y ventas (cajera) — rol par del legacy "roleid=3". Sección propia del
-  // sidebar acotada a caja + facturación/notas + clientes + tickets + órdenes.
+  // sidebar acotada a la operación de su caja + clientes + tickets + órdenes.
   AREA_CAJA: 'area.caja',
 
   // ── Acciones DESTRUCTIVAS ────────────────────────────────────────────────
@@ -168,6 +158,7 @@ export const APP_PERMISSIONS = {
   NETWORK_ROUTERS_MANAGE: 'network.routers.manage', // crear/borrar routers, tumbar sesiones PPPoE
   NETWORK_OLT_MANAGE: 'network.olt.manage', // autorizar/reiniciar/ELIMINAR ONUs por SSH
   CRON_RUN: 'system.cron.run', // disparar cronjobs a mano (facturación masiva, cartera)
+  PURCHASES_APPROVE: 'purchases.approve', // aprobar órdenes de compra (1ª y 2ª firma)
 } as const;
 
 export type AppPermission = (typeof APP_PERMISSIONS)[keyof typeof APP_PERMISSIONS];
@@ -183,6 +174,7 @@ export const ALL_APP_PERMISSIONS: { key: string; label: string; group: string }[
   { key: A.HR_ACCESS_MANAGE, label: 'Dar acceso al sistema y asignar roles (RRHH)', group: 'Recursos Humanos' },
   { key: A.USERS_MANAGE, label: 'Gestionar usuarios y roles', group: 'Administración' },
   { key: A.WHATSAPP_MANAGE, label: 'Gestionar conexión de WhatsApp', group: 'Administración' },
+  { key: A.WHATSAPP_INBOX, label: 'Atender la bandeja de WhatsApp (ver y responder chats)', group: 'Administración' },
   { key: A.SYSTEM_ADMIN, label: 'Superadministrador (acceso total)', group: 'Administración' },
   // Áreas de acceso (visibilidad de secciones del sidebar Vestel)
   { key: A.AREA_GERENCIA, label: 'Área: Gerencia', group: 'Áreas Vestel' },
@@ -197,6 +189,7 @@ export const ALL_APP_PERMISSIONS: { key: string; label: string; group: string }[
   { key: A.NETWORK_ROUTERS_MANAGE, label: 'Administrar routers y sesiones PPPoE', group: 'Operaciones críticas' },
   { key: A.NETWORK_OLT_MANAGE, label: 'Administrar ONUs de la OLT (autorizar/reiniciar/eliminar)', group: 'Operaciones críticas' },
   { key: A.CRON_RUN, label: 'Ejecutar procesos programados a mano (facturación masiva)', group: 'Operaciones críticas' },
+  { key: A.PURCHASES_APPROVE, label: 'Aprobar órdenes de compra', group: 'Operaciones críticas' },
 ];
 
 /** Permiso que otorga acceso total — verificado por el PermissionsGuard. */
@@ -282,41 +275,8 @@ export const ALL_SST_PERMISSIONS: { key: string; label: string }[] = [
   { key: S.REPORTS_READ, label: 'Ver reportes SST' },
 ];
 
-/** Roles por defecto del módulo SST. */
-export const SST_ROLES: { key: string; name: string; description: string; permissions: string[] }[] = [
-  {
-    key: 'sst-admin',
-    name: 'Administrador SST',
-    description: 'Control total del módulo de Seguridad y Salud en el Trabajo',
-    permissions: [A.DASHBOARD_VIEW, ...ALL_SST_PERMISSIONS.map((p) => p.key)],
-  },
-  {
-    key: 'sst-coordinator',
-    name: 'Coordinador SST',
-    description: 'Operación SST: riesgos, EPP, médicos, capacitaciones, incidentes, hallazgos',
-    permissions: [
-      A.DASHBOARD_VIEW, S.VIEW,
-      S.EMPLOYEES_READ, S.EMPLOYEES_WRITE, S.RISKS_READ, S.RISKS_WRITE,
-      S.EPP_READ, S.EPP_WRITE, S.MEDICAL_READ, S.MEDICAL_WRITE,
-      S.TRAINING_READ, S.TRAINING_WRITE, S.INCIDENTS_READ, S.INCIDENTS_WRITE,
-      S.INSPECTIONS_READ, S.INSPECTIONS_WRITE, S.FINDINGS_READ, S.FINDINGS_WRITE, S.FINDINGS_APPROVE,
-      S.DOCUMENTS_READ, S.DOCUMENTS_WRITE, S.EMERGENCY_READ, S.EMERGENCY_WRITE,
-      S.BRIGADES_READ, S.BRIGADES_WRITE, S.DRILLS_READ, S.DRILLS_WRITE,
-      S.CONTRACTORS_READ, S.CONTRACTORS_WRITE, S.AUDITS_READ, S.AUDITS_WRITE, S.REPORTS_READ,
-    ],
-  },
-  {
-    key: 'sst-inspector',
-    name: 'Inspector SST',
-    description: 'Inspecciones, incidentes y hallazgos en campo',
-    permissions: [
-      A.DASHBOARD_VIEW, S.VIEW,
-      S.EMPLOYEES_READ, S.RISKS_READ, S.EPP_READ, S.MEDICAL_READ, S.TRAINING_READ,
-      S.INCIDENTS_READ, S.INCIDENTS_WRITE, S.INSPECTIONS_READ, S.INSPECTIONS_WRITE,
-      S.FINDINGS_READ, S.FINDINGS_WRITE, S.EMERGENCY_READ, S.DRILLS_READ, S.REPORTS_READ,
-    ],
-  },
-];
+// Los roles del módulo SST se retiraron el 2026-07-29 (ver nota arriba): el
+// módulo no está construido.
 
 // ============================================================================
 //  PAYROLL — Nómina Inteligente
@@ -367,25 +327,8 @@ export const ALL_PAYROLL_PERMISSIONS: { key: string; label: string }[] = [
 ];
 
 /** Roles por defecto del módulo de nómina. */
-export const PAYROLL_ROLES: { key: string; name: string; description: string; permissions: string[] }[] = [
-  {
-    key: 'payroll-manager',
-    name: 'Gestor de Nómina (RRHH)',
-    description: 'Operación completa de nómina: conceptos, contratos, periodos, novedades, liquidación y desprendibles',
-    permissions: [
-      A.DASHBOARD_VIEW, A.HR_EMPLOYEES_READ,
-      PR.VIEW, PR.CONCEPTS_READ, PR.CONCEPTS_WRITE, PR.CONTRACTS_READ, PR.CONTRACTS_WRITE,
-      PR.PERIODS_READ, PR.PERIODS_WRITE, PR.EVENTS_READ, PR.EVENTS_WRITE, PR.EVENTS_APPROVE,
-      PR.PAYSLIPS_READ, PR.PAYSLIPS_WRITE, PR.REPORTS_READ, PR.INTEGRATIONS_MANAGE,
-    ],
-  },
-  {
-    key: 'employee-self',
-    name: 'Empleado (autoservicio)',
-    description: 'Consulta únicamente su propia nómina: desprendibles, vacaciones y horas extras acumuladas',
-    permissions: [PR.SELF_READ],
-  },
-];
+// Los roles de Nómina se retiraron el 2026-07-29 (ver nota arriba): el módulo
+// no tiene pantallas.
 
 // ============================================================================
 //  PANTALLAS (screens) — permiso por módulo/submódulo del sidebar
@@ -407,18 +350,76 @@ export interface ScreenDef {
 }
 
 export const SCREENS: ScreenDef[] = [
-  { href: '/dashboard', label: 'Panel ejecutivo', module: 'Gerencia', areas: ['gerencia'] },
-  { href: '/reportes', label: 'Reportes / Indicadores', module: 'Gerencia', areas: ['gerencia'] },
+  // Una sola ruta, TRES paneles: gerencia ve el ejecutivo (abonados, cartera,
+  // recaudo, red), la cajera el de SU caja (el informe del cierre del día) y el
+  // técnico su jornada (las órdenes que le tocan hoy y su rendimiento).
+  // La pantalla decide cuál pintar según el área; el endpoint `/dashboard` sigue
+  // siendo de gerencia — cada uno de los otros dos se sirve de los suyos, ya
+  // acotados a quien pregunta: tesorería por caja, `/support/mi-*` por sesión.
+  { href: '/dashboard', label: 'Panel (ejecutivo / de caja / del técnico)', module: 'Gerencia', areas: ['gerencia', 'caja', 'tecnicos'] },
+  // REPORTES — una pantalla por reporte (2026-07-28). Antes era una sola ruta
+  // con un selector adentro; al partirla, cada reporte tiene URL propia y por
+  // tanto permiso propio, que es lo que permite dar acceso a "Recaudo" sin dar
+  // acceso a "Rendimiento de técnicos".
+  { href: '/reportes', label: 'Reportes (índice)', module: 'Reportes', areas: ['gerencia'] },
+  { href: '/reportes/tendencias', label: 'Tendencias e histórico', module: 'Reportes', areas: ['gerencia'] },
+  { href: '/reportes/indice-recaudo', label: 'Índice de recaudo', module: 'Reportes', areas: ['gerencia'] },
+  { href: '/reportes/arpu', label: 'ARPU por abonado', module: 'Reportes', areas: ['gerencia'] },
+  { href: '/reportes/permanencia', label: 'Antigüedad y permanencia', module: 'Reportes', areas: ['gerencia'] },
+  { href: '/reportes/capacidad-red', label: 'Capacidad de red (NAPs)', module: 'Reportes', areas: ['gerencia'] },
+  { href: '/reportes/reincidencia', label: 'Reincidencia de cortes', module: 'Reportes', areas: ['gerencia'] },
+  { href: '/reportes/facturacion', label: 'Resumen de facturación', module: 'Reportes', areas: ['gerencia'] },
+  { href: '/reportes/recaudo', label: 'Recaudo', module: 'Reportes', areas: ['gerencia'] },
+  { href: '/reportes/ventas-sede', label: 'Ventas por sede', module: 'Reportes', areas: ['gerencia'] },
+  { href: '/reportes/ingresos-egresos', label: 'Ingresos y egresos', module: 'Reportes', areas: ['gerencia'] },
+  { href: '/reportes/cartera', label: 'Cartera / deudores', module: 'Reportes', areas: ['gerencia'] },
+  { href: '/reportes/iva', label: 'Reporte de IVA', module: 'Reportes', areas: ['gerencia'] },
+  { href: '/reportes/ordenes', label: 'Órdenes de servicio', module: 'Reportes', areas: ['gerencia'] },
+  { href: '/reportes/cortes-activaciones', label: 'Cortes y activaciones', module: 'Reportes', areas: ['gerencia'] },
+  { href: '/reportes/estado-clientes', label: 'Estado de clientes', module: 'Reportes', areas: ['gerencia'] },
+  { href: '/reportes/altas-retiros', label: 'Altas y retiros', module: 'Reportes', areas: ['gerencia'] },
+  { href: '/reportes/tecnicos', label: 'Rendimiento de técnicos', module: 'Reportes', areas: ['gerencia'] },
+  { href: '/reportes/recaudo-funcionario', label: 'Recaudo por funcionario', module: 'Reportes', areas: ['gerencia'] },
+  { href: '/reportes/anulaciones', label: 'Anulaciones (control)', module: 'Reportes', areas: ['gerencia'] },
+  { href: '/reportes/actividad', label: 'Actividad en el sistema', module: 'Reportes', areas: ['gerencia'] },
 
-  { href: '/facturacion', label: 'Administrar facturas', module: 'Facturación', areas: ['contabilidad', 'caja'] },
-  { href: '/facturacion/notas', label: 'Notas crédito/débito', module: 'Facturación', areas: ['contabilidad', 'caja'] },
+  // FACTURACIÓN es de contabilidad, NO de la cajera (decisión 2026-07-29): ella
+  // recauda sobre facturas que ya existen. Sigue llegando al DETALLE de una factura
+  // desde la ficha del cliente y desde su arqueo (`/facturacion/[id]` no es una
+  // pantalla del menú, se gatea por área), pero no administra ni emite notas.
+  { href: '/facturacion', label: 'Administrar facturas', module: 'Facturación', areas: ['contabilidad'] },
+  { href: '/facturacion/notas', label: 'Notas crédito/débito', module: 'Facturación', areas: ['contabilidad'] },
   { href: '/facturacion/electronica', label: 'Facturas electrónicas', module: 'Facturación', areas: ['contabilidad'] },
   { href: '/cotizaciones', label: 'Cotizaciones', module: 'Facturación', areas: ['contabilidad'] },
 
-  { href: '/tesoreria', label: 'Movimientos de caja', module: 'Caja / Cobranza', areas: ['contabilidad', 'caja'] },
-  { href: '/tesoreria/apertura', label: 'Apertura de caja', module: 'Caja / Cobranza', areas: ['contabilidad', 'caja'] },
+  // "Movimientos" es la vista TRANSVERSAL de tesorería (todas las cajas, todos los
+  // tipos, con anular y filtro por caja). La cajera trabaja por sus pantallas
+  // concretas —Ingresos, Egresos, Nueva transacción, Transferencia— y su arqueo,
+  // así que se le quitó (decisión 2026-07-29).
+  { href: '/tesoreria', label: 'Movimientos de caja', module: 'Caja / Cobranza', areas: ['contabilidad'] },
+  // '/tesoreria/apertura' se retiró (2026-07-29): abrir la caja es un botón del panel
+  // de la cajera, no una pantalla. Su llave `screen.tesoreria.apertura` se borra con
+  // prisma/migrate-apertura-boton-2026-07.ts.
   { href: '/tesoreria/cierres', label: 'Cierre de caja', module: 'Caja / Cobranza', areas: ['contabilidad', 'caja'] },
-  { href: '/tesoreria/importar-pagos', label: 'Importar pagos (Efecty)', module: 'Caja / Cobranza', areas: ['administracion', 'caja'] },
+  // Faltaban en el catálogo pese a llevar tiempo en el menú (nav.ts): sin llave de
+  // pantalla, `can()` sólo se las concedía al superusuario, así que la cajera —que
+  // es quien las usa todo el día— no las veía. Van con la misma pareja de áreas que
+  // el resto de la operación de caja; el DATO sigue acotado a su sede por
+  // `caja-scope.ts` (ve/mueve su caja y los bancos, nada de otra sede).
+  { href: '/tesoreria/ingresos', label: 'Ingresos', module: 'Caja / Cobranza', areas: ['contabilidad', 'caja'] },
+  { href: '/tesoreria/egresos', label: 'Egresos', module: 'Caja / Cobranza', areas: ['contabilidad', 'caja'] },
+  { href: '/tesoreria/nueva', label: 'Nueva transacción', module: 'Caja / Cobranza', areas: ['contabilidad', 'caja'] },
+  // Pagos fijos programados (2026-07-31): contabilidad los define, la cajera de la
+  // caja registra la ejecución (el dato va acotado por caja en el backend).
+  { href: '/tesoreria/pagos-fijos', label: 'Pagos fijos programados', module: 'Caja / Cobranza', areas: ['contabilidad', 'caja'] },
+  { href: '/tesoreria/transferencia', label: 'Transferencia entre cajas', module: 'Caja / Cobranza', areas: ['contabilidad', 'caja'] },
+  // Anulaciones y Cajas/categorías NO son de la cajera: la primera es el control de
+  // quién anuló qué (se mira desde fuera), y la segunda fija el fondo de cada caja.
+  { href: '/tesoreria/anulaciones', label: 'Anulaciones (control)', module: 'Caja / Cobranza', areas: ['contabilidad'] },
+  { href: '/tesoreria/cajas', label: 'Cajas y categorías', module: 'Caja / Cobranza', areas: ['contabilidad', 'administracion'] },
+  // Importar pagos (Efecty) es un cargue masivo de corresponsal: aplica cientos de
+  // pagos de golpe y dispara reconexiones. Queda en administración (2026-07-29).
+  { href: '/tesoreria/importar-pagos', label: 'Importar pagos (Efecty)', module: 'Caja / Cobranza', areas: ['administracion'] },
 
   { href: '/contabilidad', label: 'Resumen contable', module: 'Contabilidad', areas: ['contabilidad'] },
   { href: '/contabilidad/plan-de-cuentas', label: 'Plan de cuentas', module: 'Contabilidad', areas: ['contabilidad'] },
@@ -431,29 +432,68 @@ export const SCREENS: ScreenDef[] = [
   { href: '/playhub', label: 'PlayHub / IPTV', module: 'Clientes', areas: ['administracion'] },
 
   { href: '/soporte', label: 'Tickets / Órdenes de trabajo', module: 'Soporte', areas: ['tecnicos', 'caja'] },
+  // Agendamiento (2026-07-31): la cajera reparte el día entre los técnicos y fija el
+  // orden de las visitas. NO es del técnico — él sigue la agenda, no la arma —, y el
+  // servicio se lo vuelve a negar por API (`AgendaService.mover`).
+  { href: '/soporte/agenda', label: 'Agendamiento de órdenes', module: 'Soporte', areas: ['caja', 'administracion'] },
+  // La otra cara de lo mismo: lo que el técnico VE de la agenda que le armaron.
+  // Pantalla propia y no un bloque dentro de /soporte, para que sea su landing.
+  { href: '/mi-agenda', label: 'Mi agenda (técnico)', module: 'Soporte', areas: ['tecnicos'] },
 
-  { href: '/red/conexiones', label: 'Conexiones', module: 'Red / ISP', areas: ['tecnicos'] },
-  { href: '/red/transferencias', label: 'Transferencias', module: 'Red / ISP', areas: ['tecnicos'] },
-  { href: '/red/equipos', label: 'Administrar equipos', module: 'Red / ISP', areas: ['tecnicos'] },
-  { href: '/red/equipos/nuevo', label: 'Ingreso de equipo', module: 'Red / ISP', areas: ['tecnicos'] },
-  { href: '/red/bodegas', label: 'Bodega de equipos', module: 'Red / ISP', areas: ['tecnicos'] },
-  { href: '/red', label: 'Red / ISP (resumen)', module: 'Red / ISP', areas: ['tecnicos'] },
-  { href: '/red/onus', label: 'ONUs', module: 'Red / ISP', areas: ['tecnicos'] },
+  // RED / ISP y MIKROTIK salieron del perfil del técnico (2026-07-31, decisión del
+  // usuario): ni en el sidebar ni por URL. Pasan a administración, que es donde ya
+  // viven los equipos y las transferencias, y donde están las personas que de verdad
+  // operan la OLT y los routers (todas tienen esa área además de la técnica).
+  // El bloqueo por API lo hace `network/modulo-red.guard.ts`: quitar la llave de
+  // pantalla no cierra `/api/network/*`, que está abierto por ÁREA y el técnico
+  // sigue siendo del área técnica por su soporte y su inventario.
+  { href: '/red/conexiones', label: 'Conexiones', module: 'Red / ISP', areas: ['administracion'] },
+  // Transferencias de equipos: también de la cajera (2026-07-30). La pantalla ya
+  // estaba pensada para ella —`can('area.caja')` habilita RECIBIR en la sede
+  // destino— pero sin la llave de pantalla no la veía en el menú. Puede solicitar
+  // y recibir; aprobar/despachar sigue siendo del jefe de bodega (inventory.admin).
+  // El técnico salió de estas tres (2026-07-31, decisión del usuario): en INVENTARIO
+  // sólo ve lo suyo —sus equipos y su bodega de material—, y administrar el parque,
+  // dar de alta equipo y armar transferencias es de bodega/administración. La ruta
+  // sigue siendo del área técnica porque el jefe de bodega y la cajera trabajan ahí.
+  // Pasan a administración para no dejarlas huérfanas (sólo las tenía el área
+  // técnica): son el inventario de equipos de la empresa, que es justo la sección
+  // INVENTARIO. El jefe de bodega ya las alcanza por `@OrPermission(inventory.admin)`.
+  { href: '/red/transferencias', label: 'Transferencias', module: 'Red / ISP', areas: ['administracion', 'caja'] },
+  { href: '/red/equipos', label: 'Administrar equipos', module: 'Red / ISP', areas: ['administracion'] },
+  { href: '/red/equipos/nuevo', label: 'Ingreso de equipo', module: 'Red / ISP', areas: ['administracion'] },
+  // "Bodega de equipos" SÍ se le deja, pero al técnico le muestra únicamente los
+  // equipos que están a su nombre (ver `NetworkWriteService.equipmentWarehouses`).
+  { href: '/red/bodegas', label: 'Bodega de equipos', module: 'Red / ISP', areas: ['tecnicos', 'administracion'] },
+  { href: '/red', label: 'Red / ISP (resumen)', module: 'Red / ISP', areas: ['administracion'] },
+  { href: '/red/onus', label: 'ONUs', module: 'Red / ISP', areas: ['administracion'] },
   // Faltaban en el catálogo pese a estar en el nav: sin llave de pantalla, `can()`
   // solo las concedía a system.admin, así que un técnico no las veía en el menú.
-  { href: '/red/naps', label: 'Cajas NAP', module: 'Red / ISP', areas: ['tecnicos'] },
-  { href: '/red/olt', label: 'Gestión OLT', module: 'Red / ISP', areas: ['tecnicos'] },
-  { href: '/red/genieacs', label: 'GenieACS · TR-069', module: 'Red / ISP', areas: ['tecnicos'] },
+  { href: '/red/naps', label: 'Cajas NAP', module: 'Red / ISP', areas: ['administracion'] },
+  { href: '/red/olt', label: 'Gestión OLT', module: 'Red / ISP', areas: ['administracion'] },
+  { href: '/red/genieacs', label: 'GenieACS · TR-069', module: 'Red / ISP', areas: ['administracion'] },
 
   // MIKROTIK — módulo propio (2026-07-15). `/mikrotik/masivo` es el antiguo
   // `/red/masivo`: su llave se renombra en BD conservando las concesiones.
-  { href: '/mikrotik', label: 'Gestión de routers', module: 'Mikrotik', areas: ['tecnicos'] },
-  { href: '/mikrotik/masivo', label: 'Operaciones masivas', module: 'Mikrotik', areas: ['tecnicos'] },
-  { href: '/mikrotik/ips', label: 'IPs de usuarios', module: 'Mikrotik', areas: ['tecnicos'] },
+  { href: '/mikrotik', label: 'Gestión de routers', module: 'Mikrotik', areas: ['administracion'] },
+  { href: '/mikrotik/masivo', label: 'Operaciones masivas', module: 'Mikrotik', areas: ['administracion'] },
+  { href: '/mikrotik/ips', label: 'IPs de usuarios', module: 'Mikrotik', areas: ['administracion'] },
 
   { href: '/inventario', label: 'Material', module: 'Inventario / Compras', areas: ['administracion'] },
-  { href: '/inventario/traspasos', label: 'Traspasos', module: 'Inventario / Compras', areas: ['administracion'] },
-  { href: '/ordenes', label: 'Órdenes de compra', module: 'Inventario / Compras', areas: ['administracion', 'caja'] },
+  // Lo ÚNICO que la cajera hace en inventario (decisión 2026-07-29): entregarle
+  // material a un técnico. Un traspaso al "Almacén <técnico>" ES esa entrega —cada
+  // técnico tiene su bodega (`MaterialWarehouse.technicianRef`)— y el acta queda
+  // firmada cuando él la recibe. No ve el catálogo de material, ni bodegas, ni
+  // categorías: sólo mueve lo que ya existe.
+  { href: '/inventario/traspasos', label: 'Traspasos', module: 'Inventario / Compras', areas: ['administracion', 'caja'] },
+  // "Bodegas de material" faltaba en el catálogo pese a llevar tiempo en el menú: sin
+  // llave de pantalla sólo la veía el superusuario. Se le da al técnico porque es SU
+  // bodega la que abre —el backend le devuelve una sola, la suya
+  // (`InventoryService.warehouses`)— y a administración, que es la dueña del módulo.
+  { href: '/inventario/bodegas', label: 'Bodegas de material', module: 'Inventario / Compras', areas: ['administracion', 'tecnicos'] },
+  // COMPRAS fuera del perfil de caja (2026-07-29): quien recauda no ordena compras.
+  { href: '/ordenes', label: 'Órdenes de compra', module: 'Inventario / Compras', areas: ['administracion'] },
+  { href: '/ordenes/historial', label: 'Historial de órdenes', module: 'Inventario / Compras', areas: ['administracion'] },
   { href: '/proveedores', label: 'Proveedores', module: 'Inventario / Compras', areas: ['administracion'] },
   { href: '/devoluciones', label: 'Devoluciones', module: 'Inventario / Compras', areas: ['administracion'] },
 
@@ -462,10 +502,16 @@ export const SCREENS: ScreenDef[] = [
   { href: '/agenda', label: 'Agenda / Tareas', module: 'Personas y Proyectos', areas: ['administracion', 'caja'] },
   { href: '/tareas', label: 'Tareas / Pendientes', module: 'Personas y Proyectos', areas: ['administracion', 'gerencia', 'tecnicos', 'caja'] },
 
+  // WHATSAPP — bandeja de atención (módulo propio, 2026-07-29). La configuración del
+  // canal (plantillas, masivos, API, bot) se queda en Sistemas: son dos oficios
+  // distintos y no tienen por qué ir juntos.
+  { href: '/whatsapp', label: 'Bandeja de WhatsApp (chats)', module: 'WhatsApp', areas: ['administracion', 'caja', 'sistemas'] },
+
   { href: '/configuracion', label: 'Configuración', module: 'Sistemas', areas: ['sistemas'] },
   { href: '/configuracion/planes', label: 'Planes de servicio', module: 'Sistemas', areas: ['sistemas'] },
   { href: '/configuracion/api', label: 'API pública', module: 'Sistemas', areas: ['sistemas'] },
   { href: '/configuracion/usuarios', label: 'Usuarios y roles', module: 'Sistemas', areas: ['sistemas'] },
+  { href: '/configuracion/responsables', label: 'Encargados por cargo', module: 'Sistemas', areas: ['sistemas'] },
   { href: '/configuracion/whatsapp', label: 'Mensajería / WhatsApp', module: 'Sistemas', areas: ['sistemas'] },
   { href: '/configuracion/chatbot', label: 'Agente de WhatsApp (bot)', module: 'Sistemas', areas: ['sistemas'] },
   { href: '/configuracion/automatizaciones', label: 'Automatizaciones', module: 'Sistemas', areas: ['sistemas'] },
@@ -496,7 +542,7 @@ export const ALL_PERMISSIONS: { key: string; label: string; group: string }[] = 
 ];
 
 /** Áreas para AGRUPAR los roles en la UI (orden de presentación). */
-export const ROLE_AREAS = ['Áreas Vestel', 'Administración', 'Inventario', 'Recursos Humanos', 'Contabilidad', 'SST'] as const;
+export const ROLE_AREAS = ['Áreas Vestel', 'Administración', 'Inventario', 'Recursos Humanos', 'Contabilidad'] as const;
 export type RoleArea = (typeof ROLE_AREAS)[number];
 
 export interface RoleDef {
@@ -527,14 +573,15 @@ export const ALL_ROLES: RoleDef[] = [
     name: 'Gerencia',
     description: 'Visión ejecutiva: panel de indicadores y reportes',
     area: 'Áreas Vestel',
-    permissions: [A.AREA_GERENCIA, A.DASHBOARD_VIEW, ...screensForArea('gerencia')],
+    // Gerencia aprueba órdenes de compra (en el legacy estaba quemado a un usuario).
+    permissions: [A.AREA_GERENCIA, A.DASHBOARD_VIEW, A.PURCHASES_APPROVE, ...screensForArea('gerencia')],
   },
   {
     key: 'area-administracion',
     name: 'Administración',
     description: 'Clientes, inventario, compras, empleados y proyectos',
     area: 'Áreas Vestel',
-    permissions: [A.AREA_ADMINISTRACION, A.DASHBOARD_VIEW, A.HR_EMPLOYEES_READ, ...screensForArea('administracion')],
+    permissions: [A.AREA_ADMINISTRACION, A.DASHBOARD_VIEW, A.HR_EMPLOYEES_READ, A.WHATSAPP_INBOX, ...screensForArea('administracion')],
   },
   {
     key: 'area-contabilidad',
@@ -563,21 +610,23 @@ export const ALL_ROLES: RoleDef[] = [
     description: 'Configuración, usuarios y roles, WhatsApp y dispositivos',
     area: 'Áreas Vestel',
     permissions: [
-      A.AREA_SISTEMAS, A.USERS_MANAGE, A.WHATSAPP_MANAGE, A.CRON_RUN,
+      A.AREA_SISTEMAS, A.USERS_MANAGE, A.WHATSAPP_MANAGE, A.WHATSAPP_INBOX, A.CRON_RUN,
       A.NETWORK_ROUTERS_MANAGE, A.NETWORK_OLT_MANAGE,
       ...screensForArea('sistemas'),
     ],
   },
   {
-    // Cajera (legacy "Caja y ventas", roleid=3). Rol acotado a la operación de
-    // caja: apertura/cierre/movimientos + facturación + notas + clientes +
-    // tickets + órdenes + agenda. NO ve e-factura, ni config, ni el resto del
-    // sistema. Su sección propia en el sidebar se gatea con `area.caja`.
+    // Cajera (legacy "Caja y ventas", roleid=3). Rol acotado a la operación de SU
+    // caja: apertura/cierre, ingresos, egresos, nueva transacción y transferencia,
+    // + clientes, tickets, agenda y la entrega de material a técnicos (traspasos).
+    // NO ve facturación (ni notas), ni la vista transversal de movimientos, ni el
+    // cargue de Efecty, ni compras, ni e-factura, ni config. Su sección propia en
+    // el sidebar se gatea con `area.caja`.
     key: 'area-caja',
     name: 'Caja y ventas',
-    description: 'Cajera: apertura/cierre de caja, movimientos, facturación, notas, clientes, tickets y órdenes',
+    description: 'Cajera: apertura/cierre de su caja, ingresos, egresos, transferencias, entrega de material a técnicos, transferencias de equipos, clientes y tickets',
     area: 'Áreas Vestel',
-    permissions: [A.AREA_CAJA, A.ACCOUNTING_VIEW, ...screensForArea('caja')],
+    permissions: [A.AREA_CAJA, A.ACCOUNTING_VIEW, A.WHATSAPP_INBOX, ...screensForArea('caja')],
   },
   {
     key: 'auditor',
@@ -593,7 +642,13 @@ export const ALL_ROLES: RoleDef[] = [
   ...DEFAULT_ROLES.map((r): RoleDef => ({
     ...r,
     area: 'Inventario',
-    permissions: [A.DASHBOARD_VIEW, ...r.permissions],
+    permissions: [
+      A.DASHBOARD_VIEW, ...r.permissions,
+      // El Jefe de bodega es, desde 2026-07-30, el ÚNICO que puede mandar equipo de
+      // una sede a otra: sin esta pantalla no podría armar esa transferencia. (Su
+      // 403 histórico en las rutas gateadas por área lo resuelve `@OrPermission`.)
+      ...(r.key === 'warehouse-manager' ? [screenKey('/red/transferencias')] : []),
+    ],
   })),
   // ---- Recursos Humanos / Nómina ----
   {
@@ -603,14 +658,6 @@ export const ALL_ROLES: RoleDef[] = [
     area: 'Recursos Humanos',
     permissions: [A.DASHBOARD_VIEW, A.HR_EMPLOYEES_READ, A.HR_EMPLOYEES_WRITE, A.HR_ACCESS_MANAGE],
   },
-  {
-    key: 'hr-assistant',
-    name: 'Asistente de Recursos Humanos',
-    description: 'Crea y administra fichas y documentos de empleados, sin poder otorgar acceso ni roles',
-    area: 'Recursos Humanos',
-    permissions: [A.DASHBOARD_VIEW, A.HR_EMPLOYEES_READ, A.HR_EMPLOYEES_WRITE],
-  },
-  ...PAYROLL_ROLES.map((r): RoleDef => ({ ...r, area: 'Recursos Humanos' })),
   // ---- Contabilidad ----
   {
     key: 'accountant',
@@ -625,8 +672,6 @@ export const ALL_ROLES: RoleDef[] = [
       PR.PAYSLIPS_READ, PR.PAYSLIPS_WRITE, PR.REPORTS_READ, PR.INTEGRATIONS_MANAGE,
     ],
   },
-  // ---- SST ----
-  ...SST_ROLES.map((r): RoleDef => ({ ...r, area: 'SST' })),
 ];
 
 /** Lookup rápido key → área (para anexar el grupo a los roles de la BD). */

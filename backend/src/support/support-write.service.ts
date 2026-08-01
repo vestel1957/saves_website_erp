@@ -1,14 +1,24 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Type } from 'class-transformer';
-import { IsArray, IsIn, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
+import { IsArray, IsDateString, IsIn, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
 import { Prisma, TicketStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { MikrotikService } from '../network/mikrotik.service';
 import { parsePoint } from '../geo/geo.util';
 import { GeofenceService, type ResultadoCerca } from './geofence.service';
+import { ResponsibilityNotifierService } from '../responsibilities/responsibility-notifier.service';
+import {
+  TICKET_ASIGNADO_EVENT, TICKET_RESUELTO_EVENT,
+  type TicketAsignadoEvent, type TicketResueltoEvent,
+} from './support.events';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { CARGO_TECNICO } from '../staff/cargos-legacy';
+import { esTecnicoDeCampo } from '../common/tecnico-scope';
+import { AgendaService } from './agenda.service';
+import { ETIQUETA_CLASE, esClaseOrden, resolverClase } from './order-types';
 
 /** Carpeta de firmas PNG dibujadas de las órdenes. */
 const SIGNATURE_ROOT = join(process.cwd(), 'uploads', 'signatures');
@@ -17,12 +27,24 @@ export const TICKET_PRIORITIES = ['Baja', 'Media', 'Alta', 'Urgente'] as const;
 
 export class CreateTicketDto {
   @IsString() subscriberId!: string;
-  @IsString() @MinLength(1) subject!: string;
+  /**
+   * La CLASE de orden: servicio / reclamo / incidente (`tickets.subject` del
+   * legacy). Es opcional porque el chatbot manda aquí una frase descriptiva desde
+   * antes de que esto fuera un catálogo; `resolverClase` la endereza y el texto no
+   * se pierde (ver `createTicket`).
+   */
+  @IsOptional() @IsString() subject?: string;
   @IsString() @MinLength(1) type!: string; // detalle
   @IsOptional() @IsString() problem?: string;
   @IsOptional() @IsString() section?: string;
   @IsOptional() @IsString() assigned?: string;
   @IsOptional() @IsIn(TICKET_PRIORITIES) priority?: string;
+  /**
+   * Día para el que se agenda (YYYY-MM-DD). Sin esto la orden nace sin agendar, que
+   * es lo normal: la cajera reparte después desde el tablero. Exige técnico, porque
+   * la agenda es la cola de UNA persona.
+   */
+  @IsOptional() @IsDateString() scheduledFor?: string;
 }
 export class PriorityDto {
   @IsIn(TICKET_PRIORITIES) priority!: string;
@@ -89,15 +111,45 @@ export class SupportWriteService {
     private readonly prisma: PrismaService,
     private readonly mikrotik: MikrotikService,
     private readonly geofence: GeofenceService,
+    private readonly porCargo: ResponsibilityNotifierService,
+    private readonly events: EventEmitter2,
+    private readonly agenda: AgendaService,
   ) {}
 
-  /** Técnicos disponibles (Staff operativos). */
+  /**
+   * Técnicos disponibles (Staff operativos).
+   *
+   * El cargo de técnico es el 2, no el 3 — ver `staff/cargos-legacy.ts`. Estaba
+   * puesto el 3 (que son las cajeras) por el mapa de etiquetas que estuvo cambiado.
+   * No alteraba la lista de puro milagro: `areaLegacy in (2,3,4)` ya cubre a los del
+   * área Operativa, así que la condición equivocada no sumaba a nadie. Se corrige
+   * igual, porque el día que alguien confíe en ese `role` se lleva la sorpresa.
+   */
   async technicians() {
     const rows = await this.prisma.staff.findMany({
-      where: { banned: false, OR: [{ role: 3 }, { areaLegacy: { in: [2, 3, 4] } }] },
-      orderBy: { name: 'asc' }, select: { id: true, legacyId: true, name: true, username: true },
+      where: { banned: false, OR: [{ role: CARGO_TECNICO }, { areaLegacy: { in: [2, 3, 4] } }] },
+      orderBy: { name: 'asc' }, select: { id: true, legacyId: true, name: true },
     });
-    return rows.map((r) => ({ id: r.id, legacyId: r.legacyId, name: r.name, username: r.username }));
+    return rows.map((r) => ({ id: r.id, legacyId: r.legacyId, name: r.name }));
+  }
+
+  /**
+   * Traduce el texto de `assigned` al `Staff` real, para poder medir rendimiento
+   * por técnico sin agrupar por un string libre.
+   *
+   * La UI manda el NOMBRE del técnico, pero las órdenes viejas del legacy traen su
+   * nombre de usuario ('OmarTec'), así que se busca por ambos. Si no cruza, se
+   * devuelve null y la orden queda con el texto pero sin atribuir: preferible a
+   * colgársela al técnico equivocado.
+   */
+  private async resolverStaff(assigned?: string | null): Promise<string | null> {
+    const a = assigned?.trim();
+    if (!a) return null;
+    const s = await this.prisma.staff.findFirst({
+      where: { OR: [{ username: { equals: a, mode: 'insensitive' } }, { name: { equals: a, mode: 'insensitive' } }] },
+      select: { id: true },
+    });
+    return s?.id ?? null;
   }
 
   private async nextCode(tx: Prisma.TransactionClient): Promise<number> {
@@ -107,19 +159,119 @@ export class SupportWriteService {
 
   /** Crear orden de servicio. */
   async createTicket(dto: CreateTicketDto, user: AuthUser) {
+    // El técnico de campo ATIENDE órdenes, no las abre (2026-07-31, decisión del
+    // usuario): quien las genera es quien recibe al cliente —caja, administración o
+    // el chatbot—, y así el trabajo entra por un solo sitio y con quién lo pidió.
+    if (esTecnicoDeCampo(user)) {
+      throw new ForbiddenException('No puedes crear órdenes de trabajo. Tú atiendes las que te asignan.');
+    }
     const sub = await this.prisma.subscriber.findUnique({ where: { id: dto.subscriberId }, select: { id: true } });
     if (!sub) throw new NotFoundException('Cliente no encontrado');
-    return this.prisma.$transaction(async (tx) => {
+    const asignadoA = dto.assigned?.trim() || null;
+    const assignedStaffId = await this.resolverStaff(asignadoA);
+
+    // `subject` es la CLASE de la orden, no un titular libre: el legacy solo escribe
+    // ahí servicio/reclamo/incidente y los reportes agrupan por eso.
+    const clase = resolverClase(dto.subject, dto.type);
+    // Si venía prosa (el chatbot manda "Re-visita: el cliente reporta…"), no se tira:
+    // se guarda arriba de la observación, que es donde se lee el contexto.
+    const prosa = dto.subject?.trim() && !esClaseOrden(dto.subject) ? dto.subject.trim() : null;
+    const observacion = [prosa, dto.section?.trim() || null].filter(Boolean).join('\n') || null;
+
+    if (dto.scheduledFor && !assignedStaffId) {
+      throw new BadRequestException('Para agendar la orden hay que decir qué técnico la atiende.');
+    }
+    const creada = await this.prisma.$transaction(async (tx) => {
       const code = await this.nextCode(tx);
       const t = await tx.ticket.create({
         data: {
-          code, subject: dto.subject, type: dto.type, created: dateOnly(), subscriberId: sub.id,
+          code, subject: clase, type: dto.type, created: dateOnly(), subscriberId: sub.id,
           col: user.name || user.email, status: 'PENDIENTE', priority: dto.priority ?? 'Media', problem: dto.problem ?? null,
-          section: dto.section ?? null, assigned: dto.assigned ?? null,
+          section: observacion, assigned: asignadoA,
+          // Solo se sella la hora si nace asignada; si no, la sella `assign()`.
+          assignedStaffId, assignedAt: asignadoA ? new Date() : null,
         },
       });
       return { id: t.id, code: t.code };
     });
+
+    // Una orden que nace SIN técnico es la que se pierde: nadie la siente suya y se
+    // queda en la lista hasta que un cliente vuelve a llamar. Se le avisa al encargado
+    // de soporte, que es quien reparte. Si nace asignada no se avisa a nadie: ya tiene
+    // dueño, y avisar por algo que alguien acaba de hacer a conciencia es sólo ruido.
+    if (!asignadoA) {
+      await this.porCargo.notifyPost('soporte-tecnico', {
+        kind: 'soporte.orden_sin_asignar',
+        title: `Orden #${creada.code} sin técnico asignado`,
+        body: `${ETIQUETA_CLASE[clase]} · ${dto.type}${dto.priority && dto.priority !== 'Media' ? ` · prioridad ${dto.priority}` : ''}`,
+        link: `/soporte/${creada.id}`,
+        groupKey: `ticket:${creada.id}`,
+      });
+    }
+
+    // Agendar es un paso aparte y a propósito: lo hace `AgendaService.mover`, que es
+    // quien sabe renumerar la cola del técnico. Duplicar esa lógica aquí era la forma
+    // segura de que las dos se desincronizaran.
+    if (dto.scheduledFor) {
+      await this.agenda.mover(user, { ticketId: creada.id, staffId: assignedStaffId, fecha: dto.scheduledFor });
+    }
+
+    return creada;
+  }
+
+  /**
+   * Orden de servicio SIN abonado, para quien todavía no es cliente.
+   *
+   * La pide el chatbot cuando un número desconocido quiere una afiliación, pregunta
+   * por cobertura o pone una PQR (ver TramitesToolset). Antes eso solo podía acabar en
+   * la bandeja de WhatsApp como un chat más: si nadie lo leía ese día se perdía, y no
+   * quedaba nada estructurado que revisar después.
+   *
+   * Va aparte de `createTicket` y no como un parámetro opcional suyo a propósito:
+   * `createTicket` exige un abonado que existe y ese chequeo es justamente lo que
+   * protege al resto del ERP de órdenes colgadas de la nada. `Ticket.subscriberId` es
+   * nullable en el esquema, así que la fila es perfectamente válida; lo que no hay es
+   * cascada al cerrarla (`applyCloseCascade` necesita un abonado), que es lo correcto:
+   * no hay servicio que activar hasta que la venta se concrete y el cliente exista.
+   */
+  async createLeadTicket(input: {
+    subject: string;
+    type: string;
+    problem?: string;
+    section?: string;
+    priority?: string;
+    /** Cargo al que se avisa. Sin él, a quien reparte lo que llega sin dueño. */
+    post?: string;
+    actor: AuthUser;
+  }) {
+    const creada = await this.prisma.$transaction(async (tx) => {
+      const code = await this.nextCode(tx);
+      const t = await tx.ticket.create({
+        data: {
+          code,
+          subject: input.subject,
+          type: input.type,
+          created: dateOnly(),
+          subscriberId: null,
+          col: input.actor.name || input.actor.email,
+          status: 'PENDIENTE',
+          priority: input.priority ?? 'Media',
+          problem: input.problem ?? null,
+          section: input.section ?? null,
+        },
+      });
+      return { id: t.id, code: t.code };
+    });
+
+    await this.porCargo.notifyPost(input.post ?? 'call-center', {
+      kind: 'soporte.solicitud_sin_cliente',
+      title: `${input.subject} — #${creada.code}`,
+      body: `${input.type}${input.problem ? ` · ${input.problem}` : ''}`,
+      link: `/soporte/${creada.id}`,
+      groupKey: `ticket:${creada.id}`,
+    });
+
+    return creada;
   }
 
   async updateStatus(id: string, dto: UpdateStatusDto, user?: AuthUser, ip?: string | null) {
@@ -147,6 +299,9 @@ export class SupportWriteService {
     const data: Prisma.TicketUpdateInput = { status: dto.status };
     if (dto.status === 'RESUELTO') {
       data.finalDate = dto.finalDate ? dateOnly(dto.finalDate) : dateOnly();
+      // Con hora, y siempre "ahora": `finalDate` acepta una fecha que escribe el
+      // usuario y por eso no sirve para medir. Este sello es del sistema.
+      data.resolvedAt = new Date();
       if (cerca) Object.assign(data, cerca.datos);
     }
     await this.prisma.ticket.update({ where: { id }, data });
@@ -158,6 +313,17 @@ export class SupportWriteService {
     let cascade: any = {};
     if (dto.status === 'RESUELTO' && t.subscriberId) {
       cascade = await this.applyCloseCascade({ subscriberId: t.subscriberId, type: t.type }, user);
+    }
+
+    // Aviso para quien quiera reaccionar al cierre. Hoy lo escucha el chatbot, que le
+    // pregunta al cliente si de verdad le quedó funcionando (ver
+    // TicketConfirmacionService). Va por evento y no por llamada directa porque
+    // soporte no conoce —ni debe conocer— el canal de WhatsApp.
+    if (dto.status === 'RESUELTO') {
+      this.events.emit(TICKET_RESUELTO_EVENT, {
+        ticketId: id, code: t.code, type: t.type,
+        subscriberId: t.subscriberId, abiertaPor: t.col,
+      } satisfies TicketResueltoEvent);
     }
     return { id, status: dto.status, cascade };
   }
@@ -333,7 +499,28 @@ export class SupportWriteService {
   async assign(id: string, dto: AssignDto) {
     const t = await this.prisma.ticket.findUnique({ where: { id } });
     if (!t) throw new NotFoundException('Orden no encontrada');
-    await this.prisma.ticket.update({ where: { id }, data: { assigned: dto.assigned ?? null } });
+    const assignedStaffId = await this.resolverStaff(dto.assigned);
+    // `assignedAt` es el arranque del reloj del técnico. Se vuelve a sellar en
+    // cada reasignación: el tiempo que la orden estuvo en manos de otro no es
+    // deuda de quien la recibe ahora. Al desasignar se limpia, para no dejar un
+    // reloj corriendo contra nadie.
+    await this.prisma.ticket.update({
+      where: { id },
+      data: {
+        assigned: dto.assigned ?? null,
+        assignedStaffId,
+        assignedAt: dto.assigned?.trim() ? new Date() : null,
+      },
+    });
+
+    // Solo cuando se ASIGNA (no al desasignar): es lo que se le puede contar al
+    // cliente, que su caso ya tiene un técnico con nombre.
+    if (dto.assigned?.trim()) {
+      this.events.emit(TICKET_ASIGNADO_EVENT, {
+        ticketId: id, code: t.code, type: t.type, subscriberId: t.subscriberId,
+        tecnico: dto.assigned.trim(), abiertaPor: t.col,
+      } satisfies TicketAsignadoEvent);
+    }
     return { id, assigned: dto.assigned ?? null };
   }
 

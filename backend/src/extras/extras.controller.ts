@@ -29,8 +29,8 @@ export class ExtrasController {
 
   // --- PlayHub ---
   @Get('playhub')
-  playhub(@Query('search') search?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string) {
-    return this.extras.playhub({ search, page: Number(page), pageSize: Number(pageSize) });
+  playhub(@Query('search') search?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string, @Query('sortBy') sortBy?: string, @Query('sortDir') sortDir?: string) {
+    return this.extras.playhub({ search, page: Number(page), pageSize: Number(pageSize), sortBy, sortDir });
   }
 
   // --- Mensajería ---

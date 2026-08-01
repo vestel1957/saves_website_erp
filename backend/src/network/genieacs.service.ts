@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { GenieacsNbi, NbiDevice, NbiError, nbiHttpMessage } from './genieacs/genieacs-nbi.client';
+import { OltService } from './olt.service';
 import { encryptSecret, decryptSecret, isEncrypted } from '../common/secret-box';
 
 /**
@@ -41,10 +42,16 @@ const suspended = !!(tag.value && tag.value[0]);
 declare("${TV_PARAM}", {value: now}, {value: !suspended});
 `;
 export const TV_PRESET_NAME = 'tv-suspension';
-/** Precondición: sólo CPEs que exponen el parámetro CATV (evita faults en el parque xPON sin TV). */
+/**
+ * Precondición POR TAG, no por parámetro. ⚠️ NUNCA usar `$exists` aquí: esta
+ * versión de GenieACS no lo soporta y la excepción tumba el worker CWMP en cada
+ * inform → crash-loop → ACS caído para TODO el parque (pasó el 2026-07-23,
+ * ~17 min sin informs). Con el tag, el provision corre sólo en los CPEs
+ * suspendidos y jamás toca (ni enciende) la TV de los demás.
+ */
 export const TV_PRESET = {
   weight: 0,
-  precondition: JSON.stringify({ [`${TV_PARAM}._value`]: { $exists: true } }),
+  precondition: JSON.stringify({ _tags: TV_TAG }),
   configurations: [{ type: 'provision', name: TV_PROVISION_NAME, args: [] as any[] }],
 };
 
@@ -71,6 +78,13 @@ export interface CpeRow {
   alive: boolean;
   tvSuspended: boolean;
   tags: string[];
+  /** ONUs que NO hablan TR-069 (no existen en el ACS): vienen del inventario de
+   *  la OLT y su corte de TV va por OMCI. El front las enruta al modal de OLT. */
+  source?: 'olt';
+  oltId?: string;
+  oltName?: string;
+  fsp?: string;
+  runState?: string | null;
 }
 
 @Injectable()
@@ -79,7 +93,10 @@ export class GenieacsService {
   private live = process.env.GENIEACS_LIVE === 'true';
   private liveCheckedAt = 0;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly olt: OltService,
+  ) {}
 
   get isLive(): boolean {
     return this.live;
@@ -284,10 +301,54 @@ export class GenieacsService {
     const pageSize = Math.min(200, Math.max(1, Number(params.pageSize) || 50));
     const rows = items.map((d) => this.toRow(d));
     rows.sort(this.rowComparator(params.sortBy, params.sortDir));
+
+    // Al buscar, sumar las ONUs del inventario de la OLT que NO están en el ACS
+    // (gestión OMCI, sin TR-069): de otro modo son invisibles aquí y su TV sí se
+    // corta (por la OLT). Van al frente de la página 1 — son hits de la búsqueda.
+    const oltExtras = search ? await this.oltOnuMatches(search, all) : [];
     return {
-      items: rows.slice((page - 1) * pageSize, page * pageSize),
-      total, page, pageSize, pages: Math.ceil(total / pageSize),
+      items: page === 1 ? [...oltExtras, ...rows.slice(0, pageSize)] : rows.slice((page - 1) * pageSize, page * pageSize),
+      total: total + oltExtras.length, page, pageSize, pages: Math.ceil(total / pageSize) || (oltExtras.length ? 1 : 0),
     };
+  }
+
+  /** ONUs de la OLT que matchean la búsqueda y NO existen en el ACS (dedupe por serial). */
+  private async oltOnuMatches(search: string, acsDevices: NbiDevice[]): Promise<CpeRow[]> {
+    try {
+      const onus = await this.prisma.oltOnu.findMany({
+        where: {
+          sn: { not: null },
+          OR: [
+            { sn: { contains: search, mode: 'insensitive' } },
+            { description: { contains: search, mode: 'insensitive' } },
+            { clientName: { contains: search, mode: 'insensitive' } },
+          ],
+        },
+        include: { olt: { select: { id: true, name: true } }, subscriber: { select: { fullName: true, pppUsername: true } } },
+        take: 20,
+      });
+      if (!onus.length) return [];
+      const enAcs = new Set(acsDevices.map((d) => (d.serial || '').toUpperCase()).filter(Boolean));
+      return onus
+        .filter((o) => !enAcs.has((o.sn || '').toUpperCase()))
+        .map((o) => ({
+          id: `olt:${o.oltId}:${o.sn}`,
+          manufacturer: 'Sin TR-069',
+          model: 'ONU por OLT',
+          serial: o.sn,
+          pppUser: o.subscriber?.pppUsername ?? o.clientName ?? o.description ?? null,
+          wanIp: null, lastInform: null, daysSince: null,
+          alive: (o.runState || '').toLowerCase() === 'online',
+          tvSuspended: false, tags: [],
+          source: 'olt' as const,
+          oltId: o.oltId, oltName: o.olt?.name ?? undefined,
+          fsp: o.slot !== null && o.port !== null ? `${o.frame}/${o.slot}/${o.port}${o.ontId !== null ? ':' + o.ontId : ''}` : undefined,
+          runState: o.runState,
+        }));
+    } catch (e) {
+      this.logger.warn(`No se pudo consultar el inventario OLT para la búsqueda: ${(e as Error).message}`);
+      return [];
+    }
   }
 
   /** IPv4 a entero para ordenar por IP como número y no como texto ("10." < "9."). */
@@ -430,5 +491,115 @@ export class GenieacsService {
     const ok = pOk && prOk;
     await this.audit('INSTALL_PROVISION', s, ok, false, `Instalar provision=${pOk} preset=${prOk}`, { user });
     return { ok, dryRun: false, provision: pOk, preset: prOk };
+  }
+
+  // ------------------------------------------------------------------ //
+  //  Corte de TV MASIVO POR ABONADO (dos vías: TR-069 u OLT/OMCI)      //
+  // ------------------------------------------------------------------ //
+
+  /**
+   * Corta/restaura la TV de una lista de ABONADOS resolviendo el equipo de cada
+   * uno por la vía que le corresponda:
+   *  - CPE en el ACS (casado por usuario PPPoE / ConnectionRequestUsername) →
+   *    TR-069: tag + parámetro CATV, en un solo lote.
+   *  - ONU OMCI vinculada al abonado en OltOnu → puerto CATV por la OLT.
+   *  - Sin equipo identificable → se reporta, no se inventa nada.
+   * Cada vía respeta su propio gate LIVE y deja su propia auditoría.
+   */
+  async tvBatchBySubscribers(subscriberIds: string[], enable: boolean, user?: AuthUser) {
+    const ids = [...new Set((subscriberIds || []).filter(Boolean))];
+    if (!ids.length) throw new BadRequestException('No se indicaron clientes.');
+
+    const subs = await this.prisma.subscriber.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, abonado: true, fullName: true, pppUsername: true },
+    });
+    const s = await this.resolveServer(undefined);
+    const devices = await this.devicesOf(s);
+    const byUser = new Map<string, NbiDevice>();
+    for (const d of devices) {
+      const u = (d.pppUser || '').trim().toUpperCase();
+      if (u && !byUser.has(u)) byUser.set(u, d);
+    }
+    const onus = await this.prisma.oltOnu.findMany({
+      where: { subscriberId: { in: ids }, sn: { not: null } },
+      select: { subscriberId: true, sn: true, oltId: true },
+    });
+    const onuBySub = new Map(onus.map((o) => [o.subscriberId as string, o]));
+
+    type Sub = (typeof subs)[number];
+    const acsTargets: { sub: Sub; device: NbiDevice }[] = [];
+    const oltTargets: { sub: Sub; sn: string; oltId: string }[] = [];
+    const results: Array<{
+      subscriberId: string; abonado?: number; name?: string | null;
+      via: 'TR069' | 'OLT' | null; ok: boolean; dryRun?: boolean; detail: string;
+    }> = [];
+
+    for (const sub of subs) {
+      const dev = sub.pppUsername ? byUser.get(sub.pppUsername.trim().toUpperCase()) : undefined;
+      if (dev) { acsTargets.push({ sub, device: dev }); continue; }
+      const onu = onuBySub.get(sub.id);
+      if (onu?.sn && onu.oltId) { oltTargets.push({ sub, sn: onu.sn, oltId: onu.oltId }); continue; }
+      results.push({
+        subscriberId: sub.id, abonado: sub.abonado, name: sub.fullName, via: null, ok: false,
+        detail: 'Sin equipo identificado: ni CPE en el ACS (usuario PPPoE) ni ONU vinculada en la OLT.',
+      });
+    }
+    const encontrados = new Set(subs.map((x) => x.id));
+    for (const id of ids) {
+      if (!encontrados.has(id)) results.push({ subscriberId: id, via: null, ok: false, detail: 'Cliente no encontrado.' });
+    }
+
+    // Vía TR-069: un solo lote (cutTv/restoreTv auditan y respetan el gate del ACS).
+    if (acsTargets.length) {
+      const r = await (enable
+        ? this.restoreTv(acsTargets.map((t) => t.device.id), user)
+        : this.cutTv(acsTargets.map((t) => t.device.id), user));
+      const errIds = new Set((r as any).errors?.map((e: string) => e.split(':')[0]) ?? []);
+      for (const t of acsTargets) {
+        const falló = !r.dryRun && (!(r as any).ok && errIds.has(t.device.id));
+        results.push({
+          subscriberId: t.sub.id, abonado: t.sub.abonado, name: t.sub.fullName, via: 'TR069',
+          ok: !falló, dryRun: !!r.dryRun,
+          detail: r.dryRun ? 'DRY-RUN (ACS): plan sin aplicar.' : falló ? 'El ACS no pudo aplicar el cambio.' : (enable ? 'TV restaurada por TR-069.' : 'TV cortada por TR-069.'),
+        });
+      }
+    }
+
+    // Vía OLT/OMCI: una a una (cada setCatv audita y confirma releyendo el puerto).
+    for (const t of oltTargets) {
+      try {
+        const r = await this.olt.setCatv(t.oltId, { sn: t.sn, enable }, user);
+        results.push({
+          subscriberId: t.sub.id, abonado: t.sub.abonado, name: t.sub.fullName, via: 'OLT',
+          ok: !!r.ok, dryRun: !!r.dryRun,
+          detail: r.dryRun ? 'DRY-RUN (OLT): plan sin aplicar.' : (r as any).message ?? (r as any).error ?? '',
+        });
+      } catch (e) {
+        results.push({ subscriberId: t.sub.id, abonado: t.sub.abonado, name: t.sub.fullName, via: 'OLT', ok: false, detail: (e as Error).message });
+      }
+    }
+
+    // La foto por servicio en BD sigue a los equipos. Sin esto el corte de TV no
+    // deja rastro en la ficha del abonado (que no cambia de estado: se le corta la
+    // TV, no el internet) y la reconexión automática al pagar no tendría cómo saber
+    // que a ese cliente hay que devolverle la señal. En dry-run no se marca nada:
+    // no se tocó ningún equipo.
+    const aplicados = results.filter((r) => r.ok && r.via && !r.dryRun).map((r) => r.subscriberId);
+    if (aplicados.length) {
+      await this.prisma.subscriberService
+        .updateMany({
+          where: { subscriberId: { in: aplicados }, kind: { in: ['TV', 'PUNTOS'] } },
+          data: { status: enable ? 'ACTIVO' : 'CORTADO' },
+        })
+        .catch((e) => this.logger.warn(`No se pudo marcar el estado del servicio de TV: ${e.message}`));
+    }
+
+    const done = results.filter((r) => r.ok && r.via).length;
+    const failed = results.filter((r) => !r.ok && r.via).length;
+    const sinEquipo = results.filter((r) => !r.via).length;
+    const dryRun = results.some((r) => r.dryRun);
+    this.logger.log(`TV MASIVO por abonado (${enable ? 'ALTA' : 'CORTE'}): ${ids.length} pedidos → TR069=${acsTargets.length} OLT=${oltTargets.length} sinEquipo=${sinEquipo} · ok=${done} fallidos=${failed}${dryRun ? ' (dry-run)' : ''}`);
+    return { ok: failed === 0, dryRun, total: ids.length, done, failed, sinEquipo, results };
   }
 }

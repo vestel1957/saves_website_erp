@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { orden } from '../pagination-params';
 
 export interface AuditRecord {
   userId?: string;
@@ -23,7 +24,13 @@ export class AuditService {
   constructor(private readonly prisma: PrismaService) {}
 
   /** Lista paginada de la bitácora (para el visor en Sistemas). */
-  async list(params: { search?: string; entity?: string; userId?: string; from?: string; to?: string; page?: number; pageSize?: number }) {
+  /** Columnas ordenables del registro de actividad. */
+  private static readonly ORDEN_LISTA = {
+    createdAt: 'createdAt', userName: 'user.name', action: 'action',
+    entity: 'entity', ipAddress: 'ipAddress',
+  };
+
+  async list(params: { search?: string; entity?: string; userId?: string; from?: string; to?: string; page?: number; pageSize?: number; sortBy?: string; sortDir?: string }) {
     const page = Math.max(1, Number(params.page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(params.pageSize) || 30));
     const where: Prisma.AuditLogWhereInput = {};
@@ -37,7 +44,7 @@ export class AuditService {
     }
     const [rows, total] = await Promise.all([
       this.prisma.auditLog.findMany({
-        where, orderBy: { createdAt: 'desc' }, skip: (page - 1) * pageSize, take: pageSize,
+        where, orderBy: orden(params, AuditService.ORDEN_LISTA, { createdAt: 'desc' }), skip: (page - 1) * pageSize, take: pageSize,
         include: { user: { select: { name: true, email: true } } },
       }),
       this.prisma.auditLog.count({ where }),

@@ -4,8 +4,11 @@ import { PERMISSION_DENIED } from '@s4gk/wa-agent';
 import { APP_PERMISSIONS as P } from '../../auth/permissions.catalog';
 import { TreasuryService } from '../../treasury/treasury.service';
 import { CobranzasService } from '../../treasury/cobranzas.service';
+import { ChatbotDocsService, enviarDoc } from '../chatbot-docs.service';
 import { authUserOf } from '../chatbot.identity';
-import { canAny, cop, fecha, gated, safe } from './toolset.util';
+import {
+  canAny, cop, DOCUMENTO_DENEGADO, fecha, gated, HERRAMIENTAS_DOCUMENTOS, puedeDocumentos, safe,
+} from './toolset.util';
 
 /** Mismo gate que el controller de tesorería: quién puede CONSULTAR la caja. */
 const CAJA = [P.AREA_CAJA, P.AREA_CONTABILIDAD, P.AREA_ADMINISTRACION];
@@ -36,6 +39,7 @@ export class InternoCajaToolset implements Toolset {
   constructor(
     private readonly treasury: TreasuryService,
     private readonly cobranzas: CobranzasService,
+    private readonly docs: ChatbotDocsService,
   ) {}
 
   definitions(ctx: ToolContext): ToolDef[] {
@@ -67,9 +71,25 @@ export class InternoCajaToolset implements Toolset {
       },
       {
         name: 'cierres_caja',
-        description: 'Últimos cierres de caja registrados.',
+        description: 'Últimos cierres de caja registrados, con su id (necesario para pedir el comprobante).',
         input_schema: { type: 'object', properties: {} },
       },
+      ]),
+      ...gated(canAny(ctx, CAJA) && puedeDocumentos(ctx), [
+      {
+        name: 'enviar_pdf_cierre_caja',
+        description:
+          'Genera el comprobante de cierre de caja en PDF y lo adjunta A ESTE CHAT: el arqueo del cajón y ' +
+          'los resúmenes del informe (cobranza, bancos, formas de pago, servicios, anulaciones y egresos), ' +
+          'con los movimientos del día. Es el mismo comprobante que se imprime desde Tesorería.',
+        input_schema: {
+          type: 'object',
+          properties: { id: { type: 'string', description: 'id del cierre (de cierres_caja)' } },
+          required: ['id'],
+        },
+      },
+      ]),
+      ...gated(canAny(ctx, CAJA), [
       {
         name: 'cuentas_caja',
         description: 'Cuentas de caja/banco disponibles, con su id (necesario para registrar un ingreso).',
@@ -94,33 +114,59 @@ export class InternoCajaToolset implements Toolset {
           required: ['monto', 'categoria', 'metodo'],
         },
       },
+      {
+        name: 'registrar_egreso',
+        description:
+          'Registra un EGRESO (salida de dinero) en tesorería: un gasto, un pago a un tercero. ' +
+          'No paga órdenes de compra ni toca la cartera de ningún cliente. Requiere confirmación.',
+        input_schema: {
+          type: 'object',
+          properties: {
+            monto: { type: 'number', description: 'Valor en pesos (mínimo 1)' },
+            categoria: { type: 'string', description: 'Categoría del gasto' },
+            metodo: { type: 'string', description: 'Método de pago, ej. Cash, Bank' },
+            cashAccountId: { type: 'number', description: 'id de la cuenta de caja (de cuentas_caja)' },
+            beneficiario: { type: 'string', description: 'A quién se le paga' },
+            nota: { type: 'string' },
+          },
+          required: ['monto', 'categoria', 'metodo'],
+        },
+      },
       ]),
     ];
   }
 
   async execute(name: string, input: Record<string, unknown>, ctx: ToolContext): Promise<string> {
     if (!canAny(ctx, CAJA)) return PERMISSION_DENIED;
+    // Segunda barrera de los documentos: declararlos solo a administración evita que
+    // el modelo los ofrezca, pero no que los invoque si se inventa el nombre.
+    if (HERRAMIENTAS_DOCUMENTOS.has(name) && !puedeDocumentos(ctx)) return DOCUMENTO_DENEGADO;
 
     switch (name) {
       case 'caja_del_dia':
-        return safe(() => this.resumen(input));
+        return safe(() => this.resumen(input, ctx));
       case 'movimientos_caja':
         return safe(() => this.movimientos(input, ctx));
       case 'cierres_caja':
         return safe(() => this.cierres(ctx));
+      case 'enviar_pdf_cierre_caja':
+        return safe(() => this.enviarCierre(String(input.id ?? ''), ctx));
       case 'cuentas_caja':
         return safe(() => this.cuentas());
       case 'registrar_ingreso':
         return safe(() => this.ingreso(input, ctx));
+      case 'registrar_egreso':
+        return safe(() => this.egreso(input, ctx));
       default:
         return `Herramienta no disponible: ${name}`;
     }
   }
 
-  private async resumen(input: Record<string, unknown>): Promise<string> {
+  private async resumen(input: Record<string, unknown>, ctx: ToolContext): Promise<string> {
     const desde = input.desde ? String(input.desde) : hoy();
     const hasta = input.hasta ? String(input.hasta) : hoy();
-    const s = await this.treasury.stats({ from: desde, to: hasta });
+    // Con el usuario del chat: a la cajera le cuadra con SU caja, no con la empresa.
+    const s = await this.treasury.stats({ from: desde, to: hasta }, authUserOf(ctx.user));
     return [
       `Tesorería ${desde === hasta ? `del ${fecha(desde)}` : `de ${fecha(desde)} a ${fecha(hasta)}`}:`,
       `• Ingresos: ${cop(s.ingresos)} (${s.nIngresos} movimiento(s))`,
@@ -154,8 +200,18 @@ export class InternoCajaToolset implements Toolset {
     const res: any = await this.treasury.cashCloses({ pageSize: 5 } as any, authUserOf(ctx.user));
     if (!res.items?.length) return 'No hay cierres de caja registrados.';
     return res.items
-      .map((c: any) => `• ${fecha(c.date)} · ${c.cashAccountName ?? c.accountName ?? 'caja'} · ${cop(c.total ?? c.amount)}`)
+      .map((c: any) => `• ${fecha(c.date)} · ${c.cashAccountName ?? c.accountName ?? 'caja'} · ${cop(c.total ?? c.amount)}` +
+        `\n  id: ${c.id}`)
       .join('\n');
+  }
+
+  /**
+   * Comprobante del cierre, al chat de la cajera. Va con su AuthUser: `cashClosePdfData`
+   * exige acceso a esa caja, así que pedirlo por WhatsApp no salta el acotado.
+   */
+  private async enviarCierre(id: string, ctx: ToolContext): Promise<string> {
+    if (!id) return 'Indica el id del cierre (míralo con cierres_caja).';
+    return enviarDoc(ctx, await this.docs.cierreCaja(id, authUserOf(ctx.user)));
   }
 
   private async cuentas(): Promise<string> {
@@ -196,6 +252,52 @@ export class InternoCajaToolset implements Toolset {
         monto, categoria, metodo,
         cashAccountId: input.cashAccountId ? Number(input.cashAccountId) : undefined,
         pagador: input.pagador ? String(input.pagador) : undefined,
+        nota: input.nota ? String(input.nota) : undefined,
+      },
+    });
+  }
+
+  /**
+   * Egreso: el simétrico del ingreso. Misma mecánica de confirmación —el motor
+   * pregunta con el resumen literal antes de tocar nada— porque también es plata,
+   * solo que saliendo.
+   *
+   * A diferencia del ingreso, ligar un cliente aquí NO le mueve la cartera (el
+   * egreso nace `ext: true`), así que ni se ofrece: por chat se registra el gasto
+   * con su beneficiario y punto.
+   */
+  private async egreso(input: Record<string, unknown>, ctx: ToolContext): Promise<string> {
+    const monto = Number(input.monto);
+    const categoria = String(input.categoria ?? '').trim();
+    const metodo = String(input.metodo ?? '').trim();
+
+    if (ctx.committing) {
+      const r: any = await this.cobranzas.createExpense(
+        {
+          amount: monto, category: categoria, method: metodo,
+          cashAccountId: input.cashAccountId ? Number(input.cashAccountId) : undefined,
+          payerName: input.beneficiario ? String(input.beneficiario) : undefined,
+          note: input.nota ? String(input.nota) : undefined,
+        } as any,
+        authUserOf(ctx.user),
+      );
+      await ctx.audit({
+        userId: ctx.user.id, action: 'treasury.expense.create',
+        summary: `Egreso de ${cop(monto)} por WhatsApp`, detail: { categoria, metodo, id: r?.id },
+      });
+      return `Listo: egreso de ${cop(monto)} registrado en ${categoria}.`;
+    }
+
+    if (!(monto >= 1)) return 'El monto debe ser mayor o igual a 1.';
+    if (!categoria || !metodo) return 'Necesito la categoría y el método de pago del egreso.';
+    return ctx.preparePending({
+      summary: `Registrar un EGRESO de ${cop(monto)} en "${categoria}" (${metodo})` +
+        `${input.beneficiario ? ` a favor de ${input.beneficiario}` : ''}.`,
+      permission: P.AREA_CAJA,
+      commitInput: {
+        monto, categoria, metodo,
+        cashAccountId: input.cashAccountId ? Number(input.cashAccountId) : undefined,
+        beneficiario: input.beneficiario ? String(input.beneficiario) : undefined,
         nota: input.nota ? String(input.nota) : undefined,
       },
     });

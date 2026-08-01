@@ -12,16 +12,16 @@ import { CurrentUser, AuthUser } from '../auth/current-user.decorator';
 export class OmniController {
   constructor(private readonly omni: OmniService) {}
 
-  @Get('events') events(@Query('from') from?: string, @Query('to') to?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string) {
-    return this.omni.events({ from, to, page: Number(page), pageSize: Number(pageSize) });
+  @Get('events') events(@Query('from') from?: string, @Query('to') to?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string, @Query('sortBy') sortBy?: string, @Query('sortDir') sortDir?: string) {
+    return this.omni.events({ from, to, page: Number(page), pageSize: Number(pageSize), sortBy, sortDir });
   }
   @Get('events/stats') eventsStats() { return this.omni.eventsStats(); }
   @Post('events') createEvent(@Body() dto: EventDto, @CurrentUser() user: AuthUser) { return this.omni.createEvent(dto, user); }
   @Patch('events/:id') updateEvent(@Param('id') id: string, @Body() dto: UpdateEventDto) { return this.omni.updateEvent(id, dto); }
   @Delete('events/:id') deleteEvent(@Param('id') id: string) { return this.omni.deleteEvent(id); }
 
-  @Get('quotes') quotes(@Query('search') search?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string) {
-    return this.omni.quotes({ search, page: Number(page), pageSize: Number(pageSize) });
+  @Get('quotes') quotes(@Query('search') search?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string, @Query('sortBy') sortBy?: string, @Query('sortDir') sortDir?: string) {
+    return this.omni.quotes({ search, page: Number(page), pageSize: Number(pageSize), sortBy, sortDir });
   }
   @Post('quotes') createQuote(@Body() dto: CreateQuoteDto, @CurrentUser() user: AuthUser) { return this.omni.createQuote(dto, user); }
   @Get('quotes/:id') quoteDetail(@Param('id') id: string) { return this.omni.quoteDetail(id); }

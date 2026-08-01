@@ -8,9 +8,33 @@ export const CHATBOT_BUDGET_KEY = 'chatbot.dailyTokenBudget';
 /** Cache del total del día: se consulta en CADA mensaje y cambia poco. */
 const TTL_MS = 30_000;
 
-const dayUtc = () => {
-  const n = new Date();
-  return new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate()));
+/** La misma zona que usan los cron y los PDF: el negocio entero vive en hora Colombia. */
+const TZ = 'America/Bogota';
+
+/**
+ * El "día" del contador, en hora de COLOMBIA (no en UTC).
+ *
+ * Antes esto era `Date.UTC(...)` sobre la fecha UTC, y el tope diario se reiniciaba a
+ * medianoche UTC — que en Colombia son las 7 PM. Consecuencias reales, vistas el
+ * 2026-07-29: la ventana "del día" iba de 7 PM a 7 PM, partiendo la jornada de
+ * atención por la mitad, así que a las 6:38 PM el cupo ya estaba al 98% y el bot se
+ * quedaba mudo justo en las horas de más tráfico. Es el mismo desfase que se corrigió
+ * en los cron (`cron.service.ts`), que este archivo se había quedado sin heredar.
+ *
+ * Se sigue devolviendo la medianoche UTC de esa fecha civil: la columna `day` es la
+ * mitad de la clave única `[day, model]` y las filas históricas ya están escritas así,
+ * de modo que solo cambia QUÉ fecha se elige, no cómo se guarda.
+ */
+const dayCo = () => {
+  // `formatToParts` en vez de partir un string con formato dependiente del locale.
+  const partes = new Intl.DateTimeFormat('en-US', {
+    timeZone: TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const parte = (tipo: string) => Number(partes.find((p) => p.type === tipo)?.value);
+  return new Date(Date.UTC(parte('year'), parte('month') - 1, parte('day')));
 };
 
 /**
@@ -22,8 +46,11 @@ const dayUtc = () => {
  * factura sin que nadie se entere hasta que llega.
  *
  * El tope es un freno de emergencia, no una cuota fina: al superarlo el bot se apaga
- * solo hasta el día siguiente y deja el canal como si estuviera apagado —el mensaje se
- * registra y lo atiende una persona—, que es exactamente lo que hace el interruptor.
+ * solo hasta el día siguiente. Pero NO se queda callado: el gate escala la conversación
+ * a una persona y le avisa al cliente (ver `ChatbotGateService.shouldHandle`). Callarse
+ * a secas era peor que no tener bot — el cliente se quedaba hablando solo, sin
+ * respuesta ni chulito de leído, y nadie en la empresa se enteraba de que había alguien
+ * esperando.
  */
 @Injectable()
 export class ChatbotUsageService {
@@ -58,7 +85,7 @@ export class ChatbotUsageService {
   }
 
   private async record(model: string, input: number, output: number) {
-    const day = dayUtc();
+    const day = dayCo();
     await this.prisma.chatbotUsage.upsert({
       where: { day_model: { day, model } },
       create: { day, model, inputTokens: input, outputTokens: output, requests: 1 },
@@ -76,7 +103,7 @@ export class ChatbotUsageService {
     if (this.cache && Date.now() - this.cache.at < TTL_MS) return this.cache;
     const [agg, setting] = await Promise.all([
       this.prisma.chatbotUsage.aggregate({
-        where: { day: dayUtc() },
+        where: { day: dayCo() },
         _sum: { inputTokens: true, outputTokens: true },
       }),
       this.prisma.appSetting.findUnique({ where: { key: CHATBOT_BUDGET_KEY }, select: { value: true } }),

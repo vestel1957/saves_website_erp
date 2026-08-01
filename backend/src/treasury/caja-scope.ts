@@ -1,4 +1,4 @@
-import { ForbiddenException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 
@@ -48,8 +48,15 @@ export function esCajera(user: AuthUser): boolean {
   return p.includes(P_CAJA);
 }
 
+/** Sin límite: lo que se le concede a un proceso interno, que no tiene sede. */
+const SIN_LIMITE: AlcanceCajas = { todas: true, caja: null, sedes: [] };
+
 /** Resuelve qué puede ver este usuario. */
 export async function alcanceDe(prisma: PrismaService, user: AuthUser): Promise<AlcanceCajas> {
+  // Procesos internos (cargue de pagos Efecty, cron) llaman con un "usuario" de
+  // pega que no tiene id: no hay a quién acotar, y preguntarle a Prisma por
+  // `id: undefined` revienta con un error de validación en vez de no acotar nada.
+  if (!user?.id) return SIN_LIMITE;
   const fila = await prisma.user.findUnique({
     where: { id: user.id },
     select: { cajaLegacyId: true, sedesAccede: true },
@@ -109,5 +116,71 @@ export async function exigirAcceso(prisma: PrismaService, user: AuthUser, cajaLe
   });
   if (!puedeVer(a, cajaLegacyId, cuenta?.branchLegacy ?? null)) {
     throw new ForbiddenException('No tienes acceso a esta caja.');
+  }
+}
+
+/**
+ * La caja sobre la que este usuario va a ESCRIBIR, a partir de la que pidió el
+ * cliente. Puerta de ingreso/egreso/recaudo.
+ *
+ * Hasta ahora el acotado era sólo de lectura: la cajera no VEÍA la caja de otra
+ * sede, pero podía meterle un egreso mandando su `cashAccountId` a mano (el
+ * selector de la pantalla venía filtrado, el endpoint no comprobaba nada).
+ *
+ * Reglas:
+ *  - Quien está acotado y no manda caja → se le pone la SUYA. Antes ese
+ *    movimiento nacía sin caja: no salía en su cierre y no lo veía ni ella.
+ *  - Quien está acotado y no tiene caja asignada → 403 con instrucción, no un
+ *    movimiento huérfano.
+ *  - Quien manda una caja → tiene que ser una que pueda ver (403 si no).
+ *  - Quien ve todas puede seguir registrando sin caja (asientos de administración),
+ *    salvo que se pida `propiaSiFalta`: entonces, si tiene caja asignada, se usa la
+ *    suya. Lo pide el recaudo interactivo, donde el selector de caja ya no se le
+ *    enseña a nadie más que al superusuario y el movimiento tiene que caer en la
+ *    caja de quien lo registra, no quedar suelto.
+ */
+export async function exigirCajaDeEscritura(
+  prisma: PrismaService,
+  user: AuthUser,
+  pedida?: number | null,
+  opts?: { propiaSiFalta?: boolean },
+): Promise<number | null> {
+  if (pedida != null) {
+    await exigirAcceso(prisma, user, pedida);
+    return pedida;
+  }
+  const a = await alcanceDe(prisma, user);
+  if (a.todas) return opts?.propiaSiFalta ? a.caja : null;
+  if (a.caja == null) {
+    throw new ForbiddenException('No tienes una caja asignada; pídesela a administración.');
+  }
+  return a.caja;
+}
+
+/**
+ * Exige acceso a la caja del movimiento `id`, o 403. Puerta común de todo lo que
+ * recibe un id de transacción del cliente (ver detalle, adjuntar comprobante,
+ * editar, anular): sin esto una cajera podía tocar el movimiento de otra sede
+ * con sólo tener su id.
+ */
+export async function exigirAccesoAlMovimiento(
+  prisma: PrismaService,
+  user: AuthUser,
+  id: string,
+): Promise<void> {
+  const t = await prisma.transaction.findUnique({
+    where: { id },
+    select: { cashAccountId: true },
+  });
+  if (!t) throw new NotFoundException('Movimiento no encontrado');
+  if (t.cashAccountId != null) {
+    await exigirAcceso(prisma, user, t.cashAccountId);
+    return;
+  }
+  // Sin caja no hay nada contra lo que contrastar: se lo negamos a quien esté
+  // acotado y se lo permitimos a quien ve todas. Hoy no hay filas así, pero el
+  // schema lo permite y el lado seguro es no enseñar dinero ajeno.
+  if ((await cajasPermitidas(prisma, user)) !== null) {
+    throw new ForbiddenException('No tienes acceso a este movimiento.');
   }
 }

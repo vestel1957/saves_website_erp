@@ -42,6 +42,10 @@ export class TemplateDto {
 
   @IsOptional() @IsBoolean()
   active?: boolean;
+
+  /** true = además de guardarla local, crearla en Meta (queda PENDING de aprobación). */
+  @IsOptional() @IsBoolean()
+  submitToMeta?: boolean;
 }
 
 /** Filtro simple de destinatarios (cuando no se pasan ids explícitos). */

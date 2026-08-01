@@ -46,12 +46,15 @@ const prisma = new PrismaClient({ datasources: { db: { url } } });
 // Las integraciones externas quedan fuera: aquí sólo se mide la carrera sobre el dinero.
 const posting = { postCustomerPayment: async () => null, postTreasuryIncome: async () => null };
 const mikrotik = { reconnect: async () => null };
+// El emisor de eventos tampoco entra al humo: aquí sólo se mide la carrera sobre el dinero.
+const eventos = { emit: () => true };
 
 async function main() {
   const svc = new CobranzasService(
     prisma as never,
     posting as never,
     mikrotik as never,
+    eventos as never,
   );
   const user = {
     id: 'u-test', name: 'Smoke', email: 'smoke@test',

@@ -9,7 +9,9 @@ import { randomUUID } from 'node:crypto';
 import type { Response } from 'express';
 import { TreasuryService } from './treasury.service';
 import { cashClosePdf, receiptPdf } from '../common/pdf/pdf-docs';
+import { reciboRolloPdf } from '../common/pdf/recibo-rollo';
 import { CobranzasService } from './cobranzas.service';
+import { EjecutarPagoFijoDto, PagoFijoDto, PagosFijosService, UpdatePagoFijoDto } from './pagos-fijos.service';
 import {
   CashAccountDto, CashCloseDto, CashOpenDto, CollectDto, EditTxDto, ExpenseDto,
   IncomeDto, TransferDto, TxCategoryDto, VoidTxDto,
@@ -32,11 +34,56 @@ export class TreasuryController {
   constructor(
     private readonly treasury: TreasuryService,
     private readonly cobranzas: CobranzasService,
+    private readonly pagosFijos: PagosFijosService,
   ) {}
 
+  // ── Pagos fijos programados (2026-07-31) ──────────────────────────────────
+  // Contabilidad DEFINE el pago (qué, cuánto, de qué caja, qué día); la cajera de
+  // esa caja REGISTRA la ejecución (egreso en efectivo que cae a su cierre, con
+  // comprobante adjunto en la transacción).
+  @Get('scheduled-payments')
+  pagosFijosList(@CurrentUser() user: AuthUser) {
+    return this.pagosFijos.list(user);
+  }
+
+  @Get('scheduled-payments/:id/runs')
+  pagosFijosRuns(@Param('id') id: string) {
+    return this.pagosFijos.runs(id);
+  }
+
+  @Post('scheduled-payments')
+  @RequireArea('contabilidad')
+  pagosFijosCreate(@Body() dto: PagoFijoDto, @CurrentUser() user: AuthUser) {
+    return this.pagosFijos.create(dto, user);
+  }
+
+  @Patch('scheduled-payments/:id')
+  @RequireArea('contabilidad')
+  pagosFijosUpdate(@Param('id') id: string, @Body() dto: UpdatePagoFijoDto) {
+    return this.pagosFijos.update(id, dto);
+  }
+
+  @Delete('scheduled-payments/:id')
+  @RequireArea('contabilidad')
+  pagosFijosRemove(@Param('id') id: string) {
+    return this.pagosFijos.remove(id);
+  }
+
+  /** Registrar la ejecución del pago (la cajera, sobre su caja). */
+  @Post('scheduled-payments/:id/execute')
+  pagosFijosEjecutar(@Param('id') id: string, @Body() dto: EjecutarPagoFijoDto, @CurrentUser() user: AuthUser) {
+    return this.pagosFijos.ejecutar(id, dto, user);
+  }
+
   @Get('stats')
-  stats(@Query('from') from?: string, @Query('to') to?: string, @Query('all') all?: string) {
-    return this.treasury.stats({ from, to, all });
+  stats(
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('all') all?: string,
+    @CurrentUser() user?: AuthUser,
+  ) {
+    // Con usuario: acotado a sus cajas, igual que el listado que resume.
+    return this.treasury.stats({ from, to, all }, user);
   }
 
   @Get('categories')
@@ -112,6 +159,20 @@ export class TreasuryController {
     return this.treasury.cashCloseReport(Number(cashAccountId), date, user);
   }
 
+  /**
+   * Serie diaria de una caja (ingresos/egresos/pagos por día) terminando en `date`.
+   * Es la tendencia que pinta el panel de la cajera.
+   */
+  @Get('cash-daily')
+  cashDaily(
+    @Query('cashAccountId') cashAccountId: string,
+    @Query('date') date: string,
+    @Query('days') days: string | undefined,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.treasury.cashDaily(Number(cashAccountId), date, Number(days ?? 14), user);
+  }
+
   /** PDF del cierre de caja (arqueo). */
   @Get('cash-closes/:id/pdf')
   async cashClosePdf(@Param('id') id: string, @Res() res: Response, @CurrentUser() user?: AuthUser) {
@@ -121,13 +182,32 @@ export class TreasuryController {
     cashClosePdf(res, d);
   }
 
-  /** PDF del recibo de caja (comprobante de pago). */
+  /**
+   * PDF del recibo de caja (comprobante de pago).
+   *
+   * Por defecto sale en ROLLO de 80 mm, que es lo que imprime la caja y lo que hacía
+   * el legacy (mPDF con `format => [80, 250]`). `?formato=carta` devuelve la versión
+   * en hoja completa, para archivar o mandar por correo.
+   *
+   * El cajero que se estampa es QUIEN IMPRIME, igual que el legacy: el recibo no
+   * guarda quién recaudó, y firmarlo con otro nombre sería peor que no firmarlo.
+   */
   @Get('receipts/:id/pdf')
-  async receiptPdf(@Param('id') id: string, @Res() res: Response) {
+  async receiptPdf(
+    @Param('id') id: string,
+    @Res() res: Response,
+    @Query('formato') formato?: string,
+    @CurrentUser() user?: AuthUser,
+  ) {
     const d = await this.treasury.receiptPdfData(id);
+    d.cashier = user?.name ?? null;
+    d.cashierRole = user?.roles?.[0] ?? null;
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="recibo-${d.number}.pdf"`);
-    receiptPdf(res, d);
+    // En hoja el bloque de totales dice "Total recibido": ahí va lo abonado, no el
+    // "Cantidad total" del rollo (que es lo abonado + lo que sigue debiendo).
+    if (formato === 'carta') receiptPdf(res, { ...d, total: d.paid });
+    else reciboRolloPdf(res, d);
   }
 
   @Get('transactions')
@@ -142,12 +222,14 @@ export class TreasuryController {
     @Query('cashAccountId') cashAccountId?: string,
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
+    @Query('sortBy') sortBy?: string,
+    @Query('sortDir') sortDir?: string,
     @CurrentUser() user?: AuthUser,
   ) {
     return this.treasury.list({
       search, type, category, status, from, to, all,
       cashAccountId: cashAccountId ? Number(cashAccountId) : undefined,
-      page: Number(page), pageSize: Number(pageSize),
+      page: Number(page), pageSize: Number(pageSize), sortBy, sortDir,
     }, user as AuthUser);
   }
 
@@ -249,7 +331,9 @@ export class TreasuryController {
   /** Registrar un recaudo/pago (multipago en cascada + recibo). */
   @Post('collect')
   collect(@Body() dto: CollectDto, @CurrentUser() user: AuthUser) {
-    return this.cobranzas.collect(dto, user);
+    // `cajaPropiaSiFalta`: la pantalla sólo le enseña el selector de caja al
+    // superusuario, así que el resto recauda contra la caja que tenga asignada.
+    return this.cobranzas.collect(dto, user, { cajaPropiaSiFalta: true });
   }
 
   /** Registrar un egreso/gasto de caja. */
@@ -289,20 +373,22 @@ export class TreasuryController {
   }
 
   /** Apertura de caja (base inicial). */
+  /**
+   * Abrir la caja del día. Sin base en el body: la calcula el servidor con el fondo
+   * fijo de la caja + el arrastre del cierre anterior.
+   */
   @Post('cash-open')
   cashOpen(@Body() dto: CashOpenDto, @CurrentUser() user: AuthUser) {
     return this.cobranzas.openCash(dto, user);
   }
 
-  /** Sugerencia de base para abrir: fondo fijo + arrastre del día anterior. */
+  /** Estado de apertura: con cuánto abriría esa caja ese día, y si ya está abierta. */
   @Get('cash-open-suggest')
-  cashOpenSuggest(@Query('cashAccountId') cashAccountId: string, @Query('date') date: string) {
-    return this.cobranzas.cashOpenSuggest(Number(cashAccountId), date);
-  }
-
-  /** Aperturas recientes. */
-  @Get('cash-opens')
-  cashOpens(@Query('page') page?: string, @Query('pageSize') pageSize?: string) {
-    return this.cobranzas.cashOpens({ page: Number(page), pageSize: Number(pageSize) });
+  cashOpenSuggest(
+    @Query('cashAccountId') cashAccountId: string,
+    @Query('date') date: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.cobranzas.cashOpenSuggest(Number(cashAccountId), date, user);
   }
 }

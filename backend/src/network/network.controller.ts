@@ -1,15 +1,18 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, UseGuards } from '@nestjs/common';
-import { IsArray, IsOptional, IsString, ArrayNotEmpty } from 'class-validator';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, Res, UseGuards } from '@nestjs/common';
+import type { Response } from 'express';
+import { IsArray, IsIn, IsOptional, IsString, ArrayNotEmpty } from 'class-validator';
 import { NetworkService } from './network.service';
-import { NetworkWriteService, EquipTransferDto, AssignPortDto, AssignEquipmentSubDto, CreateEquipmentDto, CreateIpPoolDto, CreateNapDto, CreateVlanDto, RejectTransferDto, UpdateIpPoolDto, UpdateNapDto } from './network-write.service';
+import { NetworkWriteService, EquipTransferDto, AssignPortDto, AssignEquipmentSubDto, CreateEquipmentDto, CreateIpPoolDto, CreateNapDto, CreateVlanDto, ReceiveTransferDto, RejectTransferDto, SignTransferDto, UpdateIpPoolDto, UpdateNapDto } from './network-write.service';
 import { MikrotikService } from './mikrotik.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AreaGuard } from '../auth/area.guard';
 import { PermissionsGuard } from '../auth/permissions.guard';
-import { RequireArea } from '../auth/require-area.decorator';
+import { OrPermission, RequireArea } from '../auth/require-area.decorator';
 import { RequirePermissions } from '../auth/require-permissions.decorator';
 import { INV_PERMISSIONS, APP_PERMISSIONS } from '../auth/permissions.catalog';
 import { CurrentUser, AuthUser } from '../auth/current-user.decorator';
+import { actaPdf } from '../common/pdf/pdf-docs';
+import { AbiertoAlTecnico, ModuloRedGuard } from './modulo-red.guard';
 
 class BatchIdsDto {
   @IsArray() @ArrayNotEmpty() @IsString({ each: true }) ids!: string[];
@@ -21,10 +24,14 @@ class MessageBatchDto {
 class RestoreBranchDto {
   @IsOptional() @IsArray() @IsString({ each: true }) statuses?: string[];
 }
+/** Qué firma se está pidiendo: la salida (sede origen) o la entrada (sede destino). */
+class TransferOtpDto {
+  @IsIn(['salida', 'entrada']) paso!: 'salida' | 'entrada';
+}
 
 /** Red / ISP: Mikrotik, OLT/ONU, NAP, equipos (migrado de saves-vestel). */
 @Controller('network')
-@UseGuards(JwtAuthGuard, AreaGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, AreaGuard, PermissionsGuard, ModuloRedGuard)
 @RequireArea('tecnicos', 'administracion')
 export class NetworkController {
   constructor(
@@ -73,11 +80,25 @@ export class NetworkController {
   // --- Escritura: transferencias de equipos y conexiones ---
   // Lectura de transferencias: además de técnicos/administración, la ve caja
   // (para recibir en su sede). Aprobar/despachar y recibir van gateados aparte.
-  @Get('transfers') @RequireArea('tecnicos', 'administracion', 'caja')
-  transfers(@Query('page') page?: string, @Query('pageSize') pageSize?: string, @Query('search') search?: string, @Query('status') status?: string, @Query('warehouseId') warehouseId?: string) { return this.write.transfers({ page: Number(page), pageSize: Number(pageSize), search, status, warehouseId }); }
-  @Get('transfers/:id') @RequireArea('tecnicos', 'administracion', 'caja')
-  transferDetail(@Param('id') id: string) { return this.write.transferDetail(id); }
-  @Post('transfers') createTransfer(@Body() dto: EquipTransferDto, @CurrentUser() user: AuthUser) { return this.write.createTransfer(dto, user); }
+  // El acotado por SEDE lo hace el servicio con el usuario (`bodega-scope.ts`): una
+  // cajera solo ve las transferencias que tocan una bodega de sus sedes.
+  @Get('transfers') @RequireArea('tecnicos', 'administracion', 'caja') @OrPermission(INV_PERMISSIONS.ADMIN)
+  transfers(@CurrentUser() user: AuthUser, @Query('page') page?: string, @Query('pageSize') pageSize?: string, @Query('search') search?: string, @Query('status') status?: string, @Query('warehouseId') warehouseId?: string, @Query('sortBy') sortBy?: string, @Query('sortDir') sortDir?: string) { return this.write.transfers({ page: Number(page), pageSize: Number(pageSize), search, status, warehouseId, sortBy, sortDir }, user); }
+  @Get('transfers/:id') @RequireArea('tecnicos', 'administracion', 'caja') @OrPermission(INV_PERMISSIONS.ADMIN)
+  transferDetail(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.write.transferDetail(id, user); }
+  /** El acta en PDF: la misma que se le manda por WhatsApp a quien debe firmarla. */
+  @Get('transfers/:id/pdf') @RequireArea('tecnicos', 'administracion', 'caja') @OrPermission(INV_PERMISSIONS.ADMIN)
+  async transferPdf(@Param('id') id: string, @Res() res: Response) {
+    const d = await this.write.transferPdfData(id);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="acta-equipos-${d.numero}.pdf"`);
+    actaPdf(res, d);
+  }
+  // Solicitar una transferencia: caja también (2026-07-30), pero solo dentro de SU
+  // sede. Enviar de una sede a otra es del encargado de bodega, y eso lo revalida
+  // `createTransfer` (no se puede expresar con un decorador: depende de las bodegas).
+  @Post('transfers') @RequireArea('tecnicos', 'administracion', 'caja') @OrPermission(INV_PERMISSIONS.ADMIN)
+  createTransfer(@Body() dto: EquipTransferDto, @CurrentUser() user: AuthUser) { return this.write.createTransfer(dto, user); }
   // Aprobar/despachar y rechazar: reservado a inventario (Jefe de bodega,
   // inventory.admin). @RequireArea() vacío desactiva el AreaGuard de clase para
   // que el gateo lo haga PermissionsGuard por permiso (no por área).
@@ -85,25 +106,43 @@ export class NetworkController {
   approveTransfer(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.write.approveTransfer(id, user); }
   @Post('transfers/:id/reject') @RequireArea() @RequirePermissions(INV_PERMISSIONS.ADMIN)
   rejectTransfer(@Param('id') id: string, @Body() dto: RejectTransferDto, @CurrentUser() user: AuthUser) { return this.write.rejectTransfer(id, user, dto.reason); }
-  // Recepción en la sede destino: reservado a caja (área caja).
+  // --- Firma de la transferencia ENTRE SEDES (código al WhatsApp del firmante) ---
+  // Quién puede firmar cada paso lo decide el servicio por la SEDE de la bodega, no
+  // por área: la salida la firma la encargada de la sede origen y la entrada quien
+  // recibe en destino, y las dos son cajeras. Por eso van con `area.caja`.
+  @Post('transfers/:id/otp') @RequireArea() @RequirePermissions(APP_PERMISSIONS.AREA_CAJA)
+  pedirCodigo(@Param('id') id: string, @Body() dto: TransferOtpDto, @CurrentUser() user: AuthUser) {
+    return this.write.pedirCodigoFirma(id, dto.paso, user);
+  }
+  @Post('transfers/:id/sign-out') @RequireArea() @RequirePermissions(APP_PERMISSIONS.AREA_CAJA)
+  firmarSalida(@Param('id') id: string, @Body() dto: SignTransferDto, @CurrentUser() user: AuthUser) {
+    return this.write.firmarSalida(id, dto.code, user);
+  }
+  // Recepción en la sede destino: reservado a caja (área caja). Entre sedes exige el
+  // código; dentro de la sede se recibe con un clic, como siempre.
   @Post('transfers/:id/receive') @RequireArea() @RequirePermissions(APP_PERMISSIONS.AREA_CAJA)
-  receiveTransfer(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.write.receiveTransfer(id, user); }
+  receiveTransfer(@Param('id') id: string, @Body() dto: ReceiveTransferDto, @CurrentUser() user: AuthUser) { return this.write.receiveTransfer(id, user, dto?.code); }
 
   @Get('ports')
-  ports(@Query('search') search?: string, @Query('status') status?: string, @Query('napId') napId?: string, @Query('branchId') branchId?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string) {
-    return this.write.ports({ search, status, napId, branchId, page: Number(page), pageSize: Number(pageSize) });
+  ports(@Query('search') search?: string, @Query('status') status?: string, @Query('napId') napId?: string, @Query('branchId') branchId?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string, @Query('sortBy') sortBy?: string, @Query('sortDir') sortDir?: string) {
+    return this.write.ports({ search, status, napId, branchId, page: Number(page), pageSize: Number(pageSize), sortBy, sortDir });
   }
   @Get('nap-options') napOptions(@Query('branchId') branchId?: string) { return this.write.napOptions(branchId); }
   @Post('ports/:id/assign') assignPort(@Param('id') id: string, @Body() dto: AssignPortDto) { return this.write.assignPort(id, dto); }
   @Post('ports/:id/free') freePort(@Param('id') id: string) { return this.write.freePort(id); }
 
-  @Get('equipment-warehouses') equipmentWarehouses() { return this.write.equipmentWarehouses(); }
+  // Las DOS únicas rutas del módulo de red que le quedan al técnico de campo: su
+  // "bodega" (= él mismo) y los equipos que están a su nombre. Ver `ModuloRedGuard`.
+  @Get('equipment-warehouses') @AbiertoAlTecnico() equipmentWarehouses(@CurrentUser() user?: AuthUser) { return this.write.equipmentWarehouses(user); }
   @Post('equipment') createEquipment(@Body() dto: CreateEquipmentDto, @CurrentUser() user: AuthUser) { return this.write.createEquipment(dto, user); }
 
   @Get('stats') stats() { return this.network.stats(); }
   @Get('mikrotiks') mikrotiks() { return this.network.mikrotiks(); }
   @Get('olts') olts() { return this.network.olts(); }
-  @Get('warehouses') warehouses() { return this.network.warehouses(); }
+  // Caja incluida: es el selector origen/destino del formulario de transferencia.
+  // Va con el usuario porque a la cajera se le sirven SOLO las bodegas de sus sedes.
+  @Get('warehouses') @RequireArea('tecnicos', 'administracion', 'caja') @OrPermission(INV_PERMISSIONS.ADMIN)
+  warehouses(@CurrentUser() user: AuthUser) { return this.network.warehouses(user); }
   @Get('ip-pools') ipPools(@Query('search') search?: string) { return this.network.ipPools({ search }); }
 
   // Escritura de pools de IP. Paridad legacy `Mikrotiks::guardar_configuracion` +
@@ -126,8 +165,8 @@ export class NetworkController {
   }
 
   @Get('naps')
-  naps(@Query('search') search?: string, @Query('branchId') branchId?: string, @Query('sort') sort?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string) {
-    return this.network.naps({ search, branchId, sort, page: Number(page), pageSize: Number(pageSize) });
+  naps(@Query('search') search?: string, @Query('branchId') branchId?: string, @Query('sort') sort?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string, @Query('sortBy') sortBy?: string, @Query('sortDir') sortDir?: string) {
+    return this.network.naps({ search, branchId, sort, page: Number(page), pageSize: Number(pageSize), sortBy, sortDir });
   }
   @Get('naps/:id') napById(@Param('id') id: string) { return this.network.napById(id); }
   @Post('naps') createNap(@Body() dto: CreateNapDto) { return this.write.createNap(dto); }
@@ -149,11 +188,16 @@ export class NetworkController {
     return this.mikrotik.restoreBranch(branchId, { statuses: dto.statuses }, user);
   }
 
-  @Get('equipment')
+  // Caja incluida (2026-07-30): el formulario de transferencia lista los equipos de
+  // la bodega origen para escogerlos. La pantalla /red/equipos sigue siendo de
+  // técnicos; esto es sólo la lectura que necesita el traslado.
+  @Get('equipment') @AbiertoAlTecnico() @RequireArea('tecnicos', 'administracion', 'caja') @OrPermission(INV_PERMISSIONS.ADMIN)
   equipment(
+    @CurrentUser() user: AuthUser,
     @Query('search') search?: string, @Query('status') status?: string, @Query('warehouseId') warehouseId?: string,
     @Query('assigned') assigned?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string,
+    @Query('sortBy') sortBy?: string, @Query('sortDir') sortDir?: string,
   ) {
-    return this.network.equipment({ search, status, warehouseId, assigned, page: Number(page), pageSize: Number(pageSize) });
+    return this.network.equipment({ search, status, warehouseId, assigned, page: Number(page), pageSize: Number(pageSize), sortBy, sortDir }, user);
   }
 }

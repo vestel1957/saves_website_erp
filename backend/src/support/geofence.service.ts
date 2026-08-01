@@ -2,6 +2,7 @@ import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { parsePoint } from '../geo/geo.util';
+import { traductorDeTecnicos } from '../staff/nombre-tecnico';
 import { detectarSenales, normalizarIp, type Senal } from './spoof.policy';
 import {
   TIPOS_DE_CAMPO_POR_DEFECTO,
@@ -256,13 +257,16 @@ export class GeofenceService {
       },
     });
 
+    // Las órdenes guardan al técnico con su username del legacy; aquí sale su nombre.
+    const tr = await traductorDeTecnicos(this.prisma);
+
     return {
       dias,
       modo: await this.modo(),
       radioM: await this.radioM(),
       resumen: { fuera, dentro, sinDato, sospechosos: sospechosos.length },
       sospechosos: sospechosos.map((c) => ({
-        id: c.id, code: c.code, type: c.type, tecnico: c.assigned, fecha: c.finalDate,
+        id: c.id, code: c.code, type: c.type, tecnico: tr.nombre(c.assigned), fecha: c.finalDate,
         senales: c.closeFlags, dentroDeRango: c.closeGeoOk,
         cliente: c.subscriber
           ? { id: c.subscriber.id, abonado: c.subscriber.abonado, nombre: c.subscriber.fullName }
@@ -272,7 +276,7 @@ export class GeofenceService {
         id: c.id,
         code: c.code,
         type: c.type,
-        tecnico: c.assigned,
+        tecnico: tr.nombre(c.assigned),
         fecha: c.finalDate,
         distanciaM: c.closeDistanceM,
         precisionM: c.closeAccuracyM,

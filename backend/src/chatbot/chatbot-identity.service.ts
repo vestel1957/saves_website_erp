@@ -3,7 +3,8 @@ import type { AgentUser } from '@s4gk/wa-agent';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthService } from '../auth/auth.service';
 import { normalizePhone } from '../common/phone.util';
-import { CHAT_CLIENTE_PERMISSION, type ChatIdentity } from './chatbot.identity';
+import { CHAT_CLIENTE_PERMISSION, CHAT_PUBLICO_PERMISSION, type ChatIdentity } from './chatbot.identity';
+import { ChatAccessService } from './chat-access.service';
 
 /** Cuentas basura del legacy: nunca se eligen si hay una viva con el mismo teléfono. */
 const DEAD_STATUS = new Set(['DEPURADO', 'RETIRADO']);
@@ -28,6 +29,7 @@ export class ChatbotIdentityService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auth: AuthService,
+    private readonly access: ChatAccessService,
   ) {}
 
   async resolveUser(phone: string): Promise<AgentUser | null> {
@@ -40,7 +42,74 @@ export class ChatbotIdentityService {
     const cliente = await this.resolveCliente(digits);
     if (cliente) return cliente;
 
-    return this.agentUser(`wa:${digits}`, 'Visitante', [], { kind: 'publico', phone: digits });
+    // Familiar autorizado por el titular (ver SubscriberContact). Va DESPUÉS del
+    // titular a propósito: si el mismo número está en la ficha y además autorizado
+    // en otra cuenta, manda su propia cuenta.
+    const autorizado = await this.resolveAutorizado(digits);
+    if (autorizado) return autorizado;
+
+    // Número que se validó a sí mismo (datos de la factura y, si dio el código del
+    // titular, acceso pleno). Va de último: cualquier vínculo real manda sobre esto.
+    const verificado = await this.resolveVerificado(digits);
+    if (verificado) return verificado;
+
+    // Lleva el permiso sintético del agente público (ver CHAT_PUBLICO_PERMISSION): no
+    // le da acceso a nada, solo le permite CONFIRMAR lo que registra a su nombre
+    // (afiliación, cobertura, PQR).
+    return this.agentUser(`wa:${digits}`, 'Visitante', [CHAT_PUBLICO_PERMISSION], {
+      kind: 'publico',
+      phone: digits,
+    });
+  }
+
+  /**
+   * Número que el titular autorizó a gestionar su cuenta (el hijo, la esposa, quien
+   * paga el arriendo). Solo cuenta el estado ACTIVO: un PENDIENTE es una solicitud
+   * que nadie ha aprobado y no puede ver ni un peso.
+   *
+   * Se comprueba además que la cuenta siga viva: autorizar a un familiar no puede
+   * sobrevivir a la baja del abonado.
+   */
+  private async resolveAutorizado(digits: string): Promise<AgentUser | null> {
+    const c = await this.prisma.subscriberContact
+      .findUnique({
+        where: { phone: digits },
+        select: {
+          status: true, name: true, relation: true,
+          subscriber: {
+            select: {
+              id: true, abonado: true, status: true,
+              fullName: true, firstName: true, lastName1: true, companyName: true,
+            },
+          },
+        },
+      })
+      .catch((e: Error) => {
+        this.logger.warn(`No se pudo buscar el número autorizado: ${e.message}`);
+        return null;
+      });
+
+    if (!c || c.status !== 'ACTIVO') return null;
+    if (DEAD_STATUS.has(c.subscriber.status ?? '')) {
+      this.logger.warn(`El número ${digits} está autorizado en una cuenta ${c.subscriber.status}; se atiende como público.`);
+      return null;
+    }
+
+    const titular =
+      c.subscriber.fullName?.trim() ||
+      [c.subscriber.firstName, c.subscriber.lastName1].filter(Boolean).join(' ').trim() ||
+      c.subscriber.companyName?.trim() ||
+      'el titular';
+
+    // El nombre que ve el agente es el del AUTORIZADO, no el del titular: saludar
+    // "Hola Pedro" a la hija de Pedro es raro y además revela quién es el titular a
+    // quien quizá solo sepa el número de abonado.
+    return this.agentUser(c.subscriber.id, c.name?.trim() || 'Autorizado', [CHAT_CLIENTE_PERMISSION], {
+      kind: 'cliente',
+      subscriberId: c.subscriber.id,
+      abonado: c.subscriber.abonado,
+      autorizado: { nombre: c.name?.trim() || null, relacion: c.relation?.trim() || null, titular },
+    });
   }
 
   /** Funcionario por `User.whatsappPhone`, con sus permisos efectivos del ERP. */
@@ -67,7 +136,8 @@ export class ChatbotIdentityService {
    * producción, ver WhatsappLogService). `contains` puede dar falsos positivos —un
    * last10 puede aparecer dentro de un número más largo—, por eso NO se usa
    * findFirst: se traen los candidatos, se exige que el last10 calce de verdad al
-   * final del número y se prefiere la cuenta viva sobre las depuradas/retiradas.
+   * final del número, y solo se resuelve si el resultado es UNA persona viva e
+   * inequívoca — ambigüedad o solo-muertos degradan al agente público.
    */
   private async resolveCliente(digits: string): Promise<AgentUser | null> {
     const last10 = digits.slice(-10);
@@ -79,10 +149,22 @@ export class ChatbotIdentityService {
     );
     if (!exact.length) return null;
 
-    const chosen = exact.find((r) => !DEAD_STATUS.has(r.status ?? '')) ?? exact[0];
-    if (exact.length > 1) {
-      this.logger.warn(`El teléfono ${last10} apunta a ${exact.length} abonados; se eligió ${chosen.abonado}.`);
+    // Solo cuentas vivas: un DEPURADO/RETIRADO no debe recibir datos de cuenta.
+    // Y si el teléfono apunta a varias personas distintas (hay miles de last-10
+    // duplicados y números reciclados en el legacy), NO se adivina: se atiende
+    // como público antes que arriesgar el saldo/factura de otro (Habeas Data).
+    // Varios registros con la MISMA cédula sí son la misma persona duplicada.
+    const vivos = exact.filter((r) => !DEAD_STATUS.has(r.status ?? ''));
+    if (!vivos.length) {
+      this.logger.warn(`El teléfono ${last10} solo calza con cuentas muertas (${exact.length}); se atiende como público.`);
+      return null;
     }
+    const docs = new Set(vivos.map((r) => r.docNumber?.trim() || `sin-doc:${r.id}`));
+    if (docs.size > 1) {
+      this.logger.warn(`El teléfono ${last10} apunta a ${vivos.length} abonados vivos con identidad distinta; se atiende como público.`);
+      return null;
+    }
+    const chosen = vivos[0];
 
     const name =
       chosen.fullName?.trim() ||
@@ -97,6 +179,29 @@ export class ChatbotIdentityService {
     });
   }
 
+  /**
+   * Número desconocido que pasó la validación de identidad (ver ChatAccessService).
+   * El nivel viaja en la identidad para que el toolset de clientes sepa qué NO
+   * ofrecerle: con acceso básico no se le da el PDF de la factura ni los pagos.
+   */
+  private async resolveVerificado(digits: string): Promise<AgentUser | null> {
+    const v = await this.access.vigente(digits);
+    if (!v?.subscriber) return null;
+
+    const s = v.subscriber;
+    const titular = s.fullName?.trim()
+      || [s.firstName, s.lastName1].filter(Boolean).join(' ').trim()
+      || s.companyName?.trim()
+      || 'el titular';
+
+    return this.agentUser(s.id, titular, [CHAT_CLIENTE_PERMISSION], {
+      kind: 'cliente',
+      subscriberId: s.id,
+      abonado: s.abonado,
+      acceso: v.nivel === 'COMPLETO' ? 'completo' : 'basico',
+    });
+  }
+
   /** Abonados cuyo teléfono contiene esos 10 dígitos. Nunca lanza: sin BD, no hay match. */
   private async candidatos(last10: string) {
     try {
@@ -105,6 +210,7 @@ export class ChatbotIdentityService {
         select: {
           id: true, abonado: true, status: true, phone1: true, phone2: true,
           fullName: true, firstName: true, lastName1: true, companyName: true,
+          docNumber: true,
         },
         take: 10,
       });

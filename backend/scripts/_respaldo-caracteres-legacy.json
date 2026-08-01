@@ -1,0 +1,9053 @@
+[
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 8,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 18,
+  "antes": "CARRE?O",
+  "despues": "CARREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 23,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 30,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 46,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 50,
+  "antes": "CASTA?O",
+  "despues": "CASTAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 76,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 97,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 112,
+  "antes": "NU?ES",
+  "despues": "NUÑES"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 116,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 118,
+  "antes": "MU?OS",
+  "despues": "MUÑOS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 133,
+  "antes": "PE?ALOZA",
+  "despues": "PEÑALOZA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 139,
+  "antes": "BOLA?OS",
+  "despues": "BOLAÑOS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 159,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 170,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 182,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 237,
+  "antes": "LONDO?O",
+  "despues": "LONDOÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 242,
+  "antes": "LONDO?O",
+  "despues": "LONDOÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 269,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 273,
+  "antes": "CA?ON",
+  "despues": "CAÑON"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 279,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 320,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 327,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 338,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 352,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 357,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 368,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 435,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 447,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 455,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 506,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 517,
+  "antes": "FANDI?O",
+  "despues": "FANDIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 537,
+  "antes": "CARRE?O",
+  "despues": "CARREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 550,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 556,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 560,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 563,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 572,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 593,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 608,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 613,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 632,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 637,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 639,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 642,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 662,
+  "antes": "BOLA?OS",
+  "despues": "BOLAÑOS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 670,
+  "antes": "ESTUPI?AN",
+  "despues": "ESTUPIÑAN"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 679,
+  "antes": "CASTA?O",
+  "despues": "CASTAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 684,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 690,
+  "antes": "RUDI?O",
+  "despues": "RUDIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 705,
+  "antes": "CARRE?O",
+  "despues": "CARREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 707,
+  "antes": "ESPA?A",
+  "despues": "ESPAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 714,
+  "antes": "BRICE?O",
+  "despues": "BRICEÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 727,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 730,
+  "antes": "ESPA?A",
+  "despues": "ESPAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 731,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 736,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 748,
+  "antes": "BARE?O",
+  "despues": "BAREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 763,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 765,
+  "antes": "CA?IZALES",
+  "despues": "CAÑIZALES"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 795,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 811,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 814,
+  "antes": "NU?EZ",
+  "despues": "NUÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 817,
+  "antes": "CARRE?O",
+  "despues": "CARREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 822,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 843,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 848,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 850,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 853,
+  "antes": "CARRE?O",
+  "despues": "CARREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 856,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 883,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 886,
+  "antes": "LONDO?O",
+  "despues": "LONDOÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 888,
+  "antes": "BRI?EZ",
+  "despues": "BRIÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 912,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 922,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 923,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 936,
+  "antes": "MARI?O",
+  "despues": "MARIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 956,
+  "antes": "PE?ALOZA",
+  "despues": "PEÑALOZA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 965,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 967,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 981,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 983,
+  "antes": "MU?OS",
+  "despues": "MUÑOS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 985,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 996,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1037,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1038,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1050,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1052,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1073,
+  "antes": "CATA?O",
+  "despues": "CATAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1075,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1110,
+  "antes": "ESTUPI?AN",
+  "despues": "ESTUPIÑAN"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1144,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1146,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1162,
+  "antes": "CARRE?O",
+  "despues": "CARREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1179,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1185,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1190,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1201,
+  "antes": "BOLA?OS",
+  "despues": "BOLAÑOS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1211,
+  "antes": "CASTA?O",
+  "despues": "CASTAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1217,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1222,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1224,
+  "antes": "CARRE?O",
+  "despues": "CARREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1235,
+  "antes": "CARRE?O",
+  "despues": "CARREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1240,
+  "antes": "CA?AVERAL ",
+  "despues": "CAÑAVERAL "
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1282,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1285,
+  "antes": "CATA?O",
+  "despues": "CATAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1287,
+  "antes": "CATA?O",
+  "despues": "CATAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1287,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1298,
+  "antes": "NU?EZ",
+  "despues": "NUÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1307,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1321,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1323,
+  "antes": "BOLA?O",
+  "despues": "BOLAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1336,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1336,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1338,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1342,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1343,
+  "antes": "LONDO?O",
+  "despues": "LONDOÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1366,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1370,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1373,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1384,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1394,
+  "antes": "ESTUPI?AN",
+  "despues": "ESTUPIÑAN"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1395,
+  "antes": "BELE?O",
+  "despues": "BELEÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1398,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1411,
+  "antes": "ORDO?EZ",
+  "despues": "ORDOÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1427,
+  "antes": "CATA?O",
+  "despues": "CATAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1428,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1431,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1440,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1450,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1455,
+  "antes": "ORDO?ES",
+  "despues": "ORDOÑES"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1464,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1475,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1477,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1525,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1527,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1595,
+  "antes": "CARRE?O",
+  "despues": "CARREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1622,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1630,
+  "antes": "ESTUPI?AN",
+  "despues": "ESTUPIÑAN"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1635,
+  "antes": "CA?ON",
+  "despues": "CAÑON"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1635,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1647,
+  "antes": "CARRE?O",
+  "despues": "CARREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1662,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1666,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1683,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1687,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1703,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1707,
+  "antes": "MARI?O",
+  "despues": "MARIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1710,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1714,
+  "antes": "PI?ERO",
+  "despues": "PIÑERO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1723,
+  "antes": "CASTA?O",
+  "despues": "CASTAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1734,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1735,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1738,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1749,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1762,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosnombre",
+  "id": 1767,
+  "antes": "QUI?ONEZ",
+  "despues": "QUIÑONEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1782,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1783,
+  "antes": "ESTUPI?AN",
+  "despues": "ESTUPIÑAN"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1788,
+  "antes": "SALDA?A",
+  "despues": "SALDAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1816,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1817,
+  "antes": "URUE?A",
+  "despues": "URUEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1845,
+  "antes": "NU?EZ",
+  "despues": "NUÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1847,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1870,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1880,
+  "antes": "NU?EZ",
+  "despues": "NUÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1893,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1893,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1906,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1910,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1919,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1938,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1944,
+  "antes": "FANDI?O",
+  "despues": "FANDIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1945,
+  "antes": "PE?ARANDA",
+  "despues": "PEÑARANDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1951,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1958,
+  "antes": "CATA?O",
+  "despues": "CATAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 1966,
+  "antes": "MU?OS",
+  "despues": "MUÑOS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1977,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1984,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 1994,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2002,
+  "antes": "ACU?A",
+  "despues": "ACUÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2015,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2026,
+  "antes": "URUE?A",
+  "despues": "URUEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2051,
+  "antes": "MARI?O",
+  "despues": "MARIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2065,
+  "antes": "CATA?O",
+  "despues": "CATAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2088,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2091,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2092,
+  "antes": "CASTA?O",
+  "despues": "CASTAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2122,
+  "antes": "ACU?A",
+  "despues": "ACUÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2131,
+  "antes": "CATA?O",
+  "despues": "CATAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2133,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2153,
+  "antes": "MARI?O",
+  "despues": "MARIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2161,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2166,
+  "antes": "CATA?O",
+  "despues": "CATAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2191,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2192,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2226,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2232,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2250,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2267,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2278,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2302,
+  "antes": "BARE?O",
+  "despues": "BAREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2306,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2323,
+  "antes": "BOLA?OS",
+  "despues": "BOLAÑOS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2338,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2354,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2355,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2366,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2370,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2382,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2385,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2395,
+  "antes": "MU?OS",
+  "despues": "MUÑOS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2398,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2411,
+  "antes": "CARRE?O",
+  "despues": "CARREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2441,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2444,
+  "antes": "PE?ALOSA",
+  "despues": "PEÑALOSA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2449,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2450,
+  "antes": "UMA?A",
+  "despues": "UMAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2467,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2479,
+  "antes": "CATA?O",
+  "despues": "CATAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2514,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2520,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2535,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2539,
+  "antes": "HERRE?O",
+  "despues": "HERREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2549,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2583,
+  "antes": "HERRE?O",
+  "despues": "HERREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2590,
+  "antes": "CASTA?O",
+  "despues": "CASTAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2595,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2602,
+  "antes": "CARRE?O",
+  "despues": "CARREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2602,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2615,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2647,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2678,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2702,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2703,
+  "antes": "ACU?A",
+  "despues": "ACUÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2711,
+  "antes": "MARI?O",
+  "despues": "MARIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2713,
+  "antes": "UMA?A",
+  "despues": "UMAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2732,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2738,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2740,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2774,
+  "antes": "CARRE?O",
+  "despues": "CARREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2807,
+  "antes": "CEDE?O",
+  "despues": "CEDEÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2817,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2817,
+  "antes": "IBA?ES",
+  "despues": "IBAÑES"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2834,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2837,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2840,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2849,
+  "antes": "MARI?O",
+  "despues": "MARIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2851,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2871,
+  "antes": "PE?UELA",
+  "despues": "PEÑUELA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2873,
+  "antes": "ZU?IGA",
+  "despues": "ZUÑIGA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2886,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2887,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2889,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2912,
+  "antes": "CA?ON",
+  "despues": "CAÑON"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2933,
+  "antes": "DE MU?OS",
+  "despues": "DE MUÑOS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2936,
+  "antes": "CA?AS",
+  "despues": "CAÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2938,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2944,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2945,
+  "antes": "CARRE?O",
+  "despues": "CARREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2962,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 2975,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 2981,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3017,
+  "antes": "CATA?O",
+  "despues": "CATAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3027,
+  "antes": "CATA?O",
+  "despues": "CATAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 3031,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3035,
+  "antes": "CA?AS",
+  "despues": "CAÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3036,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3056,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 3088,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3090,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 3094,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 3122,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 3130,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3146,
+  "antes": "BELE?O",
+  "despues": "BELEÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 3154,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3181,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3184,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 3200,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3230,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 3294,
+  "antes": "CA?AS",
+  "despues": "CAÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3296,
+  "antes": "MARI?O",
+  "despues": "MARIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3312,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 3313,
+  "antes": "GARZ?N",
+  "despues": "GARZÓN"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 3329,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 3332,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 3341,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 3344,
+  "antes": "MARI?O",
+  "despues": "MARIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 3347,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3351,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3374,
+  "antes": "ESPA?A",
+  "despues": "ESPAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 3375,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3375,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3408,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3419,
+  "antes": "CASTA?O",
+  "despues": "CASTAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 3429,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3441,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 3446,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3448,
+  "antes": "MARI?O",
+  "despues": "MARIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 3467,
+  "antes": "CATA?O",
+  "despues": "CATAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3472,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3476,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3501,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3536,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 3629,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 3634,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 3720,
+  "antes": "FANDI?O",
+  "despues": "FANDIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 3728,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3743,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 3748,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3751,
+  "antes": "LONDO?O",
+  "despues": "LONDOÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3785,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 3801,
+  "antes": "FANDI?O",
+  "despues": "FANDIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 3804,
+  "antes": "DUE?AS",
+  "despues": "DUEÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3845,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 3874,
+  "antes": "LONDO?O",
+  "despues": "LONDOÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3881,
+  "antes": "UMA?A",
+  "despues": "UMAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3883,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3891,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 3893,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 3895,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3910,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 3980,
+  "antes": "BOLA?OS",
+  "despues": "BOLAÑOS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4039,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4064,
+  "antes": "FANDI?O",
+  "despues": "FANDIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 4067,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4161,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4169,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 4184,
+  "antes": "QUI?ONES",
+  "despues": "QUIÑONES"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4210,
+  "antes": "CA?AVERAL",
+  "despues": "CAÑAVERAL"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4235,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 4244,
+  "antes": "UMA?A",
+  "despues": "UMAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4293,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4298,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4359,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 4367,
+  "antes": "DE PI?EROS",
+  "despues": "DE PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4370,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4385,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4388,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4405,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4407,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 4414,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 4426,
+  "antes": "TRASLAVI?A",
+  "despues": "TRASLAVIÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 4452,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4453,
+  "antes": "UMA?A",
+  "despues": "UMAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4460,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4504,
+  "antes": "CARRE?O",
+  "despues": "CARREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4515,
+  "antes": "UMA?A",
+  "despues": "UMAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4571,
+  "antes": "CARRE?O",
+  "despues": "CARREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4587,
+  "antes": "LONDO?O",
+  "despues": "LONDOÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 4591,
+  "antes": "MARI?O",
+  "despues": "MARIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4604,
+  "antes": "LONDO?O",
+  "despues": "LONDOÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4605,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4632,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4651,
+  "antes": "SALDA?A",
+  "despues": "SALDAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4662,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 4705,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 4707,
+  "antes": "UMA?A",
+  "despues": "UMAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 4718,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4726,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4743,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4746,
+  "antes": "NI?O ",
+  "despues": "NIÑO "
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4754,
+  "antes": "DUE?AS",
+  "despues": "DUEÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4767,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 4799,
+  "antes": "DUE?AS",
+  "despues": "DUEÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4800,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 4826,
+  "antes": "SALDA?A",
+  "despues": "SALDAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4835,
+  "antes": "PE?A ",
+  "despues": "PEÑA "
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 4835,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4887,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4914,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4916,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 4918,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4943,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 4952,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 4983,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 4995,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5022,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5055,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5057,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5063,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5067,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5070,
+  "antes": "FANDI?O",
+  "despues": "FANDIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5075,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5107,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5142,
+  "antes": "DUE?AS",
+  "despues": "DUEÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5152,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5173,
+  "antes": "UMA?A",
+  "despues": "UMAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5190,
+  "antes": "MARI?O",
+  "despues": "MARIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5203,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5211,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5218,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5243,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5246,
+  "antes": "MARI?O",
+  "despues": "MARIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5253,
+  "antes": "NU?EZ",
+  "despues": "NUÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5261,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5280,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5281,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5296,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5348,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5371,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5382,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5382,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5384,
+  "antes": "NU?EZ",
+  "despues": "NUÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5386,
+  "antes": "RODI?O",
+  "despues": "RODIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5389,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5393,
+  "antes": "DUE?AS",
+  "despues": "DUEÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5425,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5431,
+  "antes": "FANDI?O",
+  "despues": "FANDIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5447,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5481,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5512,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5553,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5573,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5582,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5583,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5591,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5621,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5626,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5633,
+  "antes": "UMA?A",
+  "despues": "UMAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5679,
+  "antes": "FANDI?O",
+  "despues": "FANDIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5688,
+  "antes": "SALDA?A",
+  "despues": "SALDAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5694,
+  "antes": "DUE?AS",
+  "despues": "DUEÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5701,
+  "antes": "ORDO?EZ",
+  "despues": "ORDOÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5733,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5736,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5744,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5746,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5801,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5819,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5830,
+  "antes": "NU?EZ",
+  "despues": "NUÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5854,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5869,
+  "antes": "LONDO?O",
+  "despues": "LONDOÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5869,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5870,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5881,
+  "antes": "TRIVI?O",
+  "despues": "TRIVIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5883,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5905,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5915,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5916,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5938,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 5940,
+  "antes": "MARI?O",
+  "despues": "MARIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5950,
+  "antes": "UMA?A",
+  "despues": "UMAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5980,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 5998,
+  "antes": "CARRE?O",
+  "despues": "CARREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6014,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6018,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6032,
+  "antes": "QUI?ONES",
+  "despues": "QUIÑONES"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6033,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6055,
+  "antes": "DUE?AS",
+  "despues": "DUEÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6082,
+  "antes": "MU?OS",
+  "despues": "MUÑOS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6091,
+  "antes": "IBA?ES",
+  "despues": "IBAÑES"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6091,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosnombre",
+  "id": 6109,
+  "antes": "UMA?A",
+  "despues": "UMAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6109,
+  "antes": "UMA?A",
+  "despues": "UMAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6120,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6127,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6165,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6177,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6207,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6226,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6233,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6234,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6242,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6248,
+  "antes": "MU?OS",
+  "despues": "MUÑOS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6258,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6260,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6265,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6279,
+  "antes": "UMA?A",
+  "despues": "UMAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6281,
+  "antes": "UMA?A",
+  "despues": "UMAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6295,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6302,
+  "antes": "IVA?EZ",
+  "despues": "IVAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6319,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6320,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6338,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6349,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6352,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6361,
+  "antes": "FANDI?O",
+  "despues": "FANDIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6375,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6383,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6404,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6408,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6409,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6410,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6421,
+  "antes": "ORDO?EZ",
+  "despues": "ORDOÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6433,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6436,
+  "antes": "FANDI?O",
+  "despues": "FANDIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6442,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6458,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6460,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6478,
+  "antes": "CASTA?O",
+  "despues": "CASTAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6508,
+  "antes": "MARI?O",
+  "despues": "MARIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6514,
+  "antes": "UMA?A",
+  "despues": "UMAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6539,
+  "antes": "UMA?A",
+  "despues": "UMAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6540,
+  "antes": "PE?ALOZA",
+  "despues": "PEÑALOZA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6540,
+  "antes": "CARRE?O",
+  "despues": "CARREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6555,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6558,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6562,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6576,
+  "antes": "LONDO?O",
+  "despues": "LONDOÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6582,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6598,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6600,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6604,
+  "antes": "DUE?AS",
+  "despues": "DUEÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6606,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6633,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6653,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6664,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6672,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6682,
+  "antes": "ESTUPI?AN",
+  "despues": "ESTUPIÑAN"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6686,
+  "antes": "UMA?A",
+  "despues": "UMAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6706,
+  "antes": "ORDO?EZ",
+  "despues": "ORDOÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6745,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6759,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6764,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6778,
+  "antes": "E?A",
+  "despues": "EÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6779,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6830,
+  "antes": "MARI?O",
+  "despues": "MARIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6833,
+  "antes": "NU?EZ",
+  "despues": "NUÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6855,
+  "antes": "CA?ON",
+  "despues": "CAÑON"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6867,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6870,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6889,
+  "antes": "DUE?AS",
+  "despues": "DUEÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6895,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6897,
+  "antes": "CASTA?O",
+  "despues": "CASTAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6898,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6902,
+  "antes": "ORDO?EZ",
+  "despues": "ORDOÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6948,
+  "antes": "DUE?AS",
+  "despues": "DUEÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6954,
+  "antes": "DUE?AS",
+  "despues": "DUEÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6959,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 6983,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 6984,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7009,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7013,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7035,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7053,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7060,
+  "antes": "BRICE?O",
+  "despues": "BRICEÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7078,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7082,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7088,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7091,
+  "antes": "MARI?O",
+  "despues": "MARIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7098,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7107,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7110,
+  "antes": "DUE?AS",
+  "despues": "DUEÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7115,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7116,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7129,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7137,
+  "antes": "CA?IZALES",
+  "despues": "CAÑIZALES"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7141,
+  "antes": "UMA?A",
+  "despues": "UMAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7152,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7155,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7163,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7176,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7178,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7188,
+  "antes": "SALDA?A",
+  "despues": "SALDAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7189,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7205,
+  "antes": "DUE?AS",
+  "despues": "DUEÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7216,
+  "antes": "PE?ALOZA",
+  "despues": "PEÑALOZA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7222,
+  "antes": "BARE?O",
+  "despues": "BAREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7231,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7248,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7250,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7250,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7283,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7292,
+  "antes": "ESPA?OL",
+  "despues": "ESPAÑOL"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7302,
+  "antes": "DUE?AS",
+  "despues": "DUEÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7308,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7314,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7328,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7329,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7343,
+  "antes": "DUE?AS",
+  "despues": "DUEÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7356,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7361,
+  "antes": "PE?ARANDA",
+  "despues": "PEÑARANDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7372,
+  "antes": "DUE?AS",
+  "despues": "DUEÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7374,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7377,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7386,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7392,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7401,
+  "antes": "DUE?AS",
+  "despues": "DUEÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7406,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7429,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7440,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7442,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7444,
+  "antes": "FANDI?O",
+  "despues": "FANDIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7478,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7485,
+  "antes": "ESTUPI?AN",
+  "despues": "ESTUPIÑAN"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7514,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7523,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7524,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7583,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7591,
+  "antes": "NU?EZ",
+  "despues": "NUÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7596,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7606,
+  "antes": "DE PI?EROS",
+  "despues": "DE PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7613,
+  "antes": "LONDO?O",
+  "despues": "LONDOÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7642,
+  "antes": "TRIVI?O",
+  "despues": "TRIVIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7647,
+  "antes": "LONDO?O",
+  "despues": "LONDOÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7647,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7683,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7712,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7728,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7761,
+  "antes": "L?PEZ",
+  "despues": "LÓPEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7769,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7777,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7785,
+  "antes": "CAMPI?O",
+  "despues": "CAMPIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7821,
+  "antes": "ORDO?EZ",
+  "despues": "ORDOÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7836,
+  "antes": "CEDE?O",
+  "despues": "CEDEÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7869,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7870,
+  "antes": "URUE?A",
+  "despues": "URUEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7938,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7938,
+  "antes": "DUE?AS",
+  "despues": "DUEÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7975,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 7987,
+  "antes": "CARRE?O",
+  "despues": "CARREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 7998,
+  "antes": "SALDA?A",
+  "despues": "SALDAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 8000,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 8001,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 8010,
+  "antes": "SALDA?A",
+  "despues": "SALDAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 8049,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 8057,
+  "antes": "MONTA?O",
+  "despues": "MONTAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 8091,
+  "antes": "MU?OZ SAS",
+  "despues": "MUÑOZ SAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 8113,
+  "antes": "CARRE?O",
+  "despues": "CARREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 8125,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 8127,
+  "antes": "ACU?A",
+  "despues": "ACUÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 8141,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 8152,
+  "antes": "SALDA?A",
+  "despues": "SALDAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 8184,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 8260,
+  "antes": "CASTA?O",
+  "despues": "CASTAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 8269,
+  "antes": "ESTUPI?AN",
+  "despues": "ESTUPIÑAN"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 8276,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 8318,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 8334,
+  "antes": "UMA?A",
+  "despues": "UMAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 8336,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 8359,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 8373,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 8377,
+  "antes": "CARRE?O",
+  "despues": "CARREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 8379,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 8387,
+  "antes": "UMA?A",
+  "despues": "UMAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 8395,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 8408,
+  "antes": "UMA?A",
+  "despues": "UMAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 8409,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 8431,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 8440,
+  "antes": "PE?ALOZA",
+  "despues": "PEÑALOZA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 8443,
+  "antes": "ESTUPI?AN",
+  "despues": "ESTUPIÑAN"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 8463,
+  "antes": "ORDO?EZ",
+  "despues": "ORDOÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 8578,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 8594,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 8605,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 8618,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 8643,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 8681,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 8714,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 8758,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 8764,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 8775,
+  "antes": "UMA?A",
+  "despues": "UMAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 8788,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 8857,
+  "antes": "GUALDR?N",
+  "despues": "GUALDRÓN"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 8857,
+  "antes": "D?AZ",
+  "despues": "DÍAZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 8867,
+  "antes": "GARC?A",
+  "despues": "GARCÍA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 8896,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 8904,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 8925,
+  "antes": "QUI?ONES",
+  "despues": "QUIÑONES"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 8926,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 8933,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 8937,
+  "antes": "L?PEZ",
+  "despues": "LÓPEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 8940,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 8947,
+  "antes": "PE?ALOZA",
+  "despues": "PEÑALOZA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 8958,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 9003,
+  "antes": "UMA?A",
+  "despues": "UMAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 9010,
+  "antes": "BRI?EZ",
+  "despues": "BRIÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 9050,
+  "antes": "CANTO?I",
+  "despues": "CANTOÑI"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 9057,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 9100,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 9100,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 9123,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 9127,
+  "antes": "CASTA?O",
+  "despues": "CASTAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 9148,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 9181,
+  "antes": "CUFI?O",
+  "despues": "CUFIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 9204,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 9227,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 9234,
+  "antes": "DUE?AS",
+  "despues": "DUEÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 9243,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 9262,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 9293,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 9320,
+  "antes": "MONTA?O",
+  "despues": "MONTAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 9335,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 9337,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 9343,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 9384,
+  "antes": "CA?ON",
+  "despues": "CAÑON"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 9434,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 9470,
+  "antes": "VERGA?O",
+  "despues": "VERGAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 9496,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 9515,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 9525,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 9526,
+  "antes": "BRI?EZ",
+  "despues": "BRIÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 9529,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 9537,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 9545,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 9567,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 9572,
+  "antes": "DUE?AS",
+  "despues": "DUEÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 9681,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 9706,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 9728,
+  "antes": "QUI?ONES",
+  "despues": "QUIÑONES"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 9761,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 9809,
+  "antes": "QUI?ONES",
+  "despues": "QUIÑONES"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 9812,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 9831,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 9837,
+  "antes": "PE?ALOZA",
+  "despues": "PEÑALOZA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 9843,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 9860,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 9914,
+  "antes": "ORDUE?A",
+  "despues": "ORDUEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 9916,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 9952,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 9965,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 9978,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 9979,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 9984,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 10018,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 10090,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 10097,
+  "antes": "PE?UELA",
+  "despues": "PEÑUELA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 10117,
+  "antes": "BARE?O",
+  "despues": "BAREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 10125,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 10133,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 10142,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 10158,
+  "antes": "DUE?AS",
+  "despues": "DUEÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 10222,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 10225,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 10228,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 10228,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 10234,
+  "antes": "TRIVI?O",
+  "despues": "TRIVIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 10235,
+  "antes": "ORDUE?A",
+  "despues": "ORDUEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 10257,
+  "antes": "BELE?O",
+  "despues": "BELEÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 10265,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 10300,
+  "antes": "TRASLAVI?A",
+  "despues": "TRASLAVIÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 10316,
+  "antes": "SALDA?A",
+  "despues": "SALDAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 10344,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 10374,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 10420,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 10447,
+  "antes": "CASTA?O",
+  "despues": "CASTAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 10456,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 10459,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 10470,
+  "antes": "QUI?ONES",
+  "despues": "QUIÑONES"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 10511,
+  "antes": "LONDO?O",
+  "despues": "LONDOÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 10531,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 10536,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 10673,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 10682,
+  "antes": "TRIVI?O",
+  "despues": "TRIVIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 10685,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 10697,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 10711,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 10723,
+  "antes": "LONDO?O",
+  "despues": "LONDOÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 10726,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 10727,
+  "antes": "PE?ARANDA",
+  "despues": "PEÑARANDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 10736,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 10739,
+  "antes": "CUFI?O",
+  "despues": "CUFIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 10755,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 10773,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 10800,
+  "antes": "ACU?A",
+  "despues": "ACUÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 10806,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 10841,
+  "antes": "CA?AS",
+  "despues": "CAÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 10841,
+  "antes": "CARRE?O",
+  "despues": "CARREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 10852,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 10866,
+  "antes": "CARRE?O",
+  "despues": "CARREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 10882,
+  "antes": "ACU?A",
+  "despues": "ACUÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 10904,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 10906,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 10913,
+  "antes": "UMA?A",
+  "despues": "UMAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 10915,
+  "antes": "PE?UELA",
+  "despues": "PEÑUELA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 10916,
+  "antes": "LONDO?O",
+  "despues": "LONDOÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 10950,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 10980,
+  "antes": "LONDO?O",
+  "despues": "LONDOÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 10996,
+  "antes": "CA?ON",
+  "despues": "CAÑON"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11006,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11014,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11022,
+  "antes": "PE?ALOSA",
+  "despues": "PEÑALOSA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11044,
+  "antes": "PE?ARANDA",
+  "despues": "PEÑARANDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11046,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11054,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11055,
+  "antes": "CA?ON",
+  "despues": "CAÑON"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11090,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11107,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11110,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11119,
+  "antes": "BRICE?O",
+  "despues": "BRICEÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "name",
+  "id": 11124,
+  "antes": "NICOL?S",
+  "despues": "NICOLÁS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11127,
+  "antes": "CALDER?N",
+  "despues": "CALDERÓN"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11143,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11150,
+  "antes": "NU?EZ",
+  "despues": "NUÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11181,
+  "antes": "BRICE?O",
+  "despues": "BRICEÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11199,
+  "antes": "LONDO?O",
+  "despues": "LONDOÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11223,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11235,
+  "antes": "SALDA?A",
+  "despues": "SALDAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11258,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11279,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11298,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11298,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11331,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11337,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11337,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11342,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11342,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11353,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11358,
+  "antes": "DUR?N",
+  "despues": "DURÁN"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11361,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11377,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11385,
+  "antes": "PE?ALOZA",
+  "despues": "PEÑALOZA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11392,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11414,
+  "antes": "MAR?N",
+  "despues": "MARÍN"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11446,
+  "antes": "BRI?EZ",
+  "despues": "BRIÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11449,
+  "antes": "DUE?AS",
+  "despues": "DUEÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11500,
+  "antes": "ACU?A",
+  "despues": "ACUÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11515,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11533,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11540,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11568,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11575,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11640,
+  "antes": "LONDO?O",
+  "despues": "LONDOÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11643,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11646,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11653,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11669,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11695,
+  "antes": "BRICE?O",
+  "despues": "BRICEÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11697,
+  "antes": "ACU?A",
+  "despues": "ACUÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11702,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11715,
+  "antes": "BARE?O",
+  "despues": "BAREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11721,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11730,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11734,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11748,
+  "antes": "CARRE?O",
+  "despues": "CARREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11751,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11762,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11763,
+  "antes": "CASTE?EDA",
+  "despues": "CASTEÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11766,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11787,
+  "antes": "CATA?EDA",
+  "despues": "CATAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11807,
+  "antes": "ACU?A",
+  "despues": "ACUÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11816,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11832,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11835,
+  "antes": "DUE?AS",
+  "despues": "DUEÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11845,
+  "antes": "DUE?AS",
+  "despues": "DUEÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11873,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11921,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11980,
+  "antes": "BRICE?O",
+  "despues": "BRICEÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11985,
+  "antes": "SALDA?A",
+  "despues": "SALDAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 11991,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 11994,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12041,
+  "antes": "BOLA?OS",
+  "despues": "BOLAÑOS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 12054,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12066,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12069,
+  "antes": "CA?ON",
+  "despues": "CAÑON"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12086,
+  "antes": "NU?EZ",
+  "despues": "NUÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12088,
+  "antes": "LONDO?O",
+  "despues": "LONDOÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12160,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 12173,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 12188,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12194,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12202,
+  "antes": "BRICE?O",
+  "despues": "BRICEÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12207,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 12207,
+  "antes": "DUE?AS",
+  "despues": "DUEÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12235,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12246,
+  "antes": "ORDO?EZ",
+  "despues": "ORDOÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 12247,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 12298,
+  "antes": "PE?UELA",
+  "despues": "PEÑUELA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 12308,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12312,
+  "antes": "PI?A",
+  "despues": "PIÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12320,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 12325,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12338,
+  "antes": "BARE?O",
+  "despues": "BAREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12339,
+  "antes": "TRASLAVI?A",
+  "despues": "TRASLAVIÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12343,
+  "antes": "GUTI?RREZ",
+  "despues": "GUTIÉRREZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12351,
+  "antes": "HOLGU?N",
+  "despues": "HOLGUÍN"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12402,
+  "antes": "PE?ALOZA",
+  "despues": "PEÑALOZA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12419,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12421,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12427,
+  "antes": "IBA?ES",
+  "despues": "IBAÑES"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosnombre",
+  "id": 12431,
+  "antes": "LUC?A",
+  "despues": "LUCÍA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 12452,
+  "antes": "CASTA?O",
+  "despues": "CASTAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12454,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12462,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12466,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12488,
+  "antes": "LONDO?O",
+  "despues": "LONDOÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12520,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 12531,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12533,
+  "antes": "CASTA?O",
+  "despues": "CASTAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12544,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12549,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 12551,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 12564,
+  "antes": "BELTR?N",
+  "despues": "BELTRÁN"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12603,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12616,
+  "antes": "CARRE?O",
+  "despues": "CARREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12629,
+  "antes": "CA?ON",
+  "despues": "CAÑON"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12642,
+  "antes": "ORDO?EZ",
+  "despues": "ORDOÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 12659,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 12681,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12691,
+  "antes": "CA?ON",
+  "despues": "CAÑON"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 12693,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12707,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12716,
+  "antes": "BOLA?OS",
+  "despues": "BOLAÑOS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12718,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 12718,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "name",
+  "id": 12728,
+  "antes": "M?NICA",
+  "despues": "MÓNICA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12736,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 12743,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 12752,
+  "antes": "DUE?AS",
+  "despues": "DUEÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12759,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12763,
+  "antes": "CASTA?O",
+  "despues": "CASTAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12764,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 12771,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12772,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12775,
+  "antes": "ZU?IGA",
+  "despues": "ZUÑIGA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 12779,
+  "antes": "BOLA?OS",
+  "despues": "BOLAÑOS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12791,
+  "antes": "CASTA?O",
+  "despues": "CASTAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12795,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12810,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12822,
+  "antes": "NU?EZ",
+  "despues": "NUÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 12865,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12875,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 12879,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12920,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosnombre",
+  "id": 12924,
+  "antes": "IV?N",
+  "despues": "IVÁN"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12926,
+  "antes": "SALDA?A",
+  "despues": "SALDAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosnombre",
+  "id": 12935,
+  "antes": "LUC?A",
+  "despues": "LUCÍA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12937,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 12952,
+  "antes": "ORDO?EZ",
+  "despues": "ORDOÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12953,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12967,
+  "antes": "AR?VALO",
+  "despues": "ARÉVALO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12975,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12977,
+  "antes": "CA?AS",
+  "despues": "CAÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 12997,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13004,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13013,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13014,
+  "antes": "URUE?A",
+  "despues": "URUEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "name",
+  "id": 13025,
+  "antes": "MAR?A",
+  "despues": "MARÍA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13036,
+  "antes": "CA?AS",
+  "despues": "CAÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "name",
+  "id": 13039,
+  "antes": "MAR?A",
+  "despues": "MARÍA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13071,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13080,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13105,
+  "antes": "RINC?N",
+  "despues": "RINCÓN"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13122,
+  "antes": "CASTA?O",
+  "despues": "CASTAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13124,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13125,
+  "antes": "VERGA?O",
+  "despues": "VERGAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13125,
+  "antes": "URUE?A",
+  "despues": "URUEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13130,
+  "antes": "L?PEZ",
+  "despues": "LÓPEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13130,
+  "antes": "CUFI?O",
+  "despues": "CUFIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13135,
+  "antes": "RODR?GUEZ",
+  "despues": "RODRÍGUEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosnombre",
+  "id": 13142,
+  "antes": "ANDR?S",
+  "despues": "ANDRÉS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "name",
+  "id": 13145,
+  "antes": "GERM?N",
+  "despues": "GERMÁN"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13145,
+  "antes": "CORT?S",
+  "despues": "CORTÉS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13162,
+  "antes": "CALDER?N",
+  "despues": "CALDERÓN"
+ },
+ {
+  "tabla": "customers",
+  "columna": "name",
+  "id": 13163,
+  "antes": "MAR?A",
+  "despues": "MARÍA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosnombre",
+  "id": 13164,
+  "antes": "MAR?A",
+  "despues": "MARÍA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13207,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13213,
+  "antes": "MART?NEZ",
+  "despues": "MARTÍNEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13214,
+  "antes": "SU?REZ",
+  "despues": "SUÁREZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13217,
+  "antes": "DUR?N",
+  "despues": "DURÁN"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13226,
+  "antes": "JIM?NEZ",
+  "despues": "JIMÉNEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13226,
+  "antes": "GONZ?LEZ",
+  "despues": "GONZÁLEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13228,
+  "antes": "L?PEZ",
+  "despues": "LÓPEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13228,
+  "antes": "GUTI?RREZ",
+  "despues": "GUTIÉRREZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosnombre",
+  "id": 13241,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "name",
+  "id": 13242,
+  "antes": "GARZ?N",
+  "despues": "GARZÓN"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13245,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13251,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13262,
+  "antes": "CA?ON",
+  "despues": "CAÑON"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13276,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13295,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13297,
+  "antes": "PE?ARANDA",
+  "despues": "PEÑARANDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13310,
+  "antes": "MONTA?ES",
+  "despues": "MONTAÑES"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13313,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13319,
+  "antes": "SALDA?A",
+  "despues": "SALDAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13322,
+  "antes": "BELE?O",
+  "despues": "BELEÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13344,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13348,
+  "antes": "ACU?A",
+  "despues": "ACUÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13364,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13377,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13378,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13380,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13396,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13398,
+  "antes": "MARI?O",
+  "despues": "MARIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13428,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13455,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13484,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13505,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13520,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13528,
+  "antes": "CASTA?O",
+  "despues": "CASTAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13540,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13558,
+  "antes": "NU?EZ",
+  "despues": "NUÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13565,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13569,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13612,
+  "antes": "FANDI?O",
+  "despues": "FANDIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13614,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13617,
+  "antes": "PE?UELA",
+  "despues": "PEÑUELA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13639,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13654,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13663,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13703,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13718,
+  "antes": "PE?UELA",
+  "despues": "PEÑUELA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13729,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13730,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13731,
+  "antes": "LONDO?O",
+  "despues": "LONDOÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13746,
+  "antes": "ORDO?EZ",
+  "despues": "ORDOÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13765,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13771,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13777,
+  "antes": "LONDO?O",
+  "despues": "LONDOÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13780,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13812,
+  "antes": "SALDA?A",
+  "despues": "SALDAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13813,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13817,
+  "antes": "URUE?A",
+  "despues": "URUEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13825,
+  "antes": "CASTA?O",
+  "despues": "CASTAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13831,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13869,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13879,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13907,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13947,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13958,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13987,
+  "antes": "MU?OS",
+  "despues": "MUÑOS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 13994,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 13994,
+  "antes": "DUE?AS",
+  "despues": "DUEÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 14033,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14039,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14052,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 14066,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14071,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 14072,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14079,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14124,
+  "antes": "LONDO?O",
+  "despues": "LONDOÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14147,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14178,
+  "antes": "DUE?AS",
+  "despues": "DUEÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14181,
+  "antes": "ESTUPI?AN",
+  "despues": "ESTUPIÑAN"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14183,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14185,
+  "antes": "LONDO?O",
+  "despues": "LONDOÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14197,
+  "antes": "QUI?ONES",
+  "despues": "QUIÑONES"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 14209,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14232,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 14232,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 14242,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 14253,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 14261,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14265,
+  "antes": "LONDO?O",
+  "despues": "LONDOÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14281,
+  "antes": "UMA?A",
+  "despues": "UMAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 14299,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 14304,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14314,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14329,
+  "antes": "NU?EZ",
+  "despues": "NUÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14330,
+  "antes": "NU?EZ",
+  "despues": "NUÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 14334,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14345,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14346,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 14351,
+  "antes": "BOLA?OS",
+  "despues": "BOLAÑOS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 14373,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14375,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 14429,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14450,
+  "antes": "YA?EZ",
+  "despues": "YAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14463,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14469,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14482,
+  "antes": "ESTUPI?AN",
+  "despues": "ESTUPIÑAN"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14489,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14491,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 14509,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14512,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 14514,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14531,
+  "antes": "LONDO?O",
+  "despues": "LONDOÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 14533,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14684,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14706,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14802,
+  "antes": "CARDE?O",
+  "despues": "CARDEÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14803,
+  "antes": "PE?ALOZA",
+  "despues": "PEÑALOZA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14813,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 14868,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 14870,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14885,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14893,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 14958,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15016,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15030,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15040,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15045,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15159,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15160,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 15165,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15190,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15216,
+  "antes": "CATA?O",
+  "despues": "CATAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15225,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 15297,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15310,
+  "antes": "SALDA?A",
+  "despues": "SALDAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15390,
+  "antes": "CATA?O",
+  "despues": "CATAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15402,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15457,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 15469,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15527,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 15552,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 15563,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 15564,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15603,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15615,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 15629,
+  "antes": "JIM?NEZ",
+  "despues": "JIMÉNEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 15631,
+  "antes": "LONDO?O",
+  "despues": "LONDOÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15648,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 15648,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15654,
+  "antes": "LONDO?O",
+  "despues": "LONDOÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 15694,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15698,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 15703,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15713,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15716,
+  "antes": "PE?ALOZA",
+  "despues": "PEÑALOZA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 15736,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15755,
+  "antes": "RODR?GUEZ",
+  "despues": "RODRÍGUEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 15761,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15767,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 15773,
+  "antes": "SEP?LVEDA",
+  "despues": "SEPÚLVEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15797,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 15811,
+  "antes": "DUE?AS",
+  "despues": "DUEÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 15813,
+  "antes": "RODR?GUEZ",
+  "despues": "RODRÍGUEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15828,
+  "antes": "G?LVEZ",
+  "despues": "GÁLVEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 15841,
+  "antes": "RODR?GUEZ",
+  "despues": "RODRÍGUEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15850,
+  "antes": "BRICE?O",
+  "despues": "BRICEÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15860,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "name",
+  "id": 15866,
+  "antes": "MAR?A",
+  "despues": "MARÍA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15872,
+  "antes": "BOLA?OS",
+  "despues": "BOLAÑOS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 15883,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 15894,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15900,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15905,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 15921,
+  "antes": "BRI?EZ",
+  "despues": "BRIÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15936,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15941,
+  "antes": "DUE?AS",
+  "despues": "DUEÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15965,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15975,
+  "antes": "GARZ?N",
+  "despues": "GARZÓN"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 15979,
+  "antes": "PE?UELA",
+  "despues": "PEÑUELA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16005,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 16023,
+  "antes": "BOLA?OS",
+  "despues": "BOLAÑOS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16030,
+  "antes": "RAM?REZ",
+  "despues": "RAMÍREZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16066,
+  "antes": "D?AZ",
+  "despues": "DÍAZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 16068,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16128,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16139,
+  "antes": " BELE?O ",
+  "despues": " BELEÑO "
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16140,
+  "antes": "CASTA?EDA ",
+  "despues": "CASTAÑEDA "
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 16150,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 16182,
+  "antes": "CASTA?O",
+  "despues": "CASTAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16221,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 16247,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 16269,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16285,
+  "antes": "ACU?A",
+  "despues": "ACUÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16317,
+  "antes": "FANDI?O",
+  "despues": "FANDIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16428,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16432,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "company",
+  "id": 16450,
+  "antes": "Vesga televisi?n",
+  "despues": "Vesga televisión"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 16452,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16489,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16492,
+  "antes": "PE?A ",
+  "despues": "PEÑA "
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16501,
+  "antes": "ESTUPI?AN",
+  "despues": "ESTUPIÑAN"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 16503,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16576,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16583,
+  "antes": "LE?N",
+  "despues": "LEÓN"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16593,
+  "antes": "RODR?GUEZ",
+  "despues": "RODRÍGUEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16598,
+  "antes": "CASTA?EDA ",
+  "despues": "CASTAÑEDA "
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16615,
+  "antes": "ESPA?A",
+  "despues": "ESPAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16622,
+  "antes": "QUI?ONES",
+  "despues": "QUIÑONES"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 16668,
+  "antes": "ACU?A ",
+  "despues": "ACUÑA "
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16674,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16675,
+  "antes": "BOLA?OS",
+  "despues": "BOLAÑOS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 16707,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16732,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosnombre",
+  "id": 16745,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16749,
+  "antes": "GUTI?RREZ",
+  "despues": "GUTIÉRREZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16770,
+  "antes": "MART?NEZ",
+  "despues": "MARTÍNEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 16770,
+  "antes": "RAM?REZ",
+  "despues": "RAMÍREZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 16804,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 16821,
+  "antes": "PE?A ",
+  "despues": "PEÑA "
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 16825,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16858,
+  "antes": "NU?EZ",
+  "despues": "NUÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16862,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 16879,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16880,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 16909,
+  "antes": "CARRE?O",
+  "despues": "CARREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16957,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16959,
+  "antes": "BOLA?OS",
+  "despues": "BOLAÑOS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16972,
+  "antes": "DUE?AS",
+  "despues": "DUEÑAS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16996,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 16997,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 16999,
+  "antes": "CEDE?O",
+  "despues": "CEDEÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 17024,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 17030,
+  "antes": "CARRE?O",
+  "despues": "CARREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 17063,
+  "antes": "TRIVI?O",
+  "despues": "TRIVIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17069,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17073,
+  "antes": "A?EZ",
+  "despues": "AÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 17084,
+  "antes": "CA?A",
+  "despues": "CAÍA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17130,
+  "antes": "NI?O ",
+  "despues": "NIÑO "
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 17152,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17159,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17162,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17164,
+  "antes": "CARRE?O",
+  "despues": "CARREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17172,
+  "antes": "NI?O ",
+  "despues": "NIÑO "
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 17175,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17191,
+  "antes": "PI?A",
+  "despues": "PIÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 17201,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17204,
+  "antes": "BOLA?OS",
+  "despues": "BOLAÑOS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 17217,
+  "antes": "CASTA?O ",
+  "despues": "CASTAÑO "
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17221,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17229,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 17229,
+  "antes": "HERRE?O",
+  "despues": "HERREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 17241,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17251,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17306,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17307,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17324,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17328,
+  "antes": "NI?O ",
+  "despues": "NIÑO "
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17329,
+  "antes": "PATI?O ",
+  "despues": "PATIÑO "
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17339,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 17371,
+  "antes": "SALDA?A ",
+  "despues": "SALDAÑA "
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17378,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 17413,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17461,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17513,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 17524,
+  "antes": "ESTUPI?AN",
+  "despues": "ESTUPIÑAN"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17535,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 17538,
+  "antes": "PI?A",
+  "despues": "PIÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 17583,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 17587,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17592,
+  "antes": "MONTA?EZ ",
+  "despues": "MONTAÑEZ "
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17612,
+  "antes": "BELE?O",
+  "despues": "BELEÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17650,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17669,
+  "antes": "CARRE?O",
+  "despues": "CARREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 17722,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17797,
+  "antes": "ORDO?ES",
+  "despues": "ORDOÑES"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17827,
+  "antes": "RIA?O",
+  "despues": "RIAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17879,
+  "antes": "QUI?ONES ",
+  "despues": "QUIÑONES "
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17910,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 17910,
+  "antes": "FANDI?O",
+  "despues": "FANDIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17919,
+  "antes": "PE?ALOZA",
+  "despues": "PEÑALOZA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 17963,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 18083,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 18085,
+  "antes": "DUE?AS ",
+  "despues": "DUEÑAS "
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 18135,
+  "antes": "ACU?A",
+  "despues": "ACUÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 18137,
+  "antes": "LONDO?O ",
+  "despues": "LONDOÑO "
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 18165,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 18168,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 18212,
+  "antes": "CASTA?O",
+  "despues": "CASTAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 18213,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 18215,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 18251,
+  "antes": "PE?ALVER",
+  "despues": "PEÑALVER"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 18255,
+  "antes": "QUI?ONEZ",
+  "despues": "QUIÑONEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 18275,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 18279,
+  "antes": "QUI?ONES",
+  "despues": "QUIÑONES"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 18285,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 18293,
+  "antes": "U?ATE",
+  "despues": "UÑATE"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 18300,
+  "antes": "ORDO?EZ",
+  "despues": "ORDOÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 18307,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 18307,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 18323,
+  "antes": "NU?EZ",
+  "despues": "NUÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 18367,
+  "antes": "PE?ALOZA",
+  "despues": "PEÑALOZA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 18382,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 18452,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 18484,
+  "antes": "IBA?EZ",
+  "despues": "IBAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 18501,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 18506,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 18537,
+  "antes": "BRICE?O",
+  "despues": "BRICEÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 18552,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 18579,
+  "antes": "PE?UELA",
+  "despues": "PEÑUELA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 18581,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 18581,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 18582,
+  "antes": "CASTA?O",
+  "despues": "CASTAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 18596,
+  "antes": "SALDA?A",
+  "despues": "SALDAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 18598,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 18613,
+  "antes": "GUTI?RREZ ",
+  "despues": "GUTIÉRREZ "
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 18623,
+  "antes": "MONTA?EZ",
+  "despues": "MONTAÑEZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 18644,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 18660,
+  "antes": "HERRE?O",
+  "despues": "HERREÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 18671,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 18727,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 18753,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 18799,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 18809,
+  "antes": "PI?EROS",
+  "despues": "PIÑEROS"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 18815,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 18853,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 18934,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 18935,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 18953,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 18953,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 18961,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 18964,
+  "antes": "LAMU?O",
+  "despues": "LAMUÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 18997,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 19001,
+  "antes": "CASTA?O",
+  "despues": "CASTAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 19034,
+  "antes": "ACU?A",
+  "despues": "ACUÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 19043,
+  "antes": "MU?OS ",
+  "despues": "MUÑOS "
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 19059,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 19067,
+  "antes": "AVENDA?O",
+  "despues": "AVENDAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 19077,
+  "antes": "CATA?O",
+  "despues": "CATAÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 19089,
+  "antes": "PATI?O",
+  "despues": "PATIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 19119,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 19134,
+  "antes": "NI?O",
+  "despues": "NIÑO"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 19150,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 19169,
+  "antes": "PE?A",
+  "despues": "PEÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 19210,
+  "antes": "MONTA?A",
+  "despues": "MONTAÑA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 19265,
+  "antes": "MU?OZ",
+  "despues": "MUÑOZ"
+ },
+ {
+  "tabla": "customers",
+  "columna": "dosapellido",
+  "id": 19267,
+  "antes": "CASTA?EDA",
+  "despues": "CASTAÑEDA"
+ },
+ {
+  "tabla": "customers",
+  "columna": "unoapellido",
+  "id": 21608,
+  "antes": "RIA?O ",
+  "despues": "RIAÑO "
+ }
+]

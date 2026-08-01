@@ -31,6 +31,17 @@ export class WhatsappController {
     return this.whatsapp.status();
   }
 
+  /**
+   * Salud REAL del número contra Kapso/Meta: calidad (GREEN/YELLOW/RED) y tier de
+   * mensajería (clientes únicos/24h). Es lo que hay que vigilar en campañas masivas:
+   * calidad en rojo o tier bajo = Meta va a rechazar o castigar los envíos.
+   */
+  @Get('health')
+  @RequirePermissions(APP_PERMISSIONS.WHATSAPP_MANAGE)
+  health() {
+    return this.whatsapp.probe();
+  }
+
   /** Historial de conversación (entrantes + salientes). */
   @Get('messages')
   @RequirePermissions(APP_PERMISSIONS.WHATSAPP_MANAGE)

@@ -14,8 +14,8 @@ export class ReturnsController {
 
   @Get('stats') stats() { return this.returns.stats(); }
   @Get()
-  list(@Query('search') search?: string, @Query('status') status?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string) {
-    return this.returns.list({ search, status, page: Number(page), pageSize: Number(pageSize) });
+  list(@Query('search') search?: string, @Query('status') status?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string, @Query('sortBy') sortBy?: string, @Query('sortDir') sortDir?: string) {
+    return this.returns.list({ search, status, page: Number(page), pageSize: Number(pageSize), sortBy, sortDir });
   }
   @Get(':id') detail(@Param('id') id: string) { return this.returns.detail(id); }
   @Post() create(@Body() dto: CreateReturnDto, @CurrentUser() user: AuthUser) { return this.returns.create(dto, user); }

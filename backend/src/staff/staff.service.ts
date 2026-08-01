@@ -1,21 +1,21 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Type } from 'class-transformer';
-import { IsArray, IsBoolean, IsDateString, IsInt, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsArray, IsBoolean, IsDateString, IsInt, IsOptional, IsString, Matches, MinLength } from 'class-validator';
 import { randomBytes } from 'crypto';
 import { Prisma } from '@prisma/client';
+import { orden } from '../common/pagination-params';
 import { PrismaService } from '../prisma/prisma.service';
 import { ALL_PERMISSIONS, SUPERADMIN_PERMISSION } from '../auth/permissions.catalog';
 import { AuthService } from '../auth/auth.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { AuditService } from '../common/audit/audit.service';
 import { num } from '../common/money';
-
-const ROLE_LABEL: Record<number, string> = { 2: 'Cajero', 3: 'Técnico', 4: 'Administrativo', 5: 'Administrador' };
+import { CARGO_TECNICO, cargoLegacy } from './cargos-legacy';
+import { olvidarNombres } from './nombre-tecnico';
 
 export class CreateStaffDto {
   @IsString() @MinLength(1) name!: string;
   @IsOptional() @IsString() docNumber?: string;
-  @IsOptional() @IsString() username?: string;
   @IsOptional() @IsString() email?: string;
   @IsOptional() @IsInt() role?: number;
   @IsOptional() @IsString() areaId?: string;
@@ -34,7 +34,6 @@ export class CreateStaffDto {
 export class UpdateStaffDto {
   @IsOptional() @IsString() @MinLength(1) name?: string;
   @IsOptional() @IsString() docNumber?: string;
-  @IsOptional() @IsString() username?: string;
   @IsOptional() @IsString() email?: string;
   // `null` explícito = borrar el dato. `undefined` (campo ausente) = no tocarlo.
   @IsOptional() @IsInt() role?: number | null;
@@ -72,10 +71,24 @@ export class SetStaffAccountActiveDto {
   @IsBoolean() isActive!: boolean;
 }
 
+/** Habilitar / inhabilitar al funcionario entero (deja de verse en todo el sistema). */
+export class SetStaffBannedDto {
+  @IsBoolean() banned!: boolean;
+}
+
 /** Restablecer la contraseña del empleado. */
 export class ResetStaffPasswordDto {
   @IsOptional() @IsString() @MinLength(6) password?: string;
+  /** Los 6 dígitos que le llegaron por WhatsApp al propio empleado. */
+  @IsOptional() @IsString() @Matches(/^\s*\d(\s*\d){5}\s*$/, { message: 'El código son 6 dígitos.' }) code?: string;
 }
+
+/**
+ * Los funcionarios inhabilitados no existen para el sistema: no salen en la lista
+ * de empleados, ni en los selectores, ni en los reportes, ni en el chatbot. La
+ * ficha sigue ahí (por id) para poder volver a habilitarlos, nada más.
+ */
+export const ACTIVOS = { banned: false } as const;
 
 /** Contraseña temporal legible (se muestra una sola vez al superusuario). */
 function genTempPassword(): string {
@@ -96,36 +109,58 @@ export class StaffService {
     void this.audit.record({ userId: actor?.id, action, entity: 'staff-access', entityId: staffId, after });
   }
 
+  /**
+   * Resumen del personal. Cuenta SOLO a los funcionarios activos: los
+   * inhabilitados (ex-empleados que quedaron del legacy) no se cuentan ni se
+   * listan en ninguna parte, así que sumarlos aquí haría que el encabezado no
+   * cuadrara nunca con la tabla de abajo.
+   */
   async stats() {
-    const [total, byRole, byArea, banned] = await Promise.all([
-      this.prisma.staff.count(),
-      this.prisma.staff.groupBy({ by: ['role'], _count: { _all: true } }),
-      this.prisma.staff.count({ where: { areaLegacy: { in: [2, 3, 4] } } }), // técnicos/operativos
-      this.prisma.staff.count({ where: { banned: true } }),
+    const [total, byRole, tecnicos] = await Promise.all([
+      this.prisma.staff.count({ where: ACTIVOS }),
+      this.prisma.staff.groupBy({ by: ['role'], where: ACTIVOS, _count: { _all: true } }),
+      // Técnicos POR CARGO. Antes contaba `areaLegacy in (2,3,4)`, que son las
+      // áreas Operativa + Comercial + Sistemas: la tarjeta decía "Técnicos: 91"
+      // sobre 115 empleados, metiendo cajeras y sistemas en la cuenta.
+      this.prisma.staff.count({ where: { ...ACTIVOS, role: CARGO_TECNICO } }),
     ]);
     const roles: Record<string, number> = {};
-    for (const r of byRole) roles[ROLE_LABEL[r.role ?? 0] ?? `Rol ${r.role}`] = r._count._all;
-    return { total, activos: total - banned, inhabilitados: banned, tecnicos: byArea, roles };
+    for (const r of byRole) roles[cargoLegacy(r.role) ?? `Rol ${r.role}`] = r._count._all;
+    return { total, activos: total, tecnicos, roles };
   }
 
-  async list(params: { search?: string; role?: string; areaId?: string; status?: string; page?: number; pageSize?: number }) {
+  /** Columnas ordenables de la tabla de empleados. */
+  private static readonly ORDEN_LISTA = {
+    name: 'name',
+    docNumber: 'docNumber',
+    // En la fila se ve la etiqueta del cargo, pero `role` es el número legacy y
+    // las etiquetas van en ese mismo orden jerárquico, así que coincide.
+    role: 'role',
+    area: 'area.name',
+    phone: 'phone',
+  };
+
+  /**
+   * Lista de empleados. Devuelve SIEMPRE solo a los activos; `verInhabilitados`
+   * es la única puerta para volver a verlos y el controlador solo se la abre al
+   * superusuario, que es quien puede rehabilitarlos.
+   */
+  async list(params: { search?: string; role?: string; areaId?: string; verInhabilitados?: boolean; page?: number; pageSize?: number; sortBy?: string; sortDir?: string }) {
     const page = Math.max(1, Number(params.page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(params.pageSize) || 25));
-    const where: Prisma.StaffWhereInput = {};
+    const where: Prisma.StaffWhereInput = params.verInhabilitados ? { banned: true } : { ...ACTIVOS };
     if (params.role) where.role = Number(params.role);
     if (params.areaId) where.areaId = params.areaId;
-    if (params.status === 'active') where.banned = false;
-    else if (params.status === 'banned') where.banned = true;
     const search = (params.search || '').trim();
-    if (search) where.OR = [{ name: { contains: search, mode: 'insensitive' } }, { username: { contains: search, mode: 'insensitive' } }, { docNumber: { contains: search } }];
+    if (search) where.OR = [{ name: { contains: search, mode: 'insensitive' } }, { docNumber: { contains: search } }];
     const [rows, total] = await Promise.all([
-      this.prisma.staff.findMany({ where, orderBy: [{ role: 'desc' }, { name: 'asc' }], skip: (page - 1) * pageSize, take: pageSize, include: { area: true } }),
+      this.prisma.staff.findMany({ where, orderBy: orden(params, StaffService.ORDEN_LISTA, [{ role: 'desc' }, { name: 'asc' }]), skip: (page - 1) * pageSize, take: pageSize, include: { area: true } }),
       this.prisma.staff.count({ where }),
     ]);
     return {
       items: rows.map((e) => ({
-        id: e.id, name: e.name, docNumber: e.docNumber, username: e.username, email: e.email,
-        role: e.role, roleLabel: ROLE_LABEL[e.role ?? 0] ?? null, area: e.area?.name ?? null,
+        id: e.id, name: e.name, docNumber: e.docNumber, email: e.email,
+        role: e.role, roleLabel: cargoLegacy(e.role), area: e.area?.name ?? null,
         phone: e.phone, banned: e.banned, lastLogin: e.lastLogin,
       })),
       total, page, pageSize, pages: Math.ceil(total / pageSize),
@@ -145,8 +180,8 @@ export class StaffService {
       activity = { transactions: tx._count._all, income: num(tx._sum.credit), invoices: inv };
     }
     return {
-      id: e.id, legacyId: e.legacyId, name: e.name, docNumber: e.docNumber, username: e.username, email: e.email,
-      role: e.role, roleLabel: ROLE_LABEL[e.role ?? 0] ?? null, area: e.area?.name ?? null, areaId: e.areaId,
+      id: e.id, legacyId: e.legacyId, name: e.name, docNumber: e.docNumber, email: e.email,
+      role: e.role, roleLabel: cargoLegacy(e.role), area: e.area?.name ?? null, areaId: e.areaId,
       entryDate: e.entryDate, rh: e.rh, eps: e.eps, pension: e.pension,
       address: e.address, city: e.city, region: e.region, phone: e.phone, phoneAlt: e.phoneAlt,
       banned: e.banned, lastLogin: e.lastLogin, sedeAccede: e.sedeAccede, picture: e.picture, activity,
@@ -157,7 +192,7 @@ export class StaffService {
 
   create(dto: CreateStaffDto) {
     return this.prisma.staff.create({ data: {
-      name: dto.name, docNumber: dto.docNumber ?? null, username: dto.username ?? null, email: dto.email ?? null,
+      name: dto.name, docNumber: dto.docNumber ?? null, email: dto.email ?? null,
       role: dto.role ?? 2, areaId: dto.areaId ?? null, phone: dto.phone ?? null, eps: dto.eps ?? null, pension: dto.pension ?? null,
       rh: dto.rh ?? null, address: dto.address ?? null, city: dto.city ?? null,
     } });
@@ -175,7 +210,7 @@ export class StaffService {
     const str = (v: string | undefined) => (v === undefined ? undefined : v.trim() === '' ? null : v.trim());
 
     const data: Prisma.StaffUpdateInput = {
-      docNumber: str(dto.docNumber), username: str(dto.username), email: str(dto.email),
+      docNumber: str(dto.docNumber), email: str(dto.email),
       phone: str(dto.phone), phoneAlt: str(dto.phoneAlt), eps: str(dto.eps), pension: str(dto.pension),
       rh: str(dto.rh), address: str(dto.address), city: str(dto.city), region: str(dto.region),
       sedeAccede: str(dto.sedeAccede), role: dto.role,
@@ -190,6 +225,9 @@ export class StaffService {
     if (dto.areaId !== undefined) data.area = dto.areaId ? { connect: { id: dto.areaId } } : { disconnect: true };
 
     const after = await this.prisma.staff.update({ where: { id }, data });
+    // Las órdenes viejas muestran al técnico traduciendo el username al nombre:
+    // si acaban de corregirle el nombre, esa traducción ya está vieja.
+    olvidarNombres();
     void this.audit.record({
       userId: actor?.id, action: 'staff.update', entity: 'staff', entityId: id,
       before: { name: before.name, docNumber: before.docNumber, email: before.email, role: before.role, areaId: before.areaId },
@@ -393,6 +431,34 @@ export class StaffService {
     return { ...perms, tempPassword };
   }
 
+  /**
+   * Inhabilita o vuelve a habilitar al funcionario (solo superusuario).
+   *
+   * Inhabilitar lo saca de TODO: de la lista de empleados, de los selectores de
+   * técnico, de los reportes y del chatbot. La ficha no se borra —se llega por su
+   * enlace, o desde "Ver inhabilitados"— porque su trabajo pasado cuelga de ella.
+   *
+   * Arrastra la cuenta de acceso: quien ya no trabaja aquí no entra al sistema, y
+   * al rehabilitarlo se le devuelve el acceso. Si esa cuenta fuera la del último
+   * superadministrador activo, `setUserActive` se planta y aquí no se inhabilita a
+   * nadie: mejor un error que dejar el sistema sin dueño.
+   */
+  async setBanned(staffId: string, banned: boolean, actor?: AuthUser) {
+    const staff = await this.prisma.staff.findUnique({ where: { id: staffId } });
+    if (!staff) throw new NotFoundException('Empleado no encontrado');
+    if (staff.banned === banned) return this.detail(staffId);
+
+    const user = staff.email ? await this.prisma.user.findUnique({ where: { email: staff.email } }) : null;
+    if (user && user.isActive === banned) await this.auth.setUserActive(user.id, !banned);
+
+    await this.prisma.staff.update({ where: { id: staffId }, data: { banned } });
+    olvidarNombres();
+    this.logAccess(staffId, banned ? 'Inhabilitó al funcionario' : 'Habilitó al funcionario', actor, {
+      cuenta: user ? (banned ? 'inhabilitada' : 'habilitada') : 'sin cuenta',
+    });
+    return this.detail(staffId);
+  }
+
   /** Habilita / inhabilita el acceso del empleado (solo superusuario). */
   async setAccountActive(staffId: string, isActive: boolean, actor?: AuthUser) {
     const { user } = await this.linkedUser(staffId);
@@ -402,15 +468,35 @@ export class StaffService {
     return this.permissions(staffId);
   }
 
-  /** Restablece la contraseña del empleado; devuelve la temporal (solo superusuario). */
-  async resetAccountPassword(staffId: string, password: string | undefined, actor?: AuthUser) {
+  /**
+   * Restablece la contraseña del empleado; devuelve la temporal (solo superusuario).
+   *
+   * Pide el código de 6 dígitos que le llega al WhatsApp DEL EMPLEADO: el
+   * superusuario no puede apoderarse de una cuenta ajena sin que su dueño lo
+   * autorice dictándole el código (lo verifica `AuthService.resetPassword`).
+   */
+  async resetAccountPassword(staffId: string, dto: ResetStaffPasswordDto, actor?: AuthUser) {
     const { user } = await this.linkedUser(staffId);
     if (!user) throw new BadRequestException('El empleado no tiene una cuenta del sistema.');
-    const tempPassword = password?.trim() || genTempPassword();
-    await this.auth.resetPassword(user.id, tempPassword);
-    this.logAccess(staffId, 'Restableció la contraseña', actor);
+    const tempPassword = dto.password?.trim() || genTempPassword();
+    const { rastro } = await this.auth.resetPassword(user.id, tempPassword, { code: dto.code });
+    this.logAccess(staffId, 'Restableció la contraseña', actor, rastro ? { firma: rastro } : undefined);
     const perms = await this.permissions(staffId);
     return { ...perms, tempPassword };
+  }
+
+  /** Manda el código al WhatsApp del empleado para poder restablecerle la contraseña. */
+  async requestAccountPasswordCode(staffId: string, actor?: AuthUser) {
+    const { user } = await this.linkedUser(staffId);
+    if (!user) throw new BadRequestException('El empleado no tiene una cuenta del sistema.');
+    return this.auth.requestPasswordCode(user.id, actor);
+  }
+
+  /** ¿Restablecerle la contraseña va a pedir código, y hay a dónde mandarlo? */
+  async accountPasswordPolicy(staffId: string) {
+    const { user } = await this.linkedUser(staffId);
+    if (!user) throw new BadRequestException('El empleado no tiene una cuenta del sistema.');
+    return this.auth.passwordPolicy(user.id);
   }
 
   /** Bitácora de cambios de acceso de este empleado (roles, permisos, cuenta). */

@@ -1,14 +1,15 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InvoiceKind, InvoiceRon, Prisma, SubscriberStatus, SubInvoiceStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { CreateSubscriberDto, UpdateInvoiceDto, UpdateSubscriberDto } from './dto/update-subscriber.dto';
+import { ChangeStatusDto, CreateSubscriberDto, UpdateInvoiceDto, UpdateSubscriberDto } from './dto/update-subscriber.dto';
 import { MikrotikService } from '../network/mikrotik.service';
 import { MikrotikAdminService } from '../network/mikrotik-admin.service';
+import { GenieacsService } from '../network/genieacs.service';
 import type { AuthUser } from '../auth/current-user.decorator';
 import { num } from '../common/money';
 import { sedesDe, whereSedeSuscriptor, exigirSedeSuscriptor } from '../common/sede-scope';
 import { nextTid, TID_SEQ } from '../common/tid';
-import { paginacion } from '../common/pagination-params';
+import { orden, paginacion } from '../common/pagination-params';
 
 
 /** Estados de factura que cuentan como deuda. */
@@ -22,6 +23,7 @@ type ListFilter = {
   cuenta?: string; // aldia | debe | compromiso
   deuda?: string; // 1 | gt2 (nº de facturas sin pagar)
   page?: number; pageSize?: number; withPlan?: string;
+  sortBy?: string; sortDir?: string; // orden pedido por la cabecera de la tabla
 };
 
 /** Nombre visible del suscriptor a partir de los campos legacy partidos. */
@@ -103,6 +105,7 @@ export class SubscribersService {
     private readonly prisma: PrismaService,
     private readonly mikrotik: MikrotikService,
     private readonly mikrotikAdmin: MikrotikAdminService,
+    private readonly genieacs: GenieacsService,
   ) {}
 
   /** Tarjetas de resumen: totales por estado + cartera global. */
@@ -128,6 +131,172 @@ export class SubscribersService {
     };
   }
 
+  /**
+   * Los servicios que el cliente tiene contratados, sacados de su ÚLTIMA FACTURA.
+   *
+   * `SubscriberService` no está completo: se materializó de una sola pasada y solo
+   * para los ACTIVO cuya factura casaba con el catálogo
+   * (`scripts/seed-plans-from-services.js`), así que 2.350 clientes vivos se
+   * quedaron sin ni una fila — los 1.266 de CARTERA en bloque, 278 de compromiso,
+   * 223 activos… — y su ficha decía "sin plan" mientras el legacy sí enseñaba el
+   * plan. No es que no tengan: es que aquí no se copió.
+   *
+   * El legacy lo lee de la factura (`invoices.combo` / `invoices.television`), que
+   * aquí son `SubInvoice.serviceCombo` / `serviceTv`. Esta es la misma fuente, así
+   * que lo que se ve coincide con lo que se le está cobrando.
+   *
+   * El precio sale del ítem de esa factura cuyo nombre casa con el plan; si no
+   * casa, va sin precio antes que con uno inventado.
+   */
+  private async serviciosDeUltimaFactura(ids: string[]) {
+    const porAbonado = new Map<string, { kind: string; planName: string; price: number | null; status: null; source: 'factura' }[]>();
+    if (!ids.length) return porAbonado;
+
+    const ultimas = await this.prisma.$queryRaw<
+      { id: string; subscriberId: string; serviceCombo: string | null; serviceTv: string | null }[]
+    >`
+      SELECT DISTINCT ON (i."subscriberId") i.id, i."subscriberId", i."serviceCombo", i."serviceTv"
+        FROM "SubInvoice" i
+       WHERE i."subscriberId" IN (${Prisma.join(ids)})
+       ORDER BY i."subscriberId", i."invoiceDate" DESC NULLS LAST, i.tid DESC`;
+    if (!ultimas.length) return porAbonado;
+
+    const items = await this.prisma.subInvoiceItem.findMany({
+      where: { invoiceId: { in: ultimas.map((u) => u.id) } },
+      select: { invoiceId: true, description: true, productName: true, price: true },
+    });
+    const itemsPorFactura = new Map<string, typeof items>();
+    for (const it of items) {
+      const arr = itemsPorFactura.get(it.invoiceId) ?? [];
+      arr.push(it);
+      itemsPorFactura.set(it.invoiceId, arr);
+    }
+
+    const norm = (s?: string | null) => (s ?? '').trim().toLowerCase();
+    // 'no' es como el legacy escribe "este servicio no lo tiene".
+    const contratado = (s?: string | null) => !!norm(s) && norm(s) !== 'no';
+
+    for (const u of ultimas) {
+      const deLaFactura = itemsPorFactura.get(u.id) ?? [];
+      const precioDe = (plan: string) => {
+        const it = deLaFactura.find((x) => norm(x.description) === norm(plan) || norm(x.productName) === norm(plan));
+        return it && num(it.price) > 0 ? num(it.price) : null;
+      };
+      const lineas: { kind: string; planName: string; price: number | null; status: null; source: 'factura' }[] = [];
+      if (contratado(u.serviceCombo)) {
+        const plan = u.serviceCombo!.trim();
+        lineas.push({ kind: 'INTERNET', planName: plan, price: precioDe(plan), status: null, source: 'factura' });
+      }
+      if (contratado(u.serviceTv)) {
+        const plan = u.serviceTv!.trim();
+        lineas.push({ kind: 'TV', planName: plan, price: precioDe(plan), status: null, source: 'factura' });
+      }
+      if (lineas.length) porAbonado.set(u.subscriberId, lineas);
+    }
+    return porAbonado;
+  }
+
+  /**
+   * Tercera fuente: el PLAN QUE SE LE FACTURÓ, sacado de los ítems.
+   *
+   * Hay clientes cuya última factura trae los campos `combo`/`television` vacíos
+   * pero cobra un ítem que se llama igual que un plan del catálogo ('100 Megas
+   * F-26'). Se cruza el nombre del ítem contra `Plan`, que además dice si es
+   * internet o televisión, y se toma el más reciente de cada tipo: es lo último
+   * que la empresa le cobró por ese servicio.
+   */
+  private async serviciosDeItemsFacturados(ids: string[]) {
+    const porAbonado = new Map<string, { kind: string; planName: string; price: number | null; status: null; source: 'factura' }[]>();
+    if (!ids.length) return porAbonado;
+    const filas = await this.prisma.$queryRaw<
+      { subscriberId: string; kind: string; name: string; price: Prisma.Decimal | null }[]
+    >`
+      SELECT DISTINCT ON (i."subscriberId", pl.kind)
+             i."subscriberId", pl.kind::text AS kind, pl.name, it.price
+        FROM "SubInvoice" i
+        JOIN "SubInvoiceItem" it ON it."invoiceId" = i.id
+        JOIN "Plan" pl ON lower(btrim(pl.name)) = lower(btrim(COALESCE(it."productName", it.description)))
+       WHERE i."subscriberId" IN (${Prisma.join(ids)})
+       ORDER BY i."subscriberId", pl.kind, i."invoiceDate" DESC NULLS LAST, i.tid DESC`;
+    for (const f of filas) {
+      const arr = porAbonado.get(f.subscriberId) ?? [];
+      arr.push({ kind: f.kind, planName: f.name, price: num(f.price) || null, status: null, source: 'factura' });
+      porAbonado.set(f.subscriberId, arr);
+    }
+    return porAbonado;
+  }
+
+  /**
+   * Último recurso: el PERFIL DEL ROUTER como plan de internet.
+   *
+   * `Subscriber.pppProfile` es `customers.perfil` del legacy — el perfil PPPoE con
+   * el que el cliente navega ('10Megas', '300Megas'), o sea su velocidad real
+   * aunque nadie le haya registrado el plan ni le haya facturado todavía. De los
+   * 154 clientes vivos que no tienen ni servicio ni factura con plan, 38 sí tienen
+   * un perfil de verdad; los otros traen basura de captura ('-', 'default',
+   * 'Seleccione...' —y su errata 'Seleccine...') que no dice nada.
+   *
+   * El filtro es "tiene que llevar un número": todos los perfiles reales nombran
+   * las megas ('10Megas', '1000Megas26D') y ninguna de las basuras lo hace. Es más
+   * de fiar que ir listando las erratas una por una.
+   */
+  private servicioDePerfilPpp(pppProfile?: string | null) {
+    const perfil = (pppProfile ?? '').trim();
+    if (!/\d/.test(perfil)) return [];
+    return [{ kind: 'INTERNET', planName: perfil, price: null, status: null, source: 'perfil' as const }];
+  }
+
+  /**
+   * El plan de los clientes que no lo tienen registrado como servicio, buscándolo
+   * por todas partes y en este orden: lo que dice su última factura → el plan del
+   * catálogo que se le haya facturado alguna vez → el perfil con el que navega.
+   *
+   * Se resuelve en bloque (una consulta por fuente para toda la página) porque lo
+   * usan tanto la ficha como el listado.
+   */
+  private async serviciosDeRespaldo(filas: { id: string; pppProfile?: string | null }[]) {
+    const porAbonado = new Map<string, { kind: string; planName: string | null; price: number | null; status: string | null; source: string }[]>();
+    if (!filas.length) return porAbonado;
+
+    const deFactura = await this.serviciosDeUltimaFactura(filas.map((f) => f.id));
+    for (const [id, svc] of deFactura) porAbonado.set(id, svc);
+
+    const faltan = filas.filter((f) => !porAbonado.has(f.id));
+    if (faltan.length) {
+      const deItems = await this.serviciosDeItemsFacturados(faltan.map((f) => f.id));
+      for (const [id, svc] of deItems) porAbonado.set(id, svc);
+    }
+
+    for (const f of filas) {
+      if (porAbonado.has(f.id)) continue;
+      const delPerfil = this.servicioDePerfilPpp(f.pppProfile);
+      if (delPerfil.length) porAbonado.set(f.id, delPerfil);
+    }
+    return porAbonado;
+  }
+
+  /**
+   * Columnas por las que la tabla de clientes puede pedir orden. La clave es la
+   * de la columna en el frontend; lo que no esté aquí se sirve con el orden por
+   * defecto (por número de abonado).
+   */
+  private static readonly ORDEN_LISTA = {
+    abonado: 'abonado',
+    // El nombre visible sale de los campos partidos del legacy (ver
+    // `displayName`), así que se ordena por los mismos y en el mismo orden. Los
+    // 7 registros que traen `fullName` y las razones sociales sin persona
+    // quedan levemente fuera de sitio; no hay forma de ordenar un COALESCE
+    // desde Prisma y por 7 filas de 21.829 no vale montar una vista.
+    name: (dir: 'asc' | 'desc') => [
+      { firstName: dir }, { secondName: dir }, { lastName1: dir }, { lastName2: dir },
+    ],
+    doc: 'docNumber',
+    phone: 'phone1',
+    branch: 'branch.name',
+    status: 'status',
+    balance: 'balance',
+  };
+
   /** Listado paginado con búsqueda y filtros. */
   async list(params: ListFilter, user?: AuthUser) {
     // Con plan permitimos páginas más grandes (la vista de grupo carga muchos a la vez).
@@ -139,7 +308,7 @@ export class SubscribersService {
     const [rows, total] = await Promise.all([
       this.prisma.subscriber.findMany({
         where,
-        orderBy: { abonado: 'asc' },
+        orderBy: orden(params, SubscribersService.ORDEN_LISTA, { abonado: 'asc' }),
         skip: (page - 1) * pageSize,
         take: pageSize,
         include: {
@@ -150,15 +319,24 @@ export class SubscribersService {
       this.prisma.subscriber.count({ where }),
     ]);
 
-    // Resuelve el plan de Internet y de TV (activos) para la vista de grupo.
+    // A quien no se le copió el plan como servicio se le busca por las otras vías
+    // (ver `serviciosDeRespaldo`): la lista tiene que decir qué tiene contratado.
+    const respaldo = withPlan
+      ? await this.serviciosDeRespaldo(rows.filter((r: any) => !r.services?.length).map((r: any) => ({ id: r.id, pppProfile: r.pppProfile })))
+      : new Map();
+
+    // Resuelve el plan de Internet y de TV para la lista.
     const planOf = (s: any, kind: 'INTERNET' | 'TV') => {
-      const svc = (s.services ?? []).find((x: any) => x.kind === kind);
-      return svc ? { plan: svc.planName ?? null, price: num(svc.price) } : null;
+      const suyos = s.services?.length ? s.services : respaldo.get(s.id) ?? [];
+      const svc = suyos.find((x: any) => x.kind === kind);
+      return svc ? { plan: svc.planName ?? null, price: svc.price == null ? null : num(svc.price) } : null;
     };
 
-    // Deuda real por cliente = Σ(total − pagado) de facturas sin pagar (NO el saldo a favor).
+    // Deuda real por cliente = Σ(total − pagado) de facturas sin pagar (NO el saldo a favor,
+    // que es lo que guarda `subscriber.balance`). Se calcula siempre: la columna "Debe" de
+    // los listados es la cifra que de verdad se mira, y son solo los ids de la página.
     const debtById = new Map<string, number>();
-    if (withPlan && rows.length) {
+    if (rows.length) {
       const grouped = await this.prisma.subInvoice.groupBy({
         by: ['subscriberId'],
         where: { subscriberId: { in: rows.map((r) => r.id) }, status: { in: UNPAID_STATUSES } },
@@ -179,8 +357,9 @@ export class SubscribersService {
         status: s.status,
         branch: s.branch?.name ?? null,
         balance: num(s.balance),
+        debt: debtById.get(s.id) ?? 0,
         installTech: s.installTech,
-        ...(withPlan ? { internet: planOf(s, 'INTERNET'), tv: planOf(s, 'TV'), debt: debtById.get(s.id) ?? 0 } : {}),
+        ...(withPlan ? { internet: planOf(s, 'INTERNET'), tv: planOf(s, 'TV') } : {}),
       })),
       total,
       page,
@@ -295,8 +474,13 @@ export class SubscribersService {
       eInvoice: {
         enabled: s.eInvoice, tv: s.eInvoiceTv, internet: s.eInvoiceInternet, puntos: s.eInvoicePuntos,
       },
-      services: s.services.map((sv) => ({ kind: sv.kind, planName: sv.planName, status: sv.status, price: num(sv.price) })),
-      statusHistory: s.statusHistory.map((h) => ({ status: h.status, date: h.date, ticket: h.originTicketId })),
+      // Tres fuentes, de la mejor a la última: el servicio registrado, lo que dice
+      // su última factura y el perfil con el que navega. Lo que enseñe el legacy
+      // sale de alguna de ellas.
+      services: s.services.length
+        ? s.services.map((sv) => ({ kind: sv.kind, planName: sv.planName, status: sv.status, price: num(sv.price), source: 'plan' as const }))
+        : (await this.serviciosDeRespaldo([{ id: s.id, pppProfile: s.pppProfile }])).get(s.id) ?? [],
+      statusHistory: s.statusHistory.map((h) => ({ status: h.status, date: h.date, ticket: h.originTicketId, note: h.note })),
       workOrders: s.tickets.map((t) => ({
         id: t.id, code: t.code, type: t.type, subject: t.subject, status: t.status,
         created: t.created, finalDate: t.finalDate, assigned: t.assigned, problem: t.problem,
@@ -323,10 +507,16 @@ export class SubscribersService {
     if (params.status) where.status = params.status as SubscriberStatus;
     if (params.branchId) where.branchId = params.branchId;
 
-    // Servicio del cliente (según los servicios que tiene).
-    if (params.servicio === 'internet') and.push({ services: { some: { kind: 'INTERNET' } } });
-    else if (params.servicio === 'tv') and.push({ services: { some: { kind: 'TV' } } });
-    else if (params.servicio === 'combo') {
+    // Servicio del cliente (según los servicios que tiene). Los tres valores son
+    // excluyentes: "internet" y "tv" son solo-ese-servicio; quien tiene ambos
+    // sale únicamente bajo "combo".
+    if (params.servicio === 'internet') {
+      and.push({ services: { some: { kind: 'INTERNET' } } });
+      and.push({ services: { none: { kind: 'TV' } } });
+    } else if (params.servicio === 'tv') {
+      and.push({ services: { some: { kind: 'TV' } } });
+      and.push({ services: { none: { kind: 'INTERNET' } } });
+    } else if (params.servicio === 'combo') {
       and.push({ services: { some: { kind: 'INTERNET' } } });
       and.push({ services: { some: { kind: 'TV' } } });
     }
@@ -451,6 +641,24 @@ export class SubscribersService {
     return this.mikrotik.reconnectBatch(ids, user);
   }
 
+  /** Corte de TV masivo de TODOS los que cumplen el filtro (vía TR-069 u OLT por abonado). */
+  async tvCutByFilter(filter: ListFilter, user: AuthUser) {
+    const all = await this.resolveBulkIds(filter, user);
+    // Misma regla que el corte de internet: un COMPROMISO vigente protege del corte.
+    const { ids, protegidos } = await this.filterCuttable(all);
+    if (ids.length === 0) {
+      throw new BadRequestException('Todos los clientes del filtro tienen compromiso de pago vigente; no se cortó ninguno.');
+    }
+    const res = await this.genieacs.tvBatchBySubscribers(ids, false, user);
+    return { ...res, compromisosProtegidos: protegidos };
+  }
+
+  /** Alta de TV masiva de TODOS los que cumplen el filtro. */
+  async tvRestoreByFilter(filter: ListFilter, user: AuthUser) {
+    const ids = await this.resolveBulkIds(filter, user);
+    return this.genieacs.tvBatchBySubscribers(ids, true, user);
+  }
+
   /** WhatsApp masivo a TODOS los que cumplen el filtro. */
   async messageByFilter(filter: ListFilter, message: string, user?: AuthUser) {
     const ids = await this.resolveBulkIds(filter, user);
@@ -542,6 +750,40 @@ export class SubscribersService {
     }
 
     await this.prisma.subscriber.update({ where: { id }, data });
+    return this.detail(id);
+  }
+
+  /**
+   * Cambio MANUAL de estado del abonado (Activo, Suspendido, Retirado, ...).
+   * Es puramente administrativo: actualiza el cache de estado + historial, pero
+   * NO toca el router — para cortar/reconectar de verdad está el modal de
+   * Conexión (MikrotikService), que además marca CORTADO/ACTIVO por su cuenta.
+   */
+  async changeStatus(id: string, dto: ChangeStatusDto, user?: AuthUser) {
+    await exigirSedeSuscriptor(this.prisma, user, id);
+    const s = await this.prisma.subscriber.findUnique({
+      where: { id }, select: { id: true, status: true },
+    });
+    if (!s) throw new NotFoundException('Suscriptor no encontrado');
+
+    const next = dto.status as SubscriberStatus;
+    if (s.status === next) throw new BadRequestException('El cliente ya está en ese estado.');
+
+    // El historial no tiene columna de autor: el responsable va en la nota.
+    const who = user?.name || user?.email || null;
+    const extra = dto.note?.trim();
+    const note = [`Cambio manual${who ? ` por ${who}` : ''}`, extra].filter(Boolean).join(': ');
+
+    const now = new Date();
+    await this.prisma.$transaction([
+      this.prisma.subscriber.update({
+        where: { id },
+        data: { previousStatus: s.status ?? undefined, status: next, statusChangedAt: now },
+      }),
+      this.prisma.subscriberStatusHistory.create({
+        data: { subscriberId: id, status: next, date: now, note },
+      }),
+    ]);
     return this.detail(id);
   }
 

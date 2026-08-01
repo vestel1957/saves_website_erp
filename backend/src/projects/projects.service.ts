@@ -3,6 +3,7 @@ import { Type } from 'class-transformer';
 import { IsIn, IsInt, IsNumber, IsOptional, IsString, Min, MinLength } from 'class-validator';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { orden } from '../common/pagination-params';
 import { num } from '../common/money';
 
 function subName(s: { firstName: string | null; lastName1: string | null; companyName: string | null; fullName: string | null } | null): string | null {
@@ -48,7 +49,21 @@ export class ProjectsService {
     return { total: agg._count._all, presupuestoTotal: num(agg._sum.worth), enProgreso: status['Progress'] ?? 0, finalizados: status['Finished'] ?? 0, status };
   }
 
-  async list(params: { search?: string; status?: string; page?: number; pageSize?: number }) {
+  /**
+   * Columnas ordenables de la tabla de proyectos. `progress` sí es columna real
+   * (`progress`), y `milestones` es el conteo de una relación, que Prisma sabe
+   * ordenar.
+   */
+  private static readonly ORDEN_LISTA = {
+    name: 'name', status: 'status', priority: 'priority', progress: 'progress',
+    worth: 'worth',
+    client: (dir: 'asc' | 'desc') => [
+      { subscriber: { firstName: dir } }, { subscriber: { lastName1: dir } },
+    ],
+    milestones: (dir: 'asc' | 'desc') => ({ milestones: { _count: dir } }),
+  };
+
+  async list(params: { search?: string; status?: string; page?: number; pageSize?: number; sortBy?: string; sortDir?: string }) {
     const page = Math.max(1, Number(params.page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(params.pageSize) || 25));
     const where: Prisma.ProjectWhereInput = {};
@@ -56,7 +71,7 @@ export class ProjectsService {
     const search = (params.search || '').trim();
     if (search) where.OR = [{ name: { contains: search, mode: 'insensitive' } }, { subscriber: { is: { OR: [{ firstName: { contains: search, mode: 'insensitive' } }, { companyName: { contains: search, mode: 'insensitive' } }] } } }];
     const [rows, total] = await Promise.all([
-      this.prisma.project.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (page - 1) * pageSize, take: pageSize, include: { subscriber: { select: SUB }, _count: { select: { milestones: true } } } }),
+      this.prisma.project.findMany({ where, orderBy: orden(params, ProjectsService.ORDEN_LISTA, { createdAt: 'desc' }), skip: (page - 1) * pageSize, take: pageSize, include: { subscriber: { select: SUB }, _count: { select: { milestones: true } } } }),
       this.prisma.project.count({ where }),
     ]);
     return {

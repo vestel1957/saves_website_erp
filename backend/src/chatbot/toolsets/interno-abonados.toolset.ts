@@ -4,7 +4,10 @@ import { PERMISSION_DENIED } from '@s4gk/wa-agent';
 import { APP_PERMISSIONS as P } from '../../auth/permissions.catalog';
 import { SubscribersService } from '../../subscribers/subscribers.service';
 import { CobranzasService } from '../../treasury/cobranzas.service';
-import { canAny, cop, fecha, gated, safe } from './toolset.util';
+import { ChatbotDocsService, enviarDoc } from '../chatbot-docs.service';
+import {
+  canAny, cop, DOCUMENTO_DENEGADO, fecha, gated, HERRAMIENTAS_DOCUMENTOS, puedeDocumentos, safe,
+} from './toolset.util';
 import { authUserOf } from '../chatbot.identity';
 
 /** Mismo gate que el controller de clientes: cualquier área operativa consulta. */
@@ -20,10 +23,12 @@ export class InternoAbonadosToolset implements Toolset {
   constructor(
     private readonly subscribers: SubscribersService,
     private readonly cobranzas: CobranzasService,
+    private readonly docs: ChatbotDocsService,
   ) {}
 
   definitions(ctx: ToolContext): ToolDef[] {
-    return gated(canAny(ctx, VER_ABONADOS), [
+    return [
+      ...gated(canAny(ctx, VER_ABONADOS), [
       {
         name: 'buscar_abonado',
         description:
@@ -67,11 +72,31 @@ export class InternoAbonadosToolset implements Toolset {
           required: ['subscriberId'],
         },
       },
-    ]);
+      ]),
+      ...gated(canAny(ctx, VER_ABONADOS) && puedeDocumentos(ctx), [{
+        name: 'enviar_pdf_abonado',
+        description:
+          'Genera un documento del abonado en PDF y lo adjunta A ESTE CHAT (no se le manda al cliente). ' +
+          'Tipos: "estado_cuenta" (cargos, abonos y saldo corrido), "paz_y_salvo" (certificado; si tiene ' +
+          'deuda sale como constancia de cartera) y "contrato" (contrato de servicios con sus cláusulas). ' +
+          'Es el mismo PDF que se imprime desde el ERP.',
+        input_schema: {
+          type: 'object',
+          properties: {
+            subscriberId: { type: 'string', description: 'id del abonado (de buscar_abonado)' },
+            tipo: { type: 'string', enum: ['estado_cuenta', 'paz_y_salvo', 'contrato'] },
+          },
+          required: ['subscriberId', 'tipo'],
+        },
+      }]),
+    ];
   }
 
   async execute(name: string, input: Record<string, unknown>, ctx: ToolContext): Promise<string> {
     if (!canAny(ctx, VER_ABONADOS)) return PERMISSION_DENIED;
+    // Segunda barrera de los documentos: declararlos solo a administración evita que
+    // el modelo los ofrezca, pero no que los invoque si se inventa el nombre.
+    if (HERRAMIENTAS_DOCUMENTOS.has(name) && !puedeDocumentos(ctx)) return DOCUMENTO_DENEGADO;
 
     switch (name) {
       case 'buscar_abonado':
@@ -82,6 +107,8 @@ export class InternoAbonadosToolset implements Toolset {
         return safe(() => this.estadoCuenta(String(input.subscriberId ?? '')));
       case 'facturas_abonado':
         return safe(() => this.facturas(String(input.subscriberId ?? ''), Number(input.limite) || 5));
+      case 'enviar_pdf_abonado':
+        return safe(() => this.enviarPdf(input, ctx));
       default:
         return `Herramienta no disponible: ${name}`;
     }
@@ -133,6 +160,39 @@ export class InternoAbonadosToolset implements Toolset {
       ...lineas,
       d.balance ? `Saldo a favor: ${cop(d.balance)}` : '',
     ].filter(Boolean).join('\n');
+  }
+
+  /**
+   * Documentos del abonado en PDF, al chat de quien pregunta.
+   *
+   * El `AuthUser` del funcionario viaja hasta el servicio: un usuario de una sede no
+   * puede sacar por WhatsApp el contrato de un abonado de otra, igual que no puede
+   * abrirlo en la web.
+   *
+   * A diferencia del agente de clientes, aquí el paz y salvo SÍ se manda aunque haya
+   * deuda: quien lo pide es un funcionario que necesita el soporte del estado real de
+   * la cartera, no el certificado para un trámite.
+   */
+  private async enviarPdf(input: Record<string, unknown>, ctx: ToolContext): Promise<string> {
+    const id = String(input.subscriberId ?? '').trim();
+    const tipo = String(input.tipo ?? '').trim();
+    if (!id) return 'Indica el id del abonado (búscalo primero con buscar_abonado).';
+    const user = authUserOf(ctx.user);
+
+    switch (tipo) {
+      case 'estado_cuenta':
+        return enviarDoc(ctx, await this.docs.estadoCuenta(id, user));
+      case 'paz_y_salvo': {
+        const doc = await this.docs.pazYSalvo(id, user);
+        const aviso = doc.alDia ? '' : ` OJO: el abonado NO está a paz y salvo (debe ${cop(doc.saldo)}), ` +
+          'así que el documento sale como constancia de su cartera, no como certificado.';
+        return (await enviarDoc(ctx, doc)) + aviso;
+      }
+      case 'contrato':
+        return enviarDoc(ctx, await this.docs.contrato(id, user));
+      default:
+        return `No conozco el documento "${tipo}". Puedo generar: estado_cuenta, paz_y_salvo o contrato.`;
+    }
   }
 
   private async facturas(id: string, limite: number): Promise<string> {

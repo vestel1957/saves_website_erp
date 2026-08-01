@@ -5,10 +5,12 @@ import { scopeDate, currentYear } from '../common/date-scope';
 import { WhatsappService } from '../common/whatsapp/whatsapp.service';
 import { MailService } from '../common/mail/mail.service';
 import { invoicePdfBuffer } from './billing-pdf';
+import { ReciboRolloData } from '../common/pdf/recibo-rollo';
+import { conceptoFactura } from '../common/concepto-factura';
 import { num } from '../common/money';
 import { sedesDe, whereSedePorSuscriptor, exigirSedeSuscriptor } from '../common/sede-scope';
 import { AuthUser } from '../auth/current-user.decorator';
-import { paginacion } from '../common/pagination-params';
+import { orden, paginacion } from '../common/pagination-params';
 
 const cop = (n: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(n || 0);
 
@@ -27,6 +29,25 @@ const SUB_SELECT = {
   firstName: true, secondName: true, lastName1: true, lastName2: true,
   companyName: true, fullName: true, abonado: true, id: true,
 } as const;
+
+/**
+ * Mes facturado, en texto ("abril de 2026").
+ *
+ * NO hay columna de periodo en `SubInvoice` (tampoco la había en el legacy: ver
+ * `mapInvoice` en scripts/lib/vestel-map.js, que mapea la fila entera). El único
+ * anclaje fiable es el mes de emisión, y SOLO vale para las recurrentes: la
+ * corrida genera una única factura por abonado y mes calendario, así que ahí mes
+ * de emisión == periodo cobrado.
+ *
+ * Las FIJA y las notas son cargos puntuales (instalación, reconexión, ajustes):
+ * no se les inventa un periodo, se devuelve null y la pantalla las rotula como
+ * lo que son. `invoiceDate` es columna `date`, así que se lee en UTC — leerla en
+ * la zona de la sesión corre el mes en los días 1 (ver [[sql-crudo-fechas-date]]).
+ */
+function periodoFacturado(kind: string | null, invoiceDate: Date | null): string | null {
+  if (kind !== 'RECURRENTE' || !invoiceDate) return null;
+  return invoiceDate.toLocaleDateString('es-CO', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+}
 
 @Injectable()
 export class BillingService {
@@ -108,11 +129,35 @@ export class BillingService {
     };
   }
 
+  /**
+   * Columnas ordenables de la tabla de facturas.
+   *
+   * `balance` (saldo) no está y no puede estar: es `total − pagado`, una cuenta
+   * que Prisma no sabe poner en un `ORDER BY`. Como el listado se pagina en el
+   * servidor, ordenar por saldo solo movería la página visible, así que la
+   * columna no ofrece flecha en vez de ofrecer una que miente. Para "quién debe
+   * más" está el listado de cartera.
+   */
+  private static readonly ORDEN_LISTA = {
+    tid: 'tid',
+    sub: (dir: 'asc' | 'desc') => [
+      { subscriber: { firstName: dir } },
+      { subscriber: { lastName1: dir } },
+      { subscriber: { companyName: dir } },
+    ],
+    service: (dir: 'asc' | 'desc') => [{ serviceCombo: dir }, { serviceTv: dir }],
+    date: 'invoiceDate',
+    due: 'dueDate',
+    total: 'total',
+    status: 'status',
+  };
+
   /** Listado paginado de facturas con filtros. */
   async list(params: {
     search?: string; status?: string; ron?: string; branchId?: string;
     from?: string; to?: string; all?: string; overdue?: string;
     page?: number; pageSize?: number;
+    sortBy?: string; sortDir?: string;
   }, user?: AuthUser) {
     const { page, pageSize } = paginacion(params);
     const search = (params.search || '').trim();
@@ -154,7 +199,7 @@ export class BillingService {
 
     const [rows, total, agg] = await Promise.all([
       this.prisma.subInvoice.findMany({
-        where, orderBy: { invoiceDate: 'desc' },
+        where, orderBy: orden(params, BillingService.ORDEN_LISTA, { invoiceDate: 'desc' }),
         skip: (page - 1) * pageSize, take: pageSize,
         include: { subscriber: { select: SUB_SELECT } },
       }),
@@ -203,6 +248,7 @@ export class BillingService {
       subtotal: num(i.subtotal), tax: num(i.tax), discount: num(i.discount),
       total: num(i.total), paid: num(i.paidAmount), balance: num(i.total) - num(i.paidAmount),
       paymentMethod: i.paymentMethod, branchRef: i.branchRef,
+      period: periodoFacturado(i.kind, i.invoiceDate),
       service: { combo: i.serviceCombo, tv: i.serviceTv, puntos: i.puntos, estadoCombo: i.estadoCombo, estadoTv: i.estadoTv },
       eInvoiceFlag: i.eInvoiceFlag,
       subscriber: i.subscriber ? {
@@ -221,6 +267,77 @@ export class BillingService {
       electronic: i.electronicInvoices.map((e) => ({
         id: e.id, date: e.date, type: e.type, dianNumber: e.dianNumber, cufe: e.cufe, pdfUrl: e.pdfUrl,
       })),
+    };
+  }
+
+  /**
+   * Datos del recibo en ROLLO de 80 mm de una factura.
+   *
+   * El "Imprimir" del legacy (`invoices/view.php` → `Invoices::printinvoice`) nunca
+   * sacó una hoja: cargaba mPDF con `format => [80, 250]`, o sea el papel de la
+   * impresora de caja. Aquí se reconstruye ese mismo contenido: los ítems de la
+   * factura, debajo las OTRAS facturas que el cliente sigue debiendo y el saldo
+   * global — que es lo que la cajera le lee al cliente en el mostrador.
+   */
+  async reciboRolloData(id: string, user?: AuthUser): Promise<ReciboRolloData> {
+    const inv = await this.detail(id, user);
+
+    const pendientes = inv.subscriber
+      ? await this.prisma.subInvoice.findMany({
+          where: { subscriberId: inv.subscriber.id, status: { in: ['DUE', 'PARTIAL'] } },
+          select: {
+            id: true, tid: true, kind: true, invoiceDate: true, total: true, paidAmount: true,
+            items: { select: { productName: true }, take: 1, orderBy: { createdAt: 'asc' } },
+          },
+          orderBy: { invoiceDate: 'asc' },
+        })
+      : [];
+    const saldoDe = (i: { total: Prisma.Decimal; paidAmount: Prisma.Decimal }) =>
+      Math.max(0, num(i.total) - num(i.paidAmount));
+    const balance = pendientes.reduce((s, i) => s + saldoDe(i), 0);
+    // El pie del recibo manda a pagar con el "código de usuario", que es el
+    // `customers.id` del legacy — aquí, `legacyId`. Los clientes creados en este
+    // stack no lo tienen y el recibo cae al número de abonado.
+    const codigo = inv.subscriber
+      ? (await this.prisma.subscriber.findUnique({
+          where: { id: inv.subscriber.id }, select: { legacyId: true },
+        }))?.legacyId ?? null
+      : null;
+
+    return {
+      number: String(inv.tid),
+      date: inv.date,
+      createdAt: new Date(),
+      branch: inv.branchRef ?? inv.subscriber?.branch ?? null,
+      cashier: null,
+      cashierRole: null,
+      method: inv.paymentMethod,
+      subscriber: inv.subscriber
+        ? {
+            name: inv.subscriber.name,
+            abonado: inv.subscriber.abonado,
+            docType: inv.subscriber.docType,
+            docNumber: inv.subscriber.docNumber,
+            email: inv.subscriber.email,
+            codigo,
+          }
+        : null,
+      // Los ítems de la factura tal cual (el `foreach ($lista_items)` del legacy).
+      items: inv.items.map((it) => ({
+        tid: inv.tid,
+        concept: [it.product, it.description].filter(Boolean).join(' — ') || 'Ítem',
+        amount: it.subtotal + it.taxTotal,
+      })),
+      // Las demás pendientes, que el legacy imprime en negrita cursiva debajo.
+      pending: pendientes
+        .filter((i) => i.id !== inv.id)
+        .map((i) => ({ tid: i.tid, concept: conceptoFactura(i), amount: saldoDe(i) })),
+      total: inv.total,
+      paid: inv.paid,
+      discount: inv.discount,
+      balance,
+      status: inv.status,
+      terms: inv.period ? `Servicio de ${inv.period}` : null,
     };
   }
 

@@ -1,29 +1,24 @@
 import PDFDocument from 'pdfkit';
 import type { Response } from 'express';
+import * as B from './brand';
 
 const cop = (n: number) =>
   '$ ' + new Intl.NumberFormat('es-CO', { maximumFractionDigits: 0 }).format(Math.round(n || 0));
 const fmt = (d: Date | string | null) => (d ? new Date(d).toLocaleDateString('es-CO') : '—');
-const BRAND = '#1e3a8a';
-const GRAY = '#666';
+// Alias hacia el kit de marca: el resto del archivo ya hablaba en estos términos.
+const BRAND = B.NAVY;
+const GRAY = B.INK_3;
 
-function brandHeader(doc: PDFKit.PDFDocument, title: string) {
-  doc.fillColor(BRAND).fontSize(20).font('Helvetica-Bold').text('VESTEL', 40, 40);
-  doc.fillColor(GRAY).fontSize(9).font('Helvetica').text('Servicios de Internet y Televisión', 40, 64);
-  doc.fillColor(GRAY).fontSize(8).text('VESGA TELEVISION S.A.S · NIT 813.001.768-1', 40, 76);
-  doc.moveTo(40, 96).lineTo(555, 96).strokeColor('#ddd').stroke();
-  doc.fillColor('#111').fontSize(15).font('Helvetica-Bold').text(title, 40, 108);
-  doc.y = 134;
-}
+const brandHeader = (doc: PDFKit.PDFDocument, title: string, opts?: { right?: string; chip?: string }) =>
+  B.docHeader(doc, title, opts ?? {});
 
-function kv(doc: PDFKit.PDFDocument, l: string, v: string) {
-  doc.fontSize(10).fillColor('#333');
-  doc.font('Helvetica-Bold').text(l, { continued: true }).font('Helvetica').text(` ${v}`);
-}
+const kv = (doc: PDFKit.PDFDocument, l: string, v: string) => B.kv(doc, l.replace(/:$/, ''), v);
 
 // ---------------------------------------------------------------------------
 const fmtLargo = (d: Date | string | null) =>
   d ? new Date(d).toLocaleDateString('es-CO', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' }) : '—';
+const fmtHoraCorta = (d: Date | string | null) =>
+  d ? new Date(d).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', hour12: false }) : '—';
 
 type Bucket = { cantidad: number; monto: number };
 
@@ -75,112 +70,135 @@ export type CashCloseData = {
 };
 
 /**
- * Comprobante de cierre de caja — réplica del legacy.
+ * Comprobante de cierre de caja — réplica del legacy en las CIFRAS, no en la forma.
  *
  * No lleva base ni consignado: allá la base es cero y el cierre barre el efectivo entero
  * del cajón, que se arrastra al próximo día hábil (ver `treasury/cierre-legacy.ts`).
+ *
+ * Estructura del documento:
+ *
+ *   Hoja 1 · el resumen que se firma — el arqueo del cajón, las cifras del día, cómo
+ *            entró la plata y de dónde salió. Es la hoja que se archiva y se entrega.
+ *   Anexo A · los bloques del legacy, tabla por tabla, para conciliar contra el sistema
+ *            viejo cifra por cifra.
+ *   Anexo B · los movimientos, agrupados por concepto y con subtotal.
+ *
+ * Antes era todo un mismo chorro: arqueo, ocho tablas y cuatrocientas filas de
+ * movimientos seguidas, sin una hoja que se pudiera firmar sin llevarse el resto detrás.
  */
 export function cashClosePdf(res: Response, d: CashCloseData) {
-  const doc = new PDFDocument({ size: 'A4', margin: 40 });
+  const doc = B.newDoc(PDFDocument);
   doc.pipe(res);
-  brandHeader(doc, 'Cierre de caja');
+  const inf = d.informe;
 
-  kv(doc, 'Caja:', d.cashAccountName);
-  kv(doc, 'Fecha:', fmtLargo(d.date));
-  kv(doc, 'Cajero:', d.userName || '—');
-  kv(doc, 'Arrastra a:', `${fmtLargo(d.proximoDiaHabil)} (próximo día hábil)`);
-  doc.moveDown(0.8);
+  /* ─────────────────── Hoja 1: el resumen que se firma ─────────────────── */
+  brandHeader(doc, 'Cierre de caja', {
+    right: 'Comprobante de caja',
+    chip: d.descuadrado ? 'DESCUADRADO' : 'CERRADA',
+  });
+
+  B.kvGrid(doc, [
+    ['Caja', d.cashAccountName],
+    ['Fecha', fmtLargo(d.date)],
+    ['Cajero', d.userName || '—'],
+    ['Arrastra a', `${fmtLargo(d.proximoDiaHabil)} (próx. día hábil)`],
+  ]);
 
   if (d.descuadrado) {
     const y = doc.y;
-    doc.rect(40, y, 515, 30).fill('#fff4e5');
+    doc.rect(B.M, y, B.WIDTH, 30).fill('#fff4e5');
     doc.fillColor('#8a5300').fontSize(9).font('Helvetica-Bold')
-      .text('Este cierre ya no cuadra con el libro.', 46, y + 6);
+      .text('Este cierre ya no cuadra con el libro.', B.M + 6, y + 6);
     doc.font('Helvetica').text(
       `Se barrieron ${cop(d.excedente)}, pero con los movimientos vigentes hoy el cajón daría ${cop(d.efectivoHoy)}.`,
-      46, y + 17, { width: 500 },
+      B.M + 6, y + 17, { width: B.WIDTH - 12 },
     );
     doc.y = y + 38;
   }
 
-  sectionTitle(doc, 'Arqueo del cajón');
-  const rows: [string, number, boolean?][] = [
-    ['Arrastre que entró del cierre anterior', d.arrastre],
-    ['(+) Recaudo en efectivo del día', d.ventas],
-    ['(-) Egresos en efectivo', d.egresos],
-    ...(d.transferencias !== 0 ? ([['(±) Traslados entre cajas', d.transferencias]] as [string, number][]) : []),
-    ['(=) Excedente barrido', d.excedente, true],
-  ];
-  const x0 = 40, x1 = 380, w = 175;
-  for (const [label, val, bold] of rows) {
-    const y = doc.y;
-    if (bold) { doc.rect(x0, y - 3, 515, 22).fill('#f1f5ff'); doc.fillColor('#111'); }
-    doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(bold ? 12 : 11).fillColor(bold ? BRAND : '#333');
-    doc.text(label, x0 + 6, y + 2);
-    doc.text(cop(val), x1, y + 2, { width: w, align: 'right' });
-    doc.y = y + 24;
-    doc.moveTo(x0, doc.y - 3).lineTo(555, doc.y - 3).strokeColor('#eee').stroke();
-  }
+  // La cinta de cuadre: de dónde sale el excedente, paso a paso y en una sola línea.
+  sectionTitle(doc, 'Cómo se compone el cajón');
+  cinta(doc, [
+    { op: '', k: 'Arrastre anterior', v: d.arrastre },
+    { op: '+', k: 'Recaudo efectivo', v: d.ventas },
+    { op: '-', k: 'Egresos efectivo', v: d.egresos },
+    { op: d.transferencias < 0 ? '-' : '+', k: 'Traslados', v: Math.abs(d.transferencias) },
+    { op: '=', k: 'En el cajón', v: d.excedente, res: true },
+  ]);
+  // Sin el recaudo que no es efectivo: este bloque es el arqueo del CAJÓN y esa plata
+  // nunca pasa por él, así que nombrarla aquí sólo invitaba a sumarla.
   doc.font('Helvetica').fontSize(8).fillColor(GRAY).text(
-    'La base es cero: al cerrar se lleva el efectivo entero del cajón.' +
-      (d.noEfectivo > 0 ? ` El recaudo por banco/tarjeta (${cop(d.noEfectivo)}) no está en el cajón y no se barre.` : ''),
-    40, doc.y + 4, { width: 515 },
+    'La base es cero: al cerrar se lleva el efectivo entero del cajón.',
+    B.M, doc.y + 4, { width: B.WIDTH },
   );
-  doc.moveDown(1.2);
+  doc.moveDown(0.8);
 
-  // ── Los bloques de resumen del informe legacy ──────────────────────────────
-  const inf = d.informe;
-  const tabla = (titulo: string, filas: [string, number | string, number][], total?: [string, number | string, number]) => {
-    if (doc.y > 690) { doc.addPage(); doc.y = 50; }
-    sectionTitle(doc, titulo);
-    let y = doc.y;
-    doc.font('Helvetica-Bold').fontSize(8).fillColor(GRAY);
-    doc.text('DESCRIPCIÓN', 46, y); doc.text('CANT', 330, y, { width: 60, align: 'right' });
-    doc.text('MONTO', 420, y, { width: 130, align: 'right' });
-    doc.y = y + 12;
-    for (const [label, cant, monto] of filas) {
-      if (doc.y > 770) { doc.addPage(); doc.y = 50; }
-      y = doc.y;
-      doc.font('Helvetica').fontSize(9).fillColor('#333');
-      doc.text(label, 46, y, { width: 280, ellipsis: true });
-      doc.text(String(cant), 330, y, { width: 60, align: 'right' });
-      doc.text(cop(monto), 420, y, { width: 130, align: 'right' });
-      doc.y = y + 13;
-    }
-    if (total) {
-      y = doc.y;
-      doc.rect(40, y - 2, 515, 17).fill('#f1f5ff');
-      doc.font('Helvetica-Bold').fontSize(9).fillColor(BRAND);
-      doc.text(total[0], 46, y + 2, { width: 280 });
-      doc.text(String(total[1]), 330, y + 2, { width: 60, align: 'right' });
-      doc.text(cop(total[2]), 420, y + 2, { width: 130, align: 'right' });
-      doc.y = y + 22;
-    }
-    doc.moveDown(0.5);
-  };
+  sectionTitle(doc, 'El día en cifras');
+  B.stats(doc, [
+    ['Cobrado del día', cop(inf.cobranza.total.monto)],
+    ['Efectivo en el cajón', cop(d.excedente)],
+    ['Egresos del día', cop(inf.egresos.total.monto)],
+  ]);
 
-  tabla('Resumen Cobranza', [
-    ['Excento', inf.cobranza.excento.cantidad, inf.cobranza.excento.monto],
-    ['Base', inf.cobranza.base.cantidad, inf.cobranza.base.monto],
-    ['iva', '', inf.cobranza.iva.monto],
-  ], ['TOTAL COBRANZA', inf.cobranza.total.cantidad, inf.cobranza.total.monto]);
-
-  tabla('Resumen por Banco',
-    inf.porBanco.map((b) => [b.nombre, b.cantidad, b.monto] as [string, number, number]),
-    ['TOTAL COBRANZA', inf.porBanco.reduce((s, b) => s + b.cantidad, 0), inf.porBanco.reduce((s, b) => s + b.monto, 0)],
-  );
-
-  tabla('Resumen por Forma de pago', [
-    ['Saldo Anterior', inf.formaPago.saldoAnterior.cantidad, inf.formaPago.saldoAnterior.monto],
+  sectionTitle(doc, 'Cómo entró la plata');
+  const fpFilas: [string, number, number][] = [
+    ['Saldo anterior', inf.formaPago.saldoAnterior.cantidad, inf.formaPago.saldoAnterior.monto],
     ['Efectivo', inf.formaPago.efectivo.cantidad, inf.formaPago.efectivo.monto],
     ['Transferencia', inf.formaPago.transferencia.cantidad, inf.formaPago.transferencia.monto],
     ['WOMPI', inf.formaPago.wompi.cantidad, inf.formaPago.wompi.monto],
-  ], ['TOTAL FORMA PAGO',
+  ];
+  tablaRica(doc, fpFilas, 'Total forma de pago');
+
+  if (d.porCategoria.length) {
+    sectionTitle(doc, 'De dónde entró y de dónde salió');
+    // Sin barra de composición: aquí conviven entradas y salidas, y una barra apilada
+    // que mezcla las dos direcciones pintaría una proporción que no significa nada.
+    tablaRica(
+      doc,
+      d.porCategoria.map((c) => [
+        `${c.type === 'INCOME' ? '(+)' : c.type === 'EXPENSE' ? '(-)' : '(±)'} ${c.category || 'Traslado entre cajas'}`,
+        c.n,
+        c.total,
+      ] as [string, number, number]),
+      'Neto del día',
+      [
+        d.porCategoria.reduce((s, c) => s + c.n, 0),
+        d.porCategoria.reduce((s, c) => s + (c.type === 'INCOME' ? c.total : -c.total), 0),
+      ],
+      { composicion: false },
+    );
+  }
+
+  B.signatures(doc, [
+    { rotulo: 'Firma responsable de caja', nombre: d.userName || null },
+    { rotulo: 'Recibe tesorería' },
+  ]);
+
+  /* ─────────────────── Anexo A: los bloques del legacy ─────────────────── */
+  B.newPage(doc);
+  anexo(doc, 'Anexo A · Informe del legacy',
+    'Los mismos bloques del sistema viejo, en su mismo orden, para conciliar cifra por cifra.');
+
+  sectionTitle(doc, 'Resumen Cobranza');
+  tablaRica(doc, [
+    ['Excento', inf.cobranza.excento.cantidad, inf.cobranza.excento.monto],
+    ['Base', inf.cobranza.base.cantidad, inf.cobranza.base.monto],
+    ['iva', '', inf.cobranza.iva.monto],
+  ], 'Total cobranza', [inf.cobranza.total.cantidad, inf.cobranza.total.monto]);
+
+  sectionTitle(doc, 'Resumen por Banco');
+  tablaRica(doc, inf.porBanco.map((b) => [b.nombre, b.cantidad, b.monto] as [string, number, number]),
+    'Total banco', [inf.porBanco.reduce((s, b) => s + b.cantidad, 0), inf.porBanco.reduce((s, b) => s + b.monto, 0)],
+  );
+
+  sectionTitle(doc, 'Resumen por Forma de pago');
+  tablaRica(doc, fpFilas, 'Total forma de pago', [
     inf.formaPago.saldoAnterior.cantidad + inf.formaPago.efectivo.cantidad + inf.formaPago.transferencia.cantidad + inf.formaPago.wompi.cantidad,
     inf.formaPago.saldoAnterior.monto + inf.formaPago.efectivo.monto + inf.formaPago.transferencia.monto + inf.formaPago.wompi.monto,
   ]);
 
-  tabla('Resumen por Servicios', [
+  sectionTitle(doc, 'Resumen por Servicios');
+  tablaRica(doc, [
     ...inf.servicios.planes.map((p) => [`Internet ${p.megas}MG`, p.cantidad, p.monto] as [string, number, number]),
     ...(inf.servicios.television.cantidad ? ([['Television', inf.servicios.television.cantidad, inf.servicios.television.monto]] as [string, number, number][]) : []),
     ...inf.servicios.afiliaciones.map((a) => [a.producto, a.cantidad, a.monto] as [string, number, number]),
@@ -188,12 +206,13 @@ export function cashClosePdf(res: Response, d: CashCloseData) {
     ['Total Reconexiones', inf.servicios.reconexiones.cantidad, inf.servicios.reconexiones.monto],
     ['Total Materiales', inf.servicios.materiales.cantidad, inf.servicios.materiales.monto],
     ['Total Otros', inf.servicios.otros.cantidad, inf.servicios.otros.monto],
-  ], ['TOTAL', inf.servicios.total.cantidad, inf.servicios.total.monto]);
+  ], 'Total servicios', [inf.servicios.total.cantidad, inf.servicios.total.monto]);
 
-  tabla('Resumen por tipo de servicio', [
+  sectionTitle(doc, 'Resumen por tipo de servicio');
+  tablaRica(doc, [
     ['Internet', inf.tipoServicio.Internet.cantidad, inf.tipoServicio.Internet.monto],
     ['Television', inf.tipoServicio.Television.cantidad, inf.tipoServicio.Television.monto],
-  ], ['TOTAL TIPO DE SERVICIOS',
+  ], 'Total tipo de servicio', [
     inf.tipoServicio.Internet.cantidad + inf.tipoServicio.Television.cantidad,
     inf.tipoServicio.Internet.monto + inf.tipoServicio.Television.monto,
   ]);
@@ -203,71 +222,256 @@ export function cashClosePdf(res: Response, d: CashCloseData) {
     const x = new Date(Date.UTC(dd.getUTCFullYear(), dd.getUTCMonth() + delta, 1));
     return x.toLocaleDateString('es-CO', { month: 'long', year: 'numeric' });
   };
-  tabla('Resumen de cargos cobrados por meses', [
+  sectionTitle(doc, 'Resumen de cargos cobrados por meses');
+  tablaRica(doc, [
     [mesLabel(d.date, 0), inf.meses.actual.cantidad, inf.meses.actual.monto],
     [mesLabel(d.date, -1), inf.meses.anterior.cantidad, inf.meses.anterior.monto],
     ['Meses anteriores', inf.meses.anteriores.cantidad, inf.meses.anteriores.monto],
-  ], ['TOTAL COBRANZA POR MESES',
+  ], 'Total cobranza por meses', [
     inf.meses.actual.cantidad + inf.meses.anterior.cantidad + inf.meses.anteriores.cantidad,
     inf.meses.actual.monto + inf.meses.anterior.monto + inf.meses.anteriores.monto,
   ]);
 
-  tabla('Resumen Anulaciones', [
+  sectionTitle(doc, 'Resumen Anulaciones');
+  tablaRica(doc, [
     ['Anulado de cierre', inf.anulaciones.anuladoDeCierre.cantidad, inf.anulaciones.anuladoDeCierre.monto],
     ['Anulado de otros cierres', inf.anulaciones.anuladoDeOtrosCierres.cantidad, inf.anulaciones.anuladoDeOtrosCierres.monto],
     ['Cobranza efectiva', '', inf.anulaciones.cobranzaEfectiva.monto],
-  ], ['COBRADO - ANULADO DE OTRAS FECHAS', '', inf.anulaciones.cobradoNeto]);
+  ], 'Cobrado - anulado de otras fechas', ['', inf.anulaciones.cobradoNeto], { composicion: false });
 
-  tabla('Resumen Egresos', [
+  sectionTitle(doc, 'Resumen Egresos');
+  tablaRica(doc, [
     ['Pago Orden de Compra', inf.egresos.ordenes.cantidad, inf.egresos.ordenes.monto],
     ...(inf.egresos.traslados.cantidad ? ([['Transferencias', inf.egresos.traslados.cantidad, inf.egresos.traslados.monto]] as [string, number, number][]) : []),
     ...(inf.egresos.transacciones.cantidad ? ([['Transacciones', inf.egresos.transacciones.cantidad, inf.egresos.transacciones.monto]] as [string, number, number][]) : []),
-  ], ['TOTAL EGRESOS', inf.egresos.total.cantidad, inf.egresos.total.monto]);
+  ], 'Total egresos', [inf.egresos.total.cantidad, inf.egresos.total.monto]);
 
-  if (d.porCategoria.length) {
-    if (doc.y > 690) { doc.addPage(); doc.y = 50; }
-    sectionTitle(doc, 'De dónde salió');
-    for (const c of d.porCategoria) {
-      const y = doc.y;
-      doc.font('Helvetica').fontSize(9).fillColor('#333');
-      doc.text(`${c.type === 'INCOME' ? '(+)' : c.type === 'EXPENSE' ? '(-)' : '(±)'} ${c.category}  (${c.n})`, 46, y);
-      doc.text(cop(c.total), x1, y, { width: w, align: 'right' });
-      doc.y = y + 14;
-    }
-    doc.moveDown(0.8);
-  }
-
+  /* ─────────────────── Anexo B: los movimientos ─────────────────── */
   if (d.movimientos.length) {
-    sectionTitle(doc, `Movimientos del día (${d.movimientos.length})`);
-    const cols = [46, 190, 330, 420, 480];
-    doc.font('Helvetica-Bold').fontSize(8).fillColor(GRAY);
-    let y = doc.y;
-    doc.text('Quién', cols[0], y); doc.text('Concepto', cols[1], y);
-    doc.text('Medio', cols[2], y); doc.text('Valor', cols[3], y, { width: 70, align: 'right' });
-    doc.text('Saldo', cols[4], y, { width: 70, align: 'right' });
-    doc.y = y + 12;
+    B.newPage(doc);
+    anexo(doc, `Anexo B · Movimientos del día (${d.movimientos.length})`,
+      'Agrupados por concepto, con subtotal — el mismo corte que los filtros de la pantalla.');
 
-    let saldo = 0;
+    // Mismo agrupamiento que los pills de la pantalla, para que el papel y la pantalla
+    // cuenten la misma historia. Dentro de cada grupo se respeta el orden cronológico.
+    const grupos = new Map<string, typeof d.movimientos>();
     for (const m of d.movimientos) {
-      if (doc.y > 760) { doc.addPage(); doc.y = 50; }
-      saldo += m.firma;
-      y = doc.y;
-      doc.font('Helvetica').fontSize(8).fillColor('#333');
-      doc.text((m.payer || '—').slice(0, 32), cols[0], y, { width: 140, ellipsis: true });
-      doc.text((m.note || m.category || '—').slice(0, 34), cols[1], y, { width: 135, ellipsis: true });
-      doc.text(m.method || '—', cols[2], y, { width: 85, ellipsis: true });
-      doc.fillColor(m.type === 'EXPENSE' ? '#b42318' : '#067647');
-      doc.text(`${m.type === 'EXPENSE' ? '-' : '+'}${cop(m.amount)}`, cols[3], y, { width: 70, align: 'right' });
-      doc.fillColor('#333').text(cop(saldo), cols[4], y, { width: 70, align: 'right' });
-      doc.y = y + 12;
+      const k = `${m.type}|${m.category ?? '—'}`;
+      const g = grupos.get(k) ?? [];
+      g.push(m);
+      grupos.set(k, g);
+    }
+
+    // Sin columna de saldo acumulado: al agrupar por concepto las filas dejan de ir en
+    // orden cronológico, y un saldo que va y viene según el grupo no es un saldo. Lo que
+    // sí dice algo es el subtotal de cada grupo, que va en su título.
+    const cols: B.Col[] = [
+      { label: 'Hora', x: B.M + 6, w: 42 },
+      { label: 'Quién', x: 90, w: 165 },
+      { label: 'Concepto / nota', x: 258, w: 140 },
+      { label: 'Medio', x: 400, w: 75 },
+      { label: 'Valor', x: 475, w: 75, align: 'right' },
+    ];
+
+    for (const [k, filas] of grupos) {
+      const [tipo, categoria] = k.split('|');
+      const signo = tipo === 'INCOME' ? '(+)' : tipo === 'EXPENSE' ? '(-)' : '(±)';
+      const subtotal = filas.reduce((s, m) => s + m.amount, 0);
+
+      if (doc.y > 700) B.newPage(doc);
+      sectionTitle(doc, `${signo} ${categoria} · ${filas.length} · ${cop(subtotal)}`);
+      B.thead(doc, cols);
+
+      filas.forEach((m, i) => {
+        if (doc.y > 745) { B.newPage(doc); B.thead(doc, cols); }
+        B.trow(doc, cols, [
+          { t: fmtHoraCorta(m.date), color: GRAY },
+          m.payer || '—',
+          m.note || m.category || '—',
+          m.method || '—',
+          { t: `${tipo === 'INCOME' ? '+' : '-'}${cop(m.amount)}`, color: tipo === 'INCOME' ? B.OK : B.BAD, bold: true },
+        ], i, 15);
+      });
+      doc.moveDown(0.4);
     }
   }
 
-  doc.moveDown(3);
-  doc.fontSize(9).fillColor(GRAY);
-  doc.text('_______________________________', 40, doc.y);
-  doc.text('Firma responsable de caja', 40, doc.y + 4);
-  doc.end();
+  B.finish(doc);
+}
+
+/** Cinta horizontal de pasos: el arqueo leído de izquierda a derecha, sin restar de cabeza. */
+function cinta(
+  doc: PDFKit.PDFDocument,
+  pasos: { op: string; k: string; v: number; res?: boolean }[],
+) {
+  const GAP = 4;
+  const w = (B.WIDTH - GAP * (pasos.length - 1)) / pasos.length;
+  const ALTO = 44;
+  if (doc.y + ALTO > 740) B.newPage(doc);
+  const y = doc.y;
+
+  pasos.forEach((p, i) => {
+    const x = B.M + i * (w + GAP);
+    doc.roundedRect(x, y, w, ALTO, 4).fill(p.res ? B.BRAND_SOFT : '#f7fafd');
+    if (p.op) {
+      doc.fillColor(p.res ? BRAND : B.INK_3).fontSize(9).font('Helvetica-Bold')
+        .text(p.op, x + 6, y + 5, { width: 10, lineBreak: false });
+    }
+    doc.fillColor(B.INK_3).fontSize(7).font('Helvetica')
+      .text(p.k.toUpperCase(), x + (p.op ? 16 : 6), y + 6, { width: w - (p.op ? 22 : 12), characterSpacing: 0.3, ellipsis: true, lineBreak: false });
+    doc.fillColor(p.res ? BRAND : B.INK).fontSize(p.res ? 13 : 11).font('Helvetica-Bold')
+      .text(cop(p.v), x + 6, y + 22, { width: w - 12, ellipsis: true, lineBreak: false });
+  });
+
+  doc.x = B.M;
+  doc.y = y + ALTO + 6;
+}
+
+/**
+ * Los bloques del legacy intercalan sus propios subtotales entre los conceptos ("Total
+ * Ventas", "Total Reconexiones"…). No son un concepto más: son la suma de otros de la
+ * misma tabla, así que si entran en la composición y en los porcentajes, la plata se
+ * cuenta dos veces y la barra miente. Se listan, pero fuera del reparto.
+ */
+const esSubtotal = (label: string) => /^total\s/i.test(label.trim());
+
+/** Rampa de un solo tono: no hay identidades que distinguir, sólo magnitudes. */
+const RAMPA = [1, 0.82, 0.66, 0.52, 0.4, 0.3, 0.22];
+
+/**
+ * La composición del bloque en una sola barra apilada, con su leyenda — la misma pieza
+ * que la pantalla. Responde "¿qué pesa aquí?" antes de bajar a la tabla. Seis tajadas y
+ * el resto agrupado: con quince, la barra deja de decir nada.
+ */
+function barraComposicion(doc: PDFKit.PDFDocument, filas: [string, number | string, number][], total: number) {
+  const positivas = filas.filter((f) => f[2] > 0 && !esSubtotal(f[0])).sort((a, b) => b[2] - a[2]);
+  if (positivas.length < 2 || total <= 0) return;
+
+  const cola = positivas.slice(6);
+  const segmentos: [string, number][] = [
+    ...positivas.slice(0, 6).map((f) => [f[0], f[2]] as [string, number]),
+    ...(cola.length ? ([[`Otros ${cola.length}`, cola.reduce((s, f) => s + f[2], 0)]] as [string, number][]) : []),
+  ];
+
+  const H = 6;
+  let y = doc.y + 2;
+  let x = B.M;
+  doc.roundedRect(B.M, y, B.WIDTH, H, H / 2).fill(B.BRAND_SOFT);
+  segmentos.forEach(([, monto], i) => {
+    const w = (monto / total) * B.WIDTH;
+    if (w <= 0) return;
+    doc.fillOpacity(RAMPA[i] ?? 0.18).rect(x, y, Math.max(w - 1, 0.8), H).fill(B.BRAND_2);
+    x += w;
+  });
+  doc.fillOpacity(1);
+
+  // Leyenda en línea: cada entrada ocupa lo que mide y salta de renglón cuando no cabe.
+  // En dos columnas fijas, un nombre corto dejaba un hueco de media hoja hasta su cifra.
+  y += H + 5;
+  let lx = B.M;
+  let ly = y;
+  segmentos.forEach(([label, monto], i) => {
+    const pct = `${((monto / total) * 100).toFixed(1)}%`;
+    doc.font('Helvetica').fontSize(8);
+    const wLabel = doc.widthOfString(label);
+    doc.font('Helvetica-Bold');
+    const wPct = doc.widthOfString(pct);
+    const ancho = 7 + wLabel + 4 + wPct + 14;
+    if (lx + ancho > B.RIGHT) { lx = B.M; ly += 11; }
+
+    doc.fillOpacity(RAMPA[i] ?? 0.18).rect(lx, ly + 1.5, 5, 5).fill(B.BRAND_2);
+    doc.fillOpacity(1);
+    doc.font('Helvetica').fontSize(8).fillColor(B.INK_2).text(label, lx + 7, ly, { lineBreak: false });
+    doc.font('Helvetica-Bold').fillColor(B.INK).text(pct, lx + 7 + wLabel + 4, ly, { lineBreak: false });
+    lx += ancho;
+  });
+
+  doc.x = B.M;
+  doc.y = ly + 14;
+}
+
+/**
+ * La tabla de un bloque, con el mismo tratamiento que la pantalla: barra de composición
+ * arriba, la fila ENTERA teñida en proporción a lo que pesa, el monto grande y una
+ * columna de peso.
+ *
+ * El tinte se mide contra el TOTAL, igual que en pantalla: lo pintado y lo escrito tienen
+ * que ser el mismo número o el documento deja de merecer confianza.
+ *
+ * `total` es el total que IMPRIME EL LEGACY, que no siempre es la suma de las filas (el
+ * bloque de cobranza suma unidades distintas a propósito). Se respeta tal cual y sólo se
+ * rotula "100%" cuando de verdad cuadra con la suma.
+ */
+function tablaRica(
+  doc: PDFKit.PDFDocument,
+  filas: [string, number | string, number][],
+  totalLabel: string,
+  total?: [number | string, number],
+  opts?: { composicion?: boolean },
+) {
+  const suma = filas.reduce((s, f) => s + f[2], 0);
+  const totalMonto = total ? total[1] : suma;
+  const totalCant = total ? total[0] : filas.reduce((s, f) => s + (typeof f[1] === 'number' ? f[1] : 0), 0);
+
+  if (opts?.composicion !== false) barraComposicion(doc, filas, suma);
+
+  const cols: B.Col[] = [
+    { label: 'Concepto', x: B.M + 8, w: 250 },
+    { label: 'Cant', x: 300, w: 55, align: 'right' },
+    { label: 'Monto', x: 360, w: 115, align: 'right' },
+    { label: 'Peso', x: 480, w: 68, align: 'right' },
+  ];
+  if (doc.y > 700) B.newPage(doc);
+  B.thead(doc, cols);
+
+  const ALTO = 18;
+  filas.forEach(([label, cant, monto]) => {
+    if (doc.y > 745) { B.newPage(doc); B.thead(doc, cols); }
+    const y = doc.y;
+    const sub = esSubtotal(label);
+    const parte = sub || !suma ? 0 : monto / suma;
+
+    // La fila teñida hasta donde llega su peso, y nada después.
+    const ancho = Math.max(0, Math.min(1, parte)) * B.WIDTH;
+    if (ancho > 0.5) doc.rect(B.M, y, ancho, ALTO).fill(B.BRAND_SOFT);
+
+    doc.font(sub ? 'Helvetica-Oblique' : 'Helvetica').fontSize(9.5).fillColor(sub ? GRAY : B.INK_2)
+      .text(label, cols[0].x, y + 5, { width: cols[0].w, ellipsis: true, lineBreak: false });
+    doc.fontSize(8.5).fillColor(GRAY)
+      .text(cant === '' || cant == null ? '—' : `x ${cant}`, cols[1].x, y + 5.5, { width: cols[1].w, align: 'right', lineBreak: false });
+    doc.font('Helvetica-Bold').fontSize(sub ? 9.5 : 11).fillColor(sub ? B.INK_2 : B.INK)
+      .text(cop(monto), cols[2].x, y + (sub ? 5 : 4), { width: cols[2].w, align: 'right', lineBreak: false });
+    doc.font('Helvetica').fontSize(8.5).fillColor(GRAY)
+      .text(sub || !suma ? '—' : `${(parte * 100).toFixed(1)}%`, cols[3].x, y + 5.5, { width: cols[3].w, align: 'right', lineBreak: false });
+
+    doc.x = B.M;
+    doc.y = y + ALTO;
+    doc.moveTo(B.M, doc.y).lineTo(B.RIGHT, doc.y).lineWidth(0.5).strokeColor(B.LINE).stroke();
+  });
+
+  if (doc.y > 750) B.newPage(doc);
+  const y = doc.y;
+  doc.rect(B.M, y, B.WIDTH, 22).fill(B.BRAND_SOFT);
+  doc.rect(B.M, y, B.WIDTH, 1.5).fill(B.BRAND_2);
+  doc.font('Helvetica-Bold').fontSize(9).fillColor(BRAND)
+    .text(totalLabel.toUpperCase(), cols[0].x, y + 7, { width: cols[0].w, characterSpacing: 0.4, lineBreak: false });
+  doc.fontSize(8.5)
+    .text(totalCant === '' || totalCant == null ? '' : `x ${totalCant}`, cols[1].x, y + 7.5, { width: cols[1].w, align: 'right', lineBreak: false });
+  doc.fontSize(12)
+    .text(cop(totalMonto), cols[2].x, y + 5, { width: cols[2].w, align: 'right', lineBreak: false });
+  doc.fontSize(8.5)
+    .text(Math.abs(totalMonto - suma) < 1 && suma !== 0 ? '100%' : '—', cols[3].x, y + 7.5, { width: cols[3].w, align: 'right', lineBreak: false });
+  doc.x = B.M;
+  doc.y = y + 28;
+}
+
+/** Portadilla de anexo: separa el documento firmable del material de conciliación. */
+function anexo(doc: PDFKit.PDFDocument, titulo: string, bajada: string) {
+  doc.fillColor(BRAND).fontSize(14).font('Helvetica-Bold').text(titulo, B.M, doc.y, { width: B.WIDTH });
+  doc.fillColor(GRAY).fontSize(8.5).font('Helvetica').text(bajada, B.M, doc.y + 2, { width: B.WIDTH });
+  doc.moveTo(B.M, doc.y + 6).lineTo(B.RIGHT, doc.y + 6).lineWidth(0.75).strokeColor(B.BRAND_LINE).stroke();
+  doc.x = B.M;
+  doc.y = doc.y + 16;
 }
 
 // ---------------------------------------------------------------------------
@@ -283,48 +487,41 @@ export type ReceiptData = {
 
 /** Recibo de caja (comprobante de pago). */
 export function receiptPdf(res: Response, d: ReceiptData) {
-  const doc = new PDFDocument({ size: 'A4', margin: 40 });
+  const doc = B.newDoc(PDFDocument);
   doc.pipe(res);
-  brandHeader(doc, `Recibo de caja N° ${d.number}`);
+  brandHeader(doc, `Recibo de caja N° ${d.number}`, {
+    right: 'Comprobante de pago',
+    chip: d.method ?? undefined,
+  });
 
   const s = d.subscriber;
-  kv(doc, 'Recibimos de:', s?.name ?? '—');
-  if (s?.docNumber) kv(doc, 'Documento:', s.docNumber);
-  if (s?.abonado != null) kv(doc, 'Abonado N°:', String(s.abonado));
-  kv(doc, 'Fecha:', fmt(d.date));
-  kv(doc, 'Forma de pago:', d.method ?? '—');
-  if (d.cashier) kv(doc, 'Cajero:', d.cashier);
-  doc.moveDown(1);
+  B.kvGrid(doc, [
+    ['Recibimos de', s?.name ?? '—'],
+    ['Fecha', fmt(d.date)],
+    ['Documento', s?.docNumber ?? '—'],
+    ['Forma de pago', d.method ?? '—'],
+    ['Abonado N°', s?.abonado != null ? String(s.abonado) : '—'],
+    ['Cajero', d.cashier ?? '—'],
+  ]);
 
-  // Detalle por factura abonada
-  const rowY = doc.y;
-  doc.rect(40, rowY - 2, 515, 18).fill(BRAND);
-  doc.fillColor('#fff').fontSize(9).font('Helvetica-Bold');
-  doc.text('Concepto', 46, rowY + 3);
-  doc.text('Factura', 360, rowY + 3, { width: 80, align: 'right' });
-  doc.text('Valor', 450, rowY + 3, { width: 100, align: 'right' });
-  doc.y = rowY + 22;
+  B.section(doc, 'Detalle del pago');
+  const cols: B.Col[] = [
+    { label: 'Concepto', x: 46, w: 300 },
+    { label: 'Factura', x: 360, w: 80, align: 'right' },
+    { label: 'Valor', x: 450, w: 100, align: 'right' },
+  ];
+  B.thead(doc, cols);
+  d.items.forEach((it, i) =>
+    B.trow(doc, cols, [it.concept, it.tid ? `#${it.tid}` : '—', cop(it.amount)], i),
+  );
 
-  doc.font('Helvetica').fontSize(10).fillColor('#222');
-  for (const it of d.items) {
-    const y = doc.y;
-    doc.text(it.concept, 46, y, { width: 300 });
-    doc.text(it.tid ? `#${it.tid}` : '—', 360, y, { width: 80, align: 'right' });
-    doc.text(cop(it.amount), 450, y, { width: 100, align: 'right' });
-    doc.y = y + 18;
-    doc.moveTo(40, doc.y - 3).lineTo(555, doc.y - 3).strokeColor('#eee').stroke();
-  }
-
-  doc.moveDown(0.6);
-  doc.font('Helvetica-Bold').fontSize(13).fillColor(BRAND);
-  doc.text('Total recibido:', 300, doc.y, { width: 150, align: 'right', continued: true })
-     .text(`  ${cop(d.total)}`, { align: 'right' });
-
-  doc.moveDown(4);
-  doc.fontSize(9).fillColor(GRAY);
-  doc.text('_______________________________', 40, doc.y);
-  doc.text('Firma / sello de caja', 40, doc.y + 4);
-  doc.end();
+  B.totals(doc, [['Total recibido', cop(d.total)]]);
+  B.note(doc, 'Este recibo hace constar el pago de las facturas relacionadas. Consérvelo como soporte.');
+  B.signatures(doc, [
+    { rotulo: 'Firma / sello de caja', nombre: d.cashier ?? undefined },
+    { rotulo: 'Recibí conforme', nota: 'Nombre y cédula' },
+  ]);
+  B.finish(doc);
 }
 
 // ---------------------------------------------------------------------------
@@ -361,7 +558,7 @@ export type ServiceOrderData = {
 
 /** Orden / acta de servicio técnico (reemplaza el legacy pdfticket / view-ticket). */
 export function serviceOrderPdf(res: Response, d: ServiceOrderData) {
-  const doc = new PDFDocument({ size: 'A4', margin: 40 });
+  const doc = B.newDoc(PDFDocument);
   doc.pipe(res);
   brandHeader(doc, `Orden de servicio N° ${d.code}`);
 
@@ -415,29 +612,20 @@ export function serviceOrderPdf(res: Response, d: ServiceOrderData) {
 
   // Material consumido
   if (d.materials.length) {
-    sectionTitle(doc, 'Material utilizado');
-    const rowY = doc.y;
-    doc.rect(40, rowY - 2, 515, 18).fill(BRAND);
-    doc.fillColor('#fff').fontSize(9).font('Helvetica-Bold');
-    doc.text('Material', 46, rowY + 3);
-    doc.text('Cant.', 360, rowY + 3, { width: 50, align: 'right' });
-    doc.text('V. unit.', 415, rowY + 3, { width: 60, align: 'right' });
-    doc.text('Total', 480, rowY + 3, { width: 70, align: 'right' });
-    doc.y = rowY + 22;
-    doc.font('Helvetica').fontSize(9.5).fillColor('#222');
+    B.section(doc, 'Material utilizado');
+    const cols: B.Col[] = [
+      { label: 'Material', x: 46, w: 300 },
+      { label: 'Cant.', x: 360, w: 50, align: 'right' },
+      { label: 'V. unit.', x: 415, w: 60, align: 'right' },
+      { label: 'Total', x: 480, w: 70, align: 'right' },
+    ];
+    B.thead(doc, cols);
     let tot = 0;
-    for (const m of d.materials) {
-      const y = doc.y; tot += m.total;
-      doc.text(m.name, 46, y, { width: 300 });
-      doc.text(String(m.qty), 360, y, { width: 50, align: 'right' });
-      doc.text(cop(m.price), 415, y, { width: 60, align: 'right' });
-      doc.text(cop(m.total), 480, y, { width: 70, align: 'right' });
-      doc.y = y + 16;
-      doc.moveTo(40, doc.y - 3).lineTo(555, doc.y - 3).strokeColor('#eee').stroke();
-    }
-    doc.font('Helvetica-Bold').fontSize(10).fillColor(BRAND);
-    doc.text('Total material:', 340, doc.y + 2, { width: 130, align: 'right', continued: true }).text(`  ${cop(tot)}`, { align: 'right' });
-    doc.moveDown(1);
+    d.materials.forEach((m, i) => {
+      tot += m.total;
+      B.trow(doc, cols, [m.name, String(m.qty), cop(m.price), cop(m.total)], i);
+    });
+    B.totals(doc, [['Total material', cop(tot)]]);
   }
 
   // Seguimiento
@@ -446,7 +634,9 @@ export function serviceOrderPdf(res: Response, d: ServiceOrderData) {
     doc.fontSize(9).fillColor('#333').font('Helvetica');
     for (const h of d.threads) {
       if (!h.message && !h.hasPhoto) continue;
-      const label = `${fmt(h.date)}${h.hasPhoto ? ' · 📷 foto' : ''}`;
+      // Sin emoji: las fuentes base de pdfkit (Helvetica) no traen pictogramas y
+      // el 📷 salía impreso como "Ø=Ü+" en la orden que firma el cliente.
+      const label = `${fmt(h.date)}${h.hasPhoto ? ' · con foto' : ''}`;
       doc.font('Helvetica-Bold').fillColor(GRAY).text(label);
       if (h.message) doc.font('Helvetica').fillColor('#333').text(h.message, { align: 'justify' });
       doc.moveDown(0.3);
@@ -454,34 +644,121 @@ export function serviceOrderPdf(res: Response, d: ServiceOrderData) {
     doc.moveDown(0.5);
   }
 
-  // Firma de recibido
-  doc.moveDown(2);
-  const y = doc.y > 680 ? (doc.addPage(), 120) : doc.y;
-  doc.fontSize(9).fillColor(GRAY);
-  doc.text('_______________________________', 40, y);
-  if (d.signature) {
-    doc.fillColor('#333').fontSize(9).text(`${d.signature.name}${d.signature.cc ? ` · CC ${d.signature.cc}` : ''}`, 40, y + 4);
-    if (d.signature.rel) doc.fillColor(GRAY).text(`Parentesco: ${d.signature.rel}`, 40, y + 16);
-  }
-  doc.fillColor(GRAY).text('Firma de quien recibe', 40, y + (d.signature ? 30 : 4));
-  doc.text('_______________________________', 320, y);
-  doc.text(`Técnico: ${d.technician || ''}`, 320, y + 4);
-  doc.end();
+  // Firma de recibido: el nombre y la cédula de quien firma son la prueba de que
+  // el técnico estuvo en la vivienda.
+  B.signatures(doc, [
+    {
+      rotulo: 'Firma de quien recibe',
+      nombre: d.signature ? `${d.signature.name}${d.signature.cc ? ` · CC ${d.signature.cc}` : ''}` : undefined,
+      nota: d.signature?.rel ? `Parentesco: ${d.signature.rel}` : undefined,
+    },
+    { rotulo: 'Técnico', nombre: d.technician },
+  ]);
+  B.finish(doc);
 }
 
-function sectionTitle(doc: PDFKit.PDFDocument, title: string) {
-  doc.moveDown(0.2);
-  // La x va explícita: si no, el título arranca donde lo dejó el último `text()` (por
-  // ejemplo una celda alineada a la derecha) y sale corrido y partido en dos líneas.
-  doc.fillColor(BRAND).fontSize(11).font('Helvetica-Bold')
-    .text(title.toUpperCase(), 40, doc.y, { width: 515 });
-  doc.moveTo(40, doc.y + 1).lineTo(555, doc.y + 1).strokeColor('#ccd').stroke();
-  doc.moveDown(0.4);
+// ---------------------------------------------------------------------------
+// Orden de compra imprimible (legacy printinvoice: solicitante + autorizadores).
+
+export type PurchaseOrderPdfData = {
+  tid: number;
+  kind: string;
+  status: string;
+  date: Date | string | null;
+  dueDate: Date | string | null;
+  branchRef: string | null;
+  categoryRef?: string | null;
+  notes: string | null;
+  supplier: { name: string; nit: string | null; phone: string | null } | null;
+  items: { product: string; qty: number; price: number; taxRate: number; subtotal: number; taxTotal: number }[];
+  noteLines: { type: string; description: string | null; amount: number }[];
+  subtotal: number; tax: number; total: number; paid: number; balance: number;
+  createdByName: string | null;
+  firstBy: string | null;
+  secondBy: string | null;
+};
+
+/** Orden de compra/servicio con cuadro de firmas (solicitante y autorizadores). */
+export function purchaseOrderPdf(res: Response, d: PurchaseOrderPdfData) {
+  const doc = B.newDoc(PDFDocument);
+  doc.pipe(res);
+  brandHeader(doc, `Orden de ${d.kind === 'servicio' ? 'servicio' : 'compra'} N° ${d.tid}`, {
+    right: d.branchRef ?? undefined,
+    chip: d.status,
+  });
+
+  B.kvGrid(doc, [
+    ['Fecha', fmt(d.date)],
+    ['Vence', d.dueDate ? fmt(d.dueDate) : '—'],
+    ['Categoría', d.categoryRef ?? '—'],
+    ['Elaboró', d.createdByName ?? '—'],
+  ]);
+
+  if (d.supplier) {
+    B.section(doc, 'Proveedor');
+    B.kv(doc, 'Nombre', d.supplier.name);
+    if (d.supplier.nit) B.kv(doc, 'NIT', d.supplier.nit);
+    if (d.supplier.phone) B.kv(doc, 'Teléfono', d.supplier.phone);
+  }
+
+  B.section(doc, 'Ítems');
+  const cols: B.Col[] = [
+    { label: 'Descripción', x: 46, w: 275 },
+    { label: 'Cant.', x: 330, w: 45, align: 'right' },
+    { label: 'V. unit.', x: 380, w: 70, align: 'right' },
+    { label: 'IVA', x: 455, w: 35, align: 'right' },
+    { label: 'Total', x: 495, w: 55, align: 'right' },
+  ];
+  B.thead(doc, cols);
+  d.items.forEach((it, i) => {
+    if (doc.y > 700) {
+      B.newPage(doc);
+      B.thead(doc, cols);
+    }
+    B.trow(doc, cols, [
+      it.product, String(it.qty), cop(it.price),
+      it.taxRate ? `${it.taxRate}%` : '—', cop(it.subtotal + it.taxTotal),
+    ], i);
+  });
+  d.noteLines.forEach((n, i) =>
+    B.trow(doc, cols, [
+      { t: `${n.type}${n.description ? ` — ${n.description}` : ''}`, color: B.INK_3 },
+      '', '', '', { t: cop(n.amount), color: B.INK_3 },
+    ], d.items.length + i),
+  );
+
+  B.totals(doc, [
+    ['Subtotal', cop(d.subtotal)],
+    ['IVA', cop(d.tax)],
+    ...(d.paid > 0
+      ? ([['Total', cop(d.total)], ['Pagado', cop(d.paid)], ['Saldo', cop(d.balance)]] as [string, string][])
+      : ([['Total', cop(d.total)]] as [string, string][])),
+  ]);
+
+  if (d.notes) {
+    B.section(doc, 'Observaciones');
+    doc.fontSize(9.5).fillColor(B.INK_2).font('Helvetica')
+      .text(d.notes, B.M, doc.y, { width: B.WIDTH, align: 'justify' });
+    doc.x = B.M;
+  }
+
+  // Cuadro de firmas: solicitante + autorizadores (como el impreso del legacy).
+  doc.moveDown(2);
+  B.signatures(doc, [
+    { rotulo: 'Elaboró', nombre: d.createdByName },
+    { rotulo: 'Autorizó', nombre: d.firstBy },
+    { rotulo: 'Autorizó (2ª firma)', nombre: d.secondBy },
+  ]);
+  B.finish(doc);
 }
+
+// El kit ya fija la x explícita del título: sin eso el rótulo arrancaba donde lo
+// dejó el último `text()` (p. ej. una celda alineada a la derecha) y salía partido.
+const sectionTitle = (doc: PDFKit.PDFDocument, title: string) => B.section(doc, title);
 
 /** Contrato de prestación de servicios (plantilla estándar Vestel). */
 export function contractPdf(res: Response, d: ContractData) {
-  const doc = new PDFDocument({ size: 'A4', margin: 40 });
+  const doc = B.newDoc(PDFDocument);
   doc.pipe(res);
   brandHeader(doc, 'Contrato de prestación de servicios');
 
@@ -509,12 +786,104 @@ export function contractPdf(res: Response, d: ContractData) {
     doc.moveDown(0.5);
   }
 
-  doc.moveDown(3);
-  const y = doc.y;
-  doc.fontSize(9).fillColor(GRAY);
-  doc.text('_______________________________', 40, y);
-  doc.text('El suscriptor', 40, y + 4);
-  doc.text('_______________________________', 320, y);
-  doc.text('Por VESTEL', 320, y + 4);
-  doc.end();
+  B.signatures(doc, [
+    { rotulo: 'El suscriptor', nombre: d.name, nota: d.docNumber ? `${d.docType ?? 'CC'} ${d.docNumber}` : undefined },
+    { rotulo: 'Por VESTEL', nota: 'VESGA TELEVISION S.A.S' },
+  ]);
+  B.finish(doc);
+}
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Acta de traspaso: el papel de que ALGO cambió de manos.
+ *
+ * Sirve para las dos cosas que se mueven entre bodegas —material y equipos—,
+ * porque el documento es el mismo: quién lo entrega, quién lo recibe, qué va
+ * dentro y las dos firmas. Lo que cambia es la columna de la cantidad (material)
+ * o del serial (equipos), y eso lo resuelve `items`.
+ *
+ * La firma de quien recibe sale VACÍA mientras no haya firmado: el acta se emite
+ * y se manda antes de que él la firme, así que el PDF tiene que poder mostrar el
+ * renglón en blanco sin mentir. Cuando firma, el `nota` de su bloque dice a qué
+ * WhatsApp salió el código —que es la prueba de que estuvo—.
+ */
+export type ActaPdfData = {
+  /** 'Acta de traspaso de material' | 'Acta de transferencia de equipos' */
+  titulo: string;
+  /** Consecutivo o id corto que la identifica. */
+  numero: string;
+  date: Date | string;
+  status: string;
+  from: string;
+  to: string;
+  fromBranch?: string | null;
+  toBranch?: string | null;
+  observations?: string | null;
+  /** Cada línea: descripción + un dato a la derecha (cantidad o serial/MAC). */
+  items: { descripcion: string; detalle?: string | null; cantidad?: string | null }[];
+  /** Rótulo de la columna derecha ('Cantidad' o 'Serial / MAC'). */
+  columnaDerecha: string;
+  entrega: { nombre?: string | null; fecha?: Date | string | null; nota?: string | null };
+  recibe: { nombre?: string | null; fecha?: Date | string | null; nota?: string | null };
+};
+
+const fmtHora = (d: Date | string | null | undefined) =>
+  d ? new Date(d).toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' }) : null;
+
+export function actaPdf(res: Response, d: ActaPdfData) {
+  const doc = B.newDoc(PDFDocument);
+  doc.pipe(res);
+  brandHeader(doc, `${d.titulo} N° ${d.numero}`, { chip: d.status });
+
+  B.kvGrid(doc, [
+    ['Fecha', fmt(d.date)],
+    ['Origen', d.fromBranch ? `${d.from} (${d.fromBranch})` : d.from],
+    ['Destino', d.toBranch ? `${d.to} (${d.toBranch})` : d.to],
+    ['Ítems', String(d.items.length)],
+  ]);
+
+  B.section(doc, 'Detalle');
+  const cols: B.Col[] = [
+    { label: 'Descripción', x: 46, w: 300 },
+    { label: 'Detalle', x: 355, w: 110 },
+    { label: d.columnaDerecha, x: 470, w: 80, align: 'right' },
+  ];
+  B.thead(doc, cols);
+  d.items.forEach((it, i) => {
+    if (doc.y > 660) {
+      B.newPage(doc);
+      B.thead(doc, cols);
+    }
+    B.trow(doc, cols, [it.descripcion, it.detalle ?? '—', it.cantidad ?? ''], i);
+  });
+
+  if (d.observations) {
+    B.section(doc, 'Observaciones');
+    doc.fontSize(9.5).fillColor(B.INK_2).font('Helvetica')
+      .text(d.observations, B.M, doc.y, { width: B.WIDTH, align: 'justify' });
+    doc.x = B.M;
+  }
+
+  doc.moveDown(2);
+  B.signatures(doc, [
+    {
+      rotulo: 'Entrega',
+      nombre: d.entrega.nombre,
+      nota: [fmtHora(d.entrega.fecha), d.entrega.nota].filter(Boolean).join(' · ') || undefined,
+    },
+    {
+      rotulo: 'Recibe',
+      nombre: d.recibe.nombre,
+      nota: d.recibe.nombre
+        ? [fmtHora(d.recibe.fecha), d.recibe.nota].filter(Boolean).join(' · ') || undefined
+        : 'Pendiente de firma',
+    },
+  ]);
+  B.note(
+    doc,
+    'La firma de quien recibe se hace en el sistema con un código de un solo uso enviado a su WhatsApp; ' +
+    'el número al que salió queda registrado bajo su nombre.',
+  );
+  B.finish(doc);
 }

@@ -4,8 +4,11 @@ import { PERMISSION_DENIED } from '@s4gk/wa-agent';
 import { APP_PERMISSIONS as P } from '../../auth/permissions.catalog';
 import { SupportService } from '../../support/support.service';
 import { SupportWriteService } from '../../support/support-write.service';
+import { ChatbotDocsService, enviarDoc } from '../chatbot-docs.service';
 import { authUserOf } from '../chatbot.identity';
-import { canAny, fecha, gated, safe } from './toolset.util';
+import {
+  canAny, DOCUMENTO_DENEGADO, fecha, gated, HERRAMIENTAS_DOCUMENTOS, puedeDocumentos, safe,
+} from './toolset.util';
 
 /** Mismo gate que el controller de soporte: quién puede CONSULTAR tickets. */
 const SOPORTE = [P.AREA_TECNICOS, P.AREA_ADMINISTRACION, P.AREA_CAJA];
@@ -22,6 +25,33 @@ const SOPORTE_ESCRIBE = [P.AREA_TECNICOS];
 const ESTADOS = ['PENDIENTE', 'REALIZANDO', 'RESUELTO', 'ANULADA'] as const;
 
 /**
+ * Cómo llama la gente a los estados vs. cómo se llaman en la BD.
+ *
+ * Nadie pregunta por "tickets en estado PENDIENTE": pregunta "cuántos hay abiertos".
+ * El modelo traduce eso a `status: "abierto"`, que no existe en el enum de Prisma y
+ * hacía reventar la consulta con un error técnico. Se traduce aquí, que es donde se
+ * conoce el vocabulario del negocio.
+ */
+const SINONIMOS: Record<string, (typeof ESTADOS)[number]> = {
+  ABIERTO: 'PENDIENTE', ABIERTOS: 'PENDIENTE', ABIERTA: 'PENDIENTE', ABIERTAS: 'PENDIENTE',
+  PENDIENTES: 'PENDIENTE', NUEVO: 'PENDIENTE', NUEVOS: 'PENDIENTE', OPEN: 'PENDIENTE',
+  REALIZANDOSE: 'REALIZANDO', PROCESO: 'REALIZANDO', 'EN CURSO': 'REALIZANDO', CURSO: 'REALIZANDO',
+  RESUELTOS: 'RESUELTO', RESUELTA: 'RESUELTO', CERRADO: 'RESUELTO', CERRADOS: 'RESUELTO', SOLUCIONADO: 'RESUELTO',
+  ANULADO: 'ANULADA', ANULADOS: 'ANULADA', ANULADAS: 'ANULADA', CANCELADO: 'ANULADA', CANCELADA: 'ANULADA',
+};
+
+/**
+ * Estado del ERP a partir de lo que mandó el modelo. Devuelve `null` si no se puede
+ * traducir, para responderle con las opciones válidas en vez de romper la consulta.
+ */
+function estadoDe(raw: unknown): (typeof ESTADOS)[number] | null {
+  const v = String(raw ?? '').trim().toUpperCase();
+  if (!v) return null;
+  if ((ESTADOS as readonly string[]).includes(v)) return v as (typeof ESTADOS)[number];
+  return SINONIMOS[v] ?? null;
+}
+
+/**
  * Tickets de soporte para el agente interno: ver la carga propia, consultar,
  * crear, anotar la solución y cambiar el estado.
  *
@@ -33,6 +63,7 @@ export class InternoTicketsToolset implements Toolset {
   constructor(
     private readonly support: SupportService,
     private readonly write: SupportWriteService,
+    private readonly docs: ChatbotDocsService,
   ) {}
 
   definitions(ctx: ToolContext): ToolDef[] {
@@ -47,7 +78,11 @@ export class InternoTicketsToolset implements Toolset {
       },
       {
         name: 'buscar_tickets',
-        description: 'Busca tickets por texto, estado, prioridad o técnico asignado.',
+        description:
+          'Busca tickets de TODA la empresa por texto, estado, prioridad o técnico asignado, y devuelve ' +
+          'CUÁNTOS hay en total además de los primeros. Úsala también para contar: "cuántos tickets ' +
+          'abiertos hay", "cuántos pendientes tiene Yopal", "qué reclamos hay sin atender". Los abiertos ' +
+          'son los PENDIENTE; los que se están atendiendo, REALIZANDO.',
         input_schema: {
           type: 'object',
           properties: {
@@ -62,6 +97,20 @@ export class InternoTicketsToolset implements Toolset {
         name: 'detalle_ticket',
         description: 'Detalle completo de un ticket: cliente, problema, estado, historial y materiales.',
         input_schema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+      },
+      ]),
+      ...gated(canAny(ctx, SOPORTE) && puedeDocumentos(ctx), [
+      {
+        name: 'enviar_orden_de_servicio',
+        description:
+          'Genera el PDF de la orden de servicio (acta técnica) de un ticket y lo adjunta A ESTE CHAT: ' +
+          'lleva los datos del cliente, el problema, el equipo asignado, el material usado, el seguimiento ' +
+          'y el espacio de firmas. Es la misma acta que se imprime desde el ERP para que el cliente firme.',
+        input_schema: {
+          type: 'object',
+          properties: { id: { type: 'string', description: 'id del ticket (de mis_tickets o buscar_tickets)' } },
+          required: ['id'],
+        },
       },
       ]),
       ...gated(canAny(ctx, SOPORTE_ESCRIBE), [
@@ -108,6 +157,9 @@ export class InternoTicketsToolset implements Toolset {
 
   async execute(name: string, input: Record<string, unknown>, ctx: ToolContext): Promise<string> {
     if (!canAny(ctx, SOPORTE)) return PERMISSION_DENIED;
+    // Segunda barrera de los documentos: declararlos solo a administración evita que
+    // el modelo los ofrezca, pero no que los invoque si se inventa el nombre.
+    if (HERRAMIENTAS_DOCUMENTOS.has(name) && !puedeDocumentos(ctx)) return DOCUMENTO_DENEGADO;
 
     switch (name) {
       case 'mis_tickets':
@@ -116,6 +168,8 @@ export class InternoTicketsToolset implements Toolset {
         return safe(() => this.buscar(input, ctx));
       case 'detalle_ticket':
         return safe(() => this.detalle(String(input.id ?? ''), ctx));
+      case 'enviar_orden_de_servicio':
+        return safe(() => this.enviarActa(String(input.id ?? ''), ctx));
       case 'crear_ticket':
         return safe(() => this.crear(input, ctx));
       case 'agregar_nota_ticket':
@@ -128,16 +182,23 @@ export class InternoTicketsToolset implements Toolset {
   }
 
   private async misTickets(ctx: ToolContext): Promise<string> {
-    const w = await this.support.myWork(authUserOf(ctx.user));
+    const w = await this.support.miJornada(authUserOf(ctx.user));
     if (!w.resolved) {
       return 'No pude ligar tu usuario con una ficha de empleado, así que no puedo listar tus tickets. ' +
         'Pídele a administración que revise que tu correo coincida en Empleados.';
     }
-    const { pendiente, realizando, resueltoHoy } = w.counts;
-    const cab = `${w.tech?.name ?? 'Tú'}: ${pendiente} pendiente(s), ${realizando} en curso, ${resueltoHoy} resuelto(s) hoy.`;
-    if (!w.tickets.length) return `${cab}\nNo tienes tickets abiertos. 🎉`;
-    const lineas = w.tickets.map(
-      (t) => `• #${t.code} [${t.status}/${t.priority}] ${t.subject} — ${t.client}` +
+    const { realizando, resueltoHoy, vencidas, rezagadas } = w.contadores;
+    // Se cuenta la AGENDA, no la cola entera: decir "28 pendientes" cuando 27 son
+    // órdenes de hace años es la clase de dato que hace que nadie vuelva a preguntar.
+    const cab = `${w.tech?.name ?? 'Tú'}: ${w.agenda.length} por atender, ${realizando} en curso, ${resueltoHoy} resuelto(s) hoy` +
+      `${vencidas ? `, ⚠ ${vencidas} vencida(s)` : ''}.` +
+      `${rezagadas ? ` (Además ${rezagadas} sin cerrar de hace más de ${w.diasRezago} días.)` : ''}`;
+    if (!w.agenda.length) return `${cab}\nNo tienes órdenes nuevas por atender. 🎉`;
+    // Ya vienen en orden de atención (en curso → prioridad → más vieja primero), así
+    // que por WhatsApp se leen igual de arriba abajo. Se cortan a 15: en el chat una
+    // lista más larga no se lee, y el panel las tiene todas.
+    const lineas = w.agenda.slice(0, 15).map(
+      (t) => `• #${t.code} [${t.status}/${t.priority}${t.vencida ? ' ⚠ vencida' : ''}] ${t.subject} — ${t.client}` +
         `${t.address ? `\n  ${t.address}` : ''}${t.sede ? ` (${t.sede})` : ''}\n  id: ${t.id}`,
     );
     return `${cab}\n${lineas.join('\n')}`;
@@ -146,9 +207,17 @@ export class InternoTicketsToolset implements Toolset {
   private async buscar(input: Record<string, unknown>, ctx: ToolContext): Promise<string> {
     // Con el usuario del chat, igual que el resto: si no, consultar por WhatsApp
     // sería la puerta trasera del acotado por sede.
+    // "abiertos" no es un estado de la BD: se traduce antes de consultar. Si no se
+    // puede traducir, se dice qué valores hay en vez de mandarle basura a Prisma.
+    const status = input.status ? estadoDe(input.status) : undefined;
+    if (input.status && !status) {
+      return `No conozco el estado "${String(input.status)}". Los estados son: ${ESTADOS.join(', ')} ` +
+        '(los "abiertos" son los PENDIENTE, y los que están atendiéndose son REALIZANDO).';
+    }
+
     const res: any = await this.support.tickets({
       search: input.search ? String(input.search) : undefined,
-      status: input.status ? String(input.status) : undefined,
+      status: status ?? undefined,
       priority: input.priority ? String(input.priority) : undefined,
       tec: input.tec ? String(input.tec) : undefined,
       pageSize: 8,
@@ -174,6 +243,15 @@ export class InternoTicketsToolset implements Toolset {
       hilo ? `Últimas notas:\n${hilo}` : '',
       `id: ${t.id}`,
     ].filter(Boolean).join('\n');
+  }
+
+  /**
+   * El acta de la orden, al chat del técnico: es el papel que se lleva a la casa del
+   * cliente para que firme, y hasta hoy solo se podía imprimir desde la web.
+   */
+  private async enviarActa(id: string, ctx: ToolContext): Promise<string> {
+    if (!id) return 'Indica el id del ticket (búscalo con mis_tickets o buscar_tickets).';
+    return enviarDoc(ctx, await this.docs.ordenServicio(id, authUserOf(ctx.user)));
   }
 
   private async crear(input: Record<string, unknown>, ctx: ToolContext): Promise<string> {
@@ -223,7 +301,13 @@ export class InternoTicketsToolset implements Toolset {
 
   private async estado(input: Record<string, unknown>, ctx: ToolContext): Promise<string> {
     const id = String(input.id ?? '');
-    const status = String(input.status ?? '').toUpperCase();
+    // Mismo vocabulario que en la búsqueda: "ciérralo" o "ya quedó resuelto" tienen
+    // que llegar a RESUELTO. Se traduce ANTES de confirmar, para que lo que el
+    // funcionario aprueba sea el estado real que se va a guardar.
+    const status = estadoDe(input.status);
+    if (!status) {
+      return `No conozco el estado "${String(input.status ?? '')}". Debe ser uno de: ${ESTADOS.join(', ')}.`;
+    }
     if (ctx.committing) {
       await this.write.updateStatus(id, { status } as any, authUserOf(ctx.user));
       await ctx.audit({
@@ -231,9 +315,6 @@ export class InternoTicketsToolset implements Toolset {
         summary: `Ticket a ${status} por WhatsApp`, detail: { ticketId: id, status },
       });
       return `Ticket actualizado a ${status}.`;
-    }
-    if (!ESTADOS.includes(status as (typeof ESTADOS)[number])) {
-      return `Estado inválido. Debe ser uno de: ${ESTADOS.join(', ')}.`;
     }
     const t: any = await this.support.ticketDetail(id, authUserOf(ctx.user));
     // El aviso de la cascada va en el resumen: es lo que el usuario confirma.

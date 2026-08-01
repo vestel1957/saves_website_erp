@@ -3,8 +3,12 @@ import { ArrayNotEmpty, Allow, IsArray, IsOptional, IsString } from 'class-valid
 import { GenieacsService } from './genieacs.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AreaGuard } from '../auth/area.guard';
+import { PermissionsGuard } from '../auth/permissions.guard';
 import { RequireArea } from '../auth/require-area.decorator';
+import { RequirePermissions } from '../auth/require-permissions.decorator';
+import { APP_PERMISSIONS } from '../auth/permissions.catalog';
 import { CurrentUser, AuthUser } from '../auth/current-user.decorator';
+import { ModuloRedGuard } from './modulo-red.guard';
 
 class ServerUpsertDto {
   @IsOptional() @IsString() name?: string;
@@ -25,7 +29,7 @@ class RefreshDto {
 
 /** Integración GenieACS / TR-069 — cortes masivos de TV vía NBI (tag + provision). */
 @Controller('network/genieacs')
-@UseGuards(JwtAuthGuard, AreaGuard)
+@UseGuards(JwtAuthGuard, AreaGuard, PermissionsGuard, ModuloRedGuard)
 @RequireArea('tecnicos', 'administracion')
 export class GenieacsController {
   constructor(private readonly acs: GenieacsService) {}
@@ -63,4 +67,14 @@ export class GenieacsController {
   @Post('restore-tv') restoreTv(@Body() dto: BatchDto, @CurrentUser() user: AuthUser) { return this.acs.restoreTv(dto.ids, user, dto.serverId); }
   @Post('refresh') refresh(@Body() dto: RefreshDto, @CurrentUser() user: AuthUser) { return this.acs.refresh(dto.deviceId, dto.objectName ?? '', dto.serverId, user); }
   @Post('install-provision') install(@Body('serverId') serverId?: string, @CurrentUser() user?: AuthUser) { return this.acs.installProvision(serverId, user); }
+
+  // --- Corte de TV masivo POR ABONADO (resuelve TR-069 u OLT por cada uno) ---
+  @RequirePermissions(APP_PERMISSIONS.NETWORK_CUT)
+  @Post('tv-cut-subscribers') tvCutSubs(@Body() dto: BatchDto, @CurrentUser() user: AuthUser) {
+    return this.acs.tvBatchBySubscribers(dto.ids, false, user);
+  }
+  @RequirePermissions(APP_PERMISSIONS.NETWORK_RECONNECT)
+  @Post('tv-restore-subscribers') tvRestoreSubs(@Body() dto: BatchDto, @CurrentUser() user: AuthUser) {
+    return this.acs.tvBatchBySubscribers(dto.ids, true, user);
+  }
 }

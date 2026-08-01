@@ -27,6 +27,48 @@ export class ChatbotLinkService {
     }));
   }
 
+  /**
+   * Funcionarios activos AÚN SIN vincular, con el celular que ya está en su ficha de
+   * empleado como sugerencia.
+   *
+   * Sin esto, vincular la operación entera significa teclear a mano 95 números
+   * sacados de otra pantalla — y basta un dígito mal para entregarle los permisos de
+   * un empleado a un desconocido. La sugerencia se propone, NO se aplica sola: quien
+   * administra sigue teniendo que confirmar cada vínculo.
+   *
+   * Solo se sugieren móviles colombianos (573…): un fijo no tiene WhatsApp y guardarlo
+   * dejaría un vínculo muerto que nadie revisa.
+   */
+  async candidatos() {
+    const users = await this.prisma.user.findMany({
+      where: { isActive: true, whatsappPhone: null },
+      select: { id: true, name: true, email: true },
+      orderBy: { name: 'asc' },
+    });
+
+    const emails = users.map((u) => u.email).filter((e): e is string => !!e);
+    const fichas = emails.length
+      ? await this.prisma.staff.findMany({
+          where: { email: { in: emails } },
+          select: { email: true, phone: true, phoneAlt: true },
+        })
+      : [];
+
+    const movil = (raw?: string | null) => {
+      const p = normalizePhone(raw);
+      return p && /^573\d{9}$/.test(p) ? p : null;
+    };
+    const porEmail = new Map(fichas.map((f) => [f.email, movil(f.phone) ?? movil(f.phoneAlt)]));
+
+    return users.map((u) => ({
+      id: u.id,
+      name: u.name,
+      email: u.email,
+      /** Celular de la ficha de empleado, ya normalizado. null = hay que teclearlo. */
+      phoneSugerido: (u.email && porEmail.get(u.email)) || null,
+    }));
+  }
+
   async link(userId: string, rawPhone: string) {
     const phone = normalizePhone(rawPhone);
     if (!isValidPhone(phone)) {

@@ -1,6 +1,6 @@
 import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { AREAS_KEY } from './require-area.decorator';
+import { AREA_OR_PERMS_KEY, AREAS_KEY } from './require-area.decorator';
 import { SUPERADMIN_PERMISSION } from './permissions.catalog';
 
 /**
@@ -27,6 +27,15 @@ export class AreaGuard implements CanActivate {
     const granted: string[] = req?.user?.permissions ?? [];
 
     if (granted.includes(SUPERADMIN_PERMISSION)) return true;
+
+    // Escape por permiso (@OrPermission): quien manda sobre el módulo entra aunque
+    // no tenga área. Hoy lo usa el Jefe de bodega, que tiene `inventory.admin` y
+    // ningún `area.*`.
+    const escapes = this.reflector.getAllAndOverride<string[]>(AREA_OR_PERMS_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (escapes?.some((p) => granted.includes(p))) return true;
 
     const ok = required.some((slug) => granted.includes(`area.${slug}`));
     if (!ok) {

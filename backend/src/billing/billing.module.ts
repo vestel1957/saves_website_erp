@@ -3,6 +3,7 @@ import { BillingController } from './billing.controller';
 import { BillingService } from './billing.service';
 import { FacturasService } from './facturas.service';
 import { RecurringService } from './recurring.service';
+import { CatalogoService } from './catalogo.service';
 import { WhatsappModule } from '../common/whatsapp/whatsapp.module';
 import { MailModule } from '../common/mail/mail.module';
 import { AccountingModule } from '../accounting/accounting.module';
@@ -14,7 +15,7 @@ import { TreasuryModule } from '../treasury/treasury.module';
   // importa Billing).
   imports: [WhatsappModule, MailModule, AccountingModule, TreasuryModule],
   controllers: [BillingController],
-  providers: [BillingService, FacturasService, RecurringService],
-  exports: [BillingService, FacturasService, RecurringService],
+  providers: [BillingService, FacturasService, RecurringService, CatalogoService],
+  exports: [BillingService, FacturasService, RecurringService, CatalogoService],
 })
 export class BillingModule {}

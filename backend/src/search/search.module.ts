@@ -3,6 +3,7 @@ import { SubscribersModule } from '../subscribers/subscribers.module';
 import { BillingModule } from '../billing/billing.module';
 import { SearchController } from './search.controller';
 import { SearchService } from './search.service';
+import { DataQueryService } from './data-query.service';
 
 /**
  * Búsqueda con IA (⌘K en lenguaje natural). Reutiliza los servicios de
@@ -12,6 +13,7 @@ import { SearchService } from './search.service';
 @Module({
   imports: [SubscribersModule, BillingModule],
   controllers: [SearchController],
-  providers: [SearchService],
+  exports: [DataQueryService],
+  providers: [SearchService, DataQueryService],
 })
 export class SearchModule {}

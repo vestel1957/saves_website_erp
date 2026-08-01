@@ -3,6 +3,7 @@ import * as ExcelJS from 'exceljs';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CobranzasService } from '../treasury/cobranzas.service';
+import { ReconexionService } from '../network/reconexion.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { num, round2 } from '../common/money';
 
@@ -33,7 +34,11 @@ const cellText = (v: unknown): string => {
 
 @Injectable()
 export class PaymentImportsService {
-  constructor(private readonly prisma: PrismaService, private readonly cobranzas: CobranzasService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cobranzas: CobranzasService,
+    private readonly reconexion: ReconexionService,
+  ) {}
 
   /** Fase 1: parsea el archivo y crea el lote + filas en staging (no aplica nada). */
   async upload(buffer: Buffer, fileName: string, dateOverride: string | undefined, user?: AuthUser) {
@@ -92,6 +97,11 @@ export class PaymentImportsService {
     if (!batch) throw new NotFoundException('Lote no encontrado');
     if (!batch.rows.length) throw new BadRequestException('El lote no tiene filas pendientes por procesar.');
 
+    // Abonados que efectivamente pagaron en este lote: al final se reconectan de
+    // una sola pasada (ver más abajo). Es un Set porque el mismo cliente puede
+    // venir en varias filas del archivo.
+    const pagaron = new Set<string>();
+
     for (const row of batch.rows) {
       // Idempotencia: no reaplicar un pago ya cargado con la misma referencia.
       if (row.reference) {
@@ -105,13 +115,22 @@ export class PaymentImportsService {
           subscriberId: match.id, amount: num(row.amount), method: row.method || 'EFECTY',
           date: row.date ? row.date.toISOString().slice(0, 10) : undefined,
           note: `Cargue ${row.method || 'EFECTY'}${row.reference ? ` ref ${row.reference}` : ''}`,
-        } as any, (user ?? { name: 'Cargue', email: null }) as any);
+        } as any, (user ?? { name: 'Cargue', email: null }) as any, { reconectar: false });
         await this.mark(row.id, 'Cargado', match.id, res.receiptId, `Aplicado ${res.totalApplied}`);
+        pagaron.add(match.id);
       } catch (e: any) {
         await this.mark(row.id, 'Error', match.id, null, e?.message || 'No se pudo aplicar el pago');
       }
     }
-    return this.detail(batchId, true);
+
+    // Reconexión de los que pagaron: internet y/o TV, cada uno por su vía y solo al
+    // que le corresponda. Va FUERA del bucle y en lote a propósito — reconectar fila
+    // por fila abriría una conexión al router (y una sesión SSH a la OLT) por pago,
+    // y un archivo de corresponsal trae cientos. Best-effort: si los equipos fallan,
+    // el cargue igual queda aplicado y el fallo queda en el log y en la auditoría.
+    const reconexion = await this.reconexion.porPagoLote([...pagaron], user);
+
+    return { ...(await this.detail(batchId, true)), reconexion };
   }
 
   private async mark(rowId: string, status: string, subscriberId: string | null, transactionId: string | null, message: string) {

@@ -2,22 +2,34 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from './current-user.decorator';
-import { hashPassword, signToken, verifyPassword } from './crypto.util';
+import { hashPassword, isLegacyHash, signToken, verifyPassword } from './crypto.util';
 import { ROLE_AREA_BY_KEY, SUPERADMIN_PERMISSION, SCREENS, screenKey, ALL_PERMISSIONS } from './permissions.catalog';
+import { PasswordOtpService } from '../common/signature/password-otp.service';
 
 @Injectable()
 export class AuthService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    // Llega por `SignatureModule`, que es global: `AuthModule` no lo puede
+    // importar sin cerrar el ciclo con WhatsApp (ver el módulo de firma).
+    private readonly passwordOtp: PasswordOtpService,
+  ) {}
 
-  /** Registra un evento de login (éxito o fallo) en la bitácora. Best-effort. */
+  private readonly logger = new Logger('Auth');
+
+  /**
+   * Registra un evento de acceso en la bitácora (entrada, fallo, o los pasos de
+   * "olvidé mi contraseña"). Best-effort: no puede tumbar lo que está anotando.
+   */
   private async auditLogin(
-    action: 'LOGIN' | 'LOGIN_FAILED',
+    action: 'LOGIN' | 'LOGIN_FAILED' | 'PASSWORD_FORGOT' | 'PASSWORD_FORGOT_UNKNOWN' | 'PASSWORD_FORGOT_RESET',
     userId: string | null,
     ip?: string,
     after?: Prisma.InputJsonValue,
@@ -72,6 +84,13 @@ export class AuthService {
       throw new UnauthorizedException('Credenciales inválidas.');
     }
     await this.auditLogin('LOGIN', user.id, meta?.ip);
+    // Hash migrado del legacy (Aauth sha256): la clave ya se validó, así que se
+    // aprovecha para re-guardarla con scrypt+salt aleatorio. Best-effort.
+    if (isLegacyHash(user.passwordHash)) {
+      await this.prisma.user
+        .update({ where: { id: user.id }, data: { passwordHash: hashPassword(password) } })
+        .catch(() => undefined);
+    }
     const resolved = await this.resolveUser(user.id);
     // Áreas de acceso (slug tras "area.") + flag superadmin, embebidos en el JWT
     // para que el middleware del edge pueda bloquear rutas por área sin consultar la BD.
@@ -473,14 +492,134 @@ export class AuthService {
     return this.listUsers();
   }
 
-  /** Restablece la contraseña de un usuario (la fija un administrador). */
-  async resetPassword(userId: string, password: string) {
+  /**
+   * Restablece la contraseña de un usuario (la fija un administrador).
+   *
+   * Exige el código de 6 dígitos que le llega al WhatsApp DEL DUEÑO de la cuenta
+   * (no al del administrador): así nadie se apropia de una cuenta ajena sin que
+   * su titular lo sepa y lo autorice. `opts.otp: false` lo salta a propósito para
+   * los flujos que no son una toma de control —crear la cuenta desde cero, donde
+   * todavía no hay dueño a quien avisar—.
+   */
+  async resetPassword(userId: string, password: string, opts?: { code?: string | null; otp?: boolean }) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new NotFoundException('Usuario no encontrado.');
+
+    const rastro =
+      opts?.otp === false
+        ? null
+        : await this.passwordOtp.exigir({ id: user.id, name: user.name, email: user.email }, 'reset', opts?.code);
+
     await this.prisma.user.update({
       where: { id: userId },
       data: { passwordHash: hashPassword(password) },
     });
-    return { ok: true };
+    return { ok: true, rastro };
+  }
+
+  /** Manda el código para restablecerle la contraseña a este usuario. */
+  async requestPasswordCode(userId: string, actor?: AuthUser) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { id: true, name: true, email: true } });
+    if (!user) throw new NotFoundException('Usuario no encontrado.');
+    return this.passwordOtp.pedir(user, 'reset', actor?.name ?? actor?.email);
+  }
+
+  // ── "Olvidé mi contraseña" (sin sesión) ────────────────────────────────────
+  //
+  // Tres pasos desde la pantalla de ingreso: correo → código que llega al
+  // WhatsApp vinculado a ese correo → contraseña nueva.
+  //
+  // La regla que ordena todo lo de abajo: **desde fuera, todos los correos se
+  // comportan igual**. Ni la respuesta ni el mensaje de error dicen si la cuenta
+  // existe, si está activa, si tiene WhatsApp o a qué número salió el código —
+  // esta pantalla la ve cualquiera que llegue a la IP, y un "ese correo no
+  // existe" le regala la lista de empleados a quien la esté tanteando. Por eso
+  // tampoco se devuelve nunca el código en simulación: bastaría teclear el correo
+  // de gerencia para leerlo. En simulación el código sale por el log del servidor.
+
+  /** Mensaje único del paso 1: el mismo exista o no la cuenta. */
+  private static readonly OLVIDO_ENVIADO =
+    'Si ese correo tiene una cuenta con WhatsApp vinculado, le acabamos de mandar un código de 6 dígitos. ' +
+    'Revisa el WhatsApp de ese celular.';
+
+  /** Error único de los pasos 2 y 3: no distingue "no existe" de "no acertaste". */
+  private static readonly OLVIDO_INVALIDO =
+    'El código no es válido o ya venció. Pide uno nuevo desde el paso anterior.';
+
+  /** Cuenta activa de ese correo, o null. Nunca se le cuenta a nadie cuál fue. */
+  private cuentaDe(email: string) {
+    return this.prisma.user.findFirst({
+      where: { email: { equals: String(email ?? '').trim(), mode: 'insensitive' }, isActive: true },
+      select: { id: true, name: true, email: true },
+    });
+  }
+
+  /** ¿El canal puede entregar códigos? Lo consulta el login para no ofrecer un callejón sin salida. */
+  forgotAvailability() {
+    return this.passwordOtp.canalListo();
+  }
+
+  /**
+   * Paso 1: manda el código al WhatsApp vinculado a ese correo.
+   *
+   * El envío NO se espera. La respuesta es la misma pase lo que pase —no dice si
+   * la cuenta existe ni si el código salió—, así que esperar a que Kapso conteste
+   * solo servía para dejar a alguien mirando un botón girando mientras el WhatsApp
+   * ya iba en camino. Se responde de una y la pantalla pasa a pedir el código.
+   */
+  async forgotPassword(email: string, ip?: string) {
+    const user = await this.cuentaDe(email);
+    if (user) {
+      void this.passwordOtp
+        .pedirOlvido(user)
+        .then(() => this.auditLogin('PASSWORD_FORGOT', user.id, ip, { email: user.email }))
+        .catch((e: Error) => {
+          // Sin teléfono, tope diario, reenvío demasiado pronto o WhatsApp caído:
+          // se anota y se calla. Contarlo distinguiría este correo de los demás.
+          this.logger.warn(`Recuperación de ${user.email}: no se pudo mandar el código — ${e.message}`);
+        });
+    } else {
+      void this.auditLogin('PASSWORD_FORGOT_UNKNOWN', null, ip, { email: String(email ?? '').slice(0, 120) });
+    }
+    return { ok: true as const, message: AuthService.OLVIDO_ENVIADO };
+  }
+
+  /** Paso 2: ¿es ese el código? No lo gasta — la contraseña todavía no se ha escrito. */
+  async forgotCheck(email: string, code: string) {
+    const user = await this.cuentaDe(email);
+    if (!user) throw new BadRequestException(AuthService.OLVIDO_INVALIDO);
+    try {
+      await this.passwordOtp.comprobarOlvido(user, code);
+    } catch {
+      throw new BadRequestException(AuthService.OLVIDO_INVALIDO);
+    }
+    return { ok: true as const };
+  }
+
+  /** Paso 3: gasta el código y escribe la contraseña nueva. */
+  async forgotReset(email: string, code: string, password: string, ip?: string) {
+    const user = await this.cuentaDe(email);
+    if (!user) throw new BadRequestException(AuthService.OLVIDO_INVALIDO);
+
+    let rastro: string;
+    try {
+      rastro = await this.passwordOtp.consumirOlvido(user, code);
+    } catch {
+      throw new BadRequestException(AuthService.OLVIDO_INVALIDO);
+    }
+
+    await this.prisma.user.update({ where: { id: user.id }, data: { passwordHash: hashPassword(password) } });
+    void this.auditLogin('PASSWORD_FORGOT_RESET', user.id, ip, { email: user.email, firma: rastro });
+    this.logger.log(`Contraseña recuperada por ${user.email} desde la pantalla de ingreso.`);
+    // Nota: las sesiones abiertas de esa cuenta siguen vivas hasta que venza su
+    // token (12 h). Cerrarlas exigiría revocación, que hoy no existe.
+    return { ok: true as const };
+  }
+
+  /** ¿Este cambio va a pedir código, y hay a dónde mandarlo? (lo consulta la pantalla). */
+  async passwordPolicy(userId: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { id: true, name: true, email: true } });
+    if (!user) throw new NotFoundException('Usuario no encontrado.');
+    return this.passwordOtp.policy(user, 'reset');
   }
 }

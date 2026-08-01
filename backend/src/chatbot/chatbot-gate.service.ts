@@ -9,6 +9,34 @@ import { convKeyOf } from './chatbot.identity';
 export const CHATBOT_ENABLED_KEY = 'chatbot.enabled';
 /** Lista blanca de teléfonos (E.164, separados por coma). Vacía = atiende a todos. */
 export const CHATBOT_ALLOWLIST_KEY = 'chatbot.allowlist';
+/**
+ * Ids de los planes que el agente público puede ofrecer (separados por coma).
+ *
+ * Existe porque el catálogo heredado tiene 72 planes ACTIVOS —tarifas viejas,
+ * duplicadas y cosas como "1 Mega por $20.000"— y quien pregunta por WhatsApp es
+ * casi siempre alguien que quiere contratar. Listárselos todos no es informar, es
+ * confundir y además cotizar planes que ya no se venden. Vacío = se ofrecen todos
+ * (comportamiento anterior, sin sorpresas al desplegar).
+ */
+export const CHATBOT_PLANS_KEY = 'chatbot.planesPublicos';
+
+/**
+ * ¿Se le pregunta al cliente si su servicio quedó bien cuando se cierra la orden que
+ * él abrió por WhatsApp? (ver `TicketConfirmacionService`). Encendido por omisión: es
+ * el que evita que una avería se dé por resuelta sin que el cliente lo sepa.
+ */
+export const CHATBOT_CONFIRMAR_KEY = 'chatbot.confirmarSolucion';
+
+/**
+ * ¿Puede el bot escribir SIN que le pregunten? (técnico asignado, pago aplicado — ver
+ * `AvisosProactivosService`).
+ *
+ * APAGADO por omisión, y a conciencia: es la única conducta del bot que le llega a un
+ * cliente que no escribió nada. Un aviso de más no es un mensaje raro en un chat, es
+ * una queja y un golpe a la calificación del número en Meta. Se enciende cuando el
+ * equipo lo decida, no al desplegar.
+ */
+export const CHATBOT_AVISOS_KEY = 'chatbot.avisosProactivos';
 
 /**
  * Cache corta. El corte tiene que sentirse INMEDIATO —es el botón de pánico cuando el
@@ -17,6 +45,23 @@ export const CHATBOT_ALLOWLIST_KEY = 'chatbot.allowlist';
  * irrelevante.
  */
 const TTL_MS = 5000;
+
+/**
+ * Motivo por el que el bot no atiende, en clave estable para que el transporte pueda
+ * reaccionar distinto a cada uno sin comparar textos en español.
+ */
+export type MotivoVeto = 'apagado' | 'escalada' | 'tope' | 'piloto';
+
+/**
+ * Lo que se le dice al cliente cuando el bot topó el cupo del día.
+ *
+ * Deliberadamente no menciona tokens, cupos ni fallas técnicas: al cliente no le
+ * incumbe y solo genera desconfianza. Lo único que importa es que sepa que su mensaje
+ * llegó y que alguien lo va a contestar.
+ */
+const AVISO_TOPE =
+  '¡Gracias por escribirnos! 🙌 En este momento no puedo responderte automáticamente, ' +
+  'pero tu mensaje ya quedó registrado y un asesor de Vestel te continúa por este mismo chat.';
 
 /**
  * Decide si el bot atiende un mensaje, en tiempo de MENSAJE (no de arranque).
@@ -86,10 +131,18 @@ export class ChatbotGateService {
     this.cache = null;
   }
 
-  /** ¿Atiende el bot a este número ahora mismo? */
-  async shouldHandle(phone: string): Promise<{ ok: boolean; reason?: string }> {
+  /**
+   * ¿Atiende el bot a este número ahora mismo?
+   *
+   * `aviso`, cuando viene, es un texto que el transporte DEBE enviarle al cliente: hay
+   * vetos (el tope de gasto) en los que el silencio deja a alguien esperando una
+   * respuesta que no va a llegar nunca.
+   */
+  async shouldHandle(
+    phone: string,
+  ): Promise<{ ok: boolean; reason?: string; code?: MotivoVeto; aviso?: string }> {
     const c = await this.load();
-    if (!c.enabled) return { ok: false, reason: 'apagado' };
+    if (!c.enabled) return { ok: false, reason: 'apagado', code: 'apagado' };
 
     // Escalada a una persona: manda sobre la lista blanca y sobre todo lo demás. Si el
     // cliente pidió un humano, que el bot vuelva a meterse en la conversación es peor
@@ -101,7 +154,9 @@ export class ChatbotGateService {
     // `kapso:57300…` contra un handoff guardado como `kapso:300…` y no lo encontraría
     // nunca: el bot seguiría respondiendo a quien pidió un humano.
     if (await this.store.isHandedOff(convKeyOf(phone))) {
-      return { ok: false, reason: 'la atiende una persona (escalada)' };
+      // Sin `aviso`: ya se le avisó cuando se escaló. Repetirlo en cada mensaje sería
+      // spam a un cliente que está esperando a una persona.
+      return { ok: false, reason: 'la atiende una persona (escalada)', code: 'escalada' };
     }
 
     const digits = normalizePhone(phone);
@@ -109,13 +164,35 @@ export class ChatbotGateService {
     // Tope de gasto del día: freno de emergencia. Se comprueba aquí, en el transporte,
     // para que al superarlo no se gaste ni un token más.
     if (await this.usage.exceeded()) {
-      return { ok: false, reason: 'se superó el tope de tokens de hoy' };
+      // Y se escala a una persona, que es lo que faltaba: antes el bot simplemente
+      // hacía `return` y el cliente se quedaba sin respuesta, sin chulito de leído y
+      // sin que nadie en la empresa supiera que había alguien esperando. El handoff lo
+      // pone en la bandeja de WhatsApp y, de paso, hace que el resto de sus mensajes
+      // corten arriba (en `isHandedOff`) sin volver a consultar el tope.
+      await this.escalarPorTope(phone);
+      return { ok: false, reason: 'se superó el tope de tokens de hoy', code: 'tope', aviso: AVISO_TOPE };
     }
 
     if (!c.allow.length) return { ok: true };
     return c.allow.includes(digits ?? '')
       ? { ok: true }
-      : { ok: false, reason: 'fuera de la lista blanca del piloto' };
+      : { ok: false, reason: 'fuera de la lista blanca del piloto', code: 'piloto' };
+  }
+
+  /**
+   * Escala la conversación porque se agotó el cupo del día.
+   *
+   * Nunca propaga: si la escalada falla, el veto sigue siendo válido y lo peor que pasa
+   * es que la conversación no aparezca en la bandeja. Dejar que una excepción suba de
+   * aquí haría que el mensaje se procesara —o se perdiera— por una razón que no tiene
+   * nada que ver con atender al cliente.
+   */
+  private async escalarPorTope(phone: string): Promise<void> {
+    try {
+      await this.store.setHandoff(convKeyOf(phone), 'se agotó el tope de tokens del bot del día');
+    } catch (e) {
+      this.logger.warn(`No se pudo escalar ${phone} tras agotarse el tope: ${(e as Error).message}`);
+    }
   }
 
   /** Estado actual, para el panel. */
@@ -130,6 +207,79 @@ export class ChatbotGateService {
       /** Con lista blanca, el bot está en piloto: no atiende al resto de abonados. */
       pilot: c.allow.length > 0,
     };
+  }
+
+  /**
+   * Ids de los planes que el agente público ofrece. Lista vacía = todos los activos.
+   * No se cachea con el resto: se lee una vez por consulta de planes (poquísimas) y
+   * así un cambio en el catálogo comercial se ve al instante.
+   */
+  async planesPublicos(): Promise<string[]> {
+    try {
+      const row = await this.prisma.appSetting.findUnique({
+        where: { key: CHATBOT_PLANS_KEY },
+        select: { value: true },
+      });
+      return (row?.value ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+    } catch (e) {
+      // Ante un fallo de BD se ofrecen todos: es información pública, no hay riesgo.
+      this.logger.warn(`No se pudo leer el catálogo comercial del bot: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Las dos conductas que el bot ejecuta por su cuenta, sin que nadie escriba: pedirle
+   * confirmación al cliente cuando se cierra su orden, y avisarle de lo que pasa con
+   * ella. Se leen en cada uso (son pocas veces) para que el interruptor de la UI surta
+   * efecto al instante, igual que el interruptor general.
+   *
+   * El respaldo es la variable de entorno, y los valores por omisión NO son iguales a
+   * propósito: la confirmación responde a algo que el cliente ya pidió y va encendida;
+   * los avisos proactivos salen sin que nadie los pida y van apagados.
+   */
+  async conductas(): Promise<{ confirmarSolucion: boolean; avisosProactivos: boolean }> {
+    const porDefecto = {
+      confirmarSolucion: process.env.WA_BOT_CONFIRMAR !== 'false',
+      avisosProactivos: process.env.WA_BOT_AVISOS === 'true',
+    };
+    try {
+      const rows = await this.prisma.appSetting.findMany({
+        where: { key: { in: [CHATBOT_CONFIRMAR_KEY, CHATBOT_AVISOS_KEY] } },
+        select: { key: true, value: true },
+      });
+      const leer = (k: string, def: boolean) => {
+        const v = rows.find((r) => r.key === k)?.value;
+        return v === 'true' || v === 'false' ? v === 'true' : def;
+      };
+      return {
+        confirmarSolucion: leer(CHATBOT_CONFIRMAR_KEY, porDefecto.confirmarSolucion),
+        avisosProactivos: leer(CHATBOT_AVISOS_KEY, porDefecto.avisosProactivos),
+      };
+    } catch (e) {
+      // Ante un fallo de BD se cae a lo que diga el entorno; para los avisos eso es
+      // "apagado", que es el lado seguro (no se le escribe a nadie por error).
+      this.logger.warn(`No se pudieron leer las conductas del bot: ${(e as Error).message}`);
+      return porDefecto;
+    }
+  }
+
+  async setConducta(
+    cual: 'confirmarSolucion' | 'avisosProactivos',
+    activa: boolean,
+    updatedBy?: string,
+  ) {
+    const key = cual === 'confirmarSolucion' ? CHATBOT_CONFIRMAR_KEY : CHATBOT_AVISOS_KEY;
+    await this.put(key, String(activa), updatedBy);
+    this.logger.warn(`${cual} ${activa ? 'ACTIVADA' : 'desactivada'} por ${updatedBy ?? 'desconocido'}.`);
+    return this.conductas();
+  }
+
+  async setPlanesPublicos(planIds: string[], updatedBy?: string) {
+    const ids = [...new Set((planIds ?? []).map((s) => String(s).trim()).filter(Boolean))];
+    await this.put(CHATBOT_PLANS_KEY, ids.join(','), updatedBy);
+    this.logger.log(`Catálogo comercial del bot: ${ids.length ? `${ids.length} plan(es)` : '(vacío → ofrece todos los activos)'}`);
+    return { planIds: ids };
   }
 
   async setEnabled(enabled: boolean, updatedBy?: string) {

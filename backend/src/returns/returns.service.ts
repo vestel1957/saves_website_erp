@@ -3,6 +3,7 @@ import { Type } from 'class-transformer';
 import { IsArray, IsInt, IsNumber, IsOptional, IsString, Min, MinLength, ValidateNested } from 'class-validator';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { orden } from '../common/pagination-params';
 import { AuthUser } from '../auth/current-user.decorator';
 import { num, round2 } from '../common/money';
 import { nextTid, TID_SEQ } from '../common/tid';
@@ -45,7 +46,13 @@ export class ReturnsService {
     return { total: agg._count._all, montoTotal: num(agg._sum.total), status };
   }
 
-  async list(params: { search?: string; status?: string; page?: number; pageSize?: number }) {
+  /** Columnas ordenables de la tabla de devoluciones. */
+  private static readonly ORDEN_LISTA = {
+    tid: 'tid', supplier: 'supplier.name', date: 'date',
+    total: 'total', status: 'status', itemsCount: 'itemsCount',
+  };
+
+  async list(params: { search?: string; status?: string; page?: number; pageSize?: number; sortBy?: string; sortDir?: string }) {
     const page = Math.max(1, Number(params.page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(params.pageSize) || 25));
     const where: Prisma.StockReturnWhereInput = {};
@@ -56,7 +63,7 @@ export class ReturnsService {
       where.OR = [...(Number.isFinite(asNum) ? [{ tid: asNum }] : []), { supplier: { is: { name: { contains: search, mode: 'insensitive' as const } } } }];
     }
     const [rows, total] = await Promise.all([
-      this.prisma.stockReturn.findMany({ where, orderBy: { date: 'desc' }, skip: (page - 1) * pageSize, take: pageSize, include: { supplier: true } }),
+      this.prisma.stockReturn.findMany({ where, orderBy: orden(params, ReturnsService.ORDEN_LISTA, { date: 'desc' }), skip: (page - 1) * pageSize, take: pageSize, include: { supplier: true } }),
       this.prisma.stockReturn.count({ where }),
     ]);
     return {

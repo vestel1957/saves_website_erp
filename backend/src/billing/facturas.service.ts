@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { orden } from '../common/pagination-params';
 import { AuthUser } from '../auth/current-user.decorator';
 import { PostingService } from '../accounting/posting.service';
 import { CobranzasService } from '../treasury/cobranzas.service';
@@ -10,6 +11,8 @@ import {
 } from './dto/facturas.dto';
 import { num, round2 } from '../common/money';
 import { nextTid, TID_SEQ } from '../common/tid';
+import { subName } from '../common/subscriber-name';
+import { exigirSedeSuscriptor } from '../common/sede-scope';
 
 
 function dateOnly(s?: string): Date {
@@ -117,9 +120,62 @@ export class FacturasService {
       tid: inv.tid, invoiceDate: inv.invoiceDate, dueDate: inv.dueDate,
       serviceCombo: inv.serviceCombo, serviceTv: inv.serviceTv,
       items: inv.items.map((it) => ({
-        productName: it.productName, description: it.description ?? it.productName ?? 'Servicio',
+        productName: it.productName, productId: it.productId ?? 0,
+        description: it.description ?? it.productName ?? 'Servicio',
         qty: it.qty || 1, price: num(it.price), taxRate: num(it.taxRate),
       })),
+    };
+  }
+
+  /**
+   * Facturas de un cliente para elegir sobre cuál se aplica una nota.
+   *
+   * Por defecto sólo las que DEBE (DUE/PARTIAL), que es el caso normal: la nota
+   * crédito rebaja lo que está por cobrar. `scope=all` trae también las pagadas
+   * y anuladas, porque a veces hay que ajustar una factura ya saldada (retención
+   * que llega después) y el legacy lo permitía escribiendo el número a mano.
+   */
+  async subscriberInvoices(subscriberId: string, scope: string | undefined, user?: AuthUser) {
+    await exigirSedeSuscriptor(this.prisma, user, subscriberId);
+    const sub = await this.prisma.subscriber.findUnique({
+      where: { id: subscriberId },
+      select: {
+        id: true, abonado: true, docNumber: true, balance: true,
+        firstName: true, secondName: true, lastName1: true, lastName2: true,
+        companyName: true, fullName: true,
+      },
+    });
+    if (!sub) throw new NotFoundException('Cliente no encontrado');
+
+    const todas = scope === 'all';
+    const rows = await this.prisma.subInvoice.findMany({
+      where: { subscriberId, ...(todas ? {} : { status: { in: ['DUE', 'PARTIAL'] } }) },
+      orderBy: [{ invoiceDate: 'desc' }, { tid: 'desc' }],
+      // Con `all` el histórico de un cliente viejo son cientos de filas y el
+      // selector no las necesita: las últimas 60 cubren de sobra el ajuste.
+      take: todas ? 60 : 200,
+      select: {
+        id: true, tid: true, invoiceDate: true, dueDate: true,
+        total: true, paidAmount: true, status: true,
+      },
+    });
+
+    const items = rows.map((i) => ({
+      id: i.id, tid: i.tid, date: i.invoiceDate, dueDate: i.dueDate,
+      total: num(i.total), paid: num(i.paidAmount),
+      balance: round2(num(i.total) - num(i.paidAmount)),
+      status: i.status,
+    }));
+
+    return {
+      subscriberId: sub.id,
+      name: subName(sub) ?? 'Sin nombre',
+      abonado: sub.abonado,
+      docNumber: sub.docNumber,
+      balance: num(sub.balance),
+      totalDebt: round2(items.filter((i) => i.status === 'DUE' || i.status === 'PARTIAL').reduce((s, i) => s + i.balance, 0)),
+      scope: todas ? 'all' : 'due',
+      items,
     };
   }
 
@@ -140,12 +196,17 @@ export class FacturasService {
           tid, subscriberId: subscriber.id, issuerUserId: null,
           invoiceDate, dueDate,
           subtotal, tax, total, paidAmount: 0,
-          status: 'DUE', kind: 'FIJA',
+          // Fija = cargo puntual (instalación, reconexión, venta); Recurrente = la
+          // mensualidad del servicio, que es la que lleva periodo y la que el recibo
+          // de caja rotula por mes. Ver `periodoFacturado` y `conceptoFactura`.
+          status: 'DUE', kind: dto.kind ?? 'FIJA',
           eInvoiceFlag: subscriber.eInvoice ? 'Crear Factura Electronica' : null,
           itemsCount: rows.length, notes: dto.notes ?? null,
           items: {
             create: rows.map((r) => ({
-              productId: 0, productName: r.productName ?? null, description: r.description,
+              // El concepto (`productName`) es lo que leen los reportes de ventas; si la
+              // línea se escribió a mano, la descripción ES el concepto.
+              productId: r.productId ?? 0, productName: r.productName ?? r.description ?? null, description: r.description,
               qty: r.qty, price: r.price, taxRate: r.taxRate,
               subtotal: r.subtotal, taxTotal: r.taxTotal, discountTotal: 0,
               createdByUserId: null,
@@ -249,17 +310,25 @@ export class FacturasService {
     // se factura y el contador se descuenta una vez por mes calendario.
     // Con asIfUnbilled se lee la última factura ANTERIOR al mes: si no, se leerían
     // los contadores de la factura del propio mes que se está re-simulando.
-    const promoBySub = new Map(
-      (await this.prisma.subInvoice.findMany({
-        where: {
-          subscriberId: { in: subs.map((s) => s.id) },
-          ...(asIfUnbilled ? { invoiceDate: { lt: monthStart } } : {}),
-        },
-        orderBy: [{ invoiceDate: 'desc' }, { tid: 'desc' }],
-        distinct: ['subscriberId'],
-        select: { id: true, subscriberId: true, promo: true, promo2: true, promoModifiedDate: true, promo2ModifiedDate: true },
-      })).map((r) => [r.subscriberId, r]),
-    );
+    //
+    // DISTINCT ON en SQL crudo a propósito: el `distinct` de Prisma (sin
+    // nativeDistinct) deduplica EN MEMORIA, o sea que aquí se traía el histórico
+    // completo de facturas de los ~5.000 objetivo (~236.000 filas) al proceso.
+    // Eso pasó de 512 MB y PM2 mató el backend en plena corrida del día 1
+    // (2026-08-01: quedó en 697 de 4.583). En SQL vuelve una fila por abonado.
+    type PromoRow = {
+      id: string; subscriberId: string; promo: number | null; promo2: number | null;
+      promoModifiedDate: Date | null; promo2ModifiedDate: Date | null;
+    };
+    const promoRows = subs.length ? await this.prisma.$queryRaw<PromoRow[]>`
+      SELECT DISTINCT ON (i."subscriberId")
+             i.id, i."subscriberId", i.promo, i.promo2,
+             i."promoModifiedDate", i."promo2ModifiedDate"
+        FROM "SubInvoice" i
+       WHERE i."subscriberId" IN (${Prisma.join(subs.map((s) => s.id))})
+         ${asIfUnbilled ? Prisma.sql`AND i."invoiceDate" < ${monthStart}` : Prisma.empty}
+       ORDER BY i."subscriberId", i."invoiceDate" DESC NULLS LAST, i.tid DESC` : [];
+    const promoBySub = new Map(promoRows.map((r) => [r.subscriberId, r]));
     const curYm = `${invoiceDate.getUTCFullYear()}-${invoiceDate.getUTCMonth()}`;
     const ymOf = (d: Date | null | undefined) => (d ? `${d.getUTCFullYear()}-${d.getUTCMonth()}` : null);
 
@@ -500,7 +569,21 @@ export class FacturasService {
   }
 
   /** Listado de notas crédito/débito (ítems pid=0 con producto Nota …). */
-  async listNotes(params: { page?: number; pageSize?: number; search?: string; type?: string }) {
+  /**
+   * Columnas ordenables de la tabla de notas.
+   *
+   * Una "nota" es en realidad un ítem de factura (`SubInvoiceItem`) cuyo
+   * producto es "Nota Credito" / "Nota Debito", así que las claves son campos de
+   * ese modelo: el tipo sale de `productName` y el monto de `price`. `sub`
+   * (cliente) no está porque el nombre se arma a partir de cuatro campos del
+   * suscriptor a través de la factura.
+   */
+  private static readonly ORDEN_NOTAS = {
+    date: 'createdAt', type: 'productName', tid: 'invoice.tid',
+    desc: 'description', amount: 'price',
+  };
+
+  async listNotes(params: { page?: number; pageSize?: number; search?: string; type?: string; sortBy?: string; sortDir?: string }) {
     const page = Math.max(1, Number(params.page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(params.pageSize) || 25));
 
@@ -530,7 +613,7 @@ export class FacturasService {
 
     const [rows, total] = await Promise.all([
       this.prisma.subInvoiceItem.findMany({
-        where, orderBy: { createdAt: 'desc' }, skip: (page - 1) * pageSize, take: pageSize,
+        where, orderBy: orden(params, FacturasService.ORDEN_NOTAS, { createdAt: 'desc' }), skip: (page - 1) * pageSize, take: pageSize,
         include: { invoice: { select: { id: true, tid: true, subscriber: { select: { firstName: true, lastName1: true, companyName: true, fullName: true } } } } },
       }),
       this.prisma.subInvoiceItem.count({ where }),

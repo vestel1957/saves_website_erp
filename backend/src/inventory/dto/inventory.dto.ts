@@ -31,6 +31,14 @@ export class SimpleCatalogDto {
   @IsOptional() @IsString() extra?: string;
 }
 
+export class WarehouseDto extends SimpleCatalogDto {
+  /**
+   * Encargado de la bodega: quien recibe y firma los traspasos que entran aquí.
+   * Cadena vacía = desasignar; no enviar el campo = dejarlo como está.
+   */
+  @IsOptional() @IsString() managerId?: string;
+}
+
 export class TransferItemDto {
   @IsString() materialId!: string;
   @IsInt() @Min(1) qty!: number;
@@ -39,7 +47,11 @@ export class TransferItemDto {
 export class TransferDto {
   @IsString() fromWarehouseId!: string;
   @IsString() toWarehouseId!: string;
-  @IsOptional() @IsString() receiverId?: string; // usuario designado para recibir
   @IsOptional() @IsString() observations?: string;
   @IsArray() @ValidateNested({ each: true }) @Type(() => TransferItemDto) items!: TransferItemDto[];
+}
+
+/** Recibir un acta: el código de firma solo se exige en el flujo nuevo (con destino). */
+export class ReceiveActaDto {
+  @IsOptional() @IsString() code?: string;
 }

@@ -8,6 +8,8 @@ import { PrismaModule } from './prisma/prisma.module';
 import { AuditModule } from './common/audit/audit.module';
 import { AuthModule } from './auth/auth.module';
 import { WhatsappModule } from './common/whatsapp/whatsapp.module';
+import { SignatureModule } from './common/signature/signature.module';
+import { NotificationsModule } from './common/notifications/notifications.module';
 import { ChatbotModule } from './chatbot/chatbot.module';
 import { MailModule } from './common/mail/mail.module';
 import { PlayhubModule } from './playhub/playhub.module';
@@ -24,6 +26,7 @@ import { TasksModule } from './tasks/tasks.module';
 import { PaymentImportsModule } from './payment-imports/payment-imports.module';
 import { ReturnsModule } from './returns/returns.module';
 import { StaffModule } from './staff/staff.module';
+import { ManualsModule } from './manuals/manuals.module';
 import { ProjectsModule } from './projects/projects.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { ReportsModule } from './reports/reports.module';
@@ -34,6 +37,7 @@ import { CronModule } from './cron/cron.module';
 import { DataModule } from './data/data.module';
 import { ExtrasModule } from './extras/extras.module';
 import { SettingsModule } from './settings/settings.module';
+import { ResponsibilitiesModule } from './responsibilities/responsibilities.module';
 import { PublicApiModule } from './public-api/public-api.module';
 import { PlansModule } from './plans/plans.module';
 import { PortalModule } from './portal/portal.module';
@@ -57,6 +61,8 @@ import { GeoModule } from './geo/geo.module';
     AuditModule,
     AuthModule,
     WhatsappModule,
+    SignatureModule,
+    NotificationsModule,
     ChatbotModule,
     MailModule,
     PlayhubModule,
@@ -78,6 +84,7 @@ import { GeoModule } from './geo/geo.module';
     PaymentImportsModule,
     ReturnsModule,
     StaffModule,
+    ManualsModule,
     ProjectsModule,
     DashboardModule,
     ReportsModule,
@@ -88,6 +95,7 @@ import { GeoModule } from './geo/geo.module';
     DataModule,
     ExtrasModule,
     SettingsModule,
+    ResponsibilitiesModule,
     PublicApiModule,
     SearchModule,
     GeoModule,

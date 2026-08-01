@@ -1,10 +1,13 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { orden } from '../common/pagination-params';
 import { AuthUser } from '../auth/current-user.decorator';
-import { AddNoteDto, CategoryNameDto, CreateOrderDto, CreateSupplierDto, OrderItemDto, PayOrderDto, ReceiveOrderDto } from './dto/orders.dto';
+import { AddNoteDto, CategoryNameDto, CreateOrderDto, CreateSupplierDto, OrderItemDto, PayOrderDto, ReceiveOrderDto, UpdateOrderDto } from './dto/orders.dto';
 import { num, round2 } from '../common/money';
 import { nextTid, TID_SEQ } from '../common/tid';
+import { ResponsibilityNotifierService } from '../responsibilities/responsibility-notifier.service';
+import { SignatureOtpService } from '../common/signature/signature-otp.service';
 
 const dateOnly = (s?: string) => { const d = s ? new Date(s) : new Date(); return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())); };
 
@@ -14,9 +17,272 @@ const isNote = (it: { materialLegacy: number | null }) => it.materialLegacy === 
 // Notas que restan del total (crédito y retención) vs. suman (débito). Ver Purchase::crear_nota.
 const noteSign = (type: string) => (type === 'Nota Debito' ? 1 : -1);
 
+// Estados terminales: ninguna acción de dinero/stock es válida sobre ellos.
+const TERMINAL = new Set(['cancelado', 'anulado', 'finalizado']);
+
+/** Monto legible para los avisos (mismo formato que usan promociones y campañas). */
+const copFmt = (n: number) =>
+  new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(n || 0);
+
 @Injectable()
 export class OrdersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly porCargo: ResponsibilityNotifierService,
+    private readonly firma: SignatureOtpService,
+  ) {}
+
+  // ------------------------------------------------------------------ //
+  //  Flujo de aprobación                                               //
+  // ------------------------------------------------------------------ //
+
+  /** Umbral desde el cual una orden exige DOS firmas (0 = nunca). Ajuste `purchases.dualApprovalThreshold`. */
+  private async dualThreshold(): Promise<number> {
+    const row = await this.prisma.appSetting.findUnique({ where: { key: 'purchases.dualApprovalThreshold' } });
+    const n = Number(row?.value);
+    return Number.isFinite(n) && n >= 0 ? n : 2_000_000;
+  }
+
+  /** Bitácora de la orden (rastro de auditoría que el legacy no tenía). */
+  private logEvent(
+    tx: Prisma.TransactionClient,
+    orderId: string,
+    e: { action: string; fromStatus?: string | null; toStatus?: string | null; detail?: string | null; user?: AuthUser | null },
+  ) {
+    return tx.supplyOrderEvent.create({
+      data: {
+        orderId, action: e.action,
+        fromStatus: e.fromStatus ?? null, toStatus: e.toStatus ?? null, detail: e.detail ?? null,
+        userId: e.user?.id ?? null, userName: e.user?.name ?? e.user?.email ?? null,
+      },
+    });
+  }
+
+  /**
+   * Guarda del flujo nuevo: las órdenes creadas en la app (legacyId null) no se
+   * pueden pagar ni recibir sin estar aprobadas. Las migradas del legacy quedan
+   * como estaban (allá el flujo era manual y ya son historia).
+   */
+  private exigirAprobada(order: { legacyId: number | null; status: string }, accion: string) {
+    if (TERMINAL.has(order.status)) {
+      throw new BadRequestException(`La orden está "${order.status}"; no admite ${accion}.`);
+    }
+    if (order.legacyId === null && order.status === 'pendiente') {
+      throw new BadRequestException(`La orden está pendiente de aprobación; no se puede ${accion} hasta que un autorizador la apruebe.`);
+    }
+  }
+
+  /**
+   * Pide el código de firma para aprobar esta orden: se lo manda al WhatsApp del
+   * autorizador y devuelve a qué número salió (enmascarado) y cuándo vence.
+   *
+   * Se comprueba antes que la orden EXISTA y esté aprobable, para no gastar un
+   * mensaje (y la cuota de plantillas) en una orden ya aprobada o cancelada. Y el
+   * mensaje lleva el proveedor y el monto: quien recibe el código tiene que poder
+   * ver QUÉ está firmando sin volver a la pantalla — es la mitad del valor de
+   * mandarlo por otro canal.
+   */
+  async requestApprovalOtp(id: string, user: AuthUser) {
+    const o = await this.prisma.supplyOrder.findUnique({
+      where: { id },
+      select: { tid: true, status: true, total: true, approvedById: true, supplier: { select: { name: true } } },
+    });
+    if (!o) throw new NotFoundException('Orden no encontrada');
+    if (o.status !== 'pendiente') throw new BadRequestException(`La orden ya está aprobada (estado "${o.status}").`);
+    if (o.approvedById === user.id) {
+      throw new ForbiddenException('Usted ya firmó esta orden; la segunda aprobación debe darla otra persona.');
+    }
+    return this.firma.pedir({
+      userId: user.id,
+      purpose: 'purchase.approve',
+      targetId: id,
+      detalle: `la orden de compra #${o.tid} de ${o.supplier?.name ?? 'proveedor sin nombre'} por ${copFmt(num(o.total))}`,
+    });
+  }
+
+  /**
+   * Aprueba una orden (1ª o 2ª firma). Bajo el umbral basta una firma; desde el
+   * umbral se exigen dos aprobadores DISTINTOS. El permiso `purchases.approve`
+   * se verifica en el controller; aquí se valida la mecánica de firmas.
+   *
+   * La firma se cierra con un código de un solo uso que llega al WhatsApp del
+   * autorizador (`signature.otpRequired`). Se consume ANTES de abrir la
+   * transacción y a propósito: verificar cuesta un scrypt (~100 ms) y no se va a
+   * tener una fila de `SupplyOrder` bloqueada con `FOR UPDATE` mientras se hashea.
+   * El precio es que un código puede quedar quemado si la aprobación falla justo
+   * después (orden que otro aprobó en ese instante) — se pide otro y ya; lo
+   * contrario, un código reusable, sí sería un problema.
+   */
+  async approve(id: string, user: AuthUser, otp?: string) {
+    const { required } = await this.firma.config();
+    const firma = required
+      ? await this.firma.firmar({ userId: user.id, purpose: 'purchase.approve', targetId: id, code: otp ?? '' })
+      : null;
+
+    const threshold = await this.dualThreshold();
+    const r = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "SupplyOrder" WHERE id = ${id} FOR UPDATE`;
+      const o = await tx.supplyOrder.findUnique({ where: { id } });
+      if (!o) throw new NotFoundException('Orden no encontrada');
+      if (TERMINAL.has(o.status)) throw new BadRequestException(`La orden está "${o.status}"; no se puede aprobar.`);
+      if (o.status !== 'pendiente') throw new BadRequestException(`La orden ya está aprobada (estado "${o.status}").`);
+
+      const total = num(o.total);
+      const needsTwo = threshold > 0 && total >= threshold;
+      // Cómo se firmó, para la bitácora: es lo que se va a mirar el día que
+      // pregunten quién autorizó esta compra.
+      const comoFirmo = firma ? ` ${SignatureOtpService.rastro(firma)}.` : '';
+
+      if (!o.approvedById) {
+        // Primera firma.
+        const data: Prisma.SupplyOrderUpdateInput = {
+          approvedById: user.id, approvedByName: user.name ?? user.email, approvedAt: new Date(),
+        };
+        if (!needsTwo) data.status = 'aprobado';
+        await tx.supplyOrder.update({ where: { id }, data });
+        await this.logEvent(tx, id, {
+          action: 'APROBAR', fromStatus: 'pendiente', toStatus: needsTwo ? 'pendiente' : 'aprobado',
+          detail: (needsTwo ? `1ª firma. Por el monto (${total}) requiere una segunda aprobación.` : 'Aprobación única.') + comoFirmo, user,
+        });
+        return { ok: true, status: needsTwo ? 'pendiente' : 'aprobado', needsSecond: needsTwo };
+      }
+
+      // Segunda firma: debe ser una persona distinta.
+      if (o.approvedById === user.id) {
+        throw new ForbiddenException('Usted ya firmó esta orden; la segunda aprobación debe darla otra persona.');
+      }
+      await tx.supplyOrder.update({
+        where: { id },
+        data: { approved2ById: user.id, approved2ByName: user.name ?? user.email, approved2At: new Date(), status: 'aprobado' },
+      });
+      await this.logEvent(tx, id, { action: 'APROBAR', fromStatus: 'pendiente', toStatus: 'aprobado', detail: `2ª firma.${comoFirmo}`, user });
+      return { ok: true, status: 'aprobado', needsSecond: false };
+    });
+
+    await this.avisarAprobacion(id, r);
+    return r;
+  }
+
+  /**
+   * Avisos que deja una aprobación. Fuera de la transacción y sin poder tumbarla: la
+   * orden ya está firmada, y un aviso que falla no puede deshacer una firma.
+   *
+   *  · Falta la 2ª firma → al encargado de compras. Sin esto una orden que pasa del
+   *    tope se queda esperando en silencio a un segundo firmante que no sabe que existe;
+   *    era la forma más fácil de que el control de doble firma pareciera un bloqueo.
+   *  · Ya aprobada y con bodega destino → al encargado de esa bodega: le va a llegar
+   *    material y tiene que estar para recibirlo.
+   */
+  private async avisarAprobacion(id: string, r: { status: string; needsSecond: boolean }) {
+    const o = await this.prisma.supplyOrder
+      .findUnique({
+        where: { id },
+        select: { tid: true, total: true, warehouseRef: true, supplier: { select: { name: true } } },
+      })
+      .catch(() => null);
+    if (!o) return;
+
+    const monto = copFmt(num(o.total));
+
+    if (r.needsSecond) {
+      await this.porCargo.notifyPost('compras', {
+        kind: 'compras.orden_segunda_firma',
+        title: `La orden #${o.tid} necesita una segunda aprobación`,
+        body: `${o.supplier?.name ?? 'Proveedor'} · ${monto} — pasa del tope y ya tiene una firma.`,
+        link: `/ordenes/${id}`,
+        groupKey: `orden-compra:${id}`,
+      });
+      return;
+    }
+
+    if (r.status !== 'aprobado' || o.warehouseRef == null) return;
+
+    const bodega = await this.prisma.materialWarehouse
+      .findFirst({ where: { legacyId: o.warehouseRef }, select: { title: true } })
+      .catch(() => null);
+
+    await this.porCargo.notifyPost('bodega', {
+      kind: 'bodega.material_en_camino',
+      title: `Material en camino: orden #${o.tid} aprobada`,
+      body: `${o.supplier?.name ?? 'Proveedor'} · ${monto}${bodega?.title ? ` — destino ${bodega.title}` : ''}`,
+      link: `/ordenes/${id}`,
+      groupKey: `orden-compra:${id}`,
+    });
+  }
+
+  /** Cancela una orden. Bloqueado si ya tiene pagos o material recibido. */
+  async cancel(id: string, user: AuthUser, reason?: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const o = await tx.supplyOrder.findUnique({ where: { id }, include: { items: true } });
+      if (!o) throw new NotFoundException('Orden no encontrada');
+      if (TERMINAL.has(o.status)) throw new BadRequestException(`La orden ya está "${o.status}".`);
+      if (num(o.paidAmount) > 0) throw new BadRequestException('La orden tiene pagos registrados; anule primero los pagos en tesorería.');
+      if (o.items.some((i) => !isNote(i) && i.receivedQty > 0)) {
+        throw new BadRequestException('La orden tiene material recibido; devuélvalo antes de cancelar.');
+      }
+      await tx.supplyOrder.update({ where: { id }, data: { status: 'cancelado' } });
+      await this.logEvent(tx, id, { action: 'CANCELAR', fromStatus: o.status, toStatus: 'cancelado', detail: reason ?? null, user });
+      return { ok: true, status: 'cancelado' };
+    });
+  }
+
+  /** Cierra el ciclo de la orden. Exige saldo en cero (todo pagado o ajustado con notas). */
+  async finalize(id: string, user: AuthUser) {
+    return this.prisma.$transaction(async (tx) => {
+      const o = await tx.supplyOrder.findUnique({ where: { id }, include: { items: true } });
+      if (!o) throw new NotFoundException('Orden no encontrada');
+      if (TERMINAL.has(o.status)) throw new BadRequestException(`La orden ya está "${o.status}".`);
+      this.exigirAprobada(o, 'finalizar');
+      const balance = round2(num(o.total) - num(o.paidAmount));
+      if (balance > 0.01) throw new BadRequestException(`La orden tiene saldo pendiente (${balance}); páguelo o ajústelo con una nota antes de finalizar.`);
+      const items = o.items.filter((i) => !isNote(i));
+      if (o.kind === 'compra' && items.length && !items.every((i) => i.receivedQty >= i.qty)) {
+        throw new BadRequestException('Hay ítems sin recibir por completo; reciba el material antes de finalizar.');
+      }
+      await tx.supplyOrder.update({ where: { id }, data: { status: 'finalizado' } });
+      await this.logEvent(tx, id, { action: 'FINALIZAR', fromStatus: o.status, toStatus: 'finalizado', user });
+      return { ok: true, status: 'finalizado' };
+    });
+  }
+
+  /**
+   * Edita una orden mientras esté PENDIENTE (después de aprobada, el contenido
+   * que se firmó no se toca; lo variable se maneja con notas). Reemplaza los
+   * ítems y recalcula totales conservando las notas/retenciones existentes.
+   */
+  async update(id: string, dto: UpdateOrderDto, user: AuthUser) {
+    return this.prisma.$transaction(async (tx) => {
+      const o = await tx.supplyOrder.findUnique({ where: { id }, include: { items: true } });
+      if (!o) throw new NotFoundException('Orden no encontrada');
+      if (o.status !== 'pendiente') {
+        throw new BadRequestException('Solo se puede editar una orden pendiente. Una orden aprobada se ajusta con notas, o se cancela y se crea de nuevo.');
+      }
+      const data: Prisma.SupplyOrderUpdateInput = {};
+      if (dto.orderDate !== undefined) data.orderDate = dateOnly(dto.orderDate);
+      if (dto.dueDate !== undefined) data.dueDate = dto.dueDate ? dateOnly(dto.dueDate) : null;
+      if (dto.categoryRef !== undefined) data.categoryRef = dto.categoryRef?.trim() || null;
+      if (dto.notes !== undefined) data.notes = dto.notes || null;
+
+      if (dto.items) {
+        if (!dto.items.length) throw new BadRequestException('La orden no puede quedar sin ítems');
+        const { rows, subtotal, tax, total } = this.computeTotals(dto.items);
+        // Las notas (pid=0) sobreviven a la edición: su suma firmada re-ajusta el total nuevo.
+        const noteAdjust = round2(o.items.filter(isNote).reduce((s, n) => s + num(n.price), 0));
+        await tx.supplyOrderItem.deleteMany({ where: { orderId: id, NOT: { materialLegacy: NOTE_PID } } });
+        await tx.supplyOrderItem.createMany({
+          data: rows.map((r) => ({ orderId: id, materialId: r.materialId ?? null, product: r.product, qty: r.qty, price: r.price, taxRate: r.taxRate, subtotal: r.subtotal, taxTotal: r.taxTotal })),
+        });
+        data.subtotal = subtotal; data.tax = tax; data.total = round2(total + noteAdjust); data.itemsCount = rows.length;
+        // Al editar, cualquier firma previa a medias (1ª de 2) queda invalidada.
+        data.approvedById = null; data.approvedByName = null; data.approvedAt = null;
+        data.approved2ById = null; data.approved2ByName = null; data.approved2At = null;
+      }
+      await tx.supplyOrder.update({ where: { id }, data });
+      await this.logEvent(tx, id, { action: 'EDITAR', detail: dto.items ? `Ítems reemplazados (${dto.items.length}); firmas reiniciadas.` : 'Cabecera actualizada.', user });
+      const fresh = await tx.supplyOrder.findUnique({ where: { id }, select: { total: true } });
+      return { ok: true, total: num(fresh?.total) };
+    });
+  }
 
   async stats() {
     const [byStatus, byKind, agg] = await Promise.all([
@@ -30,7 +296,20 @@ export class OrdersService {
     return { total: agg._count._all, montoTotal: num(agg._sum.total), status, compra: kind['compra'] ?? { count: 0, total: 0 }, servicio: kind['servicio'] ?? { count: 0, total: 0 } };
   }
 
-  async list(params: { kind?: string; status?: string; search?: string; category?: string; branch?: string; supplier?: string; minTotal?: string; maxTotal?: string; from?: string; to?: string; page?: number; pageSize?: number }) {
+  /** Columnas ordenables de la tabla de órdenes de compra. */
+  private static readonly ORDEN_ORDENES = {
+    tid: 'tid',
+    kind: 'kind',
+    paid: 'paidAmount',
+    supplier: 'supplier.name',
+    branchRef: 'branchRef',
+    date: 'orderDate',
+    total: 'total',
+    status: 'status',
+    itemsCount: 'itemsCount',
+  };
+
+  async list(params: { kind?: string; status?: string; search?: string; category?: string; branch?: string; supplier?: string; minTotal?: string; maxTotal?: string; from?: string; to?: string; page?: number; pageSize?: number; sortBy?: string; sortDir?: string }) {
     const page = Math.max(1, Number(params.page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(params.pageSize) || 25));
     const where: Prisma.SupplyOrderWhereInput = {};
@@ -65,7 +344,7 @@ export class OrdersService {
       ];
     }
     const [rows, total] = await Promise.all([
-      this.prisma.supplyOrder.findMany({ where, orderBy: { orderDate: 'desc' }, skip: (page - 1) * pageSize, take: pageSize, include: { supplier: true } }),
+      this.prisma.supplyOrder.findMany({ where, orderBy: orden(params, OrdersService.ORDEN_ORDENES, { orderDate: 'desc' }), skip: (page - 1) * pageSize, take: pageSize, include: { supplier: true } }),
       this.prisma.supplyOrder.count({ where }),
     ]);
     return {
@@ -79,11 +358,26 @@ export class OrdersService {
   }
 
   async detail(id: string) {
-    const o = await this.prisma.supplyOrder.findUnique({ where: { id }, include: { supplier: true, items: { orderBy: { id: 'asc' } } } });
+    const [o, threshold, firmaCfg] = await Promise.all([
+      this.prisma.supplyOrder.findUnique({
+        where: { id },
+        include: {
+          supplier: true,
+          items: { orderBy: { id: 'asc' } },
+          events: { orderBy: { createdAt: 'desc' }, take: 50 },
+          files: { orderBy: { createdAt: 'desc' } },
+        },
+      }),
+      this.dualThreshold(),
+      this.firma.config(),
+    ]);
     if (!o) throw new NotFoundException('Orden no encontrada');
     // El total ya está neto de notas/retención; el saldo es total - pagado.
     const total = num(o.total);
     const paid = num(o.paidAmount);
+    const needsTwo = threshold > 0 && total >= threshold;
+    // Solo las órdenes de la app entran al flujo de aprobación; las del legacy son historia.
+    const enFlujo = o.legacyId === null;
     return {
       id: o.id, tid: o.tid, kind: o.kind, status: o.status, date: o.orderDate, dueDate: o.dueDate,
       subtotal: num(o.subtotal), tax: num(o.tax), discount: num(o.discount), total, paid, balance: round2(total - paid),
@@ -93,11 +387,36 @@ export class OrdersService {
       items: o.items.filter((it) => !isNote(it)).map((it) => ({ id: it.id, product: it.product, qty: it.qty, price: num(it.price), taxRate: num(it.taxRate), subtotal: num(it.subtotal), taxTotal: num(it.taxTotal), received: it.receivedQty, materialId: it.materialId })),
       // Notas y retenciones que ajustaron el total (pid=0). amount negativo = descuento/retención.
       noteLines: o.items.filter(isNote).map((it) => ({ id: it.id, type: it.product, description: it.description, amount: num(it.price) })),
+      // Flujo de aprobación
+      approval: {
+        enFlujo, needsTwo, threshold,
+        createdByName: o.createdByName,
+        firstBy: o.approvedByName, firstAt: o.approvedAt, firstById: o.approvedById,
+        secondBy: o.approved2ByName, secondAt: o.approved2At,
+        // Pendiente de firma: sin 1ª, o con 1ª pero le falta la 2ª por monto.
+        awaiting: enFlujo && o.status === 'pendiente',
+        // ¿Hay que firmar con código? Lo decide el ajuste, y la pantalla necesita
+        // saberlo para pedirlo (o no) sin tener que provocar un error primero.
+        otpRequired: firmaCfg.required,
+      },
+      events: o.events.map((e) => ({ id: e.id, action: e.action, from: e.fromStatus, to: e.toStatus, detail: e.detail, user: e.userName, at: e.createdAt })),
+      files: o.files.map((f) => ({ id: f.id, name: f.originalName, size: f.size, mime: f.mimeType, by: f.uploadedByName, at: f.createdAt })),
     };
   }
 
   // --- Proveedores ---
-  async suppliers(params: { category?: string; search?: string; page?: number; pageSize?: number }) {
+  /** Columnas ordenables de la tabla de proveedores. */
+  private static readonly ORDEN_PROVEEDORES = {
+    name: 'name',
+    nit: 'nit',
+    phone: 'phone',
+    city: 'city',
+    bank: 'bank',
+    // Prisma sí sabe ordenar por el número de filas de una relación.
+    orders: (dir: 'asc' | 'desc') => ({ supplyOrders: { _count: dir } }),
+  };
+
+  async suppliers(params: { category?: string; search?: string; page?: number; pageSize?: number; sortBy?: string; sortDir?: string }) {
     const page = Math.max(1, Number(params.page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(params.pageSize) || 25));
     const where: Prisma.SupplierWhereInput = {};
@@ -105,7 +424,7 @@ export class OrdersService {
     const search = (params.search || '').trim();
     if (search) where.OR = [{ name: { contains: search, mode: 'insensitive' } }, { nit: { contains: search } }, { company: { contains: search, mode: 'insensitive' } }];
     const [rows, total] = await Promise.all([
-      this.prisma.supplier.findMany({ where, orderBy: { name: 'asc' }, skip: (page - 1) * pageSize, take: pageSize, include: { _count: { select: { supplyOrders: true } } } }),
+      this.prisma.supplier.findMany({ where, orderBy: orden(params, OrdersService.ORDEN_PROVEEDORES, { name: 'asc' }), skip: (page - 1) * pageSize, take: pageSize, include: { _count: { select: { supplyOrders: true } } } }),
       this.prisma.supplier.count({ where }),
     ]);
     return {
@@ -174,6 +493,7 @@ export class OrdersService {
       await tx.$queryRaw`SELECT id FROM "SupplyOrder" WHERE id = ${id} FOR UPDATE`;
       const order = await tx.supplyOrder.findUnique({ where: { id } });
       if (!order) throw new NotFoundException('Orden no encontrada');
+      this.exigirAprobada(order, 'pagar');
       const balance = round2(num(order.total) - num(order.paidAmount));
       if (amount > balance + 0.01) throw new BadRequestException(`El abono (${amount}) supera el saldo de la orden (${balance}).`);
 
@@ -189,7 +509,12 @@ export class OrdersService {
         },
       });
       const newPaid = round2(num(order.paidAmount) + amount);
-      await tx.supplyOrder.update({ where: { id }, data: { paidAmount: newPaid } });
+      // "abonado" = con pagos parciales (estado legacy); pagado del todo conserva
+      // el estado de recepción y el cierre lo hace "finalizar".
+      const data: Prisma.SupplyOrderUpdateInput = { paidAmount: newPaid };
+      if (order.legacyId === null && order.status === 'aprobado' && newPaid < num(order.total)) data.status = 'abonado';
+      await tx.supplyOrder.update({ where: { id }, data });
+      await this.logEvent(tx, id, { action: 'PAGAR', detail: `Abono ${amount} (${dto.method ?? 'Cash'}). Pagado ${newPaid} de ${num(order.total)}.`, user });
       return { ok: true, transactionId: t.id, paidAmount: newPaid, balance: round2(num(order.total) - newPaid) };
     });
   }
@@ -258,7 +583,7 @@ export class OrdersService {
     if (!supplier) throw new NotFoundException('Proveedor no encontrado');
     const { rows, subtotal, tax, total } = this.computeTotals(dto.items);
     const warehouse = dto.warehouseId ? await this.prisma.materialWarehouse.findUnique({ where: { id: dto.warehouseId } }) : null;
-    return this.prisma.$transaction(async (tx) => {
+    const creada = await this.prisma.$transaction(async (tx) => {
       const tid = await this.nextTid(tx);
       const o = await tx.supplyOrder.create({
         data: {
@@ -267,6 +592,7 @@ export class OrdersService {
           subtotal, tax, total, status: 'pendiente', kind: supplier.category === 2 ? 'servicio' : 'compra',
           categoryRef: dto.categoryRef?.trim() || null,
           warehouseRef: warehouse?.legacyId ?? null, notes: dto.notes ?? null, itemsCount: rows.length,
+          createdById: user?.id ?? null, createdByName: user?.name ?? user?.email ?? null,
           items: { create: rows.map((r) => ({ materialId: r.materialId ?? null, product: r.product, qty: r.qty, price: r.price, taxRate: r.taxRate, subtotal: r.subtotal, taxTotal: r.taxTotal })) },
         },
       });
@@ -274,9 +600,23 @@ export class OrdersService {
       if (dto.retention && dto.retention > 0 && dto.retentionType) {
         await this.applyNote(tx, o, { type: 'Retencion', retentionType: dto.retentionType, amount: dto.retention, description: 'Retención en la fuente' });
       }
+      await this.logEvent(tx, o.id, { action: 'CREAR', toStatus: 'pendiente', detail: `Orden #${o.tid} (${rows.length} ítems).`, user });
       const fresh = await tx.supplyOrder.findUnique({ where: { id: o.id }, select: { total: true } });
       return { id: o.id, tid: o.tid, total: num(fresh?.total ?? total), kind: o.kind };
     });
+
+    // Fuera de la transacción a propósito: si el aviso se demora, no tiene por qué
+    // mantener abierta la escritura de la orden, y si la orden se revierte no se avisa
+    // de una compra que no existe.
+    await this.porCargo.notifyPost('compras', {
+      kind: 'compras.orden_por_aprobar',
+      title: `Orden de compra #${creada.tid} pendiente de aprobación`,
+      body: `${supplier.name} · ${copFmt(creada.total)}`,
+      link: `/ordenes/${creada.id}`,
+      groupKey: `orden-compra:${creada.id}`,
+    });
+
+    return creada;
   }
 
   // --- Notas y retenciones sobre la orden (legacy Purchase::crear_nota / eliminar_nota) ---
@@ -313,11 +653,13 @@ export class OrdersService {
     return { lineId: line.id, newTotal, signed };
   }
 
-  async addNote(id: string, dto: AddNoteDto, _user: AuthUser) {
+  async addNote(id: string, dto: AddNoteDto, user: AuthUser) {
     return this.prisma.$transaction(async (tx) => {
       const order = await tx.supplyOrder.findUnique({ where: { id } });
       if (!order) throw new NotFoundException('Orden no encontrada');
+      if (TERMINAL.has(order.status)) throw new BadRequestException(`La orden está "${order.status}"; no admite notas.`);
       const res = await this.applyNote(tx, order, { type: dto.type, retentionType: dto.retentionType, amount: dto.amount, description: dto.description });
+      await this.logEvent(tx, id, { action: 'NOTA', detail: `${dto.type} por ${dto.amount}${dto.description ? ` — ${dto.description}` : ''}`, user });
       return { ok: true, noteId: res.lineId, total: res.newTotal, balance: round2(res.newTotal - num(order.paidAmount)) };
     });
   }
@@ -347,8 +689,14 @@ export class OrdersService {
   }
 
   async remove(id: string) {
-    const o = await this.prisma.supplyOrder.findUnique({ where: { id } });
+    const o = await this.prisma.supplyOrder.findUnique({ where: { id }, include: { items: true } });
     if (!o) throw new NotFoundException('Orden no encontrada');
+    // Una orden con plata o stock movidos no se borra: se cancela o se finaliza,
+    // y el rastro queda. Borrar era el agujero del legacy.
+    if (num(o.paidAmount) > 0) throw new BadRequestException('La orden tiene pagos; no se puede eliminar (cancele o finalice).');
+    if (o.items.some((i) => !isNote(i) && i.receivedQty > 0)) {
+      throw new BadRequestException('La orden tiene material recibido; no se puede eliminar.');
+    }
     await this.prisma.supplyOrder.delete({ where: { id } });
     return { id, deleted: true };
   }
@@ -358,6 +706,7 @@ export class OrdersService {
     return this.prisma.$transaction(async (tx) => {
       const o = await tx.supplyOrder.findUnique({ where: { id }, include: { items: true } });
       if (!o) throw new NotFoundException('Orden no encontrada');
+      this.exigirAprobada(o, 'recibir material');
       const targetWarehouseId = dto.warehouseId ?? null;
       for (const r of dto.items) {
         const item = o.items.find((i) => i.id === r.itemId);
@@ -369,13 +718,60 @@ export class OrdersService {
         }
         await tx.supplyOrderItem.update({ where: { id: item.id }, data: { receivedQty: r.received } });
       }
-      // Recalcular estado
-      const updated = await tx.supplyOrderItem.findMany({ where: { orderId: id } });
+      // Recalcular estado (las notas pid=0 no cuentan para la recepción).
+      const updated = (await tx.supplyOrderItem.findMany({ where: { orderId: id } })).filter((i) => !isNote(i));
       const allReceived = updated.every((i) => i.receivedQty >= i.qty);
       const anyReceived = updated.some((i) => i.receivedQty > 0);
       const status = allReceived ? 'recibido' : anyReceived ? 'recibido parcial' : o.status;
       await tx.supplyOrder.update({ where: { id }, data: { status, receivedAt: new Date(), warehouseRef: undefined } });
+      if (status !== o.status) {
+        await this.logEvent(tx, id, { action: 'RECIBIR', fromStatus: o.status, toStatus: status, user });
+      }
       return { id, status };
     });
+  }
+
+  // ------------------------------------------------------------------ //
+  //  Adjuntos (metadata; el binario vive en uploads/orders/<id>/)      //
+  // ------------------------------------------------------------------ //
+
+  async addFile(id: string, meta: { originalName: string; storedName: string; mimeType: string; size: number }, user: AuthUser) {
+    const o = await this.prisma.supplyOrder.findUnique({ where: { id }, select: { id: true } });
+    if (!o) throw new NotFoundException('Orden no encontrada');
+    const f = await this.prisma.supplyOrderFile.create({
+      data: { orderId: id, ...meta, uploadedByName: user?.name ?? user?.email ?? null },
+    });
+    await this.prisma.$transaction((tx) => this.logEvent(tx, id, { action: 'ADJUNTO', detail: `Subido: ${meta.originalName}`, user }));
+    return { id: f.id, name: f.originalName };
+  }
+
+  async fileMeta(id: string, fileId: string) {
+    const f = await this.prisma.supplyOrderFile.findUnique({ where: { id: fileId } });
+    if (!f || f.orderId !== id) throw new NotFoundException('Adjunto no encontrado');
+    return f;
+  }
+
+  async deleteFile(id: string, fileId: string, user: AuthUser) {
+    const f = await this.fileMeta(id, fileId);
+    await this.prisma.supplyOrderFile.delete({ where: { id: f.id } });
+    await this.prisma.$transaction((tx) => this.logEvent(tx, id, { action: 'ADJUNTO', detail: `Eliminado: ${f.originalName}`, user }));
+    return f; // el controller borra el binario del disco
+  }
+
+  /** Datos para el PDF imprimible de la orden (con firmas de autorización). */
+  async pdfData(id: string) {
+    const d = await this.detail(id);
+    return d;
+  }
+
+  /** Filas planas para exportar a Excel (respeta los mismos filtros del listado). */
+  async exportRows(params: Parameters<OrdersService['list']>[0]) {
+    const r = await this.list({ ...params, page: 1, pageSize: 100 });
+    // Se recorren todas las páginas (tope sano de 20k filas).
+    const all = [...r.items];
+    for (let p = 2; p <= Math.min(r.pages, 200); p++) {
+      all.push(...(await this.list({ ...params, page: p, pageSize: 100 })).items);
+    }
+    return all;
   }
 }

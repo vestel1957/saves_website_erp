@@ -15,6 +15,23 @@ export const WHATSAPP_OUTBOUND_EVENT = 'whatsapp.outbound';
 /** Evento emitido cuando el webhook trae un cambio de estado de un mensaje saliente. */
 export const WHATSAPP_STATUS_EVENT = 'whatsapp.status';
 
+/**
+ * Aviso interno para un funcionario, a mandar por WhatsApp.
+ *
+ * Va por evento y no por llamada directa para no cerrar un ciclo de módulos: quien
+ * avisa por cargo (`ResponsibilitiesModule`) no puede importar WhatsApp, porque la
+ * bandeja de WhatsApp es justo uno de los que avisa por cargo.
+ */
+export const INTERNAL_ALERT_EVENT = 'internal.alert';
+
+/** Aviso dirigido a los teléfonos de funcionarios (no de clientes). */
+export interface InternalAlert {
+  /** Teléfonos E.164 sin '+'. Ya filtrados: aquí no llegan vacíos. */
+  phones: string[];
+  /** Texto ya redactado, con el enlace al final si aplica. */
+  text: string;
+}
+
 /** Cambio de estado de entrega de un mensaje saliente (sent/delivered/read/failed). */
 export interface WhatsappStatusUpdate {
   /** Id del mensaje en Meta (casa con WhatsappSend.waMessageId). */

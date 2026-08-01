@@ -39,4 +39,7 @@ export type TaskFilter = {
   kind?: string;
   page?: number;
   pageSize?: number;
+  /** Orden pedido por la cabecera de la tabla. */
+  sortBy?: string;
+  sortDir?: string;
 };

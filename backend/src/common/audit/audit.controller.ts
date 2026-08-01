@@ -20,7 +20,9 @@ export class AuditController {
     @Query('to') to?: string,
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
+    @Query('sortBy') sortBy?: string,
+    @Query('sortDir') sortDir?: string,
   ) {
-    return this.audit.list({ search, entity, userId, from, to, page: Number(page), pageSize: Number(pageSize) });
+    return this.audit.list({ search, entity, userId, from, to, page: Number(page), pageSize: Number(pageSize), sortBy, sortDir });
   }
 }

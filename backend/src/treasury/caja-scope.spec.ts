@@ -1,5 +1,9 @@
-import { esCajera, puedeVer, SEDE_BANCO, AlcanceCajas } from './caja-scope';
+import { ForbiddenException } from '@nestjs/common';
+import {
+  alcanceDe, esCajera, exigirCajaDeEscritura, puedeVer, SEDE_BANCO, AlcanceCajas,
+} from './caja-scope';
 import { AuthUser } from '../auth/current-user.decorator';
+import { PrismaService } from '../prisma/prisma.service';
 
 /** AuthUser mínimo: sólo `permissions` influye en el alcance. */
 const usuario = (permissions: string[]): AuthUser =>
@@ -83,5 +87,66 @@ describe('puedeVer', () => {
 
   it('una caja derivada (sin sede) la ve su dueña', () => {
     expect(puedeVer(alcance({ caja: 7 }), 7, null)).toBe(true);
+  });
+});
+
+/** Prisma de mentira: sólo hacen falta el usuario y la sede de cada caja. */
+const prismaCon = (fila: { cajaLegacyId: number | null; sedesAccede: number[] } | null, sedeDeCaja: number | null = 3) =>
+  ({
+    user: { findUnique: jest.fn().mockResolvedValue(fila) },
+    cashAccount: { findUnique: jest.fn().mockResolvedValue({ branchLegacy: sedeDeCaja }) },
+  }) as unknown as PrismaService;
+
+describe('alcanceDe', () => {
+  it('un proceso interno (usuario sin id) no queda acotado ni consulta la BD', async () => {
+    // El cargue de pagos Efecty llama con `{ name: 'Cargue' }`: preguntarle a Prisma
+    // por `id: undefined` reventaría, y acotarlo no tendría a qué sede acotarlo.
+    const prisma = prismaCon(null);
+    const a = await alcanceDe(prisma, { name: 'Cargue' } as unknown as AuthUser);
+    expect(a).toEqual({ todas: true, caja: null, sedes: [] });
+    expect((prisma as any).user.findUnique).not.toHaveBeenCalled();
+  });
+});
+
+describe('exigirCajaDeEscritura', () => {
+  const cajera = usuario(['area.caja']);
+  const jefa = usuario(['area.contabilidad']);
+
+  it('a la cajera que no manda caja se le pone la SUYA', async () => {
+    // Antes ese movimiento nacía sin caja: no salía en su cierre y no lo veía ni ella.
+    const prisma = prismaCon({ cajaLegacyId: 7, sedesAccede: [] });
+    await expect(exigirCajaDeEscritura(prisma, cajera, undefined)).resolves.toBe(7);
+  });
+
+  it('la cajera NO puede escribir en la caja de otra sede', async () => {
+    const prisma = prismaCon({ cajaLegacyId: 7, sedesAccede: [] }, 3);
+    await expect(exigirCajaDeEscritura(prisma, cajera, 8)).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('la cajera sí puede escribir en la suya', async () => {
+    const prisma = prismaCon({ cajaLegacyId: 7, sedesAccede: [] }, 3);
+    await expect(exigirCajaDeEscritura(prisma, cajera, 7)).resolves.toBe(7);
+  });
+
+  it('una cajera sin caja asignada no puede registrar nada', async () => {
+    const prisma = prismaCon({ cajaLegacyId: null, sedesAccede: [] });
+    await expect(exigirCajaDeEscritura(prisma, cajera, undefined)).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('quien ve todas puede seguir registrando sin caja (asiento de administración)', async () => {
+    const prisma = prismaCon({ cajaLegacyId: null, sedesAccede: [] });
+    await expect(exigirCajaDeEscritura(prisma, jefa, undefined)).resolves.toBeNull();
+  });
+
+  it('con propiaSiFalta, a quien ve todas se le pone su caja si tiene una', async () => {
+    // Es el recaudo a mano: la pantalla ya no enseña el selector de caja salvo al
+    // superusuario, así que el pago tiene que caer en la caja de quien lo registra.
+    const prisma = prismaCon({ cajaLegacyId: 5, sedesAccede: [] });
+    await expect(exigirCajaDeEscritura(prisma, jefa, undefined, { propiaSiFalta: true })).resolves.toBe(5);
+  });
+
+  it('con propiaSiFalta, quien ve todas y no tiene caja sigue registrando sin caja', async () => {
+    const prisma = prismaCon({ cajaLegacyId: null, sedesAccede: [] });
+    await expect(exigirCajaDeEscritura(prisma, jefa, undefined, { propiaSiFalta: true })).resolves.toBeNull();
   });
 });

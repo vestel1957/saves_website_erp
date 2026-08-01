@@ -30,6 +30,18 @@ export const BANCOS = [
   { id: 8, nombre: 'BANCOLOMBIA CUENTA CORRIENTE' },
   { id: 23, nombre: 'WOMPI' },
 ];
+
+/**
+ * La pasarela de pago en línea. Es una cuenta de banco más para el legacy, pero ese
+ * dinero NO pasa por ninguna ventanilla: el abonado paga desde su celular y la plata
+ * cae directa. Se consolida en la caja de su sede sólo porque el `refer` de la factura
+ * dice esa sede.
+ *
+ * Por eso el panel de la cajera lo excluye (ver `excluirBancos` y `cashCloseReport`),
+ * mientras que el informe en tablas y el PDF lo siguen incluyendo: ésos son el documento
+ * portado del legacy y tienen que cuadrar cifra por cifra con el sistema viejo.
+ */
+export const WOMPI_ID = 23;
 const CAJA_VIRTUAL_ID = 11;
 const CAJA_VIRTUAL = 'Caja Virtual';
 
@@ -90,8 +102,22 @@ export type InformeCierre = Awaited<ReturnType<typeof informeCierre>>;
 
 /**
  * Calcula todos los bloques del informe de un cierre (caja + fecha).
+ *
+ * `excluirBancos` deja fuera de la consolidación las cuentas de banco que se indiquen.
+ * No es un filtro cosmético que se pueda aplicar luego sobre el resultado: el dinero de
+ * esas cuentas entra en el prorrateo por ítem, en el reparto del residuo y en el 40/60
+ * del combo, así que la única forma de sacarlo es no meterlo y recalcular. Sin la
+ * opción, el comportamiento es el del legacy (todos los bancos dentro).
  */
-export async function informeCierre(prisma: PrismaService, cashAccountId: number, d: Date) {
+export async function informeCierre(
+  prisma: PrismaService,
+  cashAccountId: number,
+  d: Date,
+  opts?: { excluirBancos?: number[] },
+) {
+  const bancos = opts?.excluirBancos?.length
+    ? BANCOS.filter((b) => !opts.excluirBancos!.includes(b.id))
+    : BANCOS;
   const cuenta = await prisma.cashAccount.findUnique({
     where: { legacyId: cashAccountId },
     select: { holder: true, accountNumber: true },
@@ -117,7 +143,7 @@ export async function informeCierre(prisma: PrismaService, cashAccountId: number
   // 2. Consolidación de banco: un movimiento del banco es de ESTA caja si el `refer` de
   //    su factura coincide con el holder de la caja (sin espacios, case-insensitive).
   const deBanco = await prisma.transaction.findMany({
-    where: { cashAccountId: { in: BANCOS.map((b) => b.id) }, date: rangoDia(d), noShow: false },
+    where: { cashAccountId: { in: bancos.map((b) => b.id) }, date: rangoDia(d), noShow: false },
     select: {
       id: true, type: true, category: true, method: true, credit: true, debit: true,
       note: true, status: true, cashAccountId: true, invoice: incluirFactura,
@@ -221,7 +247,7 @@ export async function informeCierre(prisma: PrismaService, cashAccountId: number
 
   // ── Bloque: Resumen por Banco ────────────────────────────────────────────────
   // (Lo que el PDF del legacy deja en ceros por las variables sin asignar.)
-  const porBanco = BANCOS.map((b) => {
+  const porBanco = bancos.map((b) => {
     const filas = bancoDeLaCaja.filter((t) => t.cashAccountId === b.id && t.status !== 'ANULADA');
     return { nombre: b.nombre, cantidad: filas.length, monto: filas.reduce((s, t) => s + num(t.credit), 0) };
   });

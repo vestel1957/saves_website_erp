@@ -38,6 +38,10 @@ export abstract class OltDriver {
   private stream: ClientChannel | null = null;
   /** Buffer acumulado de datos recibidos aún no consumidos. */
   private buffer = '';
+  /** La sesión murió (socket cerrado/error): no se puede reutilizar. */
+  private dead = false;
+  /** Esperas pendientes de readUntil: se despiertan al llegar datos. */
+  private dataWaiters: Array<() => void> = [];
 
   constructor(host: string, port: string | number, user: string, pass: string) {
     this.host = (host || '').trim();
@@ -55,10 +59,6 @@ export abstract class OltDriver {
 
   getRawLog(): string {
     return this.rawLog;
-  }
-
-  private sleep(ms: number): Promise<void> {
-    return new Promise((r) => setTimeout(r, ms));
   }
 
   /**
@@ -89,14 +89,18 @@ export abstract class OltDriver {
             const s = d.toString('utf8');
             this.buffer += s;
             this.rawLog += s;
+            this.notifyData();
           });
           if (stream.stderr) {
             stream.stderr.on('data', (d: Buffer) => {
               this.buffer += d.toString('utf8');
+              this.notifyData();
             });
           }
           stream.on('close', () => {
             this.stream = null;
+            this.dead = true;
+            this.notifyData();
           });
           done(true);
         });
@@ -105,7 +109,13 @@ export abstract class OltDriver {
         const msg = e.level === 'client-authentication'
           ? 'Autenticación fallida (usuario o password incorrectos).'
           : e.message;
+        this.dead = true;
+        this.notifyData();
         done(false, msg);
+      });
+      client.on('close', () => {
+        this.dead = true;
+        this.notifyData();
       });
       client.on('timeout', () => done(false, 'Connection timed out'));
 
@@ -151,6 +161,8 @@ export abstract class OltDriver {
     } catch { /* cerrando */ }
     this.stream = null;
     this.client = null;
+    this.dead = true;
+    this.notifyData();
   }
 
   /* ------------------------------------------------------------------ *
@@ -177,8 +189,25 @@ export abstract class OltDriver {
     this.error = `Listar perfiles aún no está implementado para ${this.getMarca()}.`;
     return false;
   }
+  /** Tablas de tráfico (CIR/PIR): es donde se limita la velocidad del abonado. */
+  async getTrafficTables(): Promise<{ id: string; cir: string; pir: string }[]> {
+    return [];
+  }
+  /** Configuración de alta deducida de los abonados que ya cuelgan del puerto. */
+  async sugerenciaDePuerto(_frame: number, _slot: number, _port: number): Promise<any> {
+    return { basadoEn: 0 };
+  }
   async provisionOnu(_p: any): Promise<any | false> {
     this.error = `Aprovisionar ONU aún no está implementado para ${this.getMarca()}.`;
+    return false;
+  }
+  /** Todos los service-ports de un puerto PON, con su ONT-ID y traffic-tables. */
+  async servicePortsDePuerto(_frame: number, _slot: number, _port: number): Promise<any[]> {
+    return [];
+  }
+  /** Cambia las traffic-tables del service-port de una ONU ya autenticada. */
+  async setServicePortSpeed(_p: any): Promise<any | false> {
+    this.error = `Cambiar la velocidad de una ONU aún no está implementado para ${this.getMarca()}.`;
     return false;
   }
   async rebootOnu(_p: any): Promise<any | false> {
@@ -189,12 +218,28 @@ export abstract class OltDriver {
     this.error = `Eliminar ONU aún no está implementado para ${this.getMarca()}.`;
     return false;
   }
+  async setOnuDescription(_p: any): Promise<any | false> {
+    this.error = `Cambiar el comentario de una ONU aún no está implementado para ${this.getMarca()}.`;
+    return false;
+  }
   async getOntDetail(_frame: number, _slot: number, _port: number, _ontid: number): Promise<any | false> {
     this.error = `Detalle de ONU aún no está implementado para ${this.getMarca()}.`;
     return false;
   }
+  async getOntOptical(_frame: number, _slot: number, _port: number, _ontid: number): Promise<any | false> {
+    this.error = `Óptica de ONU aún no está implementada para ${this.getMarca()}.`;
+    return false;
+  }
   async findBySn(_sn: string): Promise<any | false> {
     this.error = `Buscar por SN aún no está implementado para ${this.getMarca()}.`;
+    return false;
+  }
+  async getCatvPorts(_frame: number, _slot: number, _port: number, _ontid: number): Promise<any[] | false> {
+    this.error = `Leer el puerto CATV aún no está implementado para ${this.getMarca()}.`;
+    return false;
+  }
+  async setCatvState(_p: any): Promise<any | false> {
+    this.error = `Cortar/activar CATV aún no está implementado para ${this.getMarca()}.`;
     return false;
   }
   async getSystemInfo(): Promise<any> {
@@ -213,13 +258,37 @@ export abstract class OltDriver {
    *  Capa de shell interactivo (reutilizable por los drivers).
    * ------------------------------------------------------------------ */
 
+  /** Despierta todas las esperas pendientes de readUntil (llegaron datos o murió la sesión). */
+  private notifyData(): void {
+    const ws = this.dataWaiters;
+    this.dataWaiters = [];
+    for (const w of ws) w();
+  }
+
+  /** Espera hasta que lleguen datos nuevos o venza `ms` (lo que ocurra primero). */
+  private waitData(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      let done = false;
+      const fin = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(t);
+        resolve();
+      };
+      const t = setTimeout(fin, ms);
+      this.dataWaiters.push(fin);
+    });
+  }
+
   /**
    * Lee del buffer hasta que aparezca `stopRegex` o venza `maxMs`. Consume del
    * buffer lo devuelto. Devuelve '' si no llegó nada nuevo antes del timeout.
+   * La espera es por evento (data del canal), no por polling: la respuesta se
+   * procesa apenas llega, importante con salidas paginadas de cientos de páginas.
    */
   private async readUntil(stopRegex: RegExp, maxMs: number): Promise<string> {
     const start = Date.now();
-    while (Date.now() - start < maxMs) {
+    while (true) {
       const m = this.buffer.match(stopRegex);
       if (m && m.index !== undefined) {
         const idx = m.index + m[0].length;
@@ -227,7 +296,9 @@ export abstract class OltDriver {
         this.buffer = this.buffer.slice(idx);
         return out;
       }
-      await this.sleep(30);
+      const restante = maxMs - (Date.now() - start);
+      if (restante <= 0 || this.dead) break;
+      await this.waitData(Math.min(restante, 500));
     }
     // Timeout: devolver lo pendiente (puede ser parcial) y vaciar.
     const out = this.buffer;
@@ -239,12 +310,42 @@ export abstract class OltDriver {
    * Drena TODA la salida inicial (banner + prompts apilados) tras el login.
    * Equipos como el Huawei MA5800 dejan varios prompts en cola; si no se
    * vacían, cada comando lee la respuesta del anterior (desfase).
+   * El primer prompt puede tardar (banner + MOTD); los apilados llegan juntos,
+   * así que tras el primero basta una ventana corta de silencio: antes se
+   * esperaban 2 s completos de silencio y ese costo se pagaba en CADA sesión.
    */
   protected async drainBanner(): Promise<void> {
+    await this.readUntil(this.promptRegex, 2500);
     for (let n = 0; n < 10; n++) {
-      const out = await this.readUntil(this.promptRegex, 2000);
+      const out = await this.readUntil(this.promptRegex, 300);
       if (out === '') break;
     }
+  }
+
+  /** ¿La sesión sigue abierta y es reutilizable? */
+  isAlive(): boolean {
+    return !!this.client && !!this.stream && !this.dead;
+  }
+
+  /**
+   * Verifica que la sesión reutilizada responde: manda un ENTER y espera el
+   * prompt. También limpia salida asíncrona acumulada (alarmas del equipo).
+   */
+  async probe(timeoutMs = 3000): Promise<boolean> {
+    if (!this.isAlive()) return false;
+    try {
+      this.stream!.write('\n');
+      const out = await this.readUntil(this.promptRegex, timeoutMs);
+      return /[>#]/.test(out);
+    } catch {
+      return false;
+    }
+  }
+
+  /** Limpia log y error entre usos de una sesión reutilizada (pool). */
+  resetSession(): void {
+    this.rawLog = '';
+    this.error = '';
   }
 
   /**
@@ -257,12 +358,45 @@ export abstract class OltDriver {
    */
   protected async sendCommand(cmd: string, autoConfirm = false, maxLoops = 200): Promise<string> {
     if (!this.stream) return '';
+    // Descartar salida residual (alarmas asíncronas que el equipo imprime en la
+    // VTY entre comandos): si se dejara, se colaría como respuesta del comando
+    // que vamos a enviar. Ya quedó copiada en rawLog al llegar.
+    if (this.buffer !== '') {
+      this.rawLog += `\n[descartados ${this.buffer.length} car. residuales]\n`;
+      this.buffer = '';
+    }
     this.stream.write(cmd + '\n');
     this.rawLog += `\n>>> ${cmd}\n`;
 
     let buf = '';
     let loops = 0;
-    const stop = /(?:\{ <cr>[^}]*\}:)|(?:---- ?[Mm]ore)|(?:\(y\/n\))|(?:\[Y\/N\])|(?:(?:^|[\r\n])[^\s\r\n]+[>#][ \t]*$)/;
+    // Ojo con `\{[^}]*\}:`: cubre TODOS los prompts de parámetro del CLI Huawei,
+    // no solo los que ofrecen <cr>. Si solo se reconocen los de <cr>, un comando
+    // incompleto deja la sesión esperando un valor y el SIGUIENTE comando se
+    // escribe dentro de ese prompt (se come los espacios) → "Unknown command" y,
+    // si se insiste, "Reenter times have reached the upper limit".
+    const stop = /(?:\{[^}\r\n]{0,300}\}:)|(?:---- ?[Mm]ore)|(?:\(y\/n\))|(?:\[Y\/N\])|(?:(?:^|[\r\n])[^\s\r\n]+[>#][ \t]*$)/;
+
+    // Guarda anti-reenter: si contestamos DOS veces seguidas al mismo prompt,
+    // es que el equipo no acepta la respuesta automática. Insistir es lo que
+    // dispara el "Reenter times have reached the upper limit" de Huawei (aborta
+    // el comando al tercer intento) y, en el peor caso, cierra la sesión.
+    let lastPrompt = '';
+    let repeats = 0;
+    const answer = (kind: string, chunkTail: string, write: string): boolean => {
+      const sig = kind + '|' + chunkTail.slice(-120).replace(/\s+/g, ' ').trim();
+      repeats = sig === lastPrompt ? repeats + 1 : 0;
+      lastPrompt = sig;
+      if (repeats >= 2) {
+        this.error =
+          'El equipo repitió la misma pregunta del CLI y no aceptó la respuesta automática. ' +
+          'El comando se abortó para no bloquear la sesión.';
+        this.rawLog += `\n[abortado: prompt repetido ${repeats + 1} veces]\n`;
+        return false;
+      }
+      this.stream!.write(write);
+      return true;
+    };
 
     while (true) {
       if (++loops > maxLoops) break;
@@ -270,16 +404,40 @@ export abstract class OltDriver {
       if (chunk === '') break;
       buf += chunk;
 
-      if (/\{ <cr>[^}]*\}:/.test(chunk)) {
-        this.stream.write('\n');
-        continue;
+      // El equipo ya agotó sus reintentos: no sirve seguir escribiendo.
+      if (/Reenter times have reached the upper limit/i.test(chunk)) {
+        this.error =
+          'La OLT rechazó la respuesta automática a una pregunta del CLI y agotó los reintentos ' +
+          '("Reenter times have reached the upper limit"). El comando no se aplicó.';
+        break;
+      }
+
+      // Prompt de parámetro. Si ofrece <cr>, ENTER significa "ejecuta ya".
+      if (/\{[^}\r\n]{0,300}\}:/.test(chunk)) {
+        if (/<cr>/.test(chunk)) {
+          if (!answer('cr', chunk, '\n')) break;
+          continue;
+        }
+        // No ofrece <cr>: el comando está incompleto y el equipo espera un
+        // valor que no sabemos inventar. Cancelamos con Ctrl+C para devolver
+        // el CLI al prompt; si no, el próximo comando entra como respuesta.
+        const pide = (chunk.match(/\{([^}\r\n]{0,300})\}:/) ?? [])[1] ?? '';
+        this.error =
+          `El comando "${cmd}" está incompleto: la OLT pide un parámetro más (${pide.trim()}).`;
+        this.rawLog += `\n[cancelado con Ctrl+C: falta parámetro]\n`;
+        this.stream.write('\x03');
+        await this.readUntil(this.promptRegex, 3000);
+        break;
       }
       if (/---- ?[Mm]ore/.test(chunk)) {
+        // La paginación es legítima y se repite: no cuenta como reenter.
+        lastPrompt = ''; repeats = 0;
         this.stream.write(' ');
         continue;
       }
       if (/\(y\/n\)|\[Y\/N\]/i.test(chunk)) {
-        this.stream.write((autoConfirm ? 'y' : 'n') + '\n');
+        const yn = (autoConfirm ? 'y' : 'n') + '\n';
+        if (!answer('yn', chunk, yn)) break;
         this.rawLog += (autoConfirm ? '[auto y]' : '[auto n]') + '\n';
         continue;
       }

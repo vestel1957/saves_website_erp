@@ -1,5 +1,6 @@
 import PDFDocument from 'pdfkit';
 import type { Response } from 'express';
+import * as B from '../common/pdf/brand';
 
 const cop = (n: number) =>
   '$ ' + new Intl.NumberFormat('es-CO', { maximumFractionDigits: 0 }).format(Math.round(n || 0));
@@ -15,17 +16,9 @@ type Statement = {
   movements: { date: string | Date; concept: string; debit: number; credit: number; balance: number }[];
 };
 
-const BRAND = '#1e3a8a';
+const BRAND = B.NAVY;
 
-function header(doc: PDFKit.PDFDocument, title: string) {
-  doc.fillColor(BRAND).fontSize(20).font('Helvetica-Bold').text('VESTEL', { continued: false });
-  doc.fillColor('#666').fontSize(9).font('Helvetica').text('Servicios de Internet y Televisión');
-  doc.moveDown(0.5);
-  doc.moveTo(doc.x, doc.y).lineTo(555, doc.y).strokeColor('#ddd').stroke();
-  doc.moveDown(0.8);
-  doc.fillColor('#111').fontSize(15).font('Helvetica-Bold').text(title);
-  doc.moveDown(0.6);
-}
+const header = (doc: PDFKit.PDFDocument, title: string) => B.docHeader(doc, title);
 
 function clientBlock(doc: PDFKit.PDFDocument, sub: Statement['subscriber']) {
   doc.fontSize(10).font('Helvetica').fillColor('#333');
@@ -42,7 +35,7 @@ function clientBlock(doc: PDFKit.PDFDocument, sub: Statement['subscriber']) {
 
 /** Certificado de paz y salvo. */
 export function pazYSalvoPdf(res: Response, data: Statement) {
-  const doc = new PDFDocument({ size: 'A4', margin: 40 });
+  const doc = B.newDoc(PDFDocument);
   doc.pipe(res);
   header(doc, 'Certificado de Paz y Salvo');
   clientBlock(doc, data.subscriber);
@@ -70,12 +63,12 @@ export function pazYSalvoPdf(res: Response, data: Statement) {
   doc.moveTo(40, doc.y).lineTo(240, doc.y).strokeColor('#999').stroke();
   doc.fontSize(9).fillColor('#666').text('Firma autorizada — VESTEL', 40, doc.y + 4);
 
-  doc.end();
+  B.finish(doc);
 }
 
 /** Estado de cuenta detallado. */
 export function statementPdf(res: Response, data: Statement) {
-  const doc = new PDFDocument({ size: 'A4', margin: 40 });
+  const doc = B.newDoc(PDFDocument);
   doc.pipe(res);
   header(doc, 'Estado de Cuenta');
   clientBlock(doc, data.subscriber);
@@ -127,5 +120,5 @@ export function statementPdf(res: Response, data: Statement) {
   doc.moveDown(1.5).fontSize(8).fillColor('#999').font('Helvetica')
     .text(`Generado el ${fmtDate(new Date())} · ${rows.length} movimiento(s).`, 40);
 
-  doc.end();
+  B.finish(doc);
 }

@@ -19,7 +19,7 @@ import { RequireArea } from '../auth/require-area.decorator';
 import { RequirePermissions } from '../auth/require-permissions.decorator';
 import { APP_PERMISSIONS } from '../auth/permissions.catalog';
 import { CurrentUser, type AuthUser } from '../auth/current-user.decorator';
-import { UpdateSubscriberDto, AddNoteDto, UpdateInvoiceDto, CreateSubscriberDto, CheckDuplicatesDto } from './dto/update-subscriber.dto';
+import { UpdateSubscriberDto, AddNoteDto, UpdateInvoiceDto, CreateSubscriberDto, CheckDuplicatesDto, ChangeStatusDto } from './dto/update-subscriber.dto';
 import { AssignPlanDto, AssignPlansDto } from '../plans/dto/plan.dto';
 import { BulkFilterDto, BulkMessageDto } from './dto/bulk.dto';
 import { pazYSalvoPdf, statementPdf } from './subscriber-pdf';
@@ -76,6 +76,18 @@ export class SubscribersController {
     return this.subscribers.reconnectByFilter(dto, user);
   }
 
+  @RequirePermissions(APP_PERMISSIONS.NETWORK_CUT)
+  @Post('bulk/tv-cut')
+  bulkTvCut(@Body() dto: BulkFilterDto, @CurrentUser() user: AuthUser) {
+    return this.subscribers.tvCutByFilter(dto, user);
+  }
+
+  @RequirePermissions(APP_PERMISSIONS.NETWORK_RECONNECT)
+  @Post('bulk/tv-restore')
+  bulkTvRestore(@Body() dto: BulkFilterDto, @CurrentUser() user: AuthUser) {
+    return this.subscribers.tvRestoreByFilter(dto, user);
+  }
+
   @Post('bulk/message')
   bulkMessage(@Body() dto: BulkMessageDto, @CurrentUser() user: AuthUser) {
     return this.subscribers.messageByFilter(dto, dto.message, user);
@@ -128,9 +140,11 @@ export class SubscribersController {
     @Query('tecnologia') tecnologia?: string,
     @Query('cuenta') cuenta?: string,
     @Query('deuda') deuda?: string,
+    @Query('sortBy') sortBy?: string,
+    @Query('sortDir') sortDir?: string,
     @CurrentUser() user?: AuthUser,
   ) {
-    return this.subscribers.list({ search, status, branchId, page: Number(page), pageSize: Number(pageSize), withPlan, servicio, tecnologia, cuenta, deuda }, user);
+    return this.subscribers.list({ search, status, branchId, page: Number(page), pageSize: Number(pageSize), withPlan, servicio, tecnologia, cuenta, deuda, sortBy, sortDir }, user);
   }
 
   @Get(':id')
@@ -146,6 +160,12 @@ export class SubscribersController {
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdateSubscriberDto, @CurrentUser() user: AuthUser) {
     return this.subscribers.update(id, dto, user);
+  }
+
+  /** Cambio manual de estado (administrativo; no corta ni reconecta en el router). */
+  @Patch(':id/status')
+  changeStatus(@Param('id') id: string, @Body() dto: ChangeStatusDto, @CurrentUser() user: AuthUser) {
+    return this.subscribers.changeStatus(id, dto, user);
   }
 
   /** Cambiar el plan del abonado (catálogo → precio de la próxima factura + perfil al router). */

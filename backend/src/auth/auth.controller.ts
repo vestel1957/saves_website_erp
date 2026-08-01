@@ -4,6 +4,7 @@ import { LoginDto } from './dto/login.dto';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { ForgotCheckDto, ForgotPasswordDto, ForgotResetDto } from './dto/forgot-password.dto';
 import { SetRolesDto } from './dto/set-roles.dto';
 import { SetScreensDto } from './dto/set-screens.dto';
 import { SetActiveDto } from './dto/set-active.dto';
@@ -29,6 +30,40 @@ export class AuthController {
   @Post('logout')
   logout() {
     return { ok: true };
+  }
+
+  // -- "Olvidé mi contraseña": tres pasos, SIN sesión ------------------------
+  //
+  // Rutas abiertas: las ve cualquiera que llegue a la IP. Van con el mismo
+  // `LoginThrottleGuard` que el login (10 intentos por IP cada 5 min) y comparten
+  // su contador a propósito — quien tantea correos aquí es el mismo que tantea
+  // claves allá. El servicio responde igual exista o no la cuenta.
+
+  /** ¿El canal de WhatsApp puede entregar códigos? El login lo pregunta antes de ofrecerlo. */
+  @Get('password/forgot/available')
+  forgotAvailability() {
+    return this.auth.forgotAvailability();
+  }
+
+  /** Paso 1: manda el código al WhatsApp vinculado a ese correo. */
+  @Post('password/forgot')
+  @UseGuards(LoginThrottleGuard)
+  forgotPassword(@Body() dto: ForgotPasswordDto, @Ip() ip: string) {
+    return this.auth.forgotPassword(dto.email, ip);
+  }
+
+  /** Paso 2: comprueba el código sin gastarlo (aún falta escribir la contraseña). */
+  @Post('password/forgot/check')
+  @UseGuards(LoginThrottleGuard)
+  forgotCheck(@Body() dto: ForgotCheckDto) {
+    return this.auth.forgotCheck(dto.email, dto.code);
+  }
+
+  /** Paso 3: gasta el código y escribe la contraseña nueva. */
+  @Post('password/forgot/reset')
+  @UseGuards(LoginThrottleGuard)
+  forgotReset(@Body() dto: ForgotResetDto, @Ip() ip: string) {
+    return this.auth.forgotReset(dto.email, dto.code, dto.password, ip);
   }
 
   @Get('me')
@@ -89,11 +124,31 @@ export class AuthController {
     return this.auth.updateUser(id, dto);
   }
 
+  /**
+   * ¿Restablecer la contraseña de este usuario va a pedir código, y hay a dónde
+   * mandarlo? La pantalla lo consulta al abrir el diálogo para no ofrecer un
+   * botón que sabe que va a fallar.
+   */
+  @Get('users/:id/password/policy')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions(APP_PERMISSIONS.USERS_MANAGE)
+  passwordPolicy(@Param('id') id: string) {
+    return this.auth.passwordPolicy(id);
+  }
+
+  /** Manda el código de 6 dígitos al WhatsApp DEL DUEÑO de la cuenta. */
+  @Post('users/:id/password/code')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions(APP_PERMISSIONS.USERS_MANAGE)
+  requestPasswordCode(@Param('id') id: string, @CurrentUser() actor: AuthUser) {
+    return this.auth.requestPasswordCode(id, actor);
+  }
+
   @Post('users/:id/password')
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions(APP_PERMISSIONS.USERS_MANAGE)
   resetPassword(@Param('id') id: string, @Body() dto: ResetPasswordDto) {
-    return this.auth.resetPassword(id, dto.password);
+    return this.auth.resetPassword(id, dto.password, { code: dto.code });
   }
 
   @Patch('users/:id/roles')

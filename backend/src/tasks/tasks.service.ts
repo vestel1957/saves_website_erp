@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { orden } from '../common/pagination-params';
 import { Prisma, TodoStatus, TodoPriority } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
@@ -46,6 +47,17 @@ export class TasksService {
     return { pendientes: due, enProgreso: progress, hechas: done, mias: mine, vencidas: overdue };
   }
 
+  /**
+   * Columnas ordenables de la tabla de tareas. `assignee` se muestra como
+   * nombre pero en la fila solo está el id legacy del empleado (el nombre se
+   * resuelve luego con un mapa), así que se ordena por ese id: agrupa por
+   * persona, aunque no sea alfabético.
+   */
+  private static readonly ORDEN_LISTA = {
+    name: 'name', status: 'status', priority: 'priority',
+    tdate: 'tdate', dueDate: 'dueDate', orderId: 'orderId', assignee: 'assigneeId',
+  };
+
   async list(f: TaskFilter, user?: AuthUser) {
     const page = Math.max(1, Number(f.page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(f.pageSize) || 25));
@@ -81,7 +93,7 @@ export class TasksService {
     }
 
     const [rows, total] = await Promise.all([
-      this.prisma.todoTask.findMany({ where, orderBy: [{ tdate: 'desc' }, { legacyId: 'desc' }], skip: (page - 1) * pageSize, take: pageSize }),
+      this.prisma.todoTask.findMany({ where, orderBy: orden(f, TasksService.ORDEN_LISTA, [{ tdate: 'desc' }, { legacyId: 'desc' }]), skip: (page - 1) * pageSize, take: pageSize }),
       this.prisma.todoTask.count({ where }),
     ]);
     const names = await this.namesByLegacyId(rows.flatMap((r) => [r.employeeId, r.assigneeId]));

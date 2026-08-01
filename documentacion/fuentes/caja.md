@@ -122,8 +122,10 @@ Todo tu día gira alrededor de tres momentos. Si entiendes estos tres pasos, ent
 6. El sistema reparte el pago sobre las facturas empezando por la más antigua. Si pagó de más, ese excedente le queda como **saldo a favor** para su próxima factura.
 7. Confirma. Verás un aviso verde y el nuevo ingreso aparecerá en la lista.
 
+**Captura:** tesoreria-ingresos-modal — Ventana **Registrar recaudo**: se busca el cliente y el sistema muestra su deuda antes de aplicar el pago.
+
 > Cada fila tiene un botón **Editar** para corregir un movimiento, mientras no esté anulado.
-> También puedes registrar el recaudo desde la ficha del cliente o desde el Inicio; es el mismo resultado.
+> También puedes registrar el recaudo desde la ficha del cliente; es el mismo resultado.
 
 ## Egresos
 
@@ -142,6 +144,8 @@ Todo tu día gira alrededor de tres momentos. Si entiendes estos tres pasos, ent
 5. Escribe una **Nota** que explique el gasto.
 6. Adjunta el **Comprobante (opcional)**: pulsa "Adjuntar comprobante" y sube la foto o el PDF de la factura, recibo o soporte de la transferencia.
 7. Confirma. Verás el aviso verde y el egreso quedará en la lista con su comprobante.
+
+**Captura:** tesoreria-egresos-modal — Ventana **Registrar egreso**, con el campo para adjuntar el comprobante.
 
 > Cada fila tiene un botón **Editar** para corregir el egreso, mientras no esté anulado.
 > Adjunta siempre el soporte de los gastos: sin comprobante, el gasto es difícil de justificar en el cierre.
@@ -310,6 +314,8 @@ Todo tu día gira alrededor de tres momentos. Si entiendes estos tres pasos, ent
 
 > Algunas acciones (emitir factura electrónica, generar facturas en lote, exportar) solo aparecen si tienes el permiso; si no las ves, es que ese permiso está en otra área.
 > Antes de entregar el PDF al cliente, verifica que el total y el saldo sean los correctos.
+
+**Captura:** facturacion-ficha — Detalle de una factura: conceptos, totales y los pagos aplicados.
 
 ## Notas crédito / débito
 

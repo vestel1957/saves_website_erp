@@ -1,39 +1,14 @@
 # Manual de Gerencia
 
-Este manual está dirigido a las personas de **Gerencia y Dirección** de Vestel: quienes necesitan ver cómo va el negocio sin entrar a registrar facturas, pagos ni órdenes. Con SAVES usted observa el estado del ISP (el proveedor de internet), compara periodos y descarga reportes para reuniones o para la contabilidad. Su perfil es de **consulta**: mira, compara y exporta; no modifica datos. Este manual explica las tres pantallas que usará a diario: **Inicio**, el **Panel ejecutivo (Dashboard)** y los **Reportes**, y al final le da una guía sencilla para interpretar los números.
+Este manual está dirigido a las personas de **Gerencia y Dirección** de Vestel: quienes necesitan ver cómo va el negocio sin entrar a registrar facturas, pagos ni órdenes. Con SAVES usted observa el estado del ISP (el proveedor de internet), compara periodos y descarga reportes para reuniones o para la contabilidad. Su perfil es de **consulta**: mira, compara y exporta; no modifica datos. Este manual explica las dos pantallas que usará a diario —el **Panel ejecutivo (Dashboard)** y los **Reportes**—, la única acción en la que usted decide (**aprobar órdenes de compra**), y al final le da una guía sencilla para interpretar los números.
 
 > A lo largo del sistema hay tres detalles útiles: el menú lateral solo muestra lo que su usuario tiene permitido ver (si no ve una opción, es por permisos). En el celular las tablas se muestran como tarjetas, una debajo de otra, para que se lean bien. Y la campana, arriba a la derecha, muestra las alertas y avisos del sistema.
 
 ---
 
-## Inicio
-
-**Dónde:** *Menú lateral → PRINCIPAL → Inicio* (es la pantalla que aparece apenas usted entra al sistema).
-
-**Para qué sirve:** Es su punto de partida. Le da la bienvenida y le ofrece un acceso directo al Panel ejecutivo y a las secciones que su usuario puede consultar, sin tener que buscar en el menú.
-
-**Qué vas a ver:** En la parte de arriba, un saludo con su nombre y la fecha de hoy. Debajo, una tarjeta grande llamada **Panel ejecutivo** que, al hacerle clic, lo lleva a los indicadores del negocio. Más abajo, una fila de **Accesos rápidos**: botones a las principales áreas que usted tiene permiso de ver (por ejemplo Clientes, Facturación, Tesorería, Red).
-
-| Elemento | Qué es | Qué hace al tocarlo |
-|---|---|---|
-| Saludo y fecha | Su nombre y el día de hoy | Solo informativo |
-| Panel ejecutivo | Tarjeta destacada | Abre el Dashboard con los indicadores |
-| Accesos rápidos | Botones a las áreas | Lleva directo a esa sección |
-
-**Paso a paso (para llegar a los indicadores del negocio):**
-
-1. Ingrese al sistema con su usuario y contraseña. Queda directamente en la pantalla de Inicio.
-2. Ubique la tarjeta **Panel ejecutivo** (tiene el texto "Indicadores de abonados, recaudo, cartera y red").
-3. Haga clic sobre ella para abrir el Dashboard.
-4. Si en lugar de eso quiere ir a otra área, use uno de los botones de **Accesos rápidos**.
-
-> Si al entrar ve la palabra "Mi caja" o "Mi jornada" en vez de "General", es porque su usuario también tiene funciones operativas. Con el selector que aparece arriba a la derecha puede cambiar a la vista **General**, que es la pensada para dirección.
-
----
-
 ## Dashboard / Panel ejecutivo
 
-**Dónde:** *Menú lateral → PRINCIPAL → Dashboard* (o desde la tarjeta "Panel ejecutivo" en Inicio).
+**Dónde:** *Menú lateral → PRINCIPAL → Dashboard*. Es la pantalla en la que queda apenas entra al sistema.
 
 **Para qué sirve:** Es la foto del negocio en una sola pantalla: cuántos clientes hay y en qué estado están, cuánto se ha recaudado, cuánta plata está pendiente de cobro (la cartera) y cómo se reparte el negocio entre las sedes.
 
@@ -62,7 +37,7 @@ Este manual está dirigido a las personas de **Gerencia y Dirección** de Vestel
 
 **Paso a paso (revisar el estado del negocio):**
 
-1. Abra el Dashboard desde el menú o desde Inicio.
+1. Abra el Dashboard desde el menú (*PRINCIPAL → Dashboard*).
 2. Lea primero la **franja de indicadores** de arriba: le da el panorama en segundos.
 3. Baje a la gráfica de **Recaudo vs. egresos** para ver si el mes viene mejor o peor que los anteriores.
 4. Revise las dos **donas**: en la de clientes, cuánta base está activa frente a la que está en mora o cortada; en la de cartera, cuánta deuda es reciente y cuánta lleva más de 90 días.
@@ -77,52 +52,42 @@ Este manual está dirigido a las personas de **Gerencia y Dirección** de Vestel
 
 ## Reportes
 
-**Dónde:** *Menú lateral → PRINCIPAL → Reportes*.
+Los reportes tienen **capítulo propio al final de este manual**: son 14, cada uno vive en su
+propia pantalla del menú **Reportes**, y todos se filtran por periodo y se exportan a PDF o Excel.
 
-**Para qué sirve:** Es la herramienta para ver la información en detalle, filtrarla por el periodo que usted elija y descargarla en Excel o PDF para presentaciones, juntas o para pasarla a contabilidad.
+## Aprobar órdenes de compra
 
-**Qué vas a ver:** Arriba, el título "Reportes de gerencia" y, a la derecha, el botón **Exportar**. Debajo, una fila de botones para elegir qué reporte quiere ver. Cuando el reporte lo permite, aparece un bloque de **filtros de fecha** (Desde, Hasta y atajos rápidos). El resto de la pantalla muestra el reporte elegido con sus cifras y gráficas.
+Es la única acción del sistema en la que Gerencia **decide y firma**, no solo consulta.
 
-**Reportes disponibles:**
+**Dónde:** *Menú lateral → INVENTARIO → Compras → Órdenes de compra* (`/ordenes`), y luego se abre la orden concreta.
 
-| Reporte | Qué muestra |
+> **Importante:** el permiso de aprobación viene con el rol de Gerencia, pero la pantalla de Órdenes de compra pertenece al área de Inventario/Administración. Si usted no ve esa opción en el menú, pida a **Sistemas** que le habilite la pantalla *Órdenes de compra* en su usuario (ficha del empleado → Permisos y accesos). El permiso para firmar ya lo tiene.
+
+**Para qué sirve:** ninguna compra queda en firme hasta que un aprobador la firma. Mientras está **Pendiente**, la orden puede editarse; una vez **Aprobada**, se congela y sigue su curso (recepción y pago).
+
+**Las dos firmas:** el sistema tiene un **umbral en pesos** (configurable por Sistemas; por defecto **$2.000.000**).
+
+| Total de la orden | Firmas que exige |
 |---|---|
-| Resumen de facturación | Facturas emitidas, total facturado, pagadas, cartera pendiente y facturas en mora |
-| Recaudo | Dinero cobrado, repartido por caja y por método de pago (efectivo, transferencia, etc.) |
-| Ventas por sede | Cuánto facturó cada sede en el periodo |
-| Ingresos y egresos | Lo que entró y salió mes a mes, con el balance (superávit o déficit) |
-| Órdenes de servicio | Solicitudes de soporte por estado, por tipo y por técnico |
-| Cartera / deudores | Los mayores deudores y el total de deuda concentrada en ellos |
-| Estado de clientes | Cuántos clientes hay en cada estado y cómo se reparten por sede |
-| Cortes y activaciones | Activaciones, cortes, suspensiones y retiros del periodo |
-| Altas y retiros | Clientes nuevos frente a clientes que se fueron, y el crecimiento neto |
-| Reporte de IVA | Base gravable, base exenta e IVA, en ventas o en compras (para contabilidad) |
+| Por debajo del umbral | Una sola firma: con su aprobación la orden queda **Aprobada** |
+| Igual o mayor al umbral | **Dos firmas de personas distintas**: la suya deja la orden "en flujo" y otro aprobador debe firmar la segunda |
 
-**Los filtros de fecha:**
+**Paso a paso (aprobar una orden):**
 
-| Filtro | Para qué |
-|---|---|
-| Desde / Hasta | Escoger el rango de fechas exacto |
-| Este mes | Atajo al mes en curso |
-| Mes anterior | Atajo al mes pasado |
-| Este año | Atajo al año en curso |
-| Limpiar | Quita las fechas y vuelve al histórico completo |
+1. Entre a **Órdenes de compra** y ubique las que están en estado **Pendiente**.
+2. Haga clic en la orden para abrir su detalle: proveedor, ítems, subtotal, IVA y total.
+3. Revise que el proveedor, las cantidades y el total sean los correctos.
+4. Pulse **Aprobar**.
+5. Si la orden está por debajo del umbral, queda **Aprobada** de inmediato. Si está por encima, queda esperando la **segunda firma**: el detalle mostrará su nombre como primera firma y quedará pendiente la otra.
+6. Si la orden no debe seguir, use **Cancelar** e indique el motivo.
 
-**Paso a paso (consultar y descargar un reporte):**
+**Captura:** ordenes-ficha — Detalle de una orden de compra: proveedor, ítems, totales y el cuadro de firmas.
 
-1. Entre a **Reportes** desde el menú.
-2. En la fila de botones, elija el reporte que necesita (por ejemplo, "Recaudo" o "Cartera / deudores").
-3. Si el reporte tiene filtros de fecha, escriba el rango en **Desde** y **Hasta**, o use un atajo como "Este mes" o "Mes anterior".
-4. Espere un momento a que la pantalla muestre las cifras y gráficas actualizadas.
-5. Revise los indicadores de arriba y las tablas de detalle de abajo.
-6. Para descargar, haga clic en **Exportar** (arriba a la derecha) y elija **PDF (imprimir)** o **Excel (.xls)**.
-7. El archivo se genera con el periodo que usted eligió, listo para adjuntar o imprimir.
+> Una misma persona **no puede poner las dos firmas**: el sistema lo rechaza. Esa es justamente la protección del doble control.
 
-> El **Reporte de IVA** tiene un selector extra para escoger entre **Ventas** y **Compras**. Es el reporte que normalmente necesita contabilidad; conviene fijar bien las fechas antes de exportarlo.
+> El botón **PDF** de la orden genera el documento imprimible con el **cuadro de firmas** (quién la creó, quién dio la primera firma y quién la segunda). Es el respaldo para el proveedor y para el archivo.
 
-> Si el botón Exportar aparece apagado (gris), es porque el reporte no tiene datos en el periodo elegido. Amplíe el rango de fechas o pulse "Limpiar" para ver el histórico.
-
-> Los reportes reflejan lo que hay registrado en el sistema en ese momento. Si un pago o una factura se acaban de registrar, vuelva a elegir el reporte para que se actualice.
+> Toda aprobación queda registrada con su nombre, fecha y hora en la bitácora de la orden. Si necesita revisar el histórico, use *Compras → Historial de órdenes*.
 
 ---
 

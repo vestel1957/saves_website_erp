@@ -95,6 +95,7 @@ Lee esto una vez; después el resto del manual se entiende mucho mejor.
 9. **Recoge la firma del cliente:** en "Firma de quien recibe" escribe el nombre, la cédula y el parentesco de quien recibe, dibuja la firma con el dedo en el recuadro y pulsa **Guardar firma**.
 10. **Genera el PDF:** pulsa **Orden PDF** (arriba a la derecha) para abrir la orden de trabajo lista para imprimir o enviar.
 
+**Captura:** soporte-ficha — Ficha de una orden de trabajo: datos del cliente, seguimiento, equipo y material.
 > El material que registras **se descuenta del stock** de verdad. Registra solo lo que realmente usaste, con la cantidad correcta.
 
 > La **ubicación de la foto** solo se guarda si el celular está en un sitio con conexión segura (HTTPS). Sobre conexión normal (HTTP) la foto sí sube, pero sin coordenadas; el sistema te lo avisa. Cuando hay ubicación, en el seguimiento verás a cuántos metros del cliente se tomó la foto (verde si está cerca, ámbar si está lejos).

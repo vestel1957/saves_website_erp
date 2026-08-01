@@ -114,6 +114,8 @@ Hay dos tipos de roles:
 - Si el empleado **tiene cuenta** del sistema: los datos de esa cuenta (correo, fecha de creación, último ingreso), los **roles** asignados y un **árbol de permisos** organizado en tres bloques: Módulos del sistema, Pantallas del menú y Áreas de acceso.
 - Si el empleado **no tiene cuenta**: un aviso indicándolo. El superadministrador puede crearle el acceso con el botón **Crear acceso al sistema** (requiere que el empleado tenga correo registrado).
 
+**Captura:** empleados-permisos — Pestaña **Permisos y accesos** de la ficha: roles asignados y árbol de permisos.
+
 **Puntos clave:**
 
 1. **Solo el superadministrador edita permisos.** Los demás usuarios ven la ficha en modo lectura; les aparece el aviso "Solo el superusuario puede editar".
@@ -163,13 +165,33 @@ Como superadministrador, usted es la primera línea de defensa del sistema. Siga
 
 Cada rol del sistema tiene su propio manual con el detalle de las pantallas que usa en su día a día. Remita a cada persona al manual de su área:
 
+**Áreas de acceso** (cada una abre su sección del menú por sí sola):
+
 | Área / Rol | Enfoque del manual | Aterriza en |
 |---|---|---|
-| Gerencia | Panel ejecutivo, indicadores y reportes (solo lectura) | Dashboard |
+| Gerencia | Panel ejecutivo, indicadores, reportes y aprobación de compras | Dashboard |
 | Administración | Clientes, inventario de material, compras, proveedores, personal y proyectos | Clientes |
 | Contabilidad | Facturas, notas, facturación electrónica y contabilidad | Facturación |
 | Caja y ventas | Apertura y cierre de caja, ingresos, egresos y cobro de facturas | Tesorería |
 | Técnicos | Tickets de soporte, red, Mikrotik, OLT y equipos | Soporte |
 | Sistemas | Configuración, WhatsApp, automatizaciones y administración de usuarios | Configuración |
 
+**Roles funcionales** (no abren el menú por sí solos: hay que habilitarles sus pantallas):
+
+| Rol | Enfoque del manual | Pantallas que hay que habilitarle |
+|---|---|---|
+| Contador | Libros, estados financieros y mapeo de cuentas | Las cinco de Contabilidad |
+| Jefe de bodega | Material, equipos y despacho de inventario | Material, Equipos (incluida **Transferencias**) y Compras |
+| Recursos Humanos | Empleados, cuadrillas y trámite de accesos | Empleados y Móviles / cuadrillas, más el área Administración |
+| Auditoría / Consulta | Revisión de cifras y rastros, solo lectura | Dashboard, Reportes, Contabilidad, Material y **Bitácora** |
+
+> **Esto es lo que más consultas le va a generar.** Los cuatro roles funcionales traen sus permisos
+> de acción pero **no** traen llaves de pantalla: quien los tenga entra bien al sistema y ve el menú
+> vacío. No es un problema de contraseña ni una falla: hay que concederle sus pantallas en
+> *Empleados → ficha → Permisos y accesos*, o sumarle el rol de área correspondiente.
+
 > Nota: este manual del Superadministrador cubre la administración de usuarios, roles, permisos y seguridad, que es transversal a todas las áreas. Para el detalle operativo de cada sección, consulte el manual del rol correspondiente.
+
+> Para ver de un golpe qué permiso trae cada rol, qué pantalla ve cada área y qué opciones del menú
+> están hoy restringidas solo a usted, use el documento **Matriz de Roles y Permisos**. Se genera
+> del código, así que siempre refleja el estado real del sistema.

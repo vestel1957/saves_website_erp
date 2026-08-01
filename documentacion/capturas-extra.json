@@ -1,0 +1,16 @@
+[
+  { "slug": "clientes-ficha",             "ruta": "/clientes",              "pasos": [{ "fila": 1, "espera": 1800 }] },
+  { "slug": "clientes-nuevo",             "ruta": "/clientes",              "pasos": [{ "clic": "Nuevo cliente" }] },
+  { "slug": "tesoreria-ingresos-modal",   "ruta": "/tesoreria/ingresos",    "pasos": [{ "clic": "Registrar recaudo" }] },
+  { "slug": "tesoreria-egresos-modal",    "ruta": "/tesoreria/egresos",     "pasos": [{ "clic": "Registrar egreso" }] },
+  { "slug": "facturacion-ficha",          "ruta": "/facturacion",           "pasos": [{ "fila": 1, "espera": 1800 }] },
+  { "slug": "soporte-ficha",              "ruta": "/soporte",               "pasos": [{ "fila": 1, "espera": 1800 }] },
+  { "slug": "ordenes-ficha",              "ruta": "/ordenes",               "pasos": [{ "fila": 1, "espera": 1800 }] },
+  { "slug": "empleados-ficha",            "ruta": "/empleados",             "pasos": [{ "fila": 1, "espera": 1800 }] },
+  { "slug": "mikrotik-ficha",             "ruta": "/mikrotik",              "pasos": [{ "fila": 1, "espera": 2500 }] },
+  { "slug": "red-naps-ficha",             "ruta": "/red/naps",              "pasos": [{ "fila": 1, "espera": 1800 }] },
+  { "slug": "red-olt-ficha",              "ruta": "/red/olt",               "pasos": [{ "fila": 1, "espera": 2500 }] },
+  { "slug": "inventario-traspasos-nuevo", "ruta": "/inventario/traspasos",  "pasos": [{ "clic": "Nuevo traspaso" }] },
+  { "slug": "empleados-permisos",         "ruta": "/empleados",             "pasos": [{ "fila": 1, "espera": 1500 }, { "pestana": "Permisos" }] },
+  { "slug": "empleados-documentos",       "ruta": "/empleados",             "pasos": [{ "fila": 1, "espera": 1500 }, { "pestana": "Documentos" }] }
+]

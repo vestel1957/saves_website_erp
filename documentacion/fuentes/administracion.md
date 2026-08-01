@@ -50,6 +50,8 @@ Cada fila tiene el botón **Ver ficha** para abrir el detalle.
 
 ## Grupos de clientes
 
+**Captura:** clientes-ficha — Ficha de un cliente: datos, servicios contratados, facturas y equipo.
+
 **Dónde:** Menú lateral → CLIENTES → Grupos de clientes.
 
 **Para qué sirve:** Muestra a los abonados agrupados por sede, con un resumen de cuántos hay en cada una y cómo van de cartera. Sirve para ver el estado general de cada sede de un vistazo.
@@ -175,6 +177,8 @@ Cada fila tiene botones de lápiz (editar) y papelera (eliminar).
 4. En la lista de materiales, marca la casilla de cada material que vas a mover y ajusta la **cantidad** (por defecto se mueve todo lo disponible; no puedes poner más de lo que hay). Puedes usar el filtro para encontrar un material.
 5. Revisa el resumen (ítems, unidades y valor) y agrega observaciones si quieres.
 6. Haz clic en **Emitir traspaso**. El material queda en tránsito.
+
+**Captura:** inventario-traspasos-nuevo — Formulario de **Nuevo traspaso**: bodega origen, destino y materiales a mover.
 
 **Paso a paso (recibir un traspaso):**
 1. Abre el acta desde la lista (botón **Ver**).

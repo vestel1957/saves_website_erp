@@ -6,8 +6,11 @@ type Size = "sm" | "md";
 const base =
   "inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-lg font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60";
 
+// `min-h-8` en el tamaño pequeño: con solo `py-1.5` el botón medía 30 px de
+// alto, por debajo del mínimo cómodo para el dedo. El relleno no cambia, así
+// que en escritorio se ve igual.
 const sizes: Record<Size, string> = {
-  sm: "px-3 py-1.5 text-[12px]",
+  sm: "min-h-8 px-3 py-1.5 text-[12px]",
   md: "px-3.5 py-2 text-[13px]",
 };
 

@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import { useParams } from "next/navigation";
 import { Icon } from "@/components/Icon";
 import { Badge } from "@/components/ui/Badge";
@@ -11,21 +10,19 @@ import { Modal } from "@/components/Modal";
 import { toast } from "@/components/ui/Toast";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { TabBar } from "@/components/accounting/TabBar";
+import { DetailHeader } from "@/components/ui/DetailHeader";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import { SedesAccedeField } from "@/components/usuarios/SedesAccedeField";
 import { fmtDate } from "@/lib/format";
 import { mensajeDeError } from "@/lib/errores";
+import { FirmaOtpModal } from "@/components/FirmaOtpModal";
+import { cargarPasswordPolicy, pedirPasswordCode, PIE_CODIGO_AJENO, type PasswordOtpPolicy } from "@/lib/passwordOtp";
+import { DocumentosEmpleado } from "@/components/empleados/DocumentosEmpleado";
+import { RendimientoEmpleado } from "@/components/empleados/RendimientoEmpleado";
+import { CARGOS_LEGACY } from "@/lib/hr";
 
-type TabKey = "datos" | "permisos";
-
-/** Rol legacy del empleado (aauth_users.roleid). Distinto de los roles RBAC. */
-const ROLE_LABELS: Record<string, string> = {
-  "2": "Cajero",
-  "3": "Técnico",
-  "4": "Administrativo",
-  "5": "Administrador",
-};
+type TabKey = "datos" | "documentos" | "permisos";
 
 const fmtDateTime = (d: string | null) => (d ? new Date(d).toLocaleString("es-CO", { dateStyle: "short", timeStyle: "short" }) : "—");
 
@@ -421,6 +418,8 @@ function PermisosCard({ staffId }: { staffId: string }) {
 
   // ── Cuenta de acceso ──
   const account = data?.account ?? null;
+  const [pwPolicy, setPwPolicy] = useState<PasswordOtpPolicy | null>(null);
+  const [otpOpen, setOtpOpen] = useState(false);
 
   const reloadAudit = useCallback(async () => {
     try { const r = await authFetch(`/staff/${staffId}/audit`); setAudit(await r.json()); } catch { /* silencioso */ }
@@ -453,17 +452,37 @@ function PermisosCard({ staffId }: { staffId: string }) {
     finally { setBusyAcct(false); }
   }, [authFetch, staffId, account, reloadAudit]);
 
-  const resetPassword = useCallback(async () => {
+  // ── Restablecer la contraseña: el código va al WhatsApp DEL EMPLEADO ──
+  // No al del superusuario que está mirando la ficha: es el dueño de la cuenta
+  // quien autoriza que se la cambien, dictando los 6 dígitos.
+  const pwBase = `/staff/${staffId}/account/password`;
+  const tieneCuenta = !!account;
+
+  useEffect(() => {
+    if (!isSuperadmin || !tieneCuenta) return;
+    void cargarPasswordPolicy(authFetch, pwBase).then(setPwPolicy);
+  }, [authFetch, isSuperadmin, tieneCuenta, pwBase]);
+
+  const resetPassword = useCallback(async (code?: string) => {
     setBusyAcct(true);
     try {
-      const res = await authFetch(`/staff/${staffId}/account/password`, { method: "POST", body: JSON.stringify({}) });
+      const res = await authFetch(pwBase, { method: "POST", body: JSON.stringify({ code }) });
       const d = await res.json();
-      if (!res.ok) throw new Error(d?.message || "Error");
+      if (!res.ok) throw new Error(Array.isArray(d?.message) ? d.message[0] : d?.message || "Error");
       setData(d); setTempPw(d.tempPassword ?? null); void reloadAudit();
       toast("Contraseña restablecida.", "check");
-    } catch (e) { toast(mensajeDeError(e, "No se pudo restablecer la contraseña."), "alert-triangle"); }
-    finally { setBusyAcct(false); }
-  }, [authFetch, staffId, reloadAudit]);
+    } finally { setBusyAcct(false); }
+  }, [authFetch, pwBase, reloadAudit]);
+
+  /** Con código de por medio manda el diálogo; sin él, se restablece derecho. */
+  const pedirReset = useCallback(() => {
+    if (pwPolicy?.required) {
+      if (pwPolicy.blocked) { toast(pwPolicy.blocked, "alert-triangle"); return; }
+      setOtpOpen(true);
+      return;
+    }
+    void resetPassword().catch((e) => toast(mensajeDeError(e, "No se pudo restablecer la contraseña."), "alert-triangle"));
+  }, [pwPolicy, resetPassword]);
 
   return (
     <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
@@ -530,11 +549,11 @@ function PermisosCard({ staffId }: { staffId: string }) {
                   <Badge label={account.isActive ? "Activa" : "Inhabilitada"} tone={account.isActive ? "success" : "error"} />
                 </div>
                 {isSuperadmin && (
-                  <div className="flex gap-2">
-                    <Button variant="secondary" size="sm" onClick={toggleActive} disabled={busyAcct}>
+                  <div className="flex w-full flex-wrap gap-2 sm:w-auto">
+                    <Button variant="secondary" size="sm" className="flex-1 sm:flex-none" onClick={toggleActive} disabled={busyAcct}>
                       <Icon name={account.isActive ? "lock" : "check"} size={14} /> {account.isActive ? "Inhabilitar" : "Habilitar"}
                     </Button>
-                    <Button variant="secondary" size="sm" onClick={resetPassword} disabled={busyAcct}>
+                    <Button variant="secondary" size="sm" className="flex-1 sm:flex-none" onClick={pedirReset} disabled={busyAcct}>
                       <Icon name="key-round" size={14} /> Restablecer contraseña
                     </Button>
                   </div>
@@ -545,6 +564,16 @@ function PermisosCard({ staffId }: { staffId: string }) {
                 <div>Creada: <span className="text-text-secondary">{fmtDate(account.createdAt)}</span></div>
                 <div>Último ingreso: <span className="text-text-secondary">{fmtDate(account.lastLogin)}</span></div>
               </div>
+              {isSuperadmin && pwPolicy?.required && (
+                <p className="mt-2 flex items-start gap-1.5 text-[11.5px] leading-snug text-text-tertiary">
+                  <Icon name={pwPolicy.blocked ? "alert-triangle" : "shield-check"} size={13} className={`mt-0.5 shrink-0 ${pwPolicy.blocked ? "text-warning-text" : "text-brand"}`} />
+                  <span className="min-w-0">
+                    {pwPolicy.blocked ?? (
+                      <>Restablecer la contraseña le manda un código de 6 dígitos a su WhatsApp <strong>{pwPolicy.phoneMask}</strong>; tiene que dictártelo para que el cambio se haga.</>
+                    )}
+                  </span>
+                </p>
+              )}
               {tempPw && <TempPasswordBox pw={tempPw} onClose={() => setTempPw(null)} />}
             </div>
           )}
@@ -640,16 +669,18 @@ function PermisosCard({ staffId }: { staffId: string }) {
           {editing ? (
             /* ── Modo edición: árbol de permisos + buscador ── */
             <div>
-              <div className="mb-2 flex items-center gap-2">
-                <div className="relative flex-1">
+              {/* Buscador a renglón completo en móvil; los dos botones se
+                  reparten la fila de abajo en vez de estrujar el input. */}
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <div className="relative w-full sm:flex-1">
                   <Icon name="search" size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-text-tertiary" />
                   <Input className="pl-8" placeholder="Buscar permiso…" value={query} onChange={(e) => setQuery(e.target.value)} />
                 </div>
-                <Button variant="ghost" size="sm" onClick={toggleAllOpen} disabled={!!q}>
+                <Button variant="ghost" size="sm" className="flex-1 sm:flex-none" onClick={toggleAllOpen} disabled={!!q}>
                   <Icon name="chevrons-up-down" size={14} />
                   {allOpen ? "Colapsar" : "Expandir"}
                 </Button>
-                <Button variant="ghost" size="sm" onClick={resetToRole} disabled={overrideCount === 0} title="Deja solo lo que dan los roles (quita los ajustes finos)">
+                <Button variant="ghost" size="sm" className="flex-1 sm:flex-none" onClick={resetToRole} disabled={overrideCount === 0} title="Deja solo lo que dan los roles (quita los ajustes finos)">
                   <Icon name="key-round" size={14} />
                   Restablecer al rol{overrideCount > 0 ? ` (${overrideCount})` : ""}
                 </Button>
@@ -668,13 +699,13 @@ function PermisosCard({ staffId }: { staffId: string }) {
                 )}
               </div>
 
-              <div className="mt-3 flex items-center justify-between border-t border-border-subtle pt-3">
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border-subtle pt-3">
                 <span className="text-[11px] text-text-tertiary">
                   {draft.size} permisos activos{changedCount > 0 ? ` · ${changedCount} cambio${changedCount === 1 ? "" : "s"} sin guardar` : ""}
                 </span>
-                <div className="flex items-center gap-2">
-                  <Button variant="secondary" size="sm" onClick={cancelEdit} disabled={saving}>Cancelar</Button>
-                  <Button variant="primary" size="sm" onClick={save} disabled={saving || !dirty}>
+                <div className="flex w-full items-center gap-2 sm:w-auto">
+                  <Button variant="secondary" size="sm" className="flex-1 sm:flex-none" onClick={cancelEdit} disabled={saving}>Cancelar</Button>
+                  <Button variant="primary" size="sm" className="flex-1 sm:flex-none" onClick={save} disabled={saving || !dirty}>
                     <Icon name="save" size={14} /> {saving ? "Guardando…" : changedCount > 0 ? `Guardar (${changedCount})` : "Guardar"}
                   </Button>
                 </div>
@@ -731,6 +762,21 @@ function PermisosCard({ staffId }: { staffId: string }) {
           )}
         </>
       )}
+
+      {/* El código sale al WhatsApp del empleado, no al del superusuario. */}
+      <FirmaOtpModal
+        open={otpOpen}
+        onClose={() => setOtpOpen(false)}
+        titulo={`Código de ${pwPolicy?.owner ?? "el empleado"}`}
+        textoBoton="Restablecer contraseña"
+        textoBotonOcupado="Restableciendo…"
+        icono="key-round"
+        destino={`el WhatsApp de ${pwPolicy?.owner ?? "el empleado"}`}
+        pie={PIE_CODIGO_AJENO}
+        queFirma={<>Vas a restablecerle la contraseña a <b>{pwPolicy?.owner ?? account?.email}</b>. Se genera una temporal que se muestra una sola vez.</>}
+        solicitar={() => pedirPasswordCode(authFetch, pwBase)}
+        firmar={(code) => resetPassword(code)}
+      />
     </div>
   );
 }
@@ -739,7 +785,7 @@ function PermisosCard({ staffId }: { staffId: string }) {
 // Refleja UpdateStaffDto del backend. Se envían todos los campos del formulario:
 // los que el usuario deja vacíos viajan como "" y el backend los pasa a NULL.
 const EDIT_FIELDS = [
-  "name", "docNumber", "username", "email", "phone", "phoneAlt",
+  "name", "docNumber", "email", "phone", "phoneAlt",
   "eps", "pension", "rh", "address", "city", "region",
 ] as const;
 
@@ -803,9 +849,6 @@ function EditarEmpleadoModal({
         <Field label="Documento">
           <Input value={form.docNumber ?? ""} onChange={(e) => setF("docNumber", e.target.value)} />
         </Field>
-        <Field label="Usuario">
-          <Input value={form.username ?? ""} onChange={(e) => setF("username", e.target.value)} />
-        </Field>
         <div className="sm:col-span-2">
           <Field label="Email" hint="Es el vínculo con la cuenta de acceso: si lo cambias, revisa la pestaña de permisos.">
             <Input type="email" value={form.email ?? ""} onChange={(e) => setF("email", e.target.value)} />
@@ -814,7 +857,7 @@ function EditarEmpleadoModal({
         <Field label="Rol">
           <Select value={form.role ?? ""} onChange={(e) => setF("role", e.target.value)}>
             <option value="">Sin rol</option>
-            {Object.entries(ROLE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            {CARGOS_LEGACY.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </Select>
         </Field>
         <Field label="Área">
@@ -869,11 +912,14 @@ function EditarEmpleadoModal({
 
 export default function EmpleadoDetallePage() {
   const { id } = useParams<{ id: string }>();
-  const { loading: authLoading, authFetch } = useAuth();
+  const { loading: authLoading, authFetch, can, isSuperadmin } = useAuth();
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<TabKey>("datos");
   const [openEdit, setOpenEdit] = useState(false);
+  /** null = el bloque de rendimiento todavía no ha respondido. */
+  const [tieneRendimiento, setTieneRendimiento] = useState<boolean | null>(null);
+  const [cambiandoEstado, setCambiandoEstado] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -890,42 +936,76 @@ export default function EmpleadoDetallePage() {
     void load();
   }, [authLoading, load]);
 
+  /**
+   * Inhabilitar saca al funcionario de TODO el sistema (listas, selectores de
+   * técnico, reportes y chatbot) y le cierra el acceso; habilitar lo devuelve.
+   * Se avisa de las dos cosas antes de hacerlo: no es un simple cambio de estado.
+   */
+  const toggleBanned = useCallback(async () => {
+    const emp: any = data ?? {};
+    const inhabilitar = !emp.banned;
+    const aviso = inhabilitar
+      ? `¿Inhabilitar a ${emp.name}? Dejará de aparecer en el sistema y no podrá iniciar sesión.`
+      : `¿Habilitar de nuevo a ${emp.name}? Volverá a aparecer en el sistema y a tener acceso.`;
+    if (!confirm(aviso)) return;
+    setCambiandoEstado(true);
+    try {
+      const res = await authFetch(`/staff/${id}/banned`, { method: "PATCH", body: JSON.stringify({ banned: inhabilitar }) });
+      const d = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(d?.message || "Error");
+      toast(inhabilitar ? "Funcionario inhabilitado." : "Funcionario habilitado.", "check");
+      await load();
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudo cambiar el estado del funcionario."), "alert-triangle");
+    } finally {
+      setCambiandoEstado(false);
+    }
+  }, [authFetch, data, id, load]);
+
   if (authLoading || (loading && !data)) return <PageSkeleton />;
 
   const emp: any = data ?? {};
   const activity: any = emp.activity ?? {};
+  const tieneCaja =
+    Number(activity.transactions ?? 0) > 0 ||
+    Number(activity.income ?? 0) > 0 ||
+    Number(activity.invoices ?? 0) > 0;
 
   return (
     <>
-      <Link href="/empleados" className="inline-flex items-center gap-1 text-[12px] font-semibold text-text-secondary hover:text-brand">
-        <Icon name="arrow-left" size={14} />
-        Empleados
-      </Link>
-
-      {/* Encabezado */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-surface-2">
-          <Icon name="user" size={22} className="text-text-secondary" />
-        </div>
-        <div className="min-w-0">
-          <h1 className="text-[17px] font-bold text-text-primary sm:text-[20px]">{emp.name ?? "Empleado"}</h1>
-          <div className="mt-1 flex items-center gap-2">
+      <DetailHeader
+        backHref="/empleados"
+        backLabel="Empleados"
+        icon="user"
+        title={emp.name ?? "Empleado"}
+        badges={
+          <>
             <Badge label={emp.roleLabel ?? "—"} tone="info" />
             <Badge label={emp.banned ? "Inhabilitado" : "Activo"} tone={emp.banned ? "error" : "success"} />
+          </>
+        }
+        subtitle={emp.area || undefined}
+        actions={
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+            <Button variant="secondary" onClick={() => setOpenEdit(true)} className="w-full sm:w-auto">
+              <Icon name="pencil" size={15} />
+              Editar
+            </Button>
+            {isSuperadmin && (
+              <Button variant={emp.banned ? "primary" : "secondary"} onClick={toggleBanned} disabled={cambiandoEstado} className="w-full sm:w-auto">
+                <Icon name={emp.banned ? "check" : "lock"} size={15} />
+                {emp.banned ? "Habilitar funcionario" : "Inhabilitar funcionario"}
+              </Button>
+            )}
           </div>
-        </div>
-        <div className="ml-auto">
-          <Button variant="secondary" onClick={() => setOpenEdit(true)}>
-            <Icon name="pencil" size={15} />
-            Editar
-          </Button>
-        </div>
-      </div>
+        }
+      />
 
       {/* Pestañas: datos personales / permisos */}
       <TabBar<TabKey>
         tabs={[
           { key: "datos", label: "Datos personales" },
+          { key: "documentos", label: "Documentos" },
           { key: "permisos", label: "Permisos y accesos" },
         ]}
         active={tab}
@@ -938,7 +1018,6 @@ export default function EmpleadoDetallePage() {
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <Card title="Datos personales" icon="user">
               <Row label="Documento" value={emp.docNumber} />
-              <Row label="Usuario" value={emp.username} />
               <Row label="Email" value={emp.email} />
               <Row label="Área" value={emp.area} />
               <Row label="Fecha de ingreso" value={fmtDate(emp.entryDate ?? null)} />
@@ -957,19 +1036,43 @@ export default function EmpleadoDetallePage() {
             </Card>
           </div>
 
-          {/* Actividad */}
-          <div>
-            <div className="mb-2.5 flex items-center gap-2 text-[13px] font-bold text-text-primary">
-              <Icon name="activity" size={15} className="text-brand" />
-              Actividad
+          {/* Qué hace esta persona, según lo que su trabajo deja registrado.
+              Es adaptativo a propósito: 26 de los 31 empleados activos tienen
+              órdenes asignadas y solo 13 mueven caja, así que el bloque fijo de
+              dinero que había antes dejaba a los doce técnicos del área Operativa
+              mirando tres ceros. Cada quien ve su rastro, y quien no deja ninguno
+              de los dos lo ve dicho en vez de en ceros. */}
+          <RendimientoEmpleado staffId={id} onDatos={setTieneRendimiento} />
+
+          {tieneCaja && (
+            <div>
+              <div className="mb-2.5 flex items-center gap-2 text-[13px] font-bold text-text-primary">
+                <Icon name="dollar-sign" size={15} className="text-brand" />
+                Caja y facturación
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <ActivityCard label="Transacciones" value={Number(activity.transactions ?? 0).toLocaleString("es-CO")} icon="activity" />
+                <ActivityCard label="Ingresos" value={cop(Number(activity.income ?? 0))} icon="dollar-sign" />
+                <ActivityCard label="Facturas emitidas" value={Number(activity.invoices ?? 0).toLocaleString("es-CO")} icon="receipt" />
+              </div>
+              <p className="mt-1.5 text-[11px] text-text-tertiary">
+                Histórico completo, sin recorte de fechas. Cuenta los movimientos vigentes y las facturas emitidas a su
+                nombre.
+              </p>
             </div>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <ActivityCard label="Transacciones" value={Number(activity.transactions ?? 0).toLocaleString("es-CO")} icon="activity" />
-              <ActivityCard label="Ingresos" value={cop(Number(activity.income ?? 0))} icon="dollar-sign" />
-              <ActivityCard label="Facturas emitidas" value={Number(activity.invoices ?? 0).toLocaleString("es-CO")} icon="receipt" />
-            </div>
-          </div>
+          )}
+
+          {tieneRendimiento === false && !tieneCaja && (
+            <p className="rounded-xl border border-border-subtle bg-surface-2 px-3 py-2.5 text-[12px] text-text-secondary">
+              Sin órdenes de campo ni movimientos de caja a su nombre. El trabajo de esta persona no queda registrado
+              por ninguna de las dos vías que el sistema sabe medir hoy.
+            </p>
+          )}
         </>
+      ) : tab === "documentos" ? (
+        /* Hoja de vida, cédula, contrato y certificados. Subir y borrar exige el
+           permiso de escritura de RRHH; ver, solo el de lectura. */
+        <DocumentosEmpleado staffId={id} puedeEditar={can("hr.employees.write")} />
       ) : (
         /* Permisos y accesos */
         <PermisosCard staffId={id} />

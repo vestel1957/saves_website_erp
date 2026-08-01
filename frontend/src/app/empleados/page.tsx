@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/Button";
 import { Input, Select, Field } from "@/components/ui/Field";
 import { Badge } from "@/components/ui/Badge";
 import { DataTable } from "@/components/ui/DataTable";
+import { ListToolbar } from "@/components/ui/ListToolbar";
 import { Pagination } from "@/components/ui/Pagination";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { Modal } from "@/components/Modal";
@@ -15,19 +16,13 @@ import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { StatCard } from "@/components/ui/StatCard";
 import { useRequest } from "@/lib/useRequest";
+import { useOrden } from "@/lib/useOrden";
 import { mensajeDeError } from "@/lib/errores";
-
-const ROLE_LABELS: Record<string, string> = {
-  "2": "Cajero",
-  "3": "Técnico",
-  "4": "Administrativo",
-  "5": "Administrador",
-};
+import { CARGOS_LEGACY } from "@/lib/hr";
 
 const emptyForm = {
   name: "",
   docNumber: "",
-  username: "",
   email: "",
   role: "",
   areaId: "",
@@ -41,14 +36,19 @@ const emptyForm = {
 
 export default function EmpleadosPage() {
   const router = useRouter();
-  const { loading: authLoading, authFetch } = useAuth();
+  const { loading: authLoading, authFetch, isSuperadmin } = useAuth();
   const [stats, setStats] = useState<any>(null);
   const [areas, setAreas] = useState<any[]>([]);
 
   const [search, setSearch] = useState("");
   const [role, setRole] = useState("");
   const [areaId, setAreaId] = useState("");
-  const [status, setStatus] = useState("");
+  /**
+   * Los inhabilitados no se listan con los demás: esto le da la vuelta a la lista
+   * y muestra SOLO a los que están fuera, para poder volver a habilitar a alguien.
+   * Es la única puerta que queda y solo la ve el superusuario.
+   */
+  const [verInhabilitados, setVerInhabilitados] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
 
@@ -65,23 +65,26 @@ export default function EmpleadosPage() {
 
   // Carga con cancelación: al teclear se aborta la petición en vuelo para que
   // una respuesta lenta no pise a otra más reciente. Ver lib/useRequest.
+  // Pagina en el servidor: el orden viaja en la query.
+  const orden = useOrden();
+
   const { data, cargando: loading, error, refrescar: load } = useRequest<any>(
     () => {
-      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize), ...orden.params });
       if (search.trim()) qs.set("search", search.trim());
       if (role) qs.set("role", role);
       if (areaId) qs.set("areaId", areaId);
-      if (status) qs.set("status", status);
+      if (verInhabilitados) qs.set("inhabilitados", "1");
       return `/staff?${qs.toString()}`;
     },
-    [page, pageSize, search, role, areaId, status],
+    [page, pageSize, search, role, areaId, verInhabilitados, orden.clave],
     { debounceMs: search ? 350 : 0, saltar: authLoading },
   );
 
   // Debounce de búsqueda/filtros.
 
   // Al cambiar filtros, vuelve a página 1.
-  useEffect(() => { setPage(1); }, [search, role, areaId, status, pageSize]);
+  useEffect(() => { setPage(1); }, [search, role, areaId, verInhabilitados, pageSize, orden.clave]);
 
   const setF = (k: string, v: string) => setForm((f: any) => ({ ...f, [k]: v }));
 
@@ -90,7 +93,7 @@ export default function EmpleadosPage() {
     setSaving(true);
     try {
       const body: any = { name: form.name.trim() };
-      for (const k of ["docNumber", "username", "email", "phone", "eps", "pension", "rh", "address", "city"]) {
+      for (const k of ["docNumber", "email", "phone", "eps", "pension", "rh", "address", "city"]) {
         if (form[k]?.trim()) body[k] = form[k].trim();
       }
       if (form.role) body.role = Number(form.role);
@@ -114,11 +117,11 @@ export default function EmpleadosPage() {
 
   return (
     <>
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <PageHeading
           icon="users"
           title="Empleados"
-          subtitle={stats ? `${(stats.total ?? 0).toLocaleString("es-CO")} empleados · ${(stats.activos ?? 0).toLocaleString("es-CO")} activos` : "Talento humano"}
+          subtitle={stats ? `${(stats.total ?? 0).toLocaleString("es-CO")} empleados activos` : "Talento humano"}
         />
         <Button variant="primary" onClick={() => setOpenNew(true)}>
           <Icon name="plus" size={15} />
@@ -127,37 +130,28 @@ export default function EmpleadosPage() {
       </div>
 
       {/* Tarjetas de resumen */}
-      <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
-        <StatCard label="Total empleados" value={(stats?.total ?? 0).toLocaleString("es-CO")} icon="users" />
-        <StatCard label="Activos" value={(stats?.activos ?? 0).toLocaleString("es-CO")} tone="text-success-text" icon="check" />
+      <div className="mb-4 grid grid-cols-2 gap-3">
+        <StatCard label="Empleados activos" value={(stats?.total ?? 0).toLocaleString("es-CO")} icon="users" />
         <StatCard label="Técnicos" value={(stats?.tecnicos ?? 0).toLocaleString("es-CO")} tone="text-brand" icon="activity" />
       </div>
 
       {/* Filtros */}
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <div className="relative flex-1 min-w-[220px]">
-          <Icon name="search" size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary" />
-          <Input
-            className="pl-9"
-            placeholder="Buscar por nombre, documento o usuario…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </div>
+      <ListToolbar search={search} onSearch={setSearch} searchPlaceholder="Buscar por nombre o documento…">
         <Select value={role} onChange={(e) => setRole(e.target.value)} className="w-auto">
           <option value="">Todos los roles</option>
-          {Object.entries(ROLE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          {CARGOS_LEGACY.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </Select>
         <Select value={areaId} onChange={(e) => setAreaId(e.target.value)} className="w-auto">
           <option value="">Todas las áreas</option>
           {areas.map((a: any) => <option key={a.id} value={a.id}>{a.name}</option>)}
         </Select>
-        <Select value={status} onChange={(e) => setStatus(e.target.value)} className="w-auto">
-          <option value="">Todos los estados</option>
-          <option value="active">Activos</option>
-          <option value="banned">Inhabilitados</option>
-        </Select>
-      </div>
+        {isSuperadmin && (
+          <Button variant={verInhabilitados ? "primary" : "secondary"} onClick={() => setVerInhabilitados((v) => !v)}>
+            <Icon name={verInhabilitados ? "users" : "lock"} size={15} />
+            {verInhabilitados ? "Ver activos" : "Ver inhabilitados"}
+          </Button>
+        )}
+      </ListToolbar>
 
       {/* Tabla */}
       {loading && !data ? (
@@ -165,20 +159,20 @@ export default function EmpleadosPage() {
       ) : (
         <>
           <DataTable
+            sort={orden.sort}
+            onSort={orden.onSort}
             rows={data?.items ?? []}
-            empty="No se encontraron empleados con esos criterios."
+            empty={verInhabilitados ? "No hay empleados inhabilitados." : "No se encontraron empleados con esos criterios."}
             onRowClick={(r: any) => router.push(`/empleados/${r.id}`)}
             columns={[
-              { key: "name", header: "Nombre", render: (r: any) => <span className="font-medium text-text-primary">{r.name}</span> },
-              { key: "docNumber", header: "Documento", render: (r: any) => <span className="text-text-secondary">{r.docNumber ?? "—"}</span> },
-              { key: "username", header: "Usuario", render: (r: any) => <span className="text-text-secondary">{r.username ?? "—"}</span> },
-              { key: "role", header: "Rol", render: (r: any) => <Badge label={r.roleLabel ?? "—"} tone="info" /> },
-              { key: "area", header: "Área", render: (r: any) => r.area ?? "—" },
-              { key: "phone", header: "Teléfono", render: (r: any) => r.phone ?? "—" },
-              { key: "banned", header: "Estado", render: (r: any) => <Badge label={r.banned ? "Inhabilitado" : "Activo"} tone={r.banned ? "error" : "success"} /> },
+              { key: "name", header: "Nombre", sortable: true, render: (r: any) => <span className="font-medium text-text-primary">{r.name}</span> },
+              { key: "docNumber", header: "Documento", sortable: true, render: (r: any) => <span className="text-text-secondary">{r.docNumber ?? "—"}</span> },
+              { key: "role", header: "Rol", sortable: true, render: (r: any) => <Badge label={r.roleLabel ?? "—"} tone="info" /> },
+              { key: "area", header: "Área", sortable: true, render: (r: any) => r.area ?? "—" },
+              { key: "phone", header: "Teléfono", sortable: true, render: (r: any) => r.phone ?? "—" },
             ]}
           />
-          {data && data.pages > 1 && (
+          {data && (
             <div className="mt-3">
               <Pagination
                 meta={{ page: data.page, pageSize: data.pageSize, total: data.total, pageCount: data.pages }}
@@ -201,9 +195,6 @@ export default function EmpleadosPage() {
           <Field label="Documento">
             <Input value={form.docNumber} onChange={(e) => setF("docNumber", e.target.value)} />
           </Field>
-          <Field label="Usuario">
-            <Input value={form.username} onChange={(e) => setF("username", e.target.value)} />
-          </Field>
           <Field label="Email">
             <Input type="email" value={form.email} onChange={(e) => setF("email", e.target.value)} />
           </Field>
@@ -213,7 +204,7 @@ export default function EmpleadosPage() {
           <Field label="Rol">
             <Select value={form.role} onChange={(e) => setF("role", e.target.value)}>
               <option value="">Sin rol</option>
-              {Object.entries(ROLE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              {CARGOS_LEGACY.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
             </Select>
           </Field>
           <Field label="Área">

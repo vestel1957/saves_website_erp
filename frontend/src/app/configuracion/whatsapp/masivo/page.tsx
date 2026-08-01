@@ -1,24 +1,68 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
 import { Modal } from "@/components/Modal";
 import { Button } from "@/components/ui/Button";
 import { Input, Select, Field } from "@/components/ui/Field";
 import { Badge } from "@/components/ui/Badge";
-import { DataTable } from "@/components/ui/DataTable";
+import { PagedTable } from "@/components/ui/PagedTable";
+import { ListToolbar } from "@/components/ui/ListToolbar";
 import { toast } from "@/components/ui/Toast";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { useAuth } from "@/context/AuthProvider";
 import { PERM } from "@/lib/auth";
 import {
-  type WaTemplate, type WaCampaign, type WaCampaignReport,
-  WA_SEND_STATUS, SUBSCRIBER_STATUSES,
+  type WaTemplate, type WaCampaign, type WaCampaignReport, type WaHealth,
+  WA_SEND_STATUS, WA_QUALITY, WA_TIER, SUBSCRIBER_STATUSES,
 } from "@/lib/whatsapp";
 import { mensajeDeError } from "@/lib/errores";
 
 const fmt = (d: string | null) => (d ? new Date(d).toLocaleString("es-CO") : "—");
+
+/**
+ * Salud del número (calidad + tier de Meta). La calidad baja por bloqueos/reportes
+ * de los clientes y es lo que decide si Meta sube o BAJA el cupo diario de envíos.
+ */
+function HealthPanel({ health }: { health: WaHealth | null }) {
+  if (!health) return null;
+  if (!health.ok) {
+    return (
+      <div className="mt-4 flex items-center gap-2 rounded-2xl border border-error-subtle bg-error-soft p-3 text-[13px] text-error-text">
+        <Icon name="alert-triangle" size={15} /> WhatsApp no disponible: {health.error ?? "sin diagnóstico"}
+      </div>
+    );
+  }
+  const q = health.quality ? WA_QUALITY[health.quality.toUpperCase()] : null;
+  const tier = health.tier ? (WA_TIER[health.tier.toUpperCase()] ?? health.tier) : null;
+  return (
+    <section className="mt-4 rounded-2xl border border-border-subtle bg-surface p-4 shadow-sm">
+      <h2 className="mb-3 text-[13px] font-bold uppercase tracking-wide text-text-tertiary">Salud del número</h2>
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-[13px]">
+        <div className="flex items-center gap-2">
+          <Icon name="phone" size={14} className="text-text-tertiary" />
+          <span className="font-mono">{health.phone ?? "—"}</span>
+          {health.name && <span className="text-text-secondary">· {health.name}</span>}
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-text-tertiary">Calidad:</span>
+          {q ? <Badge label={q.label} tone={q.tone} /> : <span className="text-text-secondary">sin dato</span>}
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-text-tertiary">Límite de envío:</span>
+          {tier ? <span className="font-medium text-text-primary">{tier}</span> : <span className="text-text-secondary">sin dato</span>}
+        </div>
+      </div>
+      {(q?.tone === "error" || q?.tone === "warning") && (
+        <p className="mt-2 text-[12px] text-warning-text">
+          La calidad baja cuando los clientes bloquean o reportan el número. Con calidad baja Meta reduce el límite diario:
+          pausa las campañas no esenciales y revisa el texto de las plantillas.
+        </p>
+      )}
+    </section>
+  );
+}
 
 /** Reporte de una campaña (envíos por estado + reintento). */
 function ReportModal({ campaignId, onClose }: { campaignId: string | null; onClose: () => void }) {
@@ -70,8 +114,7 @@ function ReportModal({ campaignId, onClose }: { campaignId: string | null; onClo
             </Select>
             {c!.failed > 0 && <Button size="sm" variant="secondary" onClick={retry}><Icon name="refresh-cw" size={13} /> Reintentar fallidos</Button>}
           </div>
-          <DataTable
-            autoHeight
+          <PagedTable
             rows={data.sends}
             empty="Sin envíos."
             columns={[
@@ -94,8 +137,10 @@ export default function MasivoPage() {
   const isAdmin = can(PERM.WHATSAPP_MANAGE);
   const [templates, setTemplates] = useState<WaTemplate[]>([]);
   const [campaigns, setCampaigns] = useState<WaCampaign[]>([]);
+  const [health, setHealth] = useState<WaHealth | null>(null);
   const [loading, setLoading] = useState(true);
   const [report, setReport] = useState<string | null>(null);
+  const [campSearch, setCampSearch] = useState("");
 
   // Formulario de nueva campaña.
   const [name, setName] = useState("");
@@ -107,11 +152,12 @@ export default function MasivoPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [t, c] = await Promise.all([
+      const [t, c, h] = await Promise.all([
         authFetch("/admin/whatsapp/templates").then((r) => (r.ok ? r.json() : [])),
         authFetch("/admin/whatsapp/campaigns?pageSize=25").then((r) => (r.ok ? r.json() : { items: [] })),
+        authFetch("/admin/whatsapp/health").then((r) => (r.ok ? r.json() : null)).catch(() => null),
       ]);
-      setTemplates(t); setCampaigns(c.items ?? []);
+      setTemplates(t); setCampaigns(c.items ?? []); setHealth(h);
       if (!templateName && t.length) setTemplateName(t[0].name);
     } finally { setLoading(false); }
   }, [authFetch, templateName]);
@@ -137,11 +183,20 @@ export default function MasivoPage() {
     } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setLaunching(false); }
   }
 
+  // Filtro en cliente de las campañas ya cargadas (nombre y plantilla).
+  const shownCampaigns = useMemo(() => {
+    const q = campSearch.trim().toLowerCase();
+    if (!q) return campaigns;
+    return campaigns.filter((c) => [c.name, c.templateName].some((v) => (v ?? "").toLowerCase().includes(q)));
+  }, [campaigns, campSearch]);
+
   if (authLoading || loading) return <PageSkeleton />;
 
   return (
     <>
       <PageHeading icon="send" title="Envío masivo de WhatsApp" subtitle="Campañas por plantilla a un grupo de clientes, con reporte de entregas" />
+
+      <HealthPanel health={health} />
 
       {isAdmin && (
         <section className="mt-4 rounded-2xl border border-border-subtle bg-surface p-4 shadow-sm">
@@ -165,10 +220,10 @@ export default function MasivoPage() {
 
       <section className="mt-6">
         <h2 className="mb-2 text-[13px] font-bold uppercase tracking-wide text-text-tertiary">Campañas</h2>
-        <DataTable
-          autoHeight
-          rows={campaigns}
-          empty="No hay campañas todavía."
+        <ListToolbar search={campSearch} onSearch={setCampSearch} searchPlaceholder="Buscar campaña o plantilla…" />
+        <PagedTable
+          rows={shownCampaigns}
+          empty={campSearch ? "Ninguna campaña coincide con la búsqueda." : "No hay campañas todavía."}
           columns={[
             { key: "name", header: "Campaña", render: (c: WaCampaign) => <span className="font-medium text-text-primary">{c.name}</span> },
             { key: "tpl", header: "Plantilla", render: (c: WaCampaign) => <span className="font-mono text-[12px] text-text-secondary">{c.templateName}</span> },
@@ -180,7 +235,7 @@ export default function MasivoPage() {
             { key: "st", header: "Estado", render: (c: WaCampaign) => <Badge label={c.status === "done" ? "Finalizada" : c.status === "running" ? "En curso" : c.status} tone={c.status === "done" ? "success" : "info"} /> },
             { key: "date", header: "Fecha", render: (c: WaCampaign) => fmt(c.createdAt) },
             { key: "acc", header: "", align: "right" as const, render: (c: WaCampaign) => (
-              <button type="button" onClick={() => setReport(c.id)} className="inline-flex items-center gap-1 text-[12px] font-medium text-brand hover:underline"><Icon name="eye" size={13} /> Ver</button>
+              <button type="button" onClick={() => setReport(c.id)} className="inline-flex min-h-8 items-center gap-1 text-[12px] font-medium text-brand hover:underline"><Icon name="eye" size={13} /> Ver</button>
             ) },
           ]}
         />

@@ -4,10 +4,10 @@ import { useCallback, useEffect, useState } from "react";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import { Input } from "@/components/ui/Field";
 import { Icon } from "@/components/Icon";
 import { toast } from "@/components/ui/Toast";
-import { DataTable } from "@/components/ui/DataTable";
+import { PagedTable } from "@/components/ui/PagedTable";
+import { ListToolbar } from "@/components/ui/ListToolbar";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { IpPoolModal, type IpPool } from "@/components/network/IpPoolModal";
 import { useAuth } from "@/context/AuthProvider";
@@ -57,21 +57,23 @@ export default function IpsPage() {
         subtitle="Pools de direcciones IP configurados por Mikrotik: rango local/remoto y perfiles PPPoE disponibles."
       />
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="relative max-w-sm flex-1">
-          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary"><Icon name="search" size={15} /></span>
-          <Input className="pl-9" placeholder="Buscar por nombre, IP o tecnología…" value={search} onChange={(e) => setSearch(e.target.value)} />
-        </div>
-        <Button onClick={() => abrir(null)}>
-          <Icon name="plus" size={15} />
-          Nuevo pool
-        </Button>
-      </div>
+      <ListToolbar
+        search={search}
+        onSearch={setSearch}
+        searchPlaceholder="Buscar por nombre, IP o tecnología…"
+        actions={
+          <Button onClick={() => abrir(null)}>
+            <Icon name="plus" size={15} />
+            Nuevo pool
+          </Button>
+        }
+      />
 
-      <DataTable
-        autoHeight
+      <PagedTable
         rows={rows ?? []}
-        empty={rows === null ? "Cargando…" : "Sin pools de IP configurados."}
+        loading={rows === null}
+        loadingText="Cargando…"
+        empty="Sin pools de IP configurados."
         columns={[
           {
             key: "name",

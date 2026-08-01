@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { Icon } from "@/components/Icon";
+import { DetailHeader } from "@/components/ui/DetailHeader";
 import { Button } from "@/components/ui/Button";
 import { Field } from "@/components/ui/Field";
 import { Badge } from "@/components/ui/Badge";
@@ -104,13 +105,13 @@ export default function NapDetailPage() {
 
   return (
     <>
-      <div className="mb-4 flex items-center gap-3">
-        <Link href="/red/naps" className="flex h-9 w-9 items-center justify-center rounded-lg border border-border-default text-text-secondary hover:bg-surface-2" title="Volver a cajas NAP"><Icon name="arrow-left" size={16} /></Link>
-        <div>
-          <h1 className="flex items-center gap-2 text-[18px] font-bold text-text-primary"><Icon name="git-branch" size={18} className="text-brand" /> {nap!.name}</h1>
-          <p className="text-[12px] text-text-tertiary">{nap!.branch ?? "Sin sede"}{nap!.vlan != null ? ` · VLAN ${nap!.vlan}` : ""}</p>
-        </div>
-      </div>
+      <DetailHeader
+        backHref="/red/naps"
+        backLabel="Cajas NAP"
+        icon="git-branch"
+        title={nap!.name}
+        subtitle={`${nap!.branch ?? "Sin sede"}${nap!.vlan != null ? ` · VLAN ${nap!.vlan}` : ""}`}
+      />
 
       <div className="mb-4 grid grid-cols-2 gap-4 rounded-xl border border-border-subtle bg-surface px-5 py-4 shadow-sm sm:grid-cols-4 lg:grid-cols-6">
         <InfoCell label="Sede" value={nap!.branch ?? "—"} />

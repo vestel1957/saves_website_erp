@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation";
 import { Sidebar } from "@/components/Sidebar";
 import { TopNav } from "@/components/TopNav";
 import { GeoGate } from "@/components/map/GeoGate";
+import { PantallaGate } from "@/components/PantallaGate";
 
 // Rutas públicas que NO llevan el chrome de staff (mismo criterio que el
 // middleware `PUBLIC_PATHS`): login y el portal del abonado.
@@ -28,7 +29,11 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
           {/* Puerta de ubicación: a un técnico con el permiso denegado no se le
               enseña nada hasta que lo reactive. Envuelve el contenido y no el
               marco, para que le queden el menú y el botón de salir. */}
-          <GeoGate>{children}</GeoGate>
+          <GeoGate>
+            {/* Puerta por pantalla: entrar por URL a una hoja del menú que no se
+                tiene concedida no debe enseñar la página. */}
+            <PantallaGate>{children}</PantallaGate>
+          </GeoGate>
         </main>
       </div>
     </div>

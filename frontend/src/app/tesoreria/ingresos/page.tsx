@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import { PageHeading } from "@/components/ui/PageHeading";
+import { LinkMovimientos } from "@/components/cobranzas/LinkMovimientos";
 import { Icon } from "@/components/Icon";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/Modal";
@@ -20,12 +20,10 @@ export default function IngresosPage() {
 
   return (
     <>
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <PageHeading icon="trending-up" title="Ingresos" subtitle="Recaudos y pagos registrados" />
         <div className="flex items-center gap-2">
-          <Link href="/tesoreria" className="inline-flex items-center gap-1.5 rounded-lg border border-border-default px-3 py-2 text-[12px] font-semibold text-text-secondary transition-colors hover:bg-surface-2">
-            <Icon name="banknote" size={14} /> Movimientos
-          </Link>
+          <LinkMovimientos />
           <Button size="sm" onClick={() => setPickerOpen(true)}><Icon name="plus" size={14} /> Registrar recaudo</Button>
         </div>
       </div>
@@ -63,7 +61,7 @@ export default function IngresosPage() {
         empty="No hay ingresos registrados."
         rowAction={(r) => r.status !== "ANULADA" ? (
           <button type="button" onClick={() => setEditing(r)} title="Editar movimiento"
-            className="inline-flex items-center gap-1 text-[12px] font-medium text-text-secondary hover:text-brand">
+            className="inline-flex min-h-8 items-center gap-1 text-[12px] font-medium text-text-secondary hover:text-brand">
             <Icon name="pencil" size={13} /> Editar
           </button>
         ) : null}

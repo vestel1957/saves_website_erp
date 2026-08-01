@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Icon } from "@/components/Icon";
 import { PageHeading } from "@/components/ui/PageHeading";
-import { DataTable } from "@/components/ui/DataTable";
+import { PagedTable } from "@/components/ui/PagedTable";
+import { ListToolbar } from "@/components/ui/ListToolbar";
 import { PermissionGate } from "@/components/PermissionGate";
 import { useAuth } from "@/context/AuthProvider";
 import { initials } from "@/lib/auth";
@@ -15,6 +16,8 @@ import { SedesAccedeField } from "@/components/usuarios/SedesAccedeField";
 import { Modal } from "@/components/Modal";
 import { StatCard } from "@/components/ui/StatCard";
 import { mensajeDeError } from "@/lib/errores";
+import { FirmaOtpModal } from "@/components/FirmaOtpModal";
+import { cargarPasswordPolicy, pedirPasswordCode, PIE_CODIGO_AJENO, type PasswordOtpPolicy } from "@/lib/passwordOtp";
 
 type RoleRef = { role: { key: string; name: string } };
 type User = {
@@ -69,6 +72,11 @@ function UsersAdmin() {
   const [editingProfile, setEditingProfile] = useState<User | null>(null);
   const [roleEditor, setRoleEditor] = useState<RoleEditorState>(null);
   const [search, setSearch] = useState("");
+  /**
+   * Las cuentas inhabilitadas no se listan con las demás: esto le da la vuelta a
+   * la tabla y muestra SOLO las inactivas, que es de donde se reactiva una.
+   */
+  const [verInactivos, setVerInactivos] = useState(false);
 
   async function deleteRole(role: Role) {
     if (!confirm(`¿Eliminar el rol "${role.name}"? Esta acción no se puede deshacer.`)) return;
@@ -79,9 +87,11 @@ function UsersAdmin() {
   }
 
   const filtered = users.filter((u) => {
+    if (u.isActive === verInactivos) return false;
     const q = search.trim().toLowerCase();
     return !q || u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
   });
+  const inactivos = users.filter((u) => !u.isActive).length;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -121,7 +131,7 @@ function UsersAdmin() {
   return (
     <>
       {/* encabezado */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <PageHeading icon="user-cog" title="Usuarios y roles" />
         <Button onClick={() => setCreating(true)}>
           <Icon name="user-plus" size={15} /> Nuevo usuario
@@ -129,40 +139,32 @@ function UsersAdmin() {
       </div>
 
       {/* tarjetas de resumen */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <StatCard icon="users" label="Usuarios" value={users.length} />
-        <StatCard
-          icon="check"
-          label="Activos"
-          value={users.filter((u) => u.isActive).length}
-        />
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <StatCard icon="users" label="Usuarios activos" value={users.length - inactivos} />
         <StatCard icon="shield-check" label="Roles definidos" value={roles.length} />
       </div>
 
       {/* usuarios */}
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-2">
-          <Icon name="users" size={15} className="text-text-secondary" />
-          <h2 className="text-[14px] font-bold text-text-primary">Usuarios</h2>
-        </div>
-        <div className="relative sm:w-64">
-          <Icon name="search" size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary" />
-          <Input
-            className="pl-9"
-            placeholder="Buscar por nombre o correo…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </div>
+      <div className="flex items-center gap-2">
+        <Icon name="users" size={15} className="text-text-secondary" />
+        <h2 className="text-[14px] font-bold text-text-primary">{verInactivos ? "Cuentas inhabilitadas" : "Usuarios"}</h2>
       </div>
+      <ListToolbar search={search} onSearch={setSearch} searchPlaceholder="Buscar por nombre o correo…">
+        {inactivos > 0 && (
+          <Button variant={verInactivos ? "primary" : "secondary"} onClick={() => setVerInactivos((v) => !v)}>
+            <Icon name={verInactivos ? "users" : "lock"} size={15} />
+            {verInactivos ? "Ver activos" : `Ver inhabilitadas (${inactivos})`}
+          </Button>
+        )}
+      </ListToolbar>
       {loading ? (
         <div className="flex items-center justify-center py-12 text-text-tertiary">
           <Icon name="loader" size={18} className="animate-spin" />
         </div>
       ) : (
-        <DataTable
+        <PagedTable
           rows={filtered}
-          empty={search ? "Ningún usuario coincide con la búsqueda." : "No hay usuarios todavía."}
+          empty={search ? "Ningún usuario coincide con la búsqueda." : verInactivos ? "No hay cuentas inhabilitadas." : "No hay usuarios todavía."}
           columns={[
             {
               key: "user",
@@ -367,7 +369,7 @@ function Collapsible({
         className={`grid transition-[grid-template-rows] duration-300 ease-in-out ${open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}
       >
         <div className="overflow-hidden">
-          <div className="flex flex-col gap-2 p-3.5">{children}</div>
+          <div className="flex min-w-0 flex-col gap-2 p-3.5">{children}</div>
         </div>
       </div>
     </div>
@@ -405,7 +407,7 @@ function RoleCard({
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="mt-2 flex items-center gap-1.5 text-[11px] font-medium text-brand transition-colors hover:text-brand/80"
+        className="mt-2 flex min-h-8 items-center gap-1.5 text-[11px] font-medium text-brand transition-colors hover:text-brand/80"
       >
         <Icon name="key-round" size={12} />
         {role.permissions.length} permisos
@@ -473,7 +475,7 @@ function PasswordInput({
         type="button"
         onClick={() => setShow((s) => !s)}
         aria-label={show ? "Ocultar contraseña" : "Mostrar contraseña"}
-        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-text-tertiary transition-colors hover:text-text-secondary"
+        className="tap absolute right-1 top-1/2 -translate-y-1/2 text-text-tertiary transition-colors hover:text-text-secondary"
       >
         <Icon name={show ? "eye-off" : "eye"} size={15} />
       </button>
@@ -756,6 +758,13 @@ function EditUserModal({
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [policy, setPolicy] = useState<PasswordOtpPolicy | null>(null);
+  const [otpOpen, setOtpOpen] = useState(false);
+  const base = `/auth/users/${user.id}/password`;
+
+  useEffect(() => {
+    void cargarPasswordPolicy(authFetch, base).then(setPolicy);
+  }, [authFetch, base]);
 
   async function saveProfile(e: React.FormEvent) {
     e.preventDefault();
@@ -775,24 +784,36 @@ function EditUserModal({
     }
   }
 
+  /** Escribe la contraseña nueva. `code` va solo cuando el cambio pide código. */
+  async function guardarPassword(code?: string) {
+    setSaving(true);
+    const res = await authFetch(base, { method: "POST", body: JSON.stringify({ password, code }) });
+    setSaving(false);
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      throw new Error(Array.isArray(body?.message) ? body.message.join(", ") : body?.message ?? "No se pudo restablecer");
+    }
+    setPassword("");
+    toast("Contraseña restablecida", "check");
+  }
+
   async function resetPassword() {
     if (password.length < 8) {
       setError("La contraseña debe tener al menos 8 caracteres.");
       return;
     }
-    setSaving(true);
     setError("");
-    const res = await authFetch(`/auth/users/${user.id}/password`, {
-      method: "POST",
-      body: JSON.stringify({ password }),
-    });
-    setSaving(false);
-    if (res.ok) {
-      setPassword("");
-      toast("Contraseña restablecida", "check");
-    } else {
-      const body = await res.json().catch(() => null);
-      setError(Array.isArray(body?.message) ? body.message.join(", ") : body?.message ?? "No se pudo restablecer");
+    // El código le llega al DUEÑO de la cuenta, no a quien está aquí: sin que él
+    // lo dicte, la contraseña no se toca.
+    if (policy?.required) {
+      if (policy.blocked) { setError(policy.blocked); return; }
+      setOtpOpen(true);
+      return;
+    }
+    try {
+      await guardarPassword();
+    } catch (e) {
+      setError(mensajeDeError(e, "No se pudo restablecer"));
     }
   }
 
@@ -822,6 +843,22 @@ function EditUserModal({
         >
           <PasswordInput value={password} onChange={setPassword} placeholder="Nueva contraseña" />
         </Field>
+
+        {policy?.required && (
+          <p className="flex items-start gap-1.5 rounded-lg bg-surface-2 px-3 py-2 text-[11.5px] leading-snug text-text-secondary">
+            <Icon name={policy.blocked ? "alert-triangle" : "shield-check"} size={14} className={`mt-0.5 shrink-0 ${policy.blocked ? "text-warning-text" : "text-brand"}`} />
+            <span className="min-w-0">
+              {policy.blocked ?? (
+                <>
+                  Al confirmar, <strong>{user.name}</strong> recibe un código de 6 dígitos en su WhatsApp{" "}
+                  <strong>{policy.phoneMask}</strong> y tiene que dictártelo. Sin él la contraseña no cambia:
+                  nadie se queda con una cuenta ajena sin que su dueño se entere.
+                </>
+              )}
+            </span>
+          </p>
+        )}
+
         <div className="flex justify-end">
           <Button type="button" variant="secondary" size="sm" onClick={() => void resetPassword()} disabled={saving || !password}>
             <Icon name="key-round" size={14} /> Restablecer contraseña
@@ -835,6 +872,21 @@ function EditUserModal({
           Cerrar
         </Button>
       </div>
+
+      {/* Ojo: el código sale al WhatsApp del usuario editado, no al de quien administra. */}
+      <FirmaOtpModal
+        open={otpOpen}
+        onClose={() => setOtpOpen(false)}
+        titulo={`Código de ${user.name}`}
+        textoBoton="Restablecer contraseña"
+        textoBotonOcupado="Restableciendo…"
+        icono="key-round"
+        destino={`el WhatsApp de ${user.name}`}
+        pie={PIE_CODIGO_AJENO}
+        queFirma={<>Vas a cambiarle la contraseña a <b>{user.name}</b> ({user.email}).</>}
+        solicitar={() => pedirPasswordCode(authFetch, base)}
+        firmar={(code) => guardarPassword(code)}
+      />
     </Modal>
   );
 }

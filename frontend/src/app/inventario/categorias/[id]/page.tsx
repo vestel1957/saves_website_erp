@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import { Icon } from "@/components/Icon";
+import { DetailHeader } from "@/components/ui/DetailHeader";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Field";
 import { Badge } from "@/components/ui/Badge";
@@ -15,21 +16,21 @@ import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import { StatCard } from "@/components/ui/StatCard";
 import { useRequest } from "@/lib/useRequest";
+import { useOrden } from "@/lib/useOrden";
 
 type Category = { id: string; title: string; extra: string | null; materials: number; value: number };
 
 const COLUMNS = [
-  { key: "name", header: "Nombre", render: (r: any) => <span className="font-medium text-text-primary">{r.name}</span> },
-  { key: "code", header: "Código", render: (r: any) => <span className="text-text-secondary">{r.code || "—"}</span> },
-  { key: "warehouse", header: "Bodega", render: (r: any) => <span className="text-text-secondary">{r.warehouse || "—"}</span> },
-  { key: "price", header: "Precio", align: "right" as const, render: (r: any) => <span>{cop(r.price ?? 0)}</span> },
-  { key: "qty", header: "Stock", align: "right" as const, render: (r: any) => r.low ? <Badge label={`${r.qty ?? 0} · Bajo`} tone="error" /> : <span>{r.qty ?? 0}</span> },
+  { key: "name", header: "Nombre", sortable: true, render: (r: any) => <span className="font-medium text-text-primary">{r.name}</span> },
+  { key: "code", header: "Código", sortable: true, render: (r: any) => <span className="text-text-secondary">{r.code || "—"}</span> },
+  { key: "warehouse", header: "Bodega", sortable: true, render: (r: any) => <span className="text-text-secondary">{r.warehouse || "—"}</span> },
+  { key: "price", header: "Precio", sortable: true, align: "right" as const, render: (r: any) => <span>{cop(r.price ?? 0)}</span> },
+  { key: "qty", header: "Stock", sortable: true, align: "right" as const, render: (r: any) => r.low ? <Badge label={`${r.qty ?? 0} · Bajo`} tone="error" /> : <span>{r.qty ?? 0}</span> },
   { key: "value", header: "Valor", align: "right" as const, render: (r: any) => <span className="font-semibold">{cop(r.value ?? 0)}</span> },
 ];
 
 export default function CategoriaMaterialesPage() {
   const { id } = useParams<{ id: string }>();
-  const router = useRouter();
   const { loading: authLoading, authFetch } = useAuth();
 
   const [cat, setCat] = useState<Category | null>(null);
@@ -46,9 +47,12 @@ export default function CategoriaMaterialesPage() {
 
   // Carga con cancelación. El estado de error lo aporta el propio hook, así que
   // desaparece el `err` local: antes había que acordarse de resetearlo a mano.
+  // Pagina en el servidor: el orden viaja en la query.
+  const orden = useOrden();
+
   const { data, cargando: loading, error: err, refrescar: load } = useRequest<any>(
     () => {
-      const params = new URLSearchParams({ categoryId: String(id), page: String(page), pageSize: "25" });
+      const params = new URLSearchParams({ categoryId: String(id), page: String(page), pageSize: "25", ...orden.params });
       if (search.trim()) params.set("search", search.trim());
       return `/inventory/materials?${params.toString()}`;
     },
@@ -62,24 +66,18 @@ export default function CategoriaMaterialesPage() {
 
   return (
     <div className="space-y-4">
-      <button
-        type="button"
-        onClick={() => router.back()}
-        className="inline-flex items-center gap-1 text-[12px] font-medium text-text-tertiary transition-colors hover:text-text-secondary"
-      >
-        <Icon name="arrow-left" size={13} /> Volver
-      </button>
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="flex items-center gap-2 text-[18px] font-bold text-text-primary">
-            <Icon name="boxes" size={18} className="text-brand" /> {cat ? cat.title : "Categoría"}
-          </h1>
-          <p className="mt-0.5 text-[13px] text-text-tertiary">{cat?.extra || "Materiales de esta categoría"}</p>
-        </div>
-        <Link href={`/inventario?categoryId=${id}`} title="Abrir en el administrador de material">
-          <Button variant="secondary" size="sm"><Icon name="external-link" size={14} /> Administrar</Button>
-        </Link>
-      </div>
+      <DetailHeader
+        backHref="/inventario/categorias"
+        backLabel="Categorías de material"
+        icon="boxes"
+        title={cat ? cat.title : "Categoría"}
+        subtitle={cat?.extra || "Materiales de esta categoría"}
+        actions={
+          <Link href={`/inventario?categoryId=${id}`} title="Abrir en el administrador de material" className="w-full sm:w-auto">
+            <Button variant="secondary" size="sm" className="w-full sm:w-auto"><Icon name="external-link" size={14} /> Administrar</Button>
+          </Link>
+        }
+      />
 
       <div className="grid grid-cols-2 gap-3 sm:max-w-md">
         <StatCard label="Total de materiales" value={(cat?.materials ?? data?.total ?? 0).toLocaleString("es-CO")} icon="package" />
@@ -102,7 +100,7 @@ export default function CategoriaMaterialesPage() {
         <PageSkeleton />
       ) : (
         <>
-          <DataTable rows={data?.items ?? []} empty={search ? "Ningún material coincide con la búsqueda." : "Esta categoría no tiene materiales."} columns={COLUMNS} />
+          <DataTable rows={data?.items ?? []} empty={search ? "Ningún material coincide con la búsqueda." : "Esta categoría no tiene materiales."} columns={COLUMNS} sort={orden.sort} onSort={orden.onSort} />
           {data && data.pages > 1 && (
             <Pagination meta={{ page: data.page, pageSize: data.pageSize, total: data.total, pageCount: data.pages }} onPage={setPage} />
           )}

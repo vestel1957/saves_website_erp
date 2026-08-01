@@ -5,15 +5,16 @@ import Link from "next/link";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
 import { Button } from "@/components/ui/Button";
-import { Input } from "@/components/ui/Field";
 import { Badge } from "@/components/ui/Badge";
 import { DataTable } from "@/components/ui/DataTable";
+import { ListToolbar } from "@/components/ui/ListToolbar";
 import { Pagination } from "@/components/ui/Pagination";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { OrdersFilterButton, EMPTY_FILTERS, countActiveFilters, type OrderFilters } from "@/components/orders/OrdersFilterButton";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import { useRequest } from "@/lib/useRequest";
+import { useOrden } from "@/lib/useOrden";
 
 function statusTone(status: string): "default" | "success" | "error" | "warning" {
   if (status === "recibido" || status === "finalizado") return "success";
@@ -41,9 +42,12 @@ export default function OrdenesPage() {
 
   // Carga con cancelación: al teclear se aborta la petición en vuelo para que
   // una respuesta lenta no pise a otra más reciente. Ver lib/useRequest.
+  // Pagina en el servidor: el orden viaja en la query.
+  const orden = useOrden();
+
   const { data, cargando: loading, error, refrescar: load } = useRequest<any>(
     () => {
-      const qs = new URLSearchParams({ kind, page: String(page), pageSize: String(pageSize) });
+      const qs = new URLSearchParams({ kind, page: String(page), pageSize: String(pageSize), ...orden.params });
       if (search.trim()) qs.set("search", search.trim());
       if (filters.status) qs.set("status", filters.status);
       if (filters.category) qs.set("category", filters.category);
@@ -55,11 +59,11 @@ export default function OrdenesPage() {
       if (filters.to) qs.set("to", filters.to);
       return `/orders?${qs.toString()}`;
     },
-    [kind, page, pageSize, search, filters],
+    [kind, page, pageSize, search, filters, orden.clave],
     { debounceMs: search ? 350 : 0, saltar: authLoading },
   );
 
-  useEffect(() => { setPage(1); }, [kind, search, filters, pageSize]);
+  useEffect(() => { setPage(1); }, [kind, search, filters, pageSize, orden.clave]);
 
   if (authLoading) return <PageSkeleton />;
 
@@ -67,18 +71,23 @@ export default function OrdenesPage() {
 
   return (
     <>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <PageHeading
           icon="receipt"
           title="Órdenes de compra / servicio"
           subtitle="Compras y servicios a proveedores"
         />
-        <Link href="/ordenes/nueva">
-          <Button variant="primary"><Icon name="plus" size={15} /> Nueva orden</Button>
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link href="/ordenes/historial">
+            <Button variant="secondary"><Icon name="clock" size={15} /> Historial</Button>
+          </Link>
+          <Link href="/ordenes/nueva">
+            <Button variant="primary"><Icon name="plus" size={15} /> Nueva orden</Button>
+          </Link>
+        </div>
       </div>
 
-      <div className="mb-3 flex flex-wrap items-center gap-2">
+      <ListToolbar search={search} onSearch={setSearch} searchPlaceholder="Buscar por N°, proveedor…">
         <div className="inline-flex rounded-lg border border-border-default bg-surface p-0.5">
           {(["compra", "servicio"] as const).map((k) => (
             <button
@@ -91,10 +100,6 @@ export default function OrdenesPage() {
             </button>
           ))}
         </div>
-        <div className="relative w-[220px] flex-1 sm:max-w-[280px]">
-          <Icon name="search" size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary" />
-          <Input className="pl-9" placeholder="Buscar por N°, proveedor…" value={search} onChange={(e) => setSearch(e.target.value)} />
-        </div>
         <OrdersFilterButton value={filters} onChange={setFilters} categories={categories} branches={branches} />
         {activeFilters > 0 && (
           <button
@@ -105,24 +110,26 @@ export default function OrdenesPage() {
             <Icon name="x" size={14} /> Limpiar
           </button>
         )}
-      </div>
+      </ListToolbar>
 
       {loading && !data ? <PageSkeleton /> : (
         <>
           <DataTable
+            sort={orden.sort}
+            onSort={orden.onSort}
             rows={data?.items ?? []}
             empty="No se encontraron órdenes."
             columns={[
-              { key: "tid", header: "N°", render: (r: any) => <Link href={`/ordenes/${r.id}`} className="font-mono font-medium text-brand hover:underline">{r.tid}</Link> },
-              { key: "supplier", header: "Proveedor", render: (r: any) => <span className="font-medium text-text-primary">{r.supplier}</span> },
-              { key: "branchRef", header: "Sede", render: (r: any) => (r.branchRef ? <Badge label={r.branchRef} tone="info" /> : <span className="text-text-tertiary">—</span>) },
-              { key: "date", header: "Fecha", render: (r: any) => (r.date ? new Date(r.date).toLocaleDateString("es-CO") : "—") },
-              { key: "total", header: "Total", align: "right", render: (r: any) => cop(r.total) },
-              { key: "status", header: "Estado", render: (r: any) => <Badge label={r.status} tone={statusTone(r.status)} /> },
-              { key: "itemsCount", header: "Ítems", align: "right", render: (r: any) => <span className="text-text-secondary">{r.itemsCount}</span> },
+              { key: "tid", header: "N°", sortable: true, render: (r: any) => <Link href={`/ordenes/${r.id}`} className="font-mono font-medium text-brand hover:underline">{r.tid}</Link> },
+              { key: "supplier", header: "Proveedor", sortable: true, render: (r: any) => <span className="font-medium text-text-primary">{r.supplier}</span> },
+              { key: "branchRef", header: "Sede", sortable: true, render: (r: any) => (r.branchRef ? <Badge label={r.branchRef} tone="info" /> : <span className="text-text-tertiary">—</span>) },
+              { key: "date", header: "Fecha", sortable: true, render: (r: any) => (r.date ? new Date(r.date).toLocaleDateString("es-CO") : "—") },
+              { key: "total", header: "Total", sortable: true, align: "right", render: (r: any) => cop(r.total) },
+              { key: "status", header: "Estado", sortable: true, render: (r: any) => <Badge label={r.status} tone={statusTone(r.status)} /> },
+              { key: "itemsCount", header: "Ítems", sortable: true, align: "right", render: (r: any) => <span className="text-text-secondary">{r.itemsCount}</span> },
             ]}
           />
-          {data && data.pages > 1 && (
+          {data && (
             <div className="mt-3">
               <Pagination meta={{ page: data.page, pageSize: data.pageSize, total: data.total, pageCount: data.pages }} onPage={setPage} onPageSize={setPageSize} />
             </div>

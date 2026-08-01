@@ -7,6 +7,7 @@ import { Icon } from "@/components/Icon";
 import { Button } from "@/components/ui/Button";
 import { Input, Select, Textarea, Field } from "@/components/ui/Field";
 import { DataTable } from "@/components/ui/DataTable";
+import { ListToolbar } from "@/components/ui/ListToolbar";
 import { Pagination } from "@/components/ui/Pagination";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { Modal } from "@/components/Modal";
@@ -14,6 +15,7 @@ import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import type { Nap, Paged, BranchOpt, VlanOpt } from "@/lib/network";
 import { useRequest } from "@/lib/useRequest";
+import { useOrden } from "@/lib/useOrden";
 import { mensajeDeError } from "@/lib/errores";
 
 export default function NapsPage() {
@@ -64,7 +66,7 @@ export default function NapsPage() {
         empty="Sin sedes."
         onRowClick={(b) => setBranch(b)}
         columns={[
-          { key: "name", header: "Sede", render: (b) => (
+          { key: "name", header: "Sede", sortable: true, render: (b) => (
             <span className="flex items-center gap-2.5">
               <span className="flex h-7 w-7 items-center justify-center rounded-md bg-brand-soft text-brand"><Icon name="landmark" size={15} /></span>
               <span className="font-semibold text-text-primary">{b.name}</span>
@@ -89,20 +91,23 @@ function BranchNaps({ branch, onBack }: { branch: BranchOpt; onBack: () => void 
 
   // Carga con cancelación: al teclear se aborta la petición en vuelo para que
   // una respuesta lenta no pise a otra más reciente. Ver lib/useRequest.
+  // Pagina en el servidor: el orden viaja en la query.
+  const orden = useOrden();
+
   const { data, cargando: loading, error, refrescar: load } = useRequest<Paged<Nap>>(
     () => {
-      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize), sort, branchId: branch.id });
+      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize), sort, branchId: branch.id, ...orden.params });
       if (search.trim()) qs.set("search", search.trim());
       return `/network/naps?${qs}`;
     },
-    [branch.id, page, pageSize, sort, search],
+    [branch.id, page, pageSize, sort, search, orden.clave],
     { debounceMs: search ? 350 : 0 },
   );
 
 
   useEffect(() => {
     setPage(1);
-  }, [search, sort, pageSize]);
+  }, [search, sort, pageSize, orden.clave]);
 
   return (
     <>
@@ -117,34 +122,29 @@ function BranchNaps({ branch, onBack }: { branch: BranchOpt; onBack: () => void 
         <Button onClick={() => setCreating(true)}><Icon name="plus" size={15} /> Nueva NAP</Button>
       </div>
 
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <div className="relative min-w-[220px] flex-1">
-          <Icon name="search" size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary" />
-          <Input className="pl-9" placeholder="Buscar NAP por nombre…" value={search} onChange={(e) => setSearch(e.target.value)} />
-        </div>
-        <Select value={sort} onChange={(e) => setSort(e.target.value as "name" | "vlan")} className="w-auto">
-          <option value="name">Ordenar: Nombre</option>
-          <option value="vlan">Ordenar: VLAN</option>
-        </Select>
-      </div>
+      {/* El orden se pide pulsando la cabecera de la tabla; antes había aquí un
+          selector Nombre/VLAN que ahora sería un segundo mando para lo mismo. */}
+      <ListToolbar search={search} onSearch={setSearch} searchPlaceholder="Buscar NAP por nombre…" />
 
       {loading && !data ? (
         <PageSkeleton />
       ) : (
         <>
           <DataTable
+            sort={orden.sort}
+            onSort={orden.onSort}
             rows={data?.items ?? []}
             empty="Esta sede aún no tiene cajas NAP."
             onRowClick={(r) => router.push(`/red/naps/${r.id}`)}
             columns={[
               { key: "name", header: "NAP", render: (r) => <span className="font-medium text-text-primary">{r.name}</span> },
-              { key: "vlan", header: "VLAN", align: "right", render: (r) => r.vlan != null ? <span className="font-mono text-text-secondary">{r.vlan}</span> : "—" },
-              { key: "ports", header: "Puertos", align: "right", render: (r) => <span className="font-mono">{r.portsRegistered}/{r.portCount}</span> },
-              { key: "addr", header: "Dirección", render: (r) => <span className="text-text-secondary">{r.address || "—"}</span> },
+              { key: "vlan", header: "VLAN", sortable: true, align: "right", render: (r) => r.vlan != null ? <span className="font-mono text-text-secondary">{r.vlan}</span> : "—" },
+              { key: "ports", header: "Puertos", sortable: true, align: "right", render: (r) => <span className="font-mono">{r.portsRegistered}/{r.portCount}</span> },
+              { key: "addr", header: "Dirección", sortable: true, render: (r) => <span className="text-text-secondary">{r.address || "—"}</span> },
               { key: "go", header: "", align: "right", render: () => <Icon name="chevron-right" size={16} className="text-text-tertiary" /> },
             ]}
           />
-          {data && data.pages > 1 && (
+          {data && (
             <div className="mt-3">
               <Pagination meta={{ page: data.page, pageSize: data.pageSize, total: data.total, pageCount: data.pages }} onPage={setPage} onPageSize={setPageSize} />
             </div>

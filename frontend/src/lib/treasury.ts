@@ -1,4 +1,22 @@
 // Tipos del módulo de Tesorería (vertical Vestel).
+import { PERM, type AuthUser } from "@/lib/auth";
+
+/**
+ * ¿Este usuario es una cajera "pura"? ESPEJO de `esCajera()` del backend
+ * (`treasury/caja-scope.ts`): `area.caja` sin ningún área de mando por encima.
+ *
+ * Sirve para decidir QUÉ PANTALLA pintar (el panel de caja en vez del ejecutivo, el
+ * arqueo en vez del informe) sin esperar a `/treasury/mi-caja`. El alcance real de los
+ * datos lo sigue imponiendo el backend con un 403: esto es comodidad, no la barrera.
+ */
+const P_MANDO = [PERM.AREA_CONTABILIDAD, PERM.AREA_ADMINISTRACION, PERM.AREA_GERENCIA];
+export function esCajera(user: Pick<AuthUser, "permissions"> | null | undefined): boolean {
+  const p = user?.permissions ?? [];
+  if (p.includes(PERM.SYSTEM_ADMIN)) return false;
+  if (P_MANDO.some((m) => p.includes(m))) return false;
+  return p.includes(PERM.AREA_CAJA);
+}
+
 export type TxRow = {
   id: string; date: string; type: string; category: string;
   debit: number; credit: number; amount: number;
@@ -47,6 +65,9 @@ export type CashAccountOpt = {
 type Bucket = { cantidad: number; monto: number };
 type MesBucket = { cantidad: number; monto: number; Internet: Bucket; Television: Bucket };
 
+/** Bloques del informe recalculados sin la pasarela en línea — ver `soloCaja`. */
+type SoloCaja = Pick<InformeCierreData, "cobranza" | "formaPago" | "servicios" | "tipoServicio" | "meses">;
+
 /**
  * El informe del cierre: los bloques del legacy (`statement_list.php`) + el arqueo, que
  * es de donde sale la cabecera (horas, cajero, efectivo).
@@ -87,7 +108,30 @@ export type InformeCierreData = {
     yaCerrado: boolean;
     excedente: number;
     proximoDiaHabil: string;
+    /**
+     * De qué se compone el efectivo del cajón. El backend lo manda desde siempre
+     * (`arqueo()`); se declara aquí porque la cinta de cuadre del informe lo pinta.
+     * OJO: el excedente NO es la suma de estas líneas — el excedente ES el efectivo,
+     * y el arrastre ya viene dentro. Estas líneas sólo lo explican.
+     */
+    desglose?: {
+      arrastre: number;
+      ventas: number;
+      egresos: number;
+      transferencias: number;
+      noEfectivo: number;
+    };
   };
+  /**
+   * El mismo informe SIN los pagos de la pasarela en línea (Wompi). Es lo que ve la
+   * cajera en sus gráficas: esa plata cae directa desde el celular del abonado y no
+   * pasa por su ventanilla, así que contársela como recaudo suyo era enseñarle un
+   * número que no puede arquear.
+   *
+   * Los campos de arriba NO cambian: son el informe del legacy, el que sale en tablas
+   * y en el PDF y el que se concilia con el sistema viejo.
+   */
+  soloCaja: SoloCaja;
 };
 
 /**

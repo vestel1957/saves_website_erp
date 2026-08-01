@@ -35,7 +35,7 @@ export function PageHeading({
         <button
           type="button"
           onClick={() => router.back()}
-          className="mb-1 inline-flex items-center gap-1 text-[12px] font-medium text-text-tertiary transition-colors hover:text-text-secondary"
+          className="-ml-1 mb-1 inline-flex min-h-8 items-center gap-1 px-1 text-[12px] font-medium text-text-tertiary transition-colors hover:text-text-secondary"
         >
           <Icon name="arrow-left" size={13} /> Volver
         </button>
@@ -44,9 +44,21 @@ export function PageHeading({
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-soft">
           <Icon name={icon} size={18} className="text-brand" />
         </span>
+        {/*
+          MÓVIL: ni el título ni el subtítulo se recortan con `truncate`. En una
+          pantalla de 390 px la caja del texto mide ~312 px, y subtítulos de 400
+          a 870 px de ancho quedaban visibles en un tercio — la frase que explica
+          para qué sirve la pantalla se perdía justo donde más falta hace. El
+          título envuelve libre y el subtítulo se limita a dos líneas; desde `sm`
+          vuelve el recorte de una línea de siempre.
+        */}
         <div className="min-w-0">
-          <h1 className="truncate text-[18px] font-bold leading-tight text-text-primary">{title}</h1>
-          {subtitle && <p className="truncate text-[12.5px] leading-tight text-text-tertiary">{subtitle}</p>}
+          <h1 className="text-[18px] font-bold leading-tight text-text-primary sm:truncate">{title}</h1>
+          {subtitle && (
+            <p className="line-clamp-2 text-[12.5px] leading-tight text-text-tertiary sm:line-clamp-none sm:truncate">
+              {subtitle}
+            </p>
+          )}
         </div>
       </div>
     </div>

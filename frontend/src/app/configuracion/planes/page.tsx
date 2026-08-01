@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { PageHeading } from "@/components/ui/PageHeading";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Modal } from "@/components/Modal";
@@ -11,6 +12,7 @@ import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { fullCurrency } from "@/lib/format";
 import { type Plan, type ServiceKind, SERVICE_KIND_LABEL } from "@/lib/plans";
+import { VelocidadOltPlanes } from "@/components/configuracion/VelocidadOltPlanes";
 
 type Draft = {
   name: string;
@@ -30,6 +32,13 @@ export default function PlanesPage() {
   const [editing, setEditing] = useState<Plan | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [busy, setBusy] = useState(false);
+  const [confirmar, setConfirmar] = useState<Plan | null>(null);
+  const [borrando, setBorrando] = useState(false);
+  /** Pestaña activa. `?tab=olt` la fija desde fuera (el aviso de la orden enlaza aquí). */
+  const [tab, setTab] = useState<"catalogo" | "olt">("catalogo");
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("tab") === "olt") setTab("olt");
+  }, []);
 
   const load = useCallback(() => {
     void authFetch(`/plans`).then((r) => (r.ok ? r.json() : [])).then(setPlans).catch(() => setPlans([]));
@@ -81,7 +90,7 @@ export default function PlanesPage() {
   }
 
   async function remove(p: Plan) {
-    if (!confirm(`¿Eliminar el plan "${p.name}"?`)) return;
+    setBorrando(true);
     try {
       const res = await authFetch(`/plans/${p.id}`, { method: "DELETE" });
       const data = await res.json().catch(() => null);
@@ -90,21 +99,44 @@ export default function PlanesPage() {
       load();
     } catch (e) {
       toast((e as Error).message, "alert-circle");
+    } finally {
+      setBorrando(false);
+      setConfirmar(null);
     }
   }
 
   return (
     <div className="space-y-4">
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <PageHeading
           icon="gauge"
           title="Planes"
           subtitle="Catálogo de planes de servicio. Es la fuente del precio de la mensualidad recurrente y del perfil que se empuja al router."
         />
-        <Button onClick={openNew}><Icon name="plus" size={15} /> Nuevo plan</Button>
+        {tab === "catalogo" && <Button onClick={openNew}><Icon name="plus" size={15} /> Nuevo plan</Button>}
       </div>
 
-      <div className="space-y-2">
+      {/* El plan ya no es solo precio + perfil PPP: también dice a qué velocidad
+          se autentica la ONU en la OLT. Son dos configuraciones distintas del
+          mismo catálogo, así que van en la misma pantalla en pestañas. */}
+      <div className="flex gap-1 border-b border-border-subtle">
+        {([["catalogo", "Catálogo"], ["olt", "Velocidad en OLT"]] as const).map(([k, label]) => (
+          <button
+            key={k}
+            type="button"
+            onClick={() => setTab(k)}
+            className={`-mb-px border-b-2 px-3 py-2 text-[13px] font-semibold transition-colors ${
+              tab === k ? "border-brand text-text-primary" : "border-transparent text-text-tertiary hover:text-text-secondary"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "olt" && <VelocidadOltPlanes />}
+
+      <div className={`space-y-2 ${tab === "catalogo" ? "" : "hidden"}`}>
         {!plans ? (
           <p className="text-[13px] text-text-tertiary">Cargando…</p>
         ) : plans.length === 0 ? (
@@ -126,10 +158,10 @@ export default function PlanesPage() {
             </div>
             <div className="flex shrink-0 items-center gap-3">
               <span className="text-[14px] font-bold text-text-primary">{fullCurrency(p.price)}<span className="text-[11px] font-normal text-text-tertiary">/mes</span></span>
-              <button type="button" onClick={() => openEdit(p)} className="rounded-md p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-text-primary" title="Editar">
+              <button type="button" onClick={() => openEdit(p)} className="tap rounded-md p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-text-primary" title="Editar">
                 <Icon name="pencil" size={15} />
               </button>
-              <button type="button" onClick={() => remove(p)} className="rounded-md p-1.5 text-text-tertiary hover:bg-error-soft hover:text-error-text" title="Eliminar">
+              <button type="button" onClick={() => setConfirmar(p)} className="tap rounded-md p-1.5 text-text-tertiary hover:bg-error-soft hover:text-error-text" title="Eliminar">
                 <Icon name="trash" size={15} />
               </button>
             </div>
@@ -143,7 +175,7 @@ export default function PlanesPage() {
             <Field label="Nombre">
               <Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="300 Megas ST" />
             </Field>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="Tipo de servicio">
                 <Select value={draft.kind} onChange={(e) => setDraft({ ...draft, kind: e.target.value as ServiceKind })}>
                   {(Object.keys(SERVICE_KIND_LABEL) as ServiceKind[]).map((k) => (
@@ -158,7 +190,7 @@ export default function PlanesPage() {
             <Field label="IVA (%)" hint="Internet 0 · Televisión 19">
               <Input type="number" min={0} value={draft.taxRate} onChange={(e) => setDraft({ ...draft, taxRate: e.target.value })} placeholder="0" />
             </Field>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="Perfil PPP (router)" hint="Vacío = no se empuja al router">
                 <Input value={draft.pppProfile} onChange={(e) => setDraft({ ...draft, pppProfile: e.target.value })} placeholder="300M" />
               </Field>
@@ -177,6 +209,57 @@ export default function PlanesPage() {
           </div>
         </Modal>
       )}
+
+      {confirmar && (
+        <ConfirmDialog
+          open
+          busy={borrando}
+          onClose={() => setConfirmar(null)}
+          onConfirm={() => void remove(confirmar)}
+          tone="danger"
+          icon="trash"
+          title={confirmar.subscribers > 0 ? "Retirar plan del catálogo" : "Eliminar plan"}
+          confirmLabel={confirmar.subscribers > 0 ? "Retirar del catálogo" : "Eliminar plan"}
+          message={
+            confirmar.subscribers > 0 ? (
+              <>
+                El plan tiene <b>{confirmar.subscribers} abonado(s)</b> asignados, así que no se
+                borra: queda <b>desactivado</b>. Esos abonados conservan su plan y su cobro, pero
+                el plan dejará de poder asignarse a nuevos abonados.
+              </>
+            ) : (
+              <>
+                El plan desaparece del catálogo y dejará de estar disponible al dar de alta o
+                cambiar de plan a un abonado. No se puede deshacer.
+              </>
+            )
+          }
+          detail={<PlanResumen plan={confirmar} />}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Ficha compacta del plan dentro de la confirmación. */
+function PlanResumen({ plan }: { plan: Plan }) {
+  const filas: [string, React.ReactNode][] = [
+    ["Plan", plan.name],
+    ["Servicio", <Badge key="k" tone="info" label={SERVICE_KIND_LABEL[plan.kind]} />],
+    ["Precio", <span key="p" className="font-mono">{fullCurrency(plan.price)}/mes</span>],
+    ["Perfil PPP", <span key="pp" className="font-mono">{plan.pppProfile || "—"}</span>],
+    ["Abonados", <Badge key="s" tone={plan.subscribers > 0 ? "warning" : "default"} label={`${plan.subscribers} abonado(s)`} />],
+  ];
+  return (
+    <div className="rounded-lg border border-border-subtle bg-surface-2 p-2.5">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12px]">
+        {filas.map(([k, v]) => (
+          <Fragment key={k}>
+            <dt className="text-text-tertiary">{k}</dt>
+            <dd className="text-right text-text-primary">{v}</dd>
+          </Fragment>
+        ))}
+      </dl>
     </div>
   );
 }

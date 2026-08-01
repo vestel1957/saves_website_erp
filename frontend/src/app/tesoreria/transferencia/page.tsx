@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { PageHeading } from "@/components/ui/PageHeading";
+import { LinkMovimientos } from "@/components/cobranzas/LinkMovimientos";
 import { Icon } from "@/components/Icon";
 import { Button } from "@/components/ui/Button";
 import { Input, Select, Field } from "@/components/ui/Field";
@@ -12,6 +12,7 @@ import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import type { CashAccount } from "@/lib/cobranzas";
 import { mensajeDeError } from "@/lib/errores";
+import { useMiCaja } from "@/lib/useMiCaja";
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -23,6 +24,9 @@ type Result = {
 
 export default function TransferenciaPage() {
   const { loading: authLoading, authFetch } = useAuth();
+  // La cajera transfiere DESDE su caja (típicamente a un banco al cuadrar el día):
+  // el origen se le fija y el backend además exige que ella sea parte del traslado.
+  const { bloqueada, sinCaja } = useMiCaja();
   const [accounts, setAccounts] = useState<CashAccount[]>([]);
   const [fromId, setFromId] = useState("");
   const [toId, setToId] = useState("");
@@ -40,6 +44,8 @@ export default function TransferenciaPage() {
       .then((a: CashAccount[]) => setAccounts(a))
       .catch(() => {});
   }, [authLoading, authFetch]);
+
+  useEffect(() => { if (bloqueada) setFromId(String(bloqueada.id)); }, [bloqueada]);
 
   const amountNum = Number(amount) || 0;
   const sameAccount = !!fromId && fromId === toId;
@@ -79,14 +85,18 @@ export default function TransferenciaPage() {
 
   return (
     <>
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <PageHeading icon="arrow-left-right" title="Transferencia entre cajas" />
-        <Link href="/tesoreria" className="inline-flex items-center gap-1.5 rounded-lg border border-border-default px-3 py-2 text-[12px] font-semibold text-text-secondary transition-colors hover:bg-surface-2">
-          <Icon name="banknote" size={14} /> Movimientos
-        </Link>
+        <LinkMovimientos />
       </div>
 
       <div className="mx-auto mt-2 w-full max-w-xl">
+        {sinCaja && (
+          <div className="mb-3 flex items-start gap-2 rounded-xl border border-warning-subtle bg-warning-soft px-3.5 py-3 text-[13px] text-warning-text">
+            <Icon name="alert-triangle" size={16} className="mt-0.5 shrink-0" />
+            <span>No tienes una caja asignada, así que no puedes transferir. Pídele a administración que te asigne la de tu sede.</span>
+          </div>
+        )}
         <div className="rounded-2xl border border-border-subtle bg-surface p-5 shadow-sm">
           <div className="mb-4 flex items-center gap-2.5">
             <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-brand"><Icon name="arrow-left-right" size={18} /></span>
@@ -97,10 +107,11 @@ export default function TransferenciaPage() {
           </div>
 
           <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-[1fr_auto_1fr] sm:items-end">
-            <Field label="Desde (origen)" required>
-              <Select value={fromId} onChange={(e) => setFromId(e.target.value)}>
+            <Field label="Desde (origen)" required hint={bloqueada ? "Tu caja" : undefined}>
+              <Select value={fromId} onChange={(e) => setFromId(e.target.value)} disabled={!!bloqueada}>
                 <option value="">— Selecciona —</option>
-                {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                {(bloqueada ? accounts.filter((a) => a.id === bloqueada.id) : accounts)
+                  .map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
               </Select>
             </Field>
             <div className="hidden pb-2.5 text-text-tertiary sm:block"><Icon name="arrow-right" size={18} /></div>
@@ -114,7 +125,7 @@ export default function TransferenciaPage() {
 
           {sameAccount && <p className="mt-1.5 text-[12px] text-error-text">La caja origen y destino deben ser distintas.</p>}
 
-          <div className="mt-3 grid grid-cols-2 gap-2.5">
+          <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
             <Field label="Monto" required>
               <div className="relative">
                 <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[13px] text-text-tertiary">$</span>

@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { PageHeading } from "@/components/ui/PageHeading";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Modal } from "@/components/Modal";
@@ -19,6 +20,8 @@ export default function CategoriasPage() {
   const [draftName, setDraftName] = useState("");
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [confirmar, setConfirmar] = useState<Category | null>(null);
+  const [borrando, setBorrando] = useState(false);
 
   const load = useCallback(() => {
     void authFetch(`/config/categories`).then((r) => (r.ok ? r.json() : [])).then(setCats).catch(() => setCats([]));
@@ -49,7 +52,7 @@ export default function CategoriasPage() {
   }
 
   async function remove(c: Category) {
-    if (!confirm(`¿Eliminar la categoría "${c.name}"?`)) return;
+    setBorrando(true);
     try {
       const res = await authFetch(`/config/categories/${c.id}`, { method: "DELETE" });
       const data = await res.json().catch(() => null);
@@ -58,12 +61,15 @@ export default function CategoriasPage() {
       load();
     } catch (e) {
       toast((e as Error).message, "alert-circle");
+    } finally {
+      setBorrando(false);
+      setConfirmar(null);
     }
   }
 
   return (
     <div className="space-y-4">
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <PageHeading
           icon="folder"
           title="Categorías de transacción"
@@ -85,14 +91,14 @@ export default function CategoriasPage() {
               <Badge tone={c.usage > 0 ? "info" : "default"} label={`${c.usage} mov.`} />
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
-              <button type="button" onClick={() => openEdit(c)} className="rounded-md p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-text-primary" title="Editar">
+              <button type="button" onClick={() => openEdit(c)} className="tap rounded-md p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-text-primary" title="Editar">
                 <Icon name="pencil" size={15} />
               </button>
               <button
                 type="button"
-                onClick={() => remove(c)}
+                onClick={() => setConfirmar(c)}
                 disabled={c.usage > 0}
-                className="rounded-md p-1.5 text-text-tertiary enabled:hover:bg-error-soft enabled:hover:text-error-text disabled:cursor-not-allowed disabled:opacity-30"
+                className="tap rounded-md p-1.5 text-text-tertiary enabled:hover:bg-error-soft enabled:hover:text-error-text disabled:cursor-not-allowed disabled:opacity-30"
                 title={c.usage > 0 ? "En uso: no se puede eliminar" : "Eliminar"}
               >
                 <Icon name="trash" size={15} />
@@ -118,6 +124,46 @@ export default function CategoriasPage() {
           </div>
         </Modal>
       )}
+
+      {confirmar && (
+        <ConfirmDialog
+          open
+          busy={borrando}
+          onClose={() => setConfirmar(null)}
+          onConfirm={() => void remove(confirmar)}
+          tone="danger"
+          icon="trash"
+          title="Eliminar categoría de transacción"
+          confirmLabel="Eliminar categoría"
+          message={
+            <>
+              La categoría desaparece del catálogo y dejará de estar disponible al registrar
+              ingresos y egresos de tesorería. No se puede deshacer.
+            </>
+          }
+          detail={<CategoriaResumen cat={confirmar} />}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Ficha compacta de la categoría dentro de la confirmación. */
+function CategoriaResumen({ cat }: { cat: Category }) {
+  const filas: [string, React.ReactNode][] = [
+    ["Nombre", cat.name],
+    ["Movimientos", <Badge key="u" tone={cat.usage > 0 ? "info" : "default"} label={`${cat.usage} mov.`} />],
+  ];
+  return (
+    <div className="rounded-lg border border-border-subtle bg-surface-2 p-2.5">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12px]">
+        {filas.map(([k, v]) => (
+          <Fragment key={k}>
+            <dt className="text-text-tertiary">{k}</dt>
+            <dd className="text-right text-text-primary">{v}</dd>
+          </Fragment>
+        ))}
+      </dl>
     </div>
   );
 }

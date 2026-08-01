@@ -75,26 +75,55 @@ async function verifyToken(token: string): Promise<TokenClaims | null> {
 // La cajera ("caja") comparte rutas con contabilidad/administración/técnicos
 // porque su sección propia reutiliza esas pantallas de forma acotada.
 const ROUTE_AREA: [RegExp, string[]][] = [
-  [/^\/dashboard(\/|$)/, ["gerencia"]],
+  // El dashboard lo ven tres áreas con contenidos distintos: gerencia el panel
+  // ejecutivo, caja el panel de su caja (el informe del recaudo del día) y
+  // técnicos su jornada (las órdenes que le tocan hoy y su rendimiento).
+  [/^\/dashboard(\/|$)/, ["gerencia", "caja", "tecnicos"]],
   [/^\/reportes(\/|$)/, ["gerencia"]],
   [/^\/facturacion(\/|$)/, ["contabilidad", "caja"]],
   [/^\/tesoreria(\/|$)/, ["contabilidad", "caja"]],
   [/^\/cotizaciones(\/|$)/, ["contabilidad"]],
+  // El agendamiento lo hace la cajera (y administración), no el técnico: regla
+  // específica ANTES de /soporte, que sí es suyo.
+  [/^\/mi-agenda(\/|$)/, ["tecnicos"]],
+  [/^\/soporte\/agenda(\/|$)/, ["caja", "administracion"]],
   [/^\/soporte(\/|$)/, ["tecnicos", "caja"]],
   // Transferencias tienen flujo multi-área: técnico solicita, inventario
   // (administración) aprueba/despacha, caja recibe. Regla específica ANTES de /red.
   [/^\/red\/transferencias(\/|$)/, ["tecnicos", "administracion", "caja"]],
-  [/^\/red(\/|$)/, ["tecnicos"]],
+  // El inventario de equipos lo administra administración (2026-07-31): el técnico
+  // dejó de tener la pantalla, pero el área sigue en la lista porque el jefe de
+  // bodega y la cajera entran por aquí a mover equipo.
+  [/^\/red\/equipos(\/|$)/, ["tecnicos", "administracion"]],
+  // Lo ÚNICO de /red que le queda al técnico: sus equipos. Va ANTES de la regla
+  // general, que ya no lo incluye.
+  [/^\/red\/bodegas(\/|$)/, ["tecnicos", "administracion"]],
+  // RED / ISP y MIKROTIK salieron del perfil del técnico (2026-07-31): conexiones,
+  // NAPs, OLT, GenieACS y los routers son de administración. El backend lo repite
+  // por su cuenta (`network/modulo-red.guard.ts`); esto sólo evita el viaje.
+  [/^\/red(\/|$)/, ["administracion"]],
   // El mapa lo usan tanto el técnico (a dónde voy) como administración y caja
   // (dónde está el cliente). La capa de "dónde está cada técnico" se filtra
   // aparte, dentro de la página y en el backend: no todo el que ve el mapa la ve.
   [/^\/mapa(\/|$)/, ["gerencia", "administracion", "contabilidad", "tecnicos", "sistemas", "caja"]],
-  [/^\/mikrotik(\/|$)/, ["tecnicos"]],
+  [/^\/mikrotik(\/|$)/, ["administracion"]],
+  // La bandeja de WhatsApp la atiende quien atiende clientes; configurar el canal
+  // sigue siendo de sistemas y vive bajo /configuracion.
+  [/^\/whatsapp(\/|$)/, ["administracion", "caja", "sistemas"]],
   [/^\/configuracion(\/|$)/, ["sistemas"]],
   [/^\/clientes(\/|$)/, ["administracion", "caja"]],
   [/^\/playhub(\/|$)/, ["administracion"]],
+  // Traspasos de material: la cajera le entrega material al técnico (traspaso a su
+  // almacén). Regla específica ANTES de /inventario, que sigue siendo de
+  // administración: del módulo sólo se le abre esta pantalla.
+  [/^\/inventario\/traspasos(\/|$)/, ["administracion", "caja"]],
+  // Bodegas de material: al técnico se le abre SU bodega (el backend sólo le
+  // devuelve esa). Regla específica ANTES de /inventario, que sigue siendo de
+  // administración — del módulo no se le abre nada más.
+  [/^\/inventario\/bodegas(\/|$)/, ["administracion", "tecnicos"]],
   [/^\/inventario(\/|$)/, ["administracion"]],
-  [/^\/ordenes(\/|$)/, ["administracion", "caja"]],
+  // Compras salió del perfil de caja (2026-07-29): quien recauda no ordena compras.
+  [/^\/ordenes(\/|$)/, ["administracion"]],
   [/^\/proveedores(\/|$)/, ["administracion"]],
   [/^\/devoluciones(\/|$)/, ["administracion"]],
   [/^\/empleados(\/|$)/, ["administracion"]],
@@ -106,8 +135,12 @@ const ROUTE_AREA: [RegExp, string[]][] = [
 const AREA_LANDING: Record<string, string> = {
   gerencia: "/dashboard",
   contabilidad: "/facturacion",
-  caja: "/tesoreria",
-  tecnicos: "/soporte",
+  // La cajera aterriza en su panel: lo primero que necesita ver al entrar es el
+  // recaudo del día de SU caja, no el listado de movimientos.
+  caja: "/dashboard",
+  // El técnico aterriza en su agenda: lo primero que necesita ver al entrar es qué
+  // visitas le tocan hoy y en qué orden. Su rendimiento sigue en /dashboard.
+  tecnicos: "/mi-agenda",
   sistemas: "/configuracion",
   administracion: "/clientes",
 };

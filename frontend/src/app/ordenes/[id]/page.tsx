@@ -6,15 +6,20 @@ import { useParams } from "next/navigation";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
 import { Button } from "@/components/ui/Button";
-import { Input, Select, Field } from "@/components/ui/Field";
+import { Input, Select, Field, Textarea } from "@/components/ui/Field";
 import { Badge } from "@/components/ui/Badge";
 import { Modal } from "@/components/Modal";
+import { FirmaOtpModal } from "@/components/FirmaOtpModal";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
+import { PERM } from "@/lib/auth";
 import { cop } from "@/lib/subscribers";
 import { mensajeDeError } from "@/lib/errores";
+
+type EditRow = { product: string; qty: string; price: string; taxRate: string };
 
 function statusTone(status: string): "default" | "success" | "error" | "warning" {
   if (status === "recibido" || status === "finalizado") return "success";
@@ -28,7 +33,7 @@ function fmtDate(d?: string) {
 }
 
 export default function OrdenDetallePage() {
-  const { loading: authLoading, authFetch } = useAuth();
+  const { loading: authLoading, authFetch, can } = useAuth();
   const params = useParams();
   const id = String(params?.id ?? "");
 
@@ -49,6 +54,20 @@ export default function OrdenDetallePage() {
   const [noteAmount, setNoteAmount] = useState("");
   const [noteDesc, setNoteDesc] = useState("");
   const [notesaving, setNotesaving] = useState(false);
+  const [confirmar, setConfirmar] = useState<{ kind: "borrar-nota"; nota: any } | { kind: "cancelar" } | { kind: "finalizar" } | { kind: "borrar-adjunto"; file: any } | null>(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
+  // Flujo de aprobación / edición / adjuntos
+  const [flowBusy, setFlowBusy] = useState(false);
+  const [firmarOpen, setFirmarOpen] = useState(false);
+  const [cancelReason, setCancelReason] = useState("");
+  const [editOpen, setEditOpen] = useState(false);
+  const [editRows, setEditRows] = useState<EditRow[]>([]);
+  const [editDate, setEditDate] = useState("");
+  const [editDue, setEditDue] = useState("");
+  const [editNotes, setEditNotes] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const puedeAprobar = can(PERM.PURCHASES_APPROVE);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -67,7 +86,13 @@ export default function OrdenDetallePage() {
     void load();
   }, [authLoading, id, load]);
 
-  const canReceive = useMemo(() => order && order.status !== "recibido" && order.status !== "finalizado", [order]);
+  const canReceive = useMemo(() => {
+    if (!order) return false;
+    if (["recibido", "finalizado", "cancelado", "anulado"].includes(order.status)) return false;
+    // Órdenes del flujo nuevo: recibir solo después de aprobar.
+    if (order.approval?.awaiting) return false;
+    return true;
+  }, [order]);
   const saldo = useMemo(() => order ? Math.max(0, (order.total ?? 0) - (order.paid ?? 0)) : 0, [order]);
 
   function openPay() {
@@ -113,7 +138,7 @@ export default function OrdenDetallePage() {
   }
 
   async function removeNote(noteId: string) {
-    if (!confirm("¿Eliminar esta nota? El total de la orden se ajustará.")) return;
+    setConfirmBusy(true);
     try {
       const res = await authFetch(`/orders/${id}/notes/${noteId}`, { method: "DELETE" });
       const d = await res.json();
@@ -121,6 +146,7 @@ export default function OrdenDetallePage() {
       toast(`Nota eliminada · nuevo total ${cop(d.total)}`, "check");
       void load();
     } catch (e) { toast(mensajeDeError(e), "alert-triangle"); }
+    finally { setConfirmBusy(false); setConfirmar(null); }
   }
 
   const submitReceive = async () => {
@@ -137,6 +163,124 @@ export default function OrdenDetallePage() {
     } finally { setSaving(false); }
   };
 
+  /** Acciones del flujo (aprobar / cancelar / finalizar). */
+  const flowAction = async (path: string, body?: any, okMsg?: string) => {
+    setFlowBusy(true);
+    try {
+      const res = await authFetch(`/orders/${id}/${path}`, { method: "POST", body: JSON.stringify(body ?? {}) });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d?.message || "No se pudo completar la acción");
+      toast(okMsg ?? "Listo", "check");
+      await load();
+      return true;
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); return false; }
+    finally { setFlowBusy(false); }
+  };
+
+  const aprobar = () => flowAction("approve", {}, "Orden aprobada");
+
+  /**
+   * Firma con código: pide el OTP y aprueba con él. No usa `flowAction` porque el
+   * error tiene que llegar CRUDO al diálogo ("te quedan 3 intentos") en vez de
+   * morir en un toast, y el diálogo se cierra solo si la firma entró.
+   */
+  const pedirCodigoFirma = useCallback(async () => {
+    const res = await authFetch(`/orders/${id}/approve/otp`, { method: "POST" });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d?.message || "No se pudo enviar el código");
+    return d;
+  }, [authFetch, id]);
+
+  const firmarAprobacion = useCallback(async (otp: string) => {
+    const res = await authFetch(`/orders/${id}/approve`, { method: "POST", body: JSON.stringify({ otp }) });
+    const d = await res.json();
+    if (!res.ok) throw new Error(Array.isArray(d?.message) ? d.message[0] : d?.message || "No se pudo aprobar");
+    toast(d?.needsSecond ? "1ª firma registrada · falta la segunda" : "Orden aprobada", "check");
+    await load();
+  }, [authFetch, id, load]);
+
+  const cancelar = async () => {
+    setConfirmBusy(true);
+    const ok = await flowAction("cancel", { reason: cancelReason.trim() || undefined }, "Orden cancelada");
+    setConfirmBusy(false);
+    if (ok) { setConfirmar(null); setCancelReason(""); }
+  };
+  const finalizar = async () => {
+    setConfirmBusy(true);
+    const ok = await flowAction("finalize", {}, "Orden finalizada");
+    setConfirmBusy(false);
+    if (ok) setConfirmar(null);
+  };
+
+  const abrirPdf = async () => {
+    try {
+      const res = await authFetch(`/orders/${id}/pdf`);
+      if (!res.ok) throw new Error("No se pudo generar el PDF");
+      const blob = await res.blob();
+      window.open(URL.createObjectURL(blob), "_blank");
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); }
+  };
+
+  const abrirEditar = () => {
+    setEditRows((order?.items ?? []).map((it: any) => ({ product: it.product ?? "", qty: String(it.qty), price: String(it.price), taxRate: String(it.taxRate ?? 0) })));
+    setEditDate(order?.date ? String(order.date).slice(0, 10) : "");
+    setEditDue(order?.dueDate ? String(order.dueDate).slice(0, 10) : "");
+    setEditNotes(order?.notes ?? "");
+    setEditOpen(true);
+  };
+
+  const guardarEdicion = async () => {
+    const items = editRows
+      .filter((r) => r.product.trim() && Number(r.qty) > 0)
+      .map((r) => ({ product: r.product.trim(), qty: Number(r.qty), price: Number(r.price) || 0, taxRate: Number(r.taxRate) || 0 }));
+    if (!items.length) { toast("La orden necesita al menos un ítem", "alert-triangle"); return; }
+    setEditSaving(true);
+    try {
+      const res = await authFetch(`/orders/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ items, orderDate: editDate || undefined, dueDate: editDue || undefined, notes: editNotes }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d?.message || "No se pudo guardar");
+      toast("Orden actualizada", "check");
+      setEditOpen(false); void load();
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setEditSaving(false); }
+  };
+
+  const subirAdjunto = async (file: File) => {
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await authFetch(`/orders/${id}/files`, { method: "POST", body: fd });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d?.message || "No se pudo subir el archivo");
+      toast(`Adjunto subido: ${d.name}`, "check");
+      void load();
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setUploading(false); }
+  };
+
+  const verAdjunto = async (f: any) => {
+    try {
+      const res = await authFetch(`/orders/${id}/files/${f.id}/download`);
+      if (!res.ok) throw new Error("No se pudo descargar");
+      const blob = await res.blob();
+      window.open(URL.createObjectURL(blob), "_blank");
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); }
+  };
+
+  const borrarAdjunto = async (f: any) => {
+    setConfirmBusy(true);
+    try {
+      const res = await authFetch(`/orders/${id}/files/${f.id}`, { method: "DELETE" });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d?.message || "No se pudo eliminar");
+      toast("Adjunto eliminado", "check");
+      void load();
+      setConfirmar(null);
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setConfirmBusy(false); }
+  };
+
   if (authLoading || loading) return <PageSkeleton />;
 
   if (!order) {
@@ -151,20 +295,70 @@ export default function OrdenDetallePage() {
   }
 
   const isCompra = order.kind === "compra";
+  const aprob = order.approval ?? {};
+  const terminal = ["cancelado", "anulado", "finalizado"].includes(order.status);
+  const awaiting = !!aprob.awaiting; // orden nueva sin aprobar: pagar/recibir bloqueados
+  const esPendiente = order.status === "pendiente";
 
   return (
     <>
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <PageHeading
           icon="receipt"
           title={`Orden ${order.tid}`}
-          subtitle={`Creada el ${fmtDate(order.date)}`}
+          subtitle={`Creada el ${fmtDate(order.date)}${aprob.createdByName ? ` por ${aprob.createdByName}` : ""}`}
         />
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Badge label={isCompra ? "Compra" : "Servicio"} tone={isCompra ? "brand" : "info"} />
           <Badge label={order.status} tone={statusTone(order.status)} />
+          <Button variant="secondary" size="sm" onClick={abrirPdf}><Icon name="file-text" size={14} /> PDF</Button>
+          {esPendiente && <Button variant="secondary" size="sm" onClick={abrirEditar}><Icon name="pencil" size={14} /> Editar</Button>}
+          {!terminal && <Button variant="secondary" size="sm" onClick={() => setConfirmar({ kind: "cancelar" })}><Icon name="x" size={14} className="text-error-text" /> Cancelar orden</Button>}
+          {!terminal && !esPendiente && saldo <= 0 && (
+            <Button variant="primary" size="sm" onClick={() => setConfirmar({ kind: "finalizar" })} disabled={flowBusy}><Icon name="check" size={14} /> Finalizar</Button>
+          )}
         </div>
       </div>
+
+      {/* Flujo de aprobación: la orden nueva no se paga ni se recibe sin firma(s). */}
+      {aprob.enFlujo && !terminal && (
+        <div className={`rounded-xl border p-4 shadow-sm ${awaiting ? "border-warning-border bg-warning-soft" : "border-border-subtle bg-surface"}`}>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Icon name={awaiting ? "lock" : "check"} size={16} className={awaiting ? "text-warning-text" : "text-success-text"} />
+              <div>
+                <p className="text-[13px] font-bold text-text-primary">
+                  {awaiting
+                    ? aprob.firstBy
+                      ? "Falta la segunda aprobación"
+                      : "Pendiente de aprobación"
+                    : "Orden aprobada"}
+                </p>
+                <p className="text-[12px] text-text-tertiary">
+                  {aprob.needsTwo
+                    ? `Por su monto (≥ ${cop(aprob.threshold)}) esta orden exige DOS firmas de personas distintas.`
+                    : "Esta orden exige una aprobación antes de pagar o recibir."}
+                </p>
+              </div>
+            </div>
+            {awaiting && puedeAprobar && (
+              <Button variant="primary" size="sm" onClick={() => (aprob.otpRequired ? setFirmarOpen(true) : void aprobar())} disabled={flowBusy}>
+                <Icon name={aprob.otpRequired ? "file-signature" : "check"} size={14} />
+                {flowBusy ? "Aprobando…" : aprob.firstBy ? "Dar 2ª firma" : aprob.otpRequired ? "Firmar y aprobar" : "Aprobar orden"}
+              </Button>
+            )}
+            {awaiting && !puedeAprobar && (
+              <span className="text-[12px] text-text-tertiary">Solo un autorizador de compras puede aprobarla.</span>
+            )}
+          </div>
+          {(aprob.firstBy || aprob.secondBy) && (
+            <div className="mt-2 flex flex-wrap gap-4 border-t border-border-subtle pt-2 text-[12px] text-text-secondary">
+              {aprob.firstBy && <span><Icon name="check" size={12} className="mr-1 inline text-success-text" />1ª firma: <b>{aprob.firstBy}</b> · {fmtDate(aprob.firstAt)}</span>}
+              {aprob.secondBy && <span><Icon name="check" size={12} className="mr-1 inline text-success-text" />2ª firma: <b>{aprob.secondBy}</b> · {fmtDate(aprob.secondAt)}</span>}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
@@ -191,7 +385,8 @@ export default function OrdenDetallePage() {
           <div className="mt-1 flex justify-between border-t border-border-subtle pt-1 text-[14px] font-bold text-text-primary"><span>Total neto</span><span>{cop(order.total ?? 0)}</span></div>
           <div className="mt-1 flex justify-between text-[13px]"><span className="text-text-tertiary">Pagado</span><span className="text-success-text">{cop(order.paid ?? 0)}</span></div>
           <div className="flex justify-between text-[13px]"><span className="text-text-tertiary">Saldo</span><span className={saldo > 0 ? "font-semibold text-error-text" : "text-text-tertiary"}>{cop(saldo)}</span></div>
-          {saldo > 0 && <Button variant="secondary" size="sm" className="mt-2 w-full" onClick={openPay}><Icon name="hand-coins" size={14} /> Registrar pago</Button>}
+          {saldo > 0 && !terminal && !awaiting && <Button variant="secondary" size="sm" className="mt-2 w-full" onClick={openPay}><Icon name="hand-coins" size={14} /> Registrar pago</Button>}
+          {saldo > 0 && awaiting && <p className="mt-2 text-[11px] text-warning-text">El pago se habilita cuando la orden esté aprobada.</p>}
         </div>
       </div>
 
@@ -233,7 +428,7 @@ export default function OrdenDetallePage() {
                   {n.description ? <span className="ml-2 text-[12px] text-text-tertiary">{n.description}</span> : null}
                 </div>
                 <span className={`text-[13px] font-semibold ${n.amount < 0 ? "text-warning-text" : "text-text-secondary"}`}>{n.amount < 0 ? "-" : "+"}{cop(Math.abs(n.amount))}</span>
-                <button onClick={() => removeNote(n.id)} className="text-text-tertiary hover:text-error-text" title="Eliminar nota"><Icon name="trash" size={15} /></button>
+                <button onClick={() => setConfirmar({ kind: "borrar-nota", nota: n })} className="tap text-text-tertiary hover:text-error-text" title="Eliminar nota"><Icon name="trash" size={15} /></button>
               </div>
             ))}
           </div>
@@ -268,6 +463,95 @@ export default function OrdenDetallePage() {
           </div>
         </div>
       )}
+
+      {/* Adjuntos: factura del proveedor, cotizaciones, soportes. */}
+      <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="flex items-center gap-1.5 text-[13px] font-bold text-text-primary"><Icon name="paperclip" size={16} /> Adjuntos</h2>
+          <label className={`inline-flex cursor-pointer items-center gap-1 rounded-lg border border-border-default px-3 py-1.5 text-[12px] font-semibold text-text-secondary hover:bg-surface-2 ${uploading ? "pointer-events-none opacity-60" : ""}`}>
+            <Icon name={uploading ? "loader" : "upload"} size={14} className={uploading ? "animate-spin" : ""} />
+            {uploading ? "Subiendo…" : "Subir archivo"}
+            <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png,.gif,.webp,.heic,.doc,.docx,.xls,.xlsx,.csv,.txt,.zip"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) void subirAdjunto(f); e.target.value = ""; }} />
+          </label>
+        </div>
+        {(order.files ?? []).length === 0 ? (
+          <p className="text-[12px] text-text-tertiary">Sin adjuntos. Suba aquí la factura del proveedor o la cotización.</p>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {(order.files ?? []).map((f: any) => (
+              <div key={f.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border-subtle px-3 py-2">
+                <button onClick={() => void verAdjunto(f)} className="min-w-0 flex-1 truncate text-left text-[13px] font-medium text-brand hover:underline">{f.name}</button>
+                <span className="text-[11px] text-text-tertiary">{(f.size / 1024).toFixed(0)} KB · {f.by ?? "—"} · {fmtDate(f.at)}</span>
+                <button onClick={() => setConfirmar({ kind: "borrar-adjunto", file: f })} className="tap text-text-tertiary hover:text-error-text" title="Eliminar adjunto"><Icon name="trash" size={15} /></button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Bitácora: rastro de quién hizo qué con la orden. */}
+      {(order.events ?? []).length > 0 && (
+        <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
+          <h2 className="mb-3 flex items-center gap-1.5 text-[13px] font-bold text-text-primary"><Icon name="clock" size={16} /> Bitácora</h2>
+          <div className="flex flex-col gap-1.5">
+            {(order.events ?? []).map((e: any) => (
+              <div key={e.id} className="flex flex-wrap items-baseline gap-x-2 border-b border-border-subtle pb-1.5 text-[12px] last:border-b-0">
+                <span className="font-semibold text-text-primary">{e.action}</span>
+                {e.to && <span className="text-text-tertiary">{e.from ? `${e.from} → ` : ""}{e.to}</span>}
+                {e.detail && <span className="min-w-0 text-text-secondary">{e.detail}</span>}
+                <span className="ml-auto whitespace-nowrap text-text-tertiary">{e.user ?? "—"} · {new Date(e.at).toLocaleString("es-CO")}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Firma de la aprobación: el código llega al WhatsApp del autorizador. */}
+      <FirmaOtpModal
+        open={firmarOpen}
+        onClose={() => setFirmarOpen(false)}
+        titulo={aprob.firstBy ? "Firmar la 2ª aprobación" : "Firmar la aprobación"}
+        textoBoton={aprob.firstBy ? "Dar 2ª firma" : "Aprobar orden"}
+        queFirma={
+          <>
+            Orden <b>{order.tid}</b> · {order.supplier?.name ?? "sin proveedor"} · <b>{cop(order.total)}</b>
+          </>
+        }
+        solicitar={pedirCodigoFirma}
+        firmar={firmarAprobacion}
+      />
+
+      {/* Editar orden (solo pendiente): cabecera + reemplazo de ítems. */}
+      <Modal open={editOpen} onClose={() => setEditOpen(false)} title={`Editar orden ${order.tid}`} maxWidth="max-w-3xl">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Field label="Fecha de la orden"><Input type="date" value={editDate} onChange={(e) => setEditDate(e.target.value)} /></Field>
+          <Field label="Vence"><Input type="date" value={editDue} onChange={(e) => setEditDue(e.target.value)} /></Field>
+        </div>
+        <div className="mt-3">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-[12px] font-semibold text-text-secondary">Ítems</span>
+            <Button variant="secondary" size="sm" onClick={() => setEditRows((p) => [...p, { product: "", qty: "1", price: "0", taxRate: "0" }])}><Icon name="plus" size={13} /> Agregar</Button>
+          </div>
+          <div className="flex max-h-72 flex-col gap-2 overflow-y-auto pr-1">
+            {editRows.map((r, i) => (
+              <div key={i} className="flex flex-wrap items-center gap-2">
+                <Input className="min-w-0 flex-1" placeholder="Descripción" value={r.product} onChange={(e) => setEditRows((p) => p.map((x, idx) => idx === i ? { ...x, product: e.target.value } : x))} />
+                <Input type="number" min={0} className="w-20 text-right" title="Cantidad" value={r.qty} onChange={(e) => setEditRows((p) => p.map((x, idx) => idx === i ? { ...x, qty: e.target.value } : x))} />
+                <Input type="number" min={0} className="w-28 text-right" title="Precio" value={r.price} onChange={(e) => setEditRows((p) => p.map((x, idx) => idx === i ? { ...x, price: e.target.value } : x))} />
+                <Input type="number" min={0} className="w-20 text-right" title="IVA %" value={r.taxRate} onChange={(e) => setEditRows((p) => p.map((x, idx) => idx === i ? { ...x, taxRate: e.target.value } : x))} />
+                <button onClick={() => setEditRows((p) => p.length > 1 ? p.filter((_, idx) => idx !== i) : p)} className="tap text-text-tertiary hover:text-error-text" aria-label="Quitar"><Icon name="x" size={15} /></button>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="mt-3"><Field label="Nota"><Textarea rows={2} value={editNotes} onChange={(e) => setEditNotes(e.target.value)} /></Field></div>
+        <p className="mt-2 text-[12px] text-text-tertiary">Al editar los ítems, cualquier firma de aprobación previa se reinicia (lo firmado ya no es lo mismo).</p>
+        <div className="mt-3 flex justify-end gap-2">
+          <Button variant="secondary" onClick={() => setEditOpen(false)} disabled={editSaving}>Cancelar</Button>
+          <Button variant="primary" onClick={guardarEdicion} disabled={editSaving}>{editSaving ? "Guardando…" : "Guardar cambios"}</Button>
+        </div>
+      </Modal>
 
       <Modal open={payOpen} onClose={() => setPayOpen(false)} title="Registrar pago a proveedor" maxWidth="max-w-md">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -309,6 +593,89 @@ export default function OrdenDetallePage() {
           <Button variant="primary" onClick={submitNote} disabled={notesaving}>{notesaving ? "Guardando…" : "Aplicar nota"}</Button>
         </div>
       </Modal>
+
+      {confirmar?.kind === "cancelar" && (
+        <ConfirmDialog
+          open
+          busy={confirmBusy}
+          onClose={() => setConfirmar(null)}
+          onConfirm={() => void cancelar()}
+          tone="danger"
+          icon="x"
+          title={`Cancelar la orden ${order.tid}`}
+          confirmLabel="Cancelar orden"
+          message={<>La orden queda <b>cancelada</b> y no admite pagos, recepciones ni notas. Solo se puede cancelar una orden sin pagos y sin material recibido.</>}
+          detail={
+            <Field label="Motivo (queda en la bitácora)">
+              <Input value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} placeholder="Opcional" />
+            </Field>
+          }
+        />
+      )}
+
+      {confirmar?.kind === "finalizar" && (
+        <ConfirmDialog
+          open
+          busy={confirmBusy}
+          onClose={() => setConfirmar(null)}
+          onConfirm={() => void finalizar()}
+          icon="check"
+          title={`Finalizar la orden ${order.tid}`}
+          confirmLabel="Finalizar"
+          message={<>Cierra el ciclo de la orden: exige <b>saldo en cero</b> y, en compras, todo el material recibido. Una orden finalizada ya no se modifica.</>}
+        />
+      )}
+
+      {confirmar?.kind === "borrar-adjunto" && (
+        <ConfirmDialog
+          open
+          busy={confirmBusy}
+          onClose={() => setConfirmar(null)}
+          onConfirm={() => void borrarAdjunto(confirmar.file)}
+          tone="danger"
+          icon="trash"
+          title="Eliminar adjunto"
+          confirmLabel="Eliminar"
+          message={<>Se elimina <b>{confirmar.file.name}</b> de la orden. El archivo no se puede recuperar.</>}
+        />
+      )}
+
+      {confirmar?.kind === "borrar-nota" && (
+        <ConfirmDialog
+          open
+          busy={confirmBusy}
+          onClose={() => setConfirmar(null)}
+          onConfirm={() => void removeNote(confirmar.nota.id)}
+          tone="danger"
+          icon="trash"
+          title="Eliminar nota de la orden"
+          confirmLabel="Eliminar nota"
+          message={
+            <>
+              La línea se quita de la orden y el <b>total neto se recalcula</b>: el saldo pendiente
+              con el proveedor cambia. El total no puede quedar por debajo de lo ya pagado.
+            </>
+          }
+          detail={
+            <div className="rounded-lg border border-border-subtle bg-surface-2 p-2.5">
+              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12px]">
+                <dt className="text-text-tertiary">Tipo</dt>
+                <dd className="text-right text-text-primary">{confirmar.nota.type}</dd>
+                {confirmar.nota.description ? (
+                  <>
+                    <dt className="text-text-tertiary">Descripción</dt>
+                    <dd className="min-w-0 break-words text-right text-text-primary">{confirmar.nota.description}</dd>
+                  </>
+                ) : null}
+                <dt className="text-text-tertiary">Importe</dt>
+                <dd className="text-right font-mono text-text-primary">{confirmar.nota.amount < 0 ? "-" : "+"}{cop(Math.abs(confirmar.nota.amount))}</dd>
+                <dt className="text-text-tertiary">Total actual</dt>
+                <dd className="text-right font-mono text-text-primary">{cop(order.total ?? 0)}</dd>
+              </dl>
+            </div>
+          }
+        />
+      )}
     </>
   );
 }

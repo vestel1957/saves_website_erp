@@ -4,14 +4,8 @@ import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Icon } from "@/components/Icon";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { RecuperarClave } from "@/components/login/RecuperarClave";
 import { useAuth } from "@/context/AuthProvider";
-
-const DEMO_ACCOUNTS = [
-  { label: "Superadmin", email: "admin@bhdc.dev", password: "admin123", icon: "shield-check", hint: "Acceso total" },
-  { label: "Contador", email: "contador@bhdc.dev", password: "contador123", icon: "calculator", hint: "Contabilidad" },
-  { label: "Jefe de bodega", email: "bodega@bhdc.dev", password: "bodega123", icon: "warehouse", hint: "Inventario" },
-  { label: "Auditoría", email: "consulta@bhdc.dev", password: "consulta123", icon: "search", hint: "Solo lectura" },
-];
 
 function LoginForm() {
   const router = useRouter();
@@ -24,6 +18,9 @@ function LoginForm() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  /** El asistente de recuperación reemplaza al formulario (no es un modal encima). */
+  const [recuperando, setRecuperando] = useState(false);
+  const [recuperada, setRecuperada] = useState(false);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -37,12 +34,6 @@ function LoginForm() {
       setError((err as Error).message);
       setLoading(false);
     }
-  }
-
-  function quickFill(account: (typeof DEMO_ACCOUNTS)[number]) {
-    setEmail(account.email);
-    setPassword(account.password);
-    setError("");
   }
 
   return (
@@ -92,13 +83,26 @@ function LoginForm() {
           <ThemeToggle />
         </div>
 
-        <div className="w-full max-w-sm">
-          {/* logo compacto para móvil */}
-          <div className="mb-8 flex items-center gap-2.5 lg:hidden">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/logo-vestel.png" alt="Vestel" className="h-10 w-auto shrink-0" />
-          </div>
+        {/* logo compacto para móvil */}
+        <div className="mb-8 flex w-full max-w-sm items-center gap-2.5 lg:hidden">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo-vestel.png" alt="Vestel" className="h-10 w-auto shrink-0" />
+        </div>
 
+        {recuperando ? (
+          <RecuperarClave
+            correoInicial={email}
+            onVolver={() => setRecuperando(false)}
+            onListo={(correo) => {
+              setEmail(correo);
+              setPassword("");
+              setError("");
+              setRecuperando(false);
+              setRecuperada(true);
+            }}
+          />
+        ) : (
+        <div className="w-full max-w-sm">
           <h1 className="text-[22px] font-bold text-text-primary">Inicia sesión</h1>
           <p className="mt-1 text-[13px] text-text-tertiary">
             Ingresa tus credenciales para acceder a tu espacio de trabajo.
@@ -148,13 +152,20 @@ function LoginForm() {
                 <button
                   type="button"
                   onClick={() => setShowPassword((v) => !v)}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-text-tertiary transition-colors hover:text-text-secondary"
+                  className="tap absolute right-1 top-1/2 -translate-y-1/2 text-text-tertiary transition-colors hover:text-text-secondary"
                   aria-label={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
                 >
                   <Icon name={showPassword ? "eye-off" : "eye"} size={16} />
                 </button>
               </div>
             </div>
+
+            {recuperada && !error && (
+              <div className="flex items-start gap-2 rounded-lg border border-success/30 bg-success-soft px-3 py-2 text-[12px] text-success-text">
+                <Icon name="check" size={15} className="mt-0.5 shrink-0" />
+                <span className="min-w-0">Contraseña cambiada. Entra con la nueva.</span>
+              </div>
+            )}
 
             {error && (
               <div className="flex items-center gap-2 rounded-lg border border-error/30 bg-error-soft px-3 py-2 text-[12px] text-error-text">
@@ -180,39 +191,17 @@ function LoginForm() {
                 </>
               )}
             </button>
-          </form>
 
-          {/* accesos rápidos demo */}
-          <div className="mt-8">
-            <div className="mb-3 flex items-center gap-3">
-              <span className="h-px flex-1 bg-border-subtle" />
-              <span className="text-[11px] font-medium text-text-tertiary">
-                Cuentas de demostración
-              </span>
-              <span className="h-px flex-1 bg-border-subtle" />
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              {DEMO_ACCOUNTS.map((a) => (
-                <button
-                  key={a.email}
-                  type="button"
-                  onClick={() => quickFill(a)}
-                  className="group flex items-center gap-2.5 rounded-lg border border-border-subtle bg-surface px-3 py-2 text-left transition-colors hover:border-border-default hover:bg-surface-2"
-                >
-                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-surface-2 group-hover:bg-surface">
-                    <Icon name={a.icon} size={14} className="text-brand" />
-                  </span>
-                  <span className="flex min-w-0 flex-col leading-tight">
-                    <span className="truncate text-[12px] font-semibold text-text-primary">
-                      {a.label}
-                    </span>
-                    <span className="truncate text-[10px] text-text-tertiary">{a.hint}</span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
+            <button
+              type="button"
+              onClick={() => { setRecuperada(false); setRecuperando(true); }}
+              className="mx-auto inline-flex items-center gap-1.5 text-[12px] font-medium text-text-tertiary transition-colors hover:text-text-secondary"
+            >
+              <Icon name="key-round" size={13} /> ¿Olvidaste tu contraseña?
+            </button>
+          </form>
         </div>
+        )}
       </main>
     </div>
   );

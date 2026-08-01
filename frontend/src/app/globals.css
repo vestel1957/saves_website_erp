@@ -1,26 +1,60 @@
 @import "tailwindcss";
 
 /*
+  Tinte de fondo elegible por el usuario (ver `@/lib/appearance`).
+
+  Cada neutro se lee con `var(--ui-…, <literal>)`: si el usuario no ha elegido
+  tinte, la variable no existe y manda el literal — que es el color de siempre.
+  Cuando elige, `@/lib/appearance` escribe en línea sobre <html> los 16 valores
+  YA MEZCLADOS (ocho por modo).
+
+  La mezcla se hace en JS y no con `color-mix()` en este archivo, aunque sería
+  más corto: al compilar, Lightning CSS genera para los navegadores sin
+  `color-mix` un respaldo que descarta la mezcla y deja el tono crudo — o sea,
+  todas las superficies del mismo color y los bordes invisibles. Con `var()` +
+  literal el respaldo es exactamente el diseño original.
+
+  Que se escriban los DOS modos a la vez es lo que hace que cambiar de tema no
+  tenga que recalcular nada: cada bloque lee su propio juego de variables.
+*/
+
+/*
   Design tokens lifted verbatim from the Pencil design (untitled.pen).
   Exposed through @theme so they become Tailwind utilities, e.g. bg-canvas,
   text-primary, border-subtle, fill-brand, etc.
 */
 @theme {
-  /* surfaces — soft off-white / light gray (intentionally not pure #fff) */
-  --color-canvas: #eaeef4;
-  --color-surface: #f8fafc;
-  --color-surface-2: #eef2f7;
+  /*
+    surfaces — off-white suave (a propósito no es blanco puro), TEÑIBLE.
+
+    El usuario elige un "tinte de fondo" en /perfil?tab=preferencias; el literal
+    de cada `var()` es el valor de siempre, o sea el aspecto por defecto. Ver el
+    comentario de arriba y `@/lib/appearance`.
+
+    El texto NUNCA se tiñe: es el otro lado del par de contraste, y el tinte se
+    calcula precisamente para no moverlo.
+  */
+  --color-canvas: var(--ui-canvas-l, #eaeef4);
+  --color-surface: var(--ui-surface-l, #f8fafc);
+  --color-surface-2: var(--ui-surface2-l, #eef2f7);
 
   /* sidebar (light theme — flips to dark under html.dark) */
-  --color-sidebar: #f8fafc;
-  /* la fila activa deriva del color de marca elegido (antes cian fijo) */
-  --color-sidebar-active: color-mix(in srgb, var(--color-brand) 14%, var(--color-surface));
-  --color-sidebar-hover: #eaeff5;
+  --color-sidebar: var(--ui-sidebar-l, #f8fafc);
+  /*
+    La fila activa y `brand-soft` derivan del color de marca elegido, y se
+    mezclan sobre el neutro LITERAL, no sobre `var(--color-surface)`: si se
+    apunta a la variable, Lightning CSS ya no puede precalcular el respaldo para
+    navegadores sin `color-mix` y lo degrada al color de marca a pleno — texto de
+    marca sobre fondo de marca, o sea ilegible. El precio es que estos dos tonos
+    no siguen al tinte de fondo; a cambio nunca se rompen.
+  */
+  --color-sidebar-active: color-mix(in srgb, var(--color-brand) 14%, #f8fafc);
+  --color-sidebar-hover: var(--ui-sidebar-hover-l, #eaeff5);
 
   /* borders */
-  --color-border-subtle: #d9e0ea;
-  --color-border-default: #c3ccd8;
-  --color-border-strong: #93a0b2;
+  --color-border-subtle: var(--ui-border-subtle-l, #d9e0ea);
+  --color-border-default: var(--ui-border-default-l, #c3ccd8);
+  --color-border-strong: var(--ui-border-strong-l, #93a0b2);
   --color-border-focus: var(--color-brand);
 
   /* text — valores subidos para garantizar WCAG AA sobre --color-surface */
@@ -32,14 +66,14 @@
   --color-text-inverse: #ffffff;
 
   /*
-    brand — el color primario es elegible por el usuario (BrandColorPicker).
+    brand — el color primario lo elige el usuario en /perfil?tab=preferencias.
     --color-brand lo puede sobreescribir el JS en runtime; los tonos derivados
     (hover/soft/ring) salen de color-mix, y --color-on-brand (texto legible
     sobre la marca) lo fija el picker por luminancia. NO hardcodear tonos.
   */
   --color-brand: #0e7490;          /* primary teal — default */
   --color-brand-hover: color-mix(in oklab, var(--color-brand), #000 16%);
-  --color-brand-soft: color-mix(in srgb, var(--color-brand) 12%, var(--color-surface));
+  --color-brand-soft: color-mix(in srgb, var(--color-brand) 12%, #f8fafc);
   --color-brand-ring: color-mix(in srgb, var(--color-brand) 30%, transparent);
   --color-on-brand: #ffffff;       /* lo recalcula el picker (blanco vs. oscuro) */
   --color-accent: var(--color-brand);
@@ -69,6 +103,30 @@
   --color-info-soft: #e4eef7;
   --color-info-text: #035aa6;
 
+  /*
+    ── series de gráficas ──────────────────────────────────────────────────────
+    Pasos de los mismos hues de la marca (azul, naranja, verde, rojo), pero
+    ELEGIDOS, no reciclados de los tokens semánticos: los de arriba no sirven
+    como paleta categórica porque el teal de marca y el azul del logo se
+    diferencian en ΔE 5,9 — a ojo son el mismo color, y bajo daltonismo
+    protán/deután, peor.
+
+    Estos cuatro pasos pasan las seis comprobaciones (banda de luminosidad,
+    croma mínimo, separación bajo daltonismo, suelo de visión normal y
+    contraste contra la superficie) en claro y en oscuro, con su propia
+    versión para cada modo — el oscuro NO es el claro "aclarado".
+
+    Si tocas un valor, revalida: es una comprobación que se corre, no que se
+    razona (validate_palette.js del skill de dataviz).
+    En claro, azul/naranja/verde quedan por debajo de 3:1 contra el fondo, así
+    que las gráficas que los usan llevan SIEMPRE etiqueta directa o leyenda con
+    su valor — nunca sólo el color.
+  */
+  --chart-1: #0068aa;   /* azul   — recaudo / transferencia */
+  --chart-2: #f18731;   /* naranja— TV / otros medios */
+  --chart-3: #33b477;   /* verde  — efectivo / ingresos */
+  --chart-4: #c90a22;   /* rojo   — egresos */
+
   /* radii */
   --radius-sm: 6px;
   --radius-md: 8px;
@@ -84,21 +142,21 @@
   regardless of specificity. Toggled via the ThemeToggle button in the navbar.
 */
 html.dark {
-  /* surfaces */
-  --color-canvas: #080d18;
-  --color-surface: #0f1728;
-  --color-surface-2: #18213a;
+  /* surfaces — mismas bases de siempre, teñidas con el tinte elegido */
+  --color-canvas: var(--ui-canvas-d, #080d18);
+  --color-surface: var(--ui-surface-d, #0f1728);
+  --color-surface-2: var(--ui-surface2-d, #18213a);
 
   /* sidebar */
-  --color-sidebar: #0a1120;
+  --color-sidebar: var(--ui-sidebar-d, #0a1120);
   /* deriva del color de marca (antes cian fijo) */
-  --color-sidebar-active: color-mix(in srgb, var(--color-brand) 26%, var(--color-sidebar));
-  --color-sidebar-hover: #18223a;
+  --color-sidebar-active: color-mix(in srgb, var(--color-brand) 26%, #0a1120);
+  --color-sidebar-hover: var(--ui-sidebar-hover-d, #18223a);
 
   /* borders */
-  --color-border-subtle: #1e293e;
-  --color-border-default: #2c3a52;
-  --color-border-strong: #4a5a72;
+  --color-border-subtle: var(--ui-border-subtle-d, #1e293e);
+  --color-border-default: var(--ui-border-default-d, #2c3a52);
+  --color-border-strong: var(--ui-border-strong-d, #4a5a72);
   --color-border-focus: var(--color-brand);
 
   /* text — subidos para contraste sobre superficies oscuras */
@@ -114,7 +172,7 @@ html.dark {
     superficie oscura, así el color elegido por el usuario se lee bien sobre negro.
   */
   --color-brand-hover: color-mix(in oklab, var(--color-brand), #fff 14%);
-  --color-brand-soft: color-mix(in srgb, var(--color-brand) 26%, var(--color-surface));
+  --color-brand-soft: color-mix(in srgb, var(--color-brand) 26%, #0f1728);
   --color-accent: var(--color-brand);
 
   /* ai */
@@ -130,6 +188,16 @@ html.dark {
   --color-warning-text: #f2c14e;
   --color-info-soft: #07263e;
   --color-info-text: #7cc0ec;
+
+  /*
+    Series de gráficas en oscuro: pasos propios, más saturados y en la banda de
+    luminosidad que pide un fondo oscuro (L 0,48–0,67). Aquí los cuatro superan
+    3:1 contra la superficie, así que no dependen de la etiqueta para leerse.
+  */
+  --chart-1: #006eb3;
+  --chart-2: #da6c00;
+  --chart-3: #36a66f;
+  --chart-4: #c7222b;
 }
 
 html,
@@ -179,6 +247,19 @@ html.dark *::-webkit-scrollbar-thumb {
 /* gradiente decorativo cálido (dorado → naranja) */
 .sun-gradient {
   background: linear-gradient(160deg, var(--color-brand-gold) 0%, var(--color-brand-orange) 100%);
+}
+
+/*
+  Área táctil mínima para botones de icono.
+
+  Un botón que solo envuelve un <Icon size={14}> mide 14×14 px reales: con el
+  dedo es casi imposible acertarle (WCAG 2.2 AA pide 24×24 y las guías de iOS y
+  Android hablan de 44 y 48). `tap` reserva 32×32 de zona pulsable SIN agrandar
+  el icono — el relleno crece alrededor, así que el aspecto en escritorio no
+  cambia y en móvil el objetivo pasa a ser alcanzable.
+*/
+.tap {
+  @apply inline-flex min-h-8 min-w-8 items-center justify-center;
 }
 
 /* Controles de formulario reutilizables (usados en administración / modales). */

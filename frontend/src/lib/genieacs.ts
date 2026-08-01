@@ -38,6 +38,12 @@ export type CpeRow = {
   alive: boolean;
   tvSuspended: boolean;
   tags: string[];
+  /** ONU sin TR-069: viene del inventario de la OLT; su TV se corta por OMCI. */
+  source?: "olt";
+  oltId?: string;
+  oltName?: string;
+  fsp?: string;
+  runState?: string | null;
 };
 
 export type GenieacsLog = {

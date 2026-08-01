@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Icon } from "@/components/Icon";
 import { PageHeading } from "@/components/ui/PageHeading";
-import { DataTable } from "@/components/ui/DataTable";
+import { PagedTable } from "@/components/ui/PagedTable";
+import { ListToolbar } from "@/components/ui/ListToolbar";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { toast } from "@/components/ui/Toast";
@@ -24,6 +25,7 @@ export default function MikrotikPanelPage() {
   const [testing, setTesting] = useState<string | null>(null);
   const [testingAll, setTestingAll] = useState(false);
   const [modal, setModal] = useState<{ router: MkRouter | null } | null>(null);
+  const [search, setSearch] = useState("");
   const [toDelete, setToDelete] = useState<MkRouter | null>(null);
   const [deleting, setDeleting] = useState(false);
 
@@ -89,13 +91,22 @@ export default function MikrotikPanelPage() {
     }
   };
 
+  // Filtro en cliente sobre lo ya cargado (nombre, IP, tecnología, sede, usuario).
+  const shown = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return routers;
+    return routers.filter((r) =>
+      [r.name, r.ip, r.tech, r.branch, r.username].some((v) => (v ?? "").toLowerCase().includes(q)),
+    );
+  }, [routers, search]);
+
   if (authLoading || (loading && !routers.length)) return <PageSkeleton />;
 
   const online = routers.filter((r) => r.online).length;
 
   return (
     <>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <PageHeading
           icon="router"
           title="Gestión Mikrotik"
@@ -111,9 +122,11 @@ export default function MikrotikPanelPage() {
         </div>
       </div>
 
-      <DataTable
-        rows={routers}
-        empty="No hay Mikrotiks registrados. Pulse «Agregar Mikrotik» para crear el primero."
+      <ListToolbar search={search} onSearch={setSearch} searchPlaceholder="Buscar por nombre, IP, tecnología, sede o usuario…" />
+
+      <PagedTable
+        rows={shown}
+        empty={search ? "Ningún Mikrotik coincide con la búsqueda." : "No hay Mikrotiks registrados. Pulse «Agregar Mikrotik» para crear el primero."}
         onRowClick={(r) => nav.push(`/mikrotik/${r.id}`)}
         columns={[
           { key: "name", header: "Nombre", render: (r) => (
@@ -131,19 +144,19 @@ export default function MikrotikPanelPage() {
           { key: "acc", header: "Acciones", align: "right", render: (r) => (
             <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
               <button title="Probar conexión" disabled={testing === r.id} onClick={() => test(r)}
-                className="rounded p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-brand disabled:opacity-50">
+                className="tap rounded p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-brand disabled:opacity-50">
                 <Icon name={testing === r.id ? "loader" : "zap"} size={15} className={testing === r.id ? "animate-spin" : ""} />
               </button>
               <button title="Operar" onClick={() => nav.push(`/mikrotik/${r.id}`)}
-                className="rounded p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-brand"><Icon name="settings" size={15} /></button>
+                className="tap rounded p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-brand"><Icon name="settings" size={15} /></button>
               {r.sedeRouters > 1 && !r.isDefault && (
                 <button title="Marcar por defecto de la sede" onClick={() => setDefault(r)}
-                  className="rounded p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-success-text"><Icon name="flag" size={15} /></button>
+                  className="tap rounded p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-success-text"><Icon name="flag" size={15} /></button>
               )}
               <button title="Editar" onClick={() => setModal({ router: r })}
-                className="rounded p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-brand"><Icon name="pencil" size={15} /></button>
+                className="tap rounded p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-brand"><Icon name="pencil" size={15} /></button>
               <button title="Eliminar" onClick={() => setToDelete(r)}
-                className="rounded p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-error-text"><Icon name="trash" size={15} /></button>
+                className="tap rounded p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-error-text"><Icon name="trash" size={15} /></button>
             </div>
           ) },
         ]}

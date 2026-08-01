@@ -14,6 +14,7 @@ import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { useAuth } from "@/context/AuthProvider";
 import { GenieacsServerModal } from "@/components/network/GenieacsServerModal";
 import { CpeDetailModal } from "@/components/network/CpeDetailModal";
+import { OltCatvModal } from "@/components/network/OltCatvModal";
 import {
   ESTADO_OPTIONS, informExact, informLabel, informTone,
   type CpeRow, type GenieacsDashboard, type GenieacsMode, type GenieacsServer, type Paged, type TvBatchResult,
@@ -45,6 +46,8 @@ export default function GenieacsPage() {
 
   // modales / acciones
   const [serverModal, setServerModal] = useState(false);
+  // null = cerrado; {} = abierto vacío; {sn, oltId} = abierto desde una fila OLT (auto-busca).
+  const [oltCatv, setOltCatv] = useState<null | { sn?: string; oltId?: string }>(null);
   const [editServer, setEditServer] = useState<GenieacsServer | null>(null);
   const [detail, setDetail] = useState<CpeRow | null>(null);
   const [confirm, setConfirm] = useState<null | { enable: boolean }>(null);
@@ -182,7 +185,7 @@ export default function GenieacsPage() {
 
   return (
     <>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <PageHeading icon="tv" title="GenieACS · TR-069" subtitle="Cortes masivos de TV sobre los CPEs de fibra" />
         <div className="flex items-center gap-2">
           {mode && <Badge label={mode.live ? "MODO LIVE" : "DRY-RUN (simulación)"} tone={mode.live ? "error" : "info"} />}
@@ -205,6 +208,11 @@ export default function GenieacsPage() {
           </Button>
           <Button variant="secondary" disabled={busy || noServer} onClick={installProvision} title="Instala en el ACS el provision+preset que sostienen el corte entre informs">
             <Icon name="wand-sparkles" size={15} className="mr-1" />Instalar provision
+          </Button>
+          {/* Las ONTs combo sin TR-069 no aparecen en el inventario del ACS:
+              su corte de TV va por la OLT (puerto CATV, OMCI). */}
+          <Button variant="secondary" onClick={() => setOltCatv({})} title="Cortar/activar la TV de ONTs sin TR-069 (la palanca es el puerto CATV en la OLT)">
+            <Icon name="zap" size={15} className="mr-1" />Corte por OLT
           </Button>
         </div>
       </div>
@@ -304,7 +312,7 @@ export default function GenieacsPage() {
           <DataTable
             rows={page?.items ?? []}
             empty={invLoading ? "Cargando…" : "Sin CPEs para el filtro."}
-            onRowClick={(r: CpeRow) => setDetail(r)}
+            onRowClick={(r: CpeRow) => (r.source === "olt" ? setOltCatv({ sn: r.serial ?? undefined, oltId: r.oltId }) : setDetail(r))}
             sort={sort}
             onSort={toggleSort}
             columns={[
@@ -319,7 +327,8 @@ export default function GenieacsPage() {
                   />
                 ),
                 render: (r: CpeRow) => (
-                  <input type="checkbox" aria-label={`Seleccionar ${r.pppUser || r.id}`} checked={sel.has(r.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggle(r)} />
+                  // Las ONUs sin TR-069 no entran al corte masivo del ACS: su TV va por la OLT.
+                  <input type="checkbox" aria-label={`Seleccionar ${r.pppUser || r.id}`} checked={sel.has(r.id)} disabled={r.source === "olt"} onClick={(e) => e.stopPropagation()} onChange={() => toggle(r)} />
                 ),
               },
               { key: "pppUser", header: "Abonado (PPPoE)", sortable: true, render: (r: CpeRow) => (
@@ -328,14 +337,22 @@ export default function GenieacsPage() {
                   <span className="font-medium text-text-primary">{r.pppUser || <span className="text-text-tertiary">—</span>}</span>
                 </span>
               ) },
-              { key: "model", header: "Marca / Modelo", sortable: true, render: (r: CpeRow) => <span className="text-text-secondary">{r.manufacturer || "?"} · {r.model || "?"}</span> },
+              { key: "model", header: "Marca / Modelo", sortable: true, render: (r: CpeRow) => (
+                r.source === "olt"
+                  ? <span className="text-text-secondary">Sin TR-069 · OLT {r.oltName || "?"}{r.fsp ? ` (${r.fsp})` : ""}</span>
+                  : <span className="text-text-secondary">{r.manufacturer || "?"} · {r.model || "?"}</span>
+              ) },
               { key: "serial", header: "Serial", sortable: true, render: (r: CpeRow) => <span className="font-mono text-[12px] text-text-secondary">{r.serial || "—"}</span> },
               { key: "wanIp", header: "IP WAN", sortable: true, render: (r: CpeRow) => <span className="font-mono text-text-secondary">{r.wanIp || "—"}</span> },
               { key: "inform", header: "Último inform", sortable: true, render: (r: CpeRow) => (
-                <span title={informExact(r.lastInform)}><Badge label={informLabel(r.daysSince)} tone={informTone(r.daysSince)} /></span>
+                r.source === "olt"
+                  ? <Badge label={r.runState || "sin sync"} tone={r.alive ? "success" : "default"} />
+                  : <span title={informExact(r.lastInform)}><Badge label={informLabel(r.daysSince)} tone={informTone(r.daysSince)} /></span>
               ) },
               { key: "tv", header: "TV", align: "right", sortable: true, render: (r: CpeRow) => (
-                <Badge label={r.tvSuspended ? "Suspendida" : "Activa"} tone={r.tvSuspended ? "error" : "success"} />
+                r.source === "olt"
+                  ? <span title="El estado real de la TV se lee de la OLT al abrir la fila"><Badge label="Corte por OLT" tone="info" /></span>
+                  : <Badge label={r.tvSuspended ? "Suspendida" : "Activa"} tone={r.tvSuspended ? "error" : "success"} />
               ) },
             ]}
           />
@@ -353,6 +370,8 @@ export default function GenieacsPage() {
       )}
 
       <GenieacsServerModal open={serverModal} onClose={() => setServerModal(false)} onSaved={loadTop} server={editServer} />
+
+      <OltCatvModal open={!!oltCatv} onClose={() => setOltCatv(null)} initialSn={oltCatv?.sn} initialOltId={oltCatv?.oltId} />
 
       <CpeDetailModal cpe={detail} onClose={() => setDetail(null)} onChanged={() => { void loadTop(); void loadInventory(); }} />
 

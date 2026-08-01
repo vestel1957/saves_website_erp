@@ -2,12 +2,15 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { Icon } from "./Icon";
+import { UserAvatar } from "./UserAvatar";
+import { Dropdown, MenuItem } from "./ui/Dropdown";
 import { navSections, activeNavHref, type NavItem, type NavSection } from "@/lib/nav";
 import { useAuth } from "@/context/AuthProvider";
 import { useSidebar } from "@/context/SidebarProvider";
-import { can, initials } from "@/lib/auth";
+import { useNotifications } from "@/context/NotificationsProvider";
+import { can } from "@/lib/auth";
 
 function rowClass(active: boolean, collapsed: boolean) {
   return `group relative flex w-full items-center rounded-md text-left text-[13px] transition-colors ${
@@ -19,6 +22,15 @@ function rowClass(active: boolean, collapsed: boolean) {
   }`;
 }
 
+/**
+ * Hojas cuyo distintivo NO es fijo: sale de los avisos sin leer del módulo (la clave
+ * es el prefijo de `kind`, p. ej. `whatsapp.mensaje` → `whatsapp`). Un `badge` fijo en
+ * `nav.ts` no sirve para esto: el número depende de quién esté mirando.
+ */
+const DISTINTIVO_POR_HREF: Record<string, string> = {
+  "/whatsapp": "whatsapp",
+};
+
 function RowContent({
   item,
   active,
@@ -28,19 +40,39 @@ function RowContent({
   active: boolean;
   collapsed: boolean;
 }) {
+  const { porModulo } = useNotifications();
+  const modulo = item.href ? DISTINTIVO_POR_HREF[item.href] : undefined;
+  const pendientes = modulo ? porModulo[modulo] ?? 0 : 0;
+  const llama = pendientes > 0; // hay algo sin leer: la fila se recalca
+
   return (
     <>
       {/* barra de acento izquierda del ítem activo (solo expandido) */}
       {active && !collapsed && (
         <span className="absolute -left-3 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-brand" />
       )}
-      <Icon
-        name={item.icon}
-        size={16}
-        className={active ? "text-brand" : item.iconClass ?? "text-text-sidebar"}
-      />
-      {!collapsed && <span className="flex-1">{item.label}</span>}
+      <span className="relative flex shrink-0 items-center">
+        <Icon
+          name={item.icon}
+          size={16}
+          className={active ? "text-brand" : llama ? "text-brand" : item.iconClass ?? "text-text-sidebar"}
+        />
+        {/* En modo riel no hay etiqueta ni sitio para el número: un punto basta para
+            que se vea que ahí hay algo esperando. */}
+        {llama && collapsed && (
+          <span className="absolute -right-1 -top-1 h-2 w-2 rounded-full border-[1.5px] border-sidebar bg-error" />
+        )}
+      </span>
+      {!collapsed && (
+        <span className={`flex-1 ${llama ? "font-semibold text-text-primary" : ""}`}>{item.label}</span>
+      )}
+      {!collapsed && llama && (
+        <span className="rounded-full bg-error px-1.5 py-px text-[10px] font-bold text-white">
+          {pendientes > 99 ? "99+" : pendientes}
+        </span>
+      )}
       {!collapsed &&
+        !llama &&
         item.badge &&
         (item.badgeKind === "ai" ? (
           <span className="ai-gradient rounded-full px-1.5 py-px text-[9px] font-bold text-white">
@@ -165,7 +197,7 @@ function NavSection({
     <div className="flex flex-col">
       <button
         onClick={onToggle}
-        className="flex items-center gap-1 px-2.5 pb-1.5 pt-1 text-[10px] font-semibold tracking-wider text-text-sidebar-muted transition-colors hover:text-text-sidebar"
+        className="flex min-h-8 items-center gap-1 px-2.5 pb-1.5 pt-1 text-[10px] font-semibold tracking-wider text-text-sidebar-muted transition-colors hover:text-text-sidebar lg:min-h-0"
       >
         <Icon
           name="chevron-down"
@@ -227,6 +259,69 @@ function sectionOf(pathname: string): string | null {
     if (s.items.flatMap(itemLeaves).some((l) => l.href === href)) return s.title;
   }
   return null;
+}
+
+/**
+ * Menú de cuenta al pie del sidebar.
+ *
+ * En modo riel el disparador es sólo el avatar (no hay ancho para más); expandido
+ * es la fila completa con nombre y rol. El panel se abre hacia arriba solo: el
+ * `Dropdown` mide el espacio disponible.
+ */
+function MenuUsuario({ railMode, roleLabel }: { railMode: boolean; roleLabel: string }) {
+  const router = useRouter();
+  const { user, logout } = useAuth();
+
+  const trigger = railMode ? (
+    <UserAvatar size={36} />
+  ) : (
+    <div className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg p-2 transition-colors hover:bg-sidebar-hover">
+      <UserAvatar size={32} />
+      <div className="flex min-w-0 flex-col text-left leading-tight">
+        <span className="truncate text-[13px] font-semibold text-text-primary">
+          {user?.name ?? "Invitado"}
+        </span>
+        <span className="truncate text-[11px] text-text-sidebar-muted">{roleLabel}</span>
+      </div>
+      <Icon name="chevron-up" size={14} className="ml-auto shrink-0 text-text-sidebar-muted" />
+    </div>
+  );
+
+  return (
+    <div className={railMode ? "" : "min-w-0 flex-1"}>
+      <Dropdown align="left" width={248} trigger={trigger}>
+        {({ close }) => (
+          <>
+            <div className="flex items-center gap-2.5 px-2.5 pb-2 pt-1">
+              <UserAvatar size={36} />
+              <div className="flex min-w-0 flex-col leading-tight">
+                <span className="truncate text-[13px] font-semibold text-text-primary">
+                  {user?.name ?? "Invitado"}
+                </span>
+                <span className="truncate text-[11px] text-text-tertiary">{user?.email ?? roleLabel}</span>
+              </div>
+            </div>
+            <div className="px-2.5 pb-2">
+              <span className="inline-flex items-center gap-1 rounded-full bg-brand-soft px-2 py-0.5 text-[10px] font-semibold text-brand">
+                <Icon name="shield-check" size={11} /> {roleLabel}
+              </span>
+            </div>
+            <div className="my-1 h-px bg-border-subtle" />
+            {/* Solo dos entradas: dentro del perfil ya están las pestañas de
+                seguridad, preferencias y accesos. Repetirlas aquí era ofrecer
+                dos caminos a lo mismo. */}
+            <MenuItem onClick={() => { close(); router.push("/perfil"); }}>
+              <Icon name="user" size={15} className="text-text-tertiary" /> Mi perfil
+            </MenuItem>
+            <div className="my-1 h-px bg-border-subtle" />
+            <MenuItem danger onClick={() => { close(); void logout(); }}>
+              <Icon name="log-out" size={15} className="text-error-text" /> Cerrar sesión
+            </MenuItem>
+          </>
+        )}
+      </Dropdown>
+    </div>
+  );
 }
 
 export function Sidebar() {
@@ -318,33 +413,16 @@ export function Sidebar() {
           )}
         </nav>
 
-        {/* user */}
+        {/* Bloque de usuario: ÚNICO menú de cuenta de la app (el navbar ya no lo
+            duplica). De aquí cuelgan perfil, preferencias y cerrar sesión. */}
         <div className={railMode ? "px-2 pb-4" : "px-3 pb-4"}>
           <div
             className={`flex items-center gap-2 border-t border-sidebar-hover pt-3 ${
               railMode ? "justify-center" : ""
             }`}
           >
-            {railMode ? (
-            <span
-              title={user?.name ?? "Invitado"}
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent text-xs font-semibold text-white"
-            >
-              {user ? initials(user.name) : "··"}
-            </span>
-          ) : (
-            <>
-              <div className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg p-2">
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-xs font-semibold text-white">
-                  {user ? initials(user.name) : "··"}
-                </span>
-                <div className="flex min-w-0 flex-col text-left leading-tight">
-                  <span className="truncate text-[13px] font-semibold text-text-primary">
-                    {user?.name ?? "Invitado"}
-                  </span>
-                  <span className="truncate text-[11px] text-text-sidebar-muted">{roleLabel}</span>
-                </div>
-              </div>
+            <MenuUsuario railMode={railMode} roleLabel={roleLabel} />
+            {!railMode && (
               <button
                 onClick={() => void logout()}
                 title="Cerrar sesión"
@@ -353,8 +431,7 @@ export function Sidebar() {
               >
                 <Icon name="log-out" size={16} />
               </button>
-            </>
-          )}
+            )}
           </div>
         </div>
       </aside>

@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { PageHeading } from "@/components/ui/PageHeading";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Modal } from "@/components/Modal";
@@ -10,6 +11,7 @@ import { Icon } from "@/components/Icon";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { SUB_STATUS_LABEL } from "@/lib/subscribers";
+import { BotonOrden, useTablaOrdenable } from "@/components/ui/tabla-ordenable";
 import {
   type Promotion, type PromotionAssignee, type PromotionAssignmentLog, type DiscountFormat,
   DISCOUNT_FORMAT_OPTIONS, discountLabel, isFlatDiscount, isBeforeTaxDiscount,
@@ -18,7 +20,7 @@ import {
 const STATUS_KEYS = Object.keys(SUB_STATUS_LABEL);
 const statusText = (s: string | null) => (s ? SUB_STATUS_LABEL[s] ?? s : "");
 
-type StaffOption = { id: string; name: string; username: string | null; area: string | null };
+type StaffOption = { id: string; name: string; area: string | null };
 
 // Tipo de promoción (nombres fieles al legacy settings/promociones):
 //  ingresar = campaña disponible para TODOS los funcionarios (legacy colaborador=null)
@@ -61,20 +63,32 @@ const isProgramada = (p: Promotion) => p.active && !p.vigente && new Date(p.star
 function HistoryTable({ rows, showPromo }: { rows: PromotionAssignmentLog[] | null; showPromo: boolean }) {
   if (!rows) return <p className="text-[13px] text-text-tertiary">Cargando…</p>;
   if (rows.length === 0) return <p className="text-[13px] text-text-tertiary">Sin movimientos de asignación todavía.</p>;
+  return <HistoryRows rows={rows} showPromo={showPromo} />;
+}
+
+/** Filas del historial, separadas para poder usar el hook de orden. */
+function HistoryRows({ rows, showPromo }: { rows: PromotionAssignmentLog[]; showPromo: boolean }) {
+  const t = useTablaOrdenable(rows, {
+    fecha: (h) => h.createdAt,
+    promo: (h) => h.promotionName,
+    funcionario: (h) => h.staffName,
+    accion: (h) => h.action,
+    por: (h) => h.assignedByName,
+  });
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-[12px]">
         <thead>
           <tr className="border-b border-border-subtle text-left text-text-tertiary">
-            <th className="py-1.5 pr-3 font-medium">Fecha</th>
-            {showPromo && <th className="py-1.5 pr-3 font-medium">Promoción</th>}
-            <th className="py-1.5 pr-3 font-medium">Funcionario</th>
-            <th className="py-1.5 pr-3 font-medium">Acción</th>
-            <th className="py-1.5 pr-3 font-medium">Por</th>
+            <th className="py-1.5 pr-3 font-medium"><BotonOrden t={t} clave="fecha">Fecha</BotonOrden></th>
+            {showPromo && <th className="py-1.5 pr-3 font-medium"><BotonOrden t={t} clave="promo">Promoción</BotonOrden></th>}
+            <th className="py-1.5 pr-3 font-medium"><BotonOrden t={t} clave="funcionario">Funcionario</BotonOrden></th>
+            <th className="py-1.5 pr-3 font-medium"><BotonOrden t={t} clave="accion">Acción</BotonOrden></th>
+            <th className="py-1.5 pr-3 font-medium"><BotonOrden t={t} clave="por">Por</BotonOrden></th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((h) => (
+          {t.filas.map((h) => (
             <tr key={h.id} className="border-b border-border-subtle/60">
               <td className="whitespace-nowrap py-1.5 pr-3 text-text-tertiary">{dtstr(h.createdAt)}</td>
               {showPromo && <td className="py-1.5 pr-3 font-medium text-text-primary">{h.promotionName}</td>}
@@ -111,6 +125,8 @@ export default function PromocionesPage() {
   const [staffQuery, setStaffQuery] = useState("");
   const [history, setHistory] = useState<PromotionAssignmentLog[] | null>(null);
   const [historyFor, setHistoryFor] = useState<Promotion | null>(null);
+  const [confirmar, setConfirmar] = useState<Promotion | null>(null);
+  const [borrando, setBorrando] = useState(false);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [tab, setTab] = useState<"promos" | "historial">("promos");
@@ -131,14 +147,14 @@ export default function PromocionesPage() {
     loadHistory();
     void authFetch(`/staff?pageSize=100`)
       .then((r) => (r.ok ? r.json() : { items: [] }))
-      .then((d) => setStaff((d.items ?? []).map((s: any) => ({ id: s.id, name: s.name, username: s.username, area: s.area }))))
+      .then((d) => setStaff((d.items ?? []).map((s: any) => ({ id: s.id, name: s.name, area: s.area }))))
       .catch(() => setStaff([]));
   }, [authFetch, isSuperadmin, load, loadHistory]);
 
   const filteredStaff = useMemo(() => {
     const q = staffQuery.trim().toLowerCase();
     if (!q) return staff;
-    return staff.filter((s) => `${s.name} ${s.username ?? ""} ${s.area ?? ""}`.toLowerCase().includes(q));
+    return staff.filter((s) => `${s.name} ${s.area ?? ""}`.toLowerCase().includes(q));
   }, [staff, staffQuery]);
 
   const visible = useMemo(() => {
@@ -251,7 +267,7 @@ export default function PromocionesPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <PageHeading
           icon="gift"
           title="Promociones"
@@ -335,13 +351,13 @@ export default function PromocionesPage() {
                     </div>
                   )}
                   <div className="mt-auto flex items-center justify-end gap-1 border-t border-border-subtle pt-2">
-                    <button type="button" onClick={() => setHistoryFor(p)} className="rounded-md p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-text-primary" title="Historial de asignaciones">
+                    <button type="button" onClick={() => setHistoryFor(p)} className="tap rounded-md p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-text-primary" title="Historial de asignaciones">
                       <Icon name="history" size={15} />
                     </button>
-                    <button type="button" onClick={() => openEdit(p)} className="rounded-md p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-text-primary" title="Editar">
+                    <button type="button" onClick={() => openEdit(p)} className="tap rounded-md p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-text-primary" title="Editar">
                       <Icon name="pencil" size={15} />
                     </button>
-                    <button type="button" onClick={() => remove(p)} className="rounded-md p-1.5 text-text-tertiary hover:bg-error-soft hover:text-error-text" title="Eliminar">
+                    <button type="button" onClick={() => remove(p)} className="tap rounded-md p-1.5 text-text-tertiary hover:bg-error-soft hover:text-error-text" title="Eliminar">
                       <Icon name="trash" size={15} />
                     </button>
                   </div>
@@ -388,7 +404,7 @@ export default function PromocionesPage() {
             <Field label="Descripción" hint="Opcional">
               <Input value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="Descuento por pronto pago" />
             </Field>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="Inicia">
                 <Input type="date" value={draft.startDate} onChange={(e) => setDraft({ ...draft, startDate: e.target.value })} />
               </Field>

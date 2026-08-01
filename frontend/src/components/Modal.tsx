@@ -80,8 +80,18 @@ export function Modal({
   if (!open) return null;
 
   return (
+    /*
+      MÓVIL PRIMERO: en pantallas pequeñas el diálogo es una hoja anclada abajo
+      (a ancho completo, esquinas superiores redondeadas) — el patrón que espera
+      el pulgar y que además evita que un formulario largo quede montado sobre el
+      teclado. Desde `sm` vuelve a ser el diálogo centrado de siempre.
+
+      El alto usa `dvh` en vez de `vh` porque en móvil la barra de direcciones
+      entra y sale: con `vh` el pie del modal (los botones Guardar/Cancelar) se
+      quedaba por debajo del borde visible y no había forma de alcanzarlo.
+    */
     <div
-      className="fixed inset-0 z-[90] flex items-start justify-center overflow-y-auto bg-black/40 p-4 backdrop-blur-sm sm:items-center"
+      className="fixed inset-0 z-[90] flex items-end justify-center overflow-y-auto bg-black/40 backdrop-blur-sm sm:items-center sm:p-4"
       onMouseDown={onClose}
     >
       <div
@@ -90,8 +100,11 @@ export function Modal({
         aria-modal="true"
         aria-labelledby={idTitulo}
         onMouseDown={(e) => e.stopPropagation()}
-        className={`my-auto flex max-h-[calc(100vh-2rem)] w-full ${maxWidth} flex-col gap-3 overflow-y-auto rounded-xl border border-border-subtle bg-surface p-4 shadow-2xl sm:p-5`}
+        className={`flex max-h-[92dvh] w-full flex-col gap-3 overflow-y-auto rounded-t-2xl border border-border-subtle bg-surface p-4 pb-[max(1rem,env(safe-area-inset-bottom))] shadow-2xl sm:my-auto sm:max-h-[calc(100dvh-2rem)] sm:rounded-xl sm:p-5 sm:pb-5 ${maxWidth}`}
       >
+        {/* asidero visual de la hoja (solo móvil) */}
+        <span aria-hidden className="mx-auto -mt-1 h-1 w-10 shrink-0 rounded-full bg-border-default sm:hidden" />
+
         <div className="flex items-center justify-between gap-2">
           <span id={idTitulo} className="min-w-0 truncate text-[14px] font-bold text-text-primary">
             {title}
@@ -101,7 +114,7 @@ export function Modal({
             data-cerrar
             onClick={onClose}
             aria-label="Cerrar"
-            className="shrink-0 rounded-md p-1 text-text-tertiary hover:bg-surface-2 hover:text-text-primary"
+            className="-mr-1 shrink-0 rounded-md p-2 text-text-tertiary hover:bg-surface-2 hover:text-text-primary sm:p-1"
           >
             <Icon name="x" size={16} />
           </button>

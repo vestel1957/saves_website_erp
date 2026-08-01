@@ -31,8 +31,15 @@ export function Sparkline({
   const line = `M ${pts.join(" L ")}`;
   const area = `${line} L ${(pad + (values.length - 1) * stepX).toFixed(1)},${height - pad} L ${pad},${height - pad} Z`;
 
+  // Alto fijo: sin él el SVG crece con el ancho de la tarjeta (proporción del
+  // viewBox) y la mini-tendencia se vuelve un gráfico enorme.
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} className={`w-full ${className}`} preserveAspectRatio="none">
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      className={`w-full ${className}`}
+      style={{ height }}
+      preserveAspectRatio="none"
+    >
       <path d={area} fill="currentColor" opacity={0.1} />
       <path d={line} fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
     </svg>

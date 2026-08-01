@@ -98,7 +98,7 @@ export function GenieacsServerModal({
         <Field label="URL del NBI" required hint="API REST de GenieACS (puerto 7557). Ej: http://localhost:7557 (vía túnel).">
           <Input value={form.nbiUrl} onChange={set("nbiUrl")} placeholder="http://localhost:7557" className="font-mono" required />
         </Field>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Usuario (opcional)" hint="Sólo si el NBI tiene basic-auth.">
             <Input value={form.username} onChange={set("username")} placeholder="(vacío)" />
           </Field>

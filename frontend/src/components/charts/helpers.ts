@@ -55,3 +55,19 @@ export function compact(n: number): string {
 }
 
 export const compactCOP = (n: number) => `$${compact(n)}`;
+
+/**
+ * Cuánto espacio hay que dejar a la izquierda para las etiquetas del eje Y.
+ *
+ * Era un 46 fijo, y con eso "$20.0M" se salía del lienzo: el signo de peso quedaba
+ * cortado contra el borde. El ancho depende de lo que diga la etiqueta —no es lo mismo
+ * "$0" que "$1.250.000"—, así que se calcula: ~0,58 × el tamaño de letra por carácter
+ * (medida de las cifras en Inter) más el hueco hasta la rejilla.
+ *
+ * Es una estimación a propósito: medir texto de verdad obliga a pintar primero y volver
+ * a maquetar, y para una columna de números tabulares sobra con esto.
+ */
+export function padEjeY(labels: string[], fontSize = 11): number {
+  const chars = Math.max(0, ...labels.map((s) => s.length));
+  return Math.min(90, Math.max(34, Math.ceil(chars * fontSize * 0.58) + 14));
+}

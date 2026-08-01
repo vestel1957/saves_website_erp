@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { Icon } from "@/components/Icon";
@@ -8,7 +8,9 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/Modal";
 import { toast } from "@/components/ui/Toast";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { DataTable } from "@/components/ui/DataTable";
+import { DetailHeader } from "@/components/ui/DetailHeader";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { useAuth } from "@/context/AuthProvider";
 import { PERM } from "@/lib/auth";
@@ -17,11 +19,17 @@ import { INVOICE_KIND_LABEL, RON_LABEL } from "@/lib/billing";
 import { type AvailablePromotion, discountLabel, isFlatDiscount, isBeforeTaxDiscount } from "@/lib/promotions";
 import { fmtDate } from "@/lib/format";
 
+/** Descuento que aplicaría la promoción sobre esta factura (estimación en pantalla). */
+function descuentoEstimado(p: AvailablePromotion, f: any) {
+  const base = isBeforeTaxDiscount(p.discountFormat) ? (f.subtotal ?? f.total) : f.total;
+  return isFlatDiscount(p.discountFormat) ? Math.min(Number(p.flatAmount ?? 0), base) : (base * p.percentage) / 100;
+}
+
 export default function FacturaDetallePage() {
   const { id } = useParams<{ id: string }>();
   const { loading: authLoading, authFetch, can, isSuperadmin } = useAuth();
   const [f, setF] = useState<any | null>(null);
-  const [err, setErr] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
   const [promoOpen, setPromoOpen] = useState(false);
   const [promos, setPromos] = useState<AvailablePromotion[] | null>(null);
   const [applyingId, setApplyingId] = useState<string | null>(null);
@@ -30,13 +38,30 @@ export default function FacturaDetallePage() {
   const [voidOpen, setVoidOpen] = useState(false);
   const [voidReason, setVoidReason] = useState("");
   const [voiding, setVoiding] = useState(false);
+  // Dos confirmaciones distintas conviven en esta pantalla: se distinguen por `kind`.
+  const [confirmar, setConfirmar] = useState<
+    { kind: "promo"; promo: AvailablePromotion } | { kind: "emitir" } | null
+  >(null);
 
   const canEmit = isSuperadmin || can(PERM.AREA_CONTABILIDAD);
 
   const loadInvoice = () =>
     authFetch(`/billing/invoices/${id}`)
-      .then((r) => (r.ok ? r.json() : Promise.reject()))
-      .then(setF).catch(() => setErr(true));
+      .then(async (r) => {
+        if (r.ok) return r.json();
+        // Un 403 por sede NO es una factura inexistente. Decía "Factura no
+        // encontrada" a los 92 (de 138) usuarios acotados por sede cada vez que
+        // abrían la factura de un cliente de otra sede, y manda a buscar un
+        // problema de datos donde lo que hay es uno de permisos.
+        const d = await r.json().catch(() => null);
+        throw new Error(
+          r.status === 403
+            ? (d?.message ?? "No tienes acceso a los datos de esta sede.")
+            : "Factura no encontrada.",
+        );
+      })
+      .then((d) => { setF(d); setErr(null); })
+      .catch((e) => setErr(e instanceof Error ? e.message : "No se pudo cargar la factura."));
 
   useEffect(() => {
     if (authLoading) return;
@@ -51,7 +76,6 @@ export default function FacturaDetallePage() {
   }
 
   async function applyPromo(promo: AvailablePromotion) {
-    if (!confirm(`Aplicar "${promo.name}" (${discountLabel(promo)}) a la factura #${f.tid}? Se generará una nota crédito.`)) return;
     setApplyingId(promo.id);
     try {
       const res = await authFetch(`/my-promotions/${promo.id}/apply`, {
@@ -67,11 +91,17 @@ export default function FacturaDetallePage() {
       toast((e as Error).message, "alert-circle");
     } finally {
       setApplyingId(null);
+      setConfirmar(null);
     }
   }
 
-  async function openPdf() {
-    const res = await authFetch(`/billing/invoices/${id}/pdf`);
+  /**
+   * `formato="rollo"` es el recibo de 80 mm que sale por la impresora de caja (el
+   * "Imprimir" del legacy); sin formato, la factura en hoja completa para archivar
+   * o mandar por correo.
+   */
+  async function openPdf(formato?: "rollo") {
+    const res = await authFetch(`/billing/invoices/${id}/pdf${formato ? `?formato=${formato}` : ""}`);
     if (!res.ok) return;
     const url = URL.createObjectURL(await res.blob());
     window.open(url, "_blank");
@@ -86,11 +116,6 @@ export default function FacturaDetallePage() {
   }, [authLoading, canEmit]);
 
   async function emitEinvoice() {
-    const live = !!eMode?.live;
-    const warn = live
-      ? `Vas a EMITIR ante la DIAN la factura #${f.tid}. Es un acto legal e irreversible. ¿Continuar?`
-      : `Modo PRUEBA (DRY-RUN): se construirá el payload de la factura #${f.tid} SIN enviarlo a la DIAN. ¿Continuar?`;
-    if (!confirm(warn)) return;
     setEmitting(true);
     try {
       const res = await authFetch(`/einvoice/emit/${id}`, { method: "POST" });
@@ -111,6 +136,7 @@ export default function FacturaDetallePage() {
       toast((e as Error).message, "alert-circle");
     } finally {
       setEmitting(false);
+      setConfirmar(null);
     }
   }
 
@@ -142,42 +168,50 @@ export default function FacturaDetallePage() {
   }
 
   if (authLoading || (!f && !err)) return <PageSkeleton />;
-  if (err) return <div className="rounded-xl border border-border-subtle bg-surface p-6 text-[13px] text-text-secondary">Factura no encontrada. <Link href="/facturacion" className="text-brand">Volver</Link></div>;
+  if (err) return <div className="rounded-xl border border-border-subtle bg-surface p-6 text-[13px] text-text-secondary">{err} <Link href="/facturacion" className="text-brand">Volver</Link></div>;
 
   return (
     <>
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <Link href="/facturacion" className="mb-1 inline-flex items-center gap-1 text-[12px] text-text-tertiary hover:text-text-secondary">
-            <Icon name="arrow-left" size={13} /> Facturación
-          </Link>
-          <div className="flex items-center gap-3">
-            <h1 className="text-[20px] font-bold text-text-primary">Factura #{f.tid}</h1>
+      <DetailHeader
+        backHref="/facturacion"
+        backLabel="Facturación"
+        icon="receipt"
+        title={`Factura #${f.tid}`}
+        badges={
+          <>
             <Badge label={INVOICE_STATUS_LABEL[f.status] ?? f.status} tone={INVOICE_STATUS_TONE[f.status] ?? "default"} />
             {f.ron && <Badge label={RON_LABEL[f.ron] ?? f.ron} tone="default" />}
             <span className="text-[11px] text-text-tertiary">{INVOICE_KIND_LABEL[f.kind] ?? f.kind}</span>
-          </div>
-          <p className="text-[12px] text-text-tertiary">Emitida {fmtDate(f.date)} · Vence {fmtDate(f.dueDate)}{f.branchRef ? ` · ${f.branchRef}` : ""}</p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <button onClick={openPdf} className="inline-flex items-center gap-1.5 rounded-lg border border-border-default px-3 py-1.5 text-[12px] font-medium text-text-secondary hover:bg-surface-2">
-              <Icon name="file-text" size={14} /> Ver / imprimir PDF
-            </button>
-            <button onClick={openPromos} className="inline-flex items-center gap-1.5 rounded-lg border border-border-default px-3 py-1.5 text-[12px] font-medium text-text-secondary hover:bg-surface-2">
+          </>
+        }
+        subtitle={<>Emitida {fmtDate(f.date)} · Vence {fmtDate(f.dueDate)}{f.branchRef ? ` · ${f.branchRef}` : ""}</>}
+        actions={
+          <>
+            <Button variant="secondary" size="sm" className="w-full sm:w-auto" onClick={() => openPdf("rollo")}>
+              <Icon name="receipt" size={14} /> Imprimir recibo (caja)
+            </Button>
+            <Button variant="secondary" size="sm" className="w-full sm:w-auto" onClick={() => openPdf()}>
+              <Icon name="file-text" size={14} /> Factura en hoja
+            </Button>
+            <Button variant="secondary" size="sm" className="w-full sm:w-auto" onClick={openPromos}>
               <Icon name="gift" size={14} /> Aplicar promoción
-            </button>
+            </Button>
             {canEmit && f.status !== "CANCELED" && (
-              <button onClick={() => setVoidOpen(true)} className="inline-flex items-center gap-1.5 rounded-lg border border-border-default px-3 py-1.5 text-[12px] font-medium text-error-text hover:bg-surface-2">
+              <Button variant="danger" size="sm" className="w-full sm:w-auto" onClick={() => setVoidOpen(true)}>
                 <Icon name="ban" size={14} /> Anular factura
-              </button>
+              </Button>
             )}
+          </>
+        }
+        aside={
+          <div className="w-full rounded-xl border border-border-subtle bg-surface px-5 py-3 shadow-sm sm:w-auto sm:text-right">
+            <div className="text-[11px] text-text-tertiary">Saldo pendiente</div>
+            <div className={`text-[22px] font-bold ${f.balance > 0 ? "text-error-text" : "text-success-text"}`}>{cop(f.balance)}</div>
+            <div className="text-[10px] text-text-tertiary">Total {cop(f.total)} · Pagado {cop(f.paid)}</div>
           </div>
-        </div>
-        <div className="rounded-xl border border-border-subtle bg-surface px-5 py-3 text-right shadow-sm">
-          <div className="text-[11px] text-text-tertiary">Saldo pendiente</div>
-          <div className={`text-[22px] font-bold ${f.balance > 0 ? "text-error-text" : "text-success-text"}`}>{cop(f.balance)}</div>
-          <div className="text-[10px] text-text-tertiary">Total {cop(f.total)} · Pagado {cop(f.paid)}</div>
-        </div>
-      </div>
+        }
+      />
+
 
       <div className="mb-4 grid grid-cols-1 gap-3 lg:grid-cols-3">
         {/* Cliente */}
@@ -194,11 +228,7 @@ export default function FacturaDetallePage() {
         {/* Servicio */}
         <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
           <div className="mb-2 flex items-center gap-2 text-[13px] font-bold text-text-primary"><Icon name="activity" size={15} className="text-brand" />Servicio facturado</div>
-          <div className="flex flex-col gap-1 text-[12px]">
-            {f.service.combo && f.service.combo !== "no" && <span className="text-text-secondary">Internet: <b className="text-text-primary">{f.service.combo}</b>{f.service.estadoCombo && <> ({f.service.estadoCombo})</>}</span>}
-            {f.service.tv && f.service.tv !== "no" && <span className="text-text-secondary">TV: <b className="text-text-primary">{f.service.tv}</b>{f.service.estadoTv && <> ({f.service.estadoTv})</>}</span>}
-            {f.service.puntos ? <span className="text-text-secondary">Puntos: {f.service.puntos}</span> : null}
-          </div>
+          <ServicioFacturado f={f} />
         </div>
         {/* Facturación electrónica */}
         <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
@@ -223,7 +253,7 @@ export default function FacturaDetallePage() {
                     </div>
                   ))}
                   {!emitida && canEmit && (
-                    <button onClick={emitEinvoice} disabled={emitting}
+                    <button onClick={() => setConfirmar({ kind: "emitir" })} disabled={emitting}
                       className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-border-default px-3 py-1.5 text-[12px] font-semibold text-text-secondary hover:bg-surface-2 disabled:opacity-50">
                       <Icon name={emitting ? "loader" : "file-signature"} size={14} className={emitting ? "animate-spin" : ""} /> Reintentar emisión
                     </button>
@@ -305,15 +335,10 @@ export default function FacturaDetallePage() {
                         {p.subscriberStatus ? <Badge tone="warning" label="Por estado del cliente" /> : p.global && <Badge tone="info" label="Global" />}
                       </div>
                       <div className="text-[11px] text-text-tertiary">
-                        {p.description ? `${p.description} · ` : ""}Descuento estimado {cop(
-                          (() => {
-                            const base = isBeforeTaxDiscount(p.discountFormat) ? (f.subtotal ?? f.total) : f.total;
-                            return isFlatDiscount(p.discountFormat) ? Math.min(Number(p.flatAmount ?? 0), base) : (base * p.percentage) / 100;
-                          })(),
-                        )}
+                        {p.description ? `${p.description} · ` : ""}Descuento estimado {cop(descuentoEstimado(p, f))}
                       </div>
                     </div>
-                    <Button onClick={() => applyPromo(p)} disabled={applyingId === p.id}>
+                    <Button onClick={() => setConfirmar({ kind: "promo", promo: p })} disabled={applyingId === p.id}>
                       {applyingId === p.id ? "Aplicando…" : "Aplicar"}
                     </Button>
                   </div>
@@ -358,6 +383,134 @@ export default function FacturaDetallePage() {
           </div>
         </Modal>
       )}
+
+      {confirmar?.kind === "promo" && (
+        <ConfirmDialog
+          open
+          busy={applyingId === confirmar.promo.id}
+          onClose={() => setConfirmar(null)}
+          onConfirm={() => void applyPromo(confirmar.promo)}
+          tone="primary"
+          icon="gift"
+          title="Aplicar promoción a la factura"
+          confirmLabel="Aplicar promoción"
+          message={
+            <>
+              Se generará una nota crédito por el descuento sobre la factura #{f.tid}, y el
+              saldo del cliente bajará en ese importe. Queda registrada a tu nombre.
+            </>
+          }
+          detail={<PromoResumen promo={confirmar.promo} f={f} />}
+        />
+      )}
+
+      {confirmar?.kind === "emitir" && (
+        <ConfirmDialog
+          open
+          busy={emitting}
+          onClose={() => setConfirmar(null)}
+          onConfirm={() => void emitEinvoice()}
+          tone={eMode?.live ? "danger" : "primary"}
+          icon="file-signature"
+          title={eMode?.live ? "Emitir factura ante la DIAN" : "Probar emisión (dry-run)"}
+          confirmLabel={eMode?.live ? "Emitir ante la DIAN" : "Construir payload"}
+          // Solo en LIVE se exige teclear el número: en dry-run no sale nada hacia la DIAN.
+          requireText={eMode?.live ? String(f.tid) : undefined}
+          requireHint={<>Para confirmar, escribe el número de factura <span className="font-mono font-semibold text-text-primary">{f.tid}</span></>}
+          message={
+            eMode?.live ? (
+              <>
+                La factura #{f.tid} se timbrará ante la DIAN y quedará con número y CUFE
+                oficiales. <b className="text-error-text">Es un acto legal irreversible</b>: para
+                deshacerlo hay que emitir una nota crédito.
+              </>
+            ) : (
+              <>
+                Estás en <b>modo prueba (dry-run)</b>: solo se construye el payload de la factura
+                #{f.tid} para validarlo. No se envía nada a la DIAN ni se timbra.
+              </>
+            )
+          }
+          detail={<FacturaResumen f={f} />}
+        />
+      )}
     </>
+  );
+}
+
+/**
+ * Qué se le está cobrando al cliente, resumido.
+ *
+ * El snapshot de servicios (`serviceCombo`/`serviceTv`) llega vacío en 5.530
+ * facturas — el legacy guarda literalmente "no", y las fijas nunca lo llevan —,
+ * así que la tarjeta salía en blanco justo en las que hay que explicar. Cuando
+ * no hay snapshot se cae a los conceptos de la propia factura, que es el dato
+ * que de verdad se cobra.
+ */
+function ServicioFacturado({ f }: { f: any }) {
+  const combo = f.service?.combo && f.service.combo !== "no" ? f.service.combo : null;
+  const tv = f.service?.tv && f.service.tv !== "no" ? f.service.tv : null;
+  const puntos = Number(f.service?.puntos ?? 0);
+  const items: any[] = f.items ?? [];
+  const haySnapshot = Boolean(combo || tv || puntos);
+
+  return (
+    <div className="flex flex-col gap-1 text-[12px]">
+      {/* El periodo solo existe en las recurrentes; en las fijas el backend manda
+          null y se rotula como el cargo puntual que es, sin inventar un mes. */}
+      <span className="text-text-secondary">Periodo: <b className="text-text-primary">{f.period ?? "Cargo puntual"}</b></span>
+      {haySnapshot ? (
+        <>
+          {combo && <span className="text-text-secondary">Internet: <b className="text-text-primary">{combo}</b>{f.service.estadoCombo && <> ({f.service.estadoCombo})</>}</span>}
+          {tv && <span className="text-text-secondary">TV: <b className="text-text-primary">{tv}</b>{f.service.estadoTv && <> ({f.service.estadoTv})</>}</span>}
+          {puntos ? <span className="text-text-secondary">Puntos: {puntos}</span> : null}
+        </>
+      ) : items.length ? (
+        items.map((it) => (
+          <span key={it.id} className="text-text-secondary">
+            {it.product || it.description || "Concepto"}{it.qty > 1 ? ` ×${it.qty}` : ""} · <b className="text-text-primary">{cop(it.subtotal + it.taxTotal)}</b>
+          </span>
+        ))
+      ) : (
+        <span className="text-text-tertiary">Sin conceptos registrados.</span>
+      )}
+    </div>
+  );
+}
+
+/** Ficha compacta de la promoción: qué se descuenta y sobre qué factura. */
+function PromoResumen({ promo, f }: { promo: AvailablePromotion; f: any }) {
+  const filas: [string, React.ReactNode][] = [
+    ["Promoción", <span key="a">{promo.name}</span>],
+    ["Descuento", <Badge key="b" tone="brand" label={discountLabel(promo)} />],
+    ["Factura", <span key="c" className="font-mono">#{f.tid} · {cop(f.total)}</span>],
+    ["Nota crédito", <span key="d" className="font-mono font-semibold">{cop(descuentoEstimado(promo, f))}</span>],
+  ];
+  return <FichaConfirm filas={filas} />;
+}
+
+/** Ficha compacta de la factura que se va a timbrar: evita emitir la de al lado. */
+function FacturaResumen({ f }: { f: any }) {
+  const filas: [string, React.ReactNode][] = [
+    ["Factura", <span key="a" className="font-mono">#{f.tid}</span>],
+    ["Cliente", <span key="b">{f.subscriber?.name ?? "—"}</span>],
+    ["Total", <span key="c" className="font-mono font-semibold">{cop(f.total)}</span>],
+    ["Estado", <Badge key="d" label={INVOICE_STATUS_LABEL[f.status] ?? f.status} tone={INVOICE_STATUS_TONE[f.status] ?? "default"} />],
+  ];
+  return <FichaConfirm filas={filas} />;
+}
+
+function FichaConfirm({ filas }: { filas: [string, React.ReactNode][] }) {
+  return (
+    <div className="rounded-lg border border-border-subtle bg-surface-2 p-2.5">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12px]">
+        {filas.map(([k, v]) => (
+          <Fragment key={k}>
+            <dt className="text-text-tertiary">{k}</dt>
+            <dd className="text-right text-text-primary">{v}</dd>
+          </Fragment>
+        ))}
+      </dl>
+    </div>
   );
 }

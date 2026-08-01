@@ -68,7 +68,7 @@ function MembersModal({ movil, onClose, onChanged }: { movil: Movil | null; onCl
             {members.map((m) => (
               <div key={m.id} className="flex items-center justify-between rounded-lg border border-border-subtle bg-surface px-3 py-2">
                 <div><span className="text-[13px] font-medium text-text-primary">{m.name}</span>{m.position && <span className="ml-2 text-[11px] text-text-tertiary">{m.position}</span>}</div>
-                <button type="button" onClick={() => remove(m.employeeId)} className="text-text-tertiary hover:text-error-text"><Icon name="x" size={14} /></button>
+                <button type="button" onClick={() => remove(m.employeeId)} className="tap text-text-tertiary hover:text-error-text"><Icon name="x" size={14} /></button>
               </div>
             ))}
           </div>
@@ -120,7 +120,7 @@ export default function MovilesPage() {
 
   return (
     <>
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <PageHeading icon="truck" title="Móviles / cuadrillas" subtitle="Agrupa técnicos para asignar órdenes y agenda" />
         <Button size="sm" onClick={openNew}><Icon name="plus" size={14} /> Nueva móvil</Button>
       </div>
@@ -135,8 +135,8 @@ export default function MovilesPage() {
                 <Badge label={m.status} tone={m.status === "Activa" ? "success" : "default"} />
               </div>
               <div className="flex gap-1">
-                <button type="button" title="Editar" onClick={() => openEdit(m)} className="text-text-tertiary hover:text-brand"><Icon name="pencil" size={14} /></button>
-                <button type="button" title="Eliminar" onClick={() => setToDelete(m)} className="text-text-tertiary hover:text-error-text"><Icon name="trash" size={14} /></button>
+                <button type="button" title="Editar" onClick={() => openEdit(m)} className="tap text-text-tertiary hover:text-brand"><Icon name="pencil" size={14} /></button>
+                <button type="button" title="Eliminar" onClick={() => setToDelete(m)} className="tap text-text-tertiary hover:text-error-text"><Icon name="trash" size={14} /></button>
               </div>
             </div>
             <div className="mt-3 flex flex-wrap gap-1">

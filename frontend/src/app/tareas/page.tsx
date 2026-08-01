@@ -16,6 +16,7 @@ import { useAuth } from "@/context/AuthProvider";
 import { fmtDate } from "@/lib/format";
 import { StatCard } from "@/components/ui/StatCard";
 import { useRequest } from "@/lib/useRequest";
+import { useOrden } from "@/lib/useOrden";
 import { mensajeDeError } from "@/lib/errores";
 
 type Task = {
@@ -77,9 +78,12 @@ export default function TareasPage() {
 
   // Carga con cancelación: al teclear se aborta la petición en vuelo para que
   // una respuesta lenta no pise a otra más reciente. Ver lib/useRequest.
+  // Pagina en el servidor: el orden viaja en la query.
+  const orden = useOrden();
+
   const { data, cargando: loading, error, refrescar: load } = useRequest<any>(
     () => {
-        const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+        const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize), ...orden.params });
         if (search.trim()) qs.set("search", search.trim());
         if (status) qs.set("status", status);
         if (priority) qs.set("priority", priority);
@@ -87,11 +91,11 @@ export default function TareasPage() {
         if (mine) qs.set("mine", "true");
       return `/tasks?${qs.toString()}`;
     },
-    [page, pageSize, search, status, priority, kind, mine],
+    [page, pageSize, search, status, priority, kind, mine, orden.clave],
     { debounceMs: search ? 350 : 0, saltar: authLoading },
   );
 
-  useEffect(() => { setPage(1); }, [search, status, priority, kind, mine, pageSize]);
+  useEffect(() => { setPage(1); }, [search, status, priority, kind, mine, pageSize, orden.clave]);
 
   const setF = (k: string, v: string) => setForm((f: any) => ({ ...f, [k]: v }));
 
@@ -171,7 +175,7 @@ export default function TareasPage() {
 
   return (
     <>
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <PageHeading
           icon="clipboard-list"
           title="Tareas"
@@ -215,11 +219,13 @@ export default function TareasPage() {
       ) : (
         <>
           <DataTable
+            sort={orden.sort}
+            onSort={orden.onSort}
             rows={data?.items ?? []}
             empty="No hay tareas con esos criterios."
             columns={[
               {
-                key: "name", header: "Tarea",
+                key: "name", header: "Tarea", sortable: true,
                 render: (r: Task) => (
                   <div className="flex flex-col leading-tight">
                     <span className="font-medium text-text-primary">{r.name || "—"}</span>
@@ -228,18 +234,18 @@ export default function TareasPage() {
                 ),
               },
               {
-                key: "orderId", header: "Orden",
+                key: "orderId", header: "Orden", sortable: true,
                 render: (r: Task) => (r.orderId ? <Badge label={`#${r.orderId}`} tone="default" /> : <span className="text-text-tertiary">Nota</span>),
               },
-              { key: "assignee", header: "Responsable", render: (r: Task) => <span className="text-text-secondary">{r.assignee ?? "—"}</span> },
+              { key: "assignee", header: "Responsable", sortable: true, render: (r: Task) => <span className="text-text-secondary">{r.assignee ?? "—"}</span> },
               {
-                key: "dueDate", header: "Vence",
+                key: "dueDate", header: "Vence", sortable: true,
                 render: (r: Task) => (
                   <span className={r.overdue ? "font-semibold text-error-text" : "text-text-secondary"}>{fmtDate(r.dueDate)}</span>
                 ),
               },
-              { key: "priority", header: "Prioridad", render: (r: Task) => <Badge label={PRIORITY_LABEL[r.priority] ?? r.priority} tone={PRIORITY_TONE[r.priority] ?? "default"} /> },
-              { key: "status", header: "Estado", render: (r: Task) => <Badge label={STATUS_LABEL[r.status] ?? r.status} tone={STATUS_TONE[r.status] ?? "default"} /> },
+              { key: "priority", header: "Prioridad", sortable: true, render: (r: Task) => <Badge label={PRIORITY_LABEL[r.priority] ?? r.priority} tone={PRIORITY_TONE[r.priority] ?? "default"} /> },
+              { key: "status", header: "Estado", sortable: true, render: (r: Task) => <Badge label={STATUS_LABEL[r.status] ?? r.status} tone={STATUS_TONE[r.status] ?? "default"} /> },
               {
                 key: "acciones", header: "", align: "right" as const,
                 render: (r: Task) => (
@@ -248,15 +254,15 @@ export default function TareasPage() {
                       <button
                         type="button" title="Marcar como hecha"
                         onClick={() => void quickStatus(r, "DONE")}
-                        className="rounded-md p-1.5 text-text-tertiary hover:bg-success-soft hover:text-success-text"
+                        className="tap rounded-md p-1.5 text-text-tertiary hover:bg-success-soft hover:text-success-text"
                       >
                         <Icon name="check" size={15} />
                       </button>
                     )}
-                    <button type="button" title="Editar" onClick={() => openEdit(r)} className="rounded-md p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-text-primary">
+                    <button type="button" title="Editar" onClick={() => openEdit(r)} className="tap rounded-md p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-text-primary">
                       <Icon name="pencil" size={15} />
                     </button>
-                    <button type="button" title="Eliminar" onClick={() => setDelRow(r)} className="rounded-md p-1.5 text-text-tertiary hover:bg-error-soft hover:text-error-text">
+                    <button type="button" title="Eliminar" onClick={() => setDelRow(r)} className="tap rounded-md p-1.5 text-text-tertiary hover:bg-error-soft hover:text-error-text">
                       <Icon name="trash" size={15} />
                     </button>
                   </div>

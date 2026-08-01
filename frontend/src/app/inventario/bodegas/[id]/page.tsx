@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
+import { DetailHeader } from "@/components/ui/DetailHeader";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Field";
 import { Badge } from "@/components/ui/Badge";
@@ -13,24 +13,29 @@ import { Pagination } from "@/components/ui/Pagination";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { LoadError } from "@/components/ui/LoadError";
 import { useAuth } from "@/context/AuthProvider";
+import { esTecnico } from "@/lib/support";
 import { cop } from "@/lib/subscribers";
 import { StatCard } from "@/components/ui/StatCard";
 import { useRequest } from "@/lib/useRequest";
+import { useOrden } from "@/lib/useOrden";
 
 type Warehouse = { id: string; title: string; extra: string | null; technicianRef: string | null; materials: number; value: number };
 
 const COLUMNS = [
-  { key: "name", header: "Nombre", render: (r: any) => <span className="font-medium text-text-primary">{r.name}</span> },
-  { key: "code", header: "Código", render: (r: any) => <span className="text-text-secondary">{r.code || "—"}</span> },
-  { key: "category", header: "Categoría", render: (r: any) => <span className="text-text-secondary">{r.category || "—"}</span> },
-  { key: "price", header: "Precio", align: "right" as const, render: (r: any) => <span>{cop(r.price ?? 0)}</span> },
-  { key: "qty", header: "Stock", align: "right" as const, render: (r: any) => r.low ? <Badge label={`${r.qty ?? 0} · Bajo`} tone="error" /> : <span>{r.qty ?? 0}</span> },
+  { key: "name", header: "Nombre", sortable: true, render: (r: any) => <span className="font-medium text-text-primary">{r.name}</span> },
+  { key: "code", header: "Código", sortable: true, render: (r: any) => <span className="text-text-secondary">{r.code || "—"}</span> },
+  { key: "category", header: "Categoría", sortable: true, render: (r: any) => <span className="text-text-secondary">{r.category || "—"}</span> },
+  { key: "price", header: "Precio", sortable: true, align: "right" as const, render: (r: any) => <span>{cop(r.price ?? 0)}</span> },
+  { key: "qty", header: "Stock", sortable: true, align: "right" as const, render: (r: any) => r.low ? <Badge label={`${r.qty ?? 0} · Bajo`} tone="error" /> : <span>{r.qty ?? 0}</span> },
   { key: "value", header: "Valor", align: "right" as const, render: (r: any) => <span className="font-semibold">{cop(r.value ?? 0)}</span> },
 ];
 
 export default function BodegaMaterialesPage() {
   const { id } = useParams<{ id: string }>();
-  const { loading: authLoading, authFetch } = useAuth();
+  const { loading: authLoading, authFetch, user } = useAuth();
+  // "Administrar" abre /inventario, que es de administración: al técnico no se le
+  // ofrece una puerta que el middleware le va a cerrar.
+  const soloLoSuyo = esTecnico(user);
 
   const [wh, setWh] = useState<Warehouse | null>(null);
   const [search, setSearch] = useState("");
@@ -46,9 +51,12 @@ export default function BodegaMaterialesPage() {
 
   // Carga con cancelación. El estado de error lo aporta el propio hook, así que
   // desaparece el `err` local: antes había que acordarse de resetearlo a mano.
+  // Pagina en el servidor: el orden viaja en la query.
+  const orden = useOrden();
+
   const { data, cargando: loading, error: err, refrescar: load } = useRequest<any>(
     () => {
-      const params = new URLSearchParams({ warehouseId: String(id), page: String(page), pageSize: "25" });
+      const params = new URLSearchParams({ warehouseId: String(id), page: String(page), pageSize: "25", ...orden.params });
       if (search.trim()) params.set("search", search.trim());
       return `/inventory/materials?${params.toString()}`;
     },
@@ -62,18 +70,22 @@ export default function BodegaMaterialesPage() {
 
   return (
     <div className="space-y-4">
-      <PageHeading icon="warehouse" title="Volver" />
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="flex items-center gap-2 text-[18px] font-bold text-text-primary">
-            <Icon name="warehouse" size={18} className="text-brand" /> {wh ? wh.title : "Bodega"}
-          </h1>
-          <p className="mt-0.5 text-[13px] text-text-tertiary">{wh?.extra || "Inventario de esta bodega"}</p>
-        </div>
-        <Link href={`/inventario?warehouseId=${id}`} title="Abrir en el administrador de material">
-          <Button variant="secondary" size="sm"><Icon name="external-link" size={14} /> Administrar</Button>
-        </Link>
-      </div>
+      {/* El encabezado se anunciaba con el título literal "Volver" (y el nombre
+          real de la bodega colgaba aparte en un `<h1>` suelto). */}
+      <DetailHeader
+        backHref="/inventario/bodegas"
+        backLabel="Bodegas"
+        icon="warehouse"
+        title={wh ? wh.title : "Bodega"}
+        subtitle={wh?.extra || (soloLoSuyo ? "El material que tienes a tu cargo" : "Inventario de esta bodega")}
+        actions={
+          soloLoSuyo ? undefined : (
+            <Link href={`/inventario?warehouseId=${id}`} title="Abrir en el administrador de material" className="w-full sm:w-auto">
+              <Button variant="secondary" size="sm" className="w-full sm:w-auto"><Icon name="external-link" size={14} /> Administrar</Button>
+            </Link>
+          )
+        }
+      />
 
       <div className="grid grid-cols-2 gap-3 sm:max-w-md">
         <StatCard label="Total de materiales" value={(wh?.materials ?? data?.total ?? 0).toLocaleString("es-CO")} icon="package" />
@@ -96,7 +108,7 @@ export default function BodegaMaterialesPage() {
         <PageSkeleton />
       ) : (
         <>
-          <DataTable rows={data?.items ?? []} empty={search ? "Ningún material coincide con la búsqueda." : "Esta bodega no tiene materiales."} columns={COLUMNS} />
+          <DataTable rows={data?.items ?? []} empty={search ? "Ningún material coincide con la búsqueda." : "Esta bodega no tiene materiales."} columns={COLUMNS} sort={orden.sort} onSort={orden.onSort} />
           {data && data.pages > 1 && (
             <Pagination meta={{ page: data.page, pageSize: data.pageSize, total: data.total, pageCount: data.pages }} onPage={setPage} />
           )}

@@ -1,9 +1,22 @@
+"use client";
+
 import type { TrialBalance } from "@/lib/accounting-types";
 import { fullCurrency } from "@/lib/format";
+import { BotonOrden, useTablaOrdenable } from "@/components/ui/tabla-ordenable";
 
 const money = (n: number) => (n === 0 ? "—" : fullCurrency(n));
 
 export function TrialBalanceTable({ data }: { data: TrialBalance }) {
+  // Ordena solo las cuentas: la fila de TOTALES se pinta aparte y no se mueve.
+  const t = useTablaOrdenable(data.rows, {
+    codigo: (r) => r.code,
+    cuenta: (r) => r.name,
+    debito: (r) => r.debit,
+    credito: (r) => r.credit,
+    deudor: (r) => r.saldoDeudor,
+    acreedor: (r) => r.saldoAcreedor,
+  });
+
   return (
     <div className="overflow-x-auto rounded-xl border border-border-subtle bg-surface">
       {/* Móvil: tarjetas por cuenta */}
@@ -38,16 +51,16 @@ export function TrialBalanceTable({ data }: { data: TrialBalance }) {
       <table className="w-full min-w-[560px]">
         <thead>
           <tr className="border-b border-border-subtle bg-surface-2 text-[10px] uppercase tracking-wider text-text-tertiary">
-            <th className="px-4 py-2.5 text-left font-semibold">Código</th>
-            <th className="px-4 py-2.5 text-left font-semibold">Cuenta</th>
-            <th className="px-4 py-2.5 text-right font-semibold">Mov. Débito</th>
-            <th className="px-4 py-2.5 text-right font-semibold">Mov. Crédito</th>
-            <th className="px-4 py-2.5 text-right font-semibold">Saldo Deudor</th>
-            <th className="px-4 py-2.5 text-right font-semibold">Saldo Acreedor</th>
+            <th className="px-4 py-2.5 text-left font-semibold"><BotonOrden t={t} clave="codigo">Código</BotonOrden></th>
+            <th className="px-4 py-2.5 text-left font-semibold"><BotonOrden t={t} clave="cuenta">Cuenta</BotonOrden></th>
+            <th className="px-4 py-2.5 text-right font-semibold"><BotonOrden t={t} clave="debito">Mov. Débito</BotonOrden></th>
+            <th className="px-4 py-2.5 text-right font-semibold"><BotonOrden t={t} clave="credito">Mov. Crédito</BotonOrden></th>
+            <th className="px-4 py-2.5 text-right font-semibold"><BotonOrden t={t} clave="deudor">Saldo Deudor</BotonOrden></th>
+            <th className="px-4 py-2.5 text-right font-semibold"><BotonOrden t={t} clave="acreedor">Saldo Acreedor</BotonOrden></th>
           </tr>
         </thead>
         <tbody>
-          {data.rows.map((r) => (
+          {t.filas.map((r) => (
             <tr key={r.accountId} className="border-b border-border-subtle last:border-0 hover:bg-surface-2">
               <td className="px-4 py-2 font-mono text-[12px] text-text-tertiary">{r.code}</td>
               <td className="px-4 py-2 text-[13px] text-text-secondary">{r.name}</td>

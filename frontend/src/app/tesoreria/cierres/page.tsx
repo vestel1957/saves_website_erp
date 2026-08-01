@@ -2,20 +2,23 @@
 
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { Icon } from "@/components/Icon";
 import { PageHeading } from "@/components/ui/PageHeading";
-import { DataTable } from "@/components/ui/DataTable";
-import { Button } from "@/components/ui/Button";
+import { PagedTable } from "@/components/ui/PagedTable";
 import { Field, Input, Select } from "@/components/ui/Field";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import {
+  esCajera,
   type CashCloseList,
   type CashAccountOpt,
   type InformeCierreData,
   type MiCaja,
 } from "@/lib/treasury";
+import { CierreArqueo, type CierreDetalle } from "@/components/treasury/CierreArqueo";
+import { CerrarCajaBoton } from "@/components/treasury/CerrarCajaBoton";
 
 /** Sede que agrupa a los bancos (legacy `accounts.sede = 0`). */
 const SEDE_BANCO = 0;
@@ -33,44 +36,195 @@ const CierreDetalleModal = dynamic(
   { ssr: false },
 );
 
-/** Lo que se está mirando ahora mismo. null = todavía no se ha pulsado Ver. */
-type Consulta = { cashAccountId: string; fecha: string };
-
 /**
- * Cierre de caja — mismo flujo que el legacy (`reports/cierre`): un formulario de
- * Sede + Caja + Fecha y un botón Ver; **hasta que no se pulsa, no se muestra nada**.
+ * Cierre de caja. La pantalla es distinta según quién entre:
  *
- * Un arqueo es de UNA caja y UN día. A la cajera se le fijan sede y caja (sólo elige
- * fecha), igual que hace `acc_list()` allá; el backend además lo exige con un 403, así
- * que esto es comodidad, no la barrera de seguridad.
+ * · Cajera → el ARQUEO de su caja: cómo se compone el efectivo y los movimientos
+ *   que lo forman. El informe con las cifras del día se le muestra en su panel
+ *   (/dashboard), así que aquí ya no se repite.
+ * · Los demás → el informe completo de cualquier caja, como siempre.
  */
 export default function CierresPage() {
-  const { loading: authLoading, authFetch } = useAuth();
-  const [accounts, setAccounts] = useState<CashAccountOpt[]>([]);
-  const [mi, setMi] = useState<MiCaja | null>(null);
+  const { loading: authLoading, user } = useAuth();
+  if (authLoading) return <PageSkeleton />;
+  return esCajera(user) ? <ArqueoDeMiCaja /> : <CierresAdmin />;
+}
 
-  // --- El formulario (todavía no se ha consultado nada) ---
+/* ───────────────────────── Cajera: solo su arqueo ───────────────────────── */
+
+/**
+ * Lo que la cajera necesita de esta pantalla: qué movimientos pasaron por su caja ese
+ * día y cuánto efectivo debería tener en el cajón. Es el mismo arqueo que antes estaba
+ * escondido detrás del botón "Detalle".
+ *
+ * Va contra `cash-close/preview`, no contra `cash-closes/:id`: sirve igual para un día
+ * ya cerrado que para el de hoy, que es el que va a mirar el 90% de las veces.
+ */
+function ArqueoDeMiCaja() {
+  const { authFetch } = useAuth();
+  const [mi, setMi] = useState<MiCaja | null>(null);
+  const [fecha, setFecha] = useState(iso(new Date()));
+  const [d, setD] = useState<CierreDetalle | null>(null);
+  const [cargando, setCargando] = useState(true);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    void authFetch("/treasury/mi-caja")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((m: MiCaja | null) => {
+        setMi(m);
+        if (!m?.caja) setCargando(false);
+      })
+      .catch(() => { setErr("No se pudo saber cuál es tu caja."); setCargando(false); });
+  }, [authFetch]);
+
+  const cajaId = mi?.caja?.id ?? null;
+
+  const cargar = useCallback(async () => {
+    if (cajaId == null) return;
+    setCargando(true);
+    setErr("");
+    try {
+      const r = await authFetch(`/treasury/cash-close/preview?cashAccountId=${cajaId}&date=${fecha}`);
+      if (!r.ok) {
+        setD(null);
+        setErr(r.status === 403 ? "No tienes acceso a esta caja." : "No se pudo cargar el arqueo.");
+        return;
+      }
+      setD(await r.json());
+    } catch {
+      setErr("No se pudo cargar el arqueo.");
+    } finally {
+      setCargando(false);
+    }
+  }, [authFetch, cajaId, fecha]);
+
+  useEffect(() => { void cargar(); }, [cargar]);
+
+  async function openPdf(id: string) {
+    const res = await authFetch(`/treasury/cash-closes/${id}/pdf`);
+    if (!res.ok) return;
+    const url = URL.createObjectURL(await res.blob());
+    window.open(url, "_blank");
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+
+  if (mi && !mi.caja) {
+    return (
+      <>
+        <PageHeading icon="lock" title="Cierre de caja" subtitle="Tus movimientos y el efectivo del cajón" />
+        <div className="rounded-xl border border-dashed border-border-default bg-surface px-4 py-16 text-center">
+          <Icon name="wallet" size={22} className="mx-auto mb-2 text-text-tertiary" />
+          <p className="text-sm text-text-secondary">No tienes una caja asignada.</p>
+          <p className="mt-1 text-[12px] text-text-tertiary">Pídele a administración que te asigne la tuya.</p>
+        </div>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <PageHeading
+          icon="lock"
+          title="Cierre de caja"
+          subtitle={mi?.caja ? `${mi.caja.name} · tus movimientos del día` : "Tus movimientos del día"}
+        />
+        <div className="flex items-end gap-2">
+          <Field label="Día">
+            <Input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} />
+          </Field>
+          {fecha !== iso(new Date()) && (
+            <button
+              onClick={() => setFecha(iso(new Date()))}
+              className="mb-[1px] rounded-md border border-border-default px-2.5 py-2 text-[12px] text-text-secondary hover:bg-surface-2"
+            >
+              Hoy
+            </button>
+          )}
+          {d?.id && (
+            <button
+              onClick={() => void openPdf(d.id!)}
+              className="mb-[1px] inline-flex items-center gap-1 rounded-md border border-border-default px-2.5 py-2 text-[12px] text-text-secondary hover:bg-surface-2"
+            >
+              <Icon name="file-text" size={13} /> PDF
+            </button>
+          )}
+          {/* La cajera cierra SU caja desde aquí: es la pantalla donde ya está mirando el
+              arqueo con el que va a cuadrar el cajón. */}
+          {d && !d.yaCerrado && mi?.caja && (
+            <div className="mb-[1px]">
+              <CerrarCajaBoton
+                cashAccountId={mi.caja.id}
+                caja={mi.caja.name}
+                fecha={fecha}
+                excedente={d.efectivo}
+                proximoDiaHabil={d.proximoDiaHabil}
+                onCerrado={() => void cargar()}
+              />
+            </div>
+          )}
+        </div>
+      </div>
+
+      {err && <div className="mb-3 rounded-lg bg-error-soft px-3 py-2 text-sm text-error-text">{err}</div>}
+
+      {cargando && !d ? <PageSkeleton /> : d ? (
+        <div className="flex flex-col gap-4">
+          <CierreArqueo
+            d={d}
+            maxMovimientos="max-h-[34rem]"
+          />
+          <p className="text-[12px] text-text-tertiary">
+            Las cifras del día (cobranza, formas de pago, servicios) están en{" "}
+            <Link href="/dashboard" className="text-brand hover:underline">tu panel</Link>.
+          </p>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+/* ──────────────── Administración: el informe de cualquier caja ──────────────── */
+
+/** Un día ± n, en el mismo formato `YYYY-MM-DD` que come el backend. */
+const masDias = (f: string, n: number) => {
+  const [y, m, d] = f.split("-").map(Number);
+  return iso(new Date(y, m - 1, d + n));
+};
+
+/**
+ * Mismo alcance que el legacy (`reports/cierre`): un arqueo es de UNA caja y UN día. Lo
+ * que cambió es cómo se llega hasta él.
+ *
+ * Antes: un formulario de Sede + Caja + Fecha y un botón "Ver"; hasta que no se pulsaba,
+ * abajo no había nada, y para mirar el día anterior había que volver al formulario y
+ * pulsar otra vez. Ahora la caja y el día son una barra de contexto: en cuanto hay caja
+ * elegida se carga solo, las flechas ‹ › recorren días y el estado del cierre —abierto,
+ * cerrado, descuadrado— es un chip visible en vez de un renglón gris.
+ */
+function CierresAdmin() {
+  const { authFetch } = useAuth();
+  const [accounts, setAccounts] = useState<CashAccountOpt[]>([]);
+
   const [sede, setSede] = useState("");
   const [cashAccountId, setCashAccountId] = useState("");
   const [fecha, setFecha] = useState(iso(new Date()));
 
-  // --- Lo consultado ---
-  const [consulta, setConsulta] = useState<Consulta | null>(null);
   const [informe, setInforme] = useState<InformeCierreData | null>(null);
   const [historial, setHistorial] = useState<CashCloseList | null>(null);
   const [cargando, setCargando] = useState(false);
   const [err, setErr] = useState("");
   const [detalleId, setDetalleId] = useState<string | null>(null);
+  /** Se incrementa al cerrar la caja, para que el informe se vuelva a pedir. */
+  const [recarga, setRecarga] = useState(0);
 
   useEffect(() => {
-    if (authLoading) return;
-    void Promise.all([
-      authFetch("/treasury/cash-accounts").then((r) => (r.ok ? r.json() : [])),
-      authFetch("/treasury/mi-caja").then((r) => (r.ok ? r.json() : null)),
-    ])
-      .then(([accs, miCaja]) => { setAccounts(accs ?? []); setMi(miCaja); })
+    void authFetch("/treasury/cash-accounts")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((accs) => setAccounts(accs ?? []))
       .catch(() => {});
-  }, [authLoading, authFetch]);
+  }, [authFetch]);
 
   /** Sólo cajas de sede: un banco no se cierra, se consolida DENTRO del cierre. */
   const cajas = useMemo(() => accounts.filter((a) => a.branchLegacy !== SEDE_BANCO), [accounts]);
@@ -89,43 +243,35 @@ export default function CierresPage() {
     [cajas, sede],
   );
 
-  // A la cajera se le fijan sede y caja: sólo elige la fecha.
+  // Se carga solo: la caja y el día son el estado de la pantalla, no un formulario que
+  // haya que enviar. `cashAccountId` vacío = todavía no hay nada que pedir.
   useEffect(() => {
-    if (!mi?.esCajera || !mi.caja || cashAccountId) return;
-    setCashAccountId(String(mi.caja.id));
-    if (mi.caja.branchLegacy != null) setSede(String(mi.caja.branchLegacy));
-  }, [mi, cashAccountId]);
-
-  const puedeVer = !!cashAccountId && !!fecha;
-
-  const consultar = useCallback(async (q: Consulta) => {
+    if (!cashAccountId || !fecha) { setInforme(null); return; }
+    let vivo = true;
     setCargando(true);
     setErr("");
-    try {
-      const [rInf, rHist] = await Promise.all([
-        authFetch(`/treasury/cash-close/report?cashAccountId=${q.cashAccountId}&date=${q.fecha}`),
-        authFetch(`/treasury/cash-closes?cashAccountId=${q.cashAccountId}&all=1&page=1&pageSize=10`),
-      ]);
-      if (!rInf.ok) {
-        setInforme(null);
-        setErr(rInf.status === 403 ? "No tienes acceso a esta caja." : "No se pudo cargar el informe.");
-        return;
+    void (async () => {
+      try {
+        const [rInf, rHist] = await Promise.all([
+          authFetch(`/treasury/cash-close/report?cashAccountId=${cashAccountId}&date=${fecha}`),
+          authFetch(`/treasury/cash-closes?cashAccountId=${cashAccountId}&all=1&page=1&pageSize=10`),
+        ]);
+        if (!vivo) return;
+        if (!rInf.ok) {
+          setInforme(null);
+          setErr(rInf.status === 403 ? "No tienes acceso a esta caja." : "No se pudo cargar el informe.");
+          return;
+        }
+        setInforme(await rInf.json());
+        setHistorial(rHist.ok ? await rHist.json() : null);
+      } catch {
+        if (vivo) setErr("No se pudo cargar el informe.");
+      } finally {
+        if (vivo) setCargando(false);
       }
-      setInforme(await rInf.json());
-      setHistorial(rHist.ok ? await rHist.json() : null);
-    } catch {
-      setErr("No se pudo cargar el informe.");
-    } finally {
-      setCargando(false);
-    }
-  }, [authFetch]);
-
-  function onVer() {
-    if (!puedeVer) return;
-    const q = { cashAccountId, fecha };
-    setConsulta(q);
-    void consultar(q);
-  }
+    })();
+    return () => { vivo = false; };
+  }, [authFetch, cashAccountId, fecha, recarga]);
 
   async function openPdf(id: string) {
     const res = await authFetch(`/treasury/cash-closes/${id}/pdf`);
@@ -135,116 +281,143 @@ export default function CierresPage() {
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
 
-  if (authLoading) return <PageSkeleton />;
-
   const cajaSel = cajas.find((c) => String(c.id) === cashAccountId) ?? null;
+  const hoy = iso(new Date());
+  const a = informe?.arqueo;
 
   return (
     <>
       <div className="mb-4">
-        <PageHeading icon="lock" title="Cierre de caja" subtitle="Elige sede, caja y fecha, y pulsa Ver" />
+        <PageHeading icon="lock" title="Cierre de caja" subtitle="El arqueo de una caja y un día" />
       </div>
 
-      {/* ── El formulario. Hasta que no se pulsa Ver, abajo no hay nada. ── */}
-      <div className="mb-4 rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <Field label="Sede" required>
-            <Select
-              value={sede}
-              disabled={!!mi?.esCajera}
-              onChange={(e) => {
-                setSede(e.target.value);
-                setCashAccountId(""); // la caja depende de la sede
-              }}
-            >
-              <option value="">— Selecciona —</option>
-              {sedes.map(([id, nombre]) => <option key={id} value={id}>{nombre}</option>)}
-            </Select>
-          </Field>
-
-          {/* Sin `hint`: el hint va DEBAJO del input y haría esa columna más alta, con lo
-              que el botón (alineado al fondo de la fila) quedaría por debajo de la línea
-              de los inputs. Lo que decían los hints se dice en el placeholder y en el
-              estado vacío. */}
-          <Field label="Caja" required>
-            <Select
-              value={cashAccountId}
-              disabled={!!mi?.esCajera || !sede}
-              onChange={(e) => setCashAccountId(e.target.value)}
-            >
-              <option value="">{sede || mi?.esCajera ? "— Selecciona —" : "— Elige primero la sede —"}</option>
-              {cajasDeLaSede.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </Select>
-          </Field>
-
-          <Field label="Fecha" required>
-            <Input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} />
-          </Field>
-
-          {/* El espaciador invisible ocupa lo que la etiqueta de los demás campos, así el
-              botón queda a la misma altura que los inputs y no depende de `items-end`. */}
-          <div>
-            <span aria-hidden className="mb-1 block select-none text-[11px] font-semibold text-transparent">.</span>
-            {/* `border border-transparent`: los inputs llevan borde y el botón primario no,
-                así que sin esto queda 2px más bajo que ellos aun teniendo el mismo padding. */}
-            <Button onClick={onVer} disabled={!puedeVer || cargando} className="w-full border border-transparent">
-              {cargando ? "Cargando…" : "Ver"}
-            </Button>
-          </div>
-        </div>
-
-        {mi?.esCajera && (
-          <p className="mt-2 flex items-center gap-1.5 text-[12px] text-text-tertiary">
-            <Icon name="lock" size={12} />
-            {mi.caja
-              ? <>Ves solo tu caja: <strong className="text-text-secondary">{mi.caja.name}</strong>.</>
-              : <>No tienes una caja asignada. Pídele a administración que te asigne la tuya.</>}
-          </p>
+      {/* ── La barra de contexto: qué caja y qué día se está mirando ── */}
+      <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-border-subtle bg-surface p-3 shadow-sm">
+        {/* Cerrar es LA acción de esta pantalla, así que abre la barra. Sólo aparece si el
+            día sigue abierto: un día cerrado no se vuelve a cerrar. */}
+        {a && !a.yaCerrado && cajaSel && (
+          <CerrarCajaBoton
+            cashAccountId={Number(cashAccountId)}
+            caja={cajaSel.name}
+            fecha={fecha}
+            excedente={a.excedente}
+            proximoDiaHabil={a.proximoDiaHabil}
+            onCerrado={() => setRecarga((n) => n + 1)}
+          />
         )}
+
+        {/* Recorrer días es lo que más se hace aquí, y antes costaba volver al formulario. */}
+        <div className="flex items-center overflow-hidden rounded-lg border border-border-default bg-surface">
+          <button
+            onClick={() => setFecha((f) => masDias(f, -1))}
+            aria-label="Día anterior"
+            className="px-2 py-1.5 text-text-secondary hover:bg-surface-2 hover:text-text-primary"
+          >
+            <Icon name="chevron-left" size={15} />
+          </button>
+          <input
+            type="date"
+            value={fecha}
+            onChange={(e) => e.target.value && setFecha(e.target.value)}
+            aria-label="Fecha"
+            className="border-x border-border-default bg-transparent px-2 py-1.5 text-[13px] font-semibold text-text-primary focus:outline-none"
+          />
+          <button
+            onClick={() => setFecha((f) => masDias(f, 1))}
+            disabled={fecha >= hoy}
+            aria-label="Día siguiente"
+            className="px-2 py-1.5 text-text-secondary hover:bg-surface-2 hover:text-text-primary disabled:opacity-40 disabled:hover:bg-transparent"
+          >
+            <Icon name="chevron-right" size={15} />
+          </button>
+        </div>
+        {fecha !== hoy && (
+          <button
+            onClick={() => setFecha(hoy)}
+            className="rounded-lg border border-border-default px-2.5 py-1.5 text-[12px] font-semibold text-text-secondary hover:bg-surface-2"
+          >
+            Hoy
+          </button>
+        )}
+
+        <Select
+          value={sede}
+          aria-label="Sede"
+          className="w-auto min-w-[9rem]"
+          onChange={(e) => { setSede(e.target.value); setCashAccountId(""); }}
+        >
+          <option value="">— Sede —</option>
+          {sedes.map(([id, nombre]) => <option key={id} value={id}>{nombre}</option>)}
+        </Select>
+
+        <Select
+          value={cashAccountId}
+          aria-label="Caja"
+          disabled={!sede}
+          className="w-auto min-w-[10rem]"
+          onChange={(e) => setCashAccountId(e.target.value)}
+        >
+          <option value="">{sede ? "— Caja —" : "— Elige primero la sede —"}</option>
+          {cajasDeLaSede.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </Select>
+
+        {/* El estado del cierre deja de ser un renglón gris debajo del informe. */}
+        {a && (
+          a.yaCerrado ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-success-soft px-2.5 py-1 text-[12px] font-semibold text-success-text">
+              <Icon name="check" size={12} /> Cerrada · se barrieron {cop(a.excedente)}
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-warning-soft px-2.5 py-1 text-[12px] font-semibold text-warning-text">
+              <Icon name="clock" size={12} /> Sin cerrar · el cajón tiene {cop(a.excedente)}
+            </span>
+          )
+        )}
+
+        <div className="ml-auto flex items-center gap-1">
+          {a?.id && (
+            <>
+              <button onClick={() => setDetalleId(a.id)} className="inline-flex items-center gap-1 rounded-lg border border-border-default px-2.5 py-1.5 text-[12px] font-semibold text-text-secondary hover:bg-surface-2">
+                <Icon name="search" size={13} /> Movimientos
+              </button>
+              <button onClick={() => void openPdf(a.id!)} className="inline-flex items-center gap-1 rounded-lg border border-border-default px-2.5 py-1.5 text-[12px] font-semibold text-text-secondary hover:bg-surface-2">
+                <Icon name="file-text" size={13} /> PDF
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {err && <div className="mb-3 rounded-lg bg-error-soft px-3 py-2 text-sm text-error-text">{err}</div>}
 
       {/* ── El resultado ── */}
-      {!consulta ? (
+      {!cashAccountId ? (
         <div className="rounded-xl border border-dashed border-border-default bg-surface px-4 py-16 text-center">
-          <Icon name="search" size={22} className="mx-auto mb-2 text-text-tertiary" />
-          <p className="text-sm text-text-secondary">Elige sede, caja y fecha, y pulsa <strong>Ver</strong>.</p>
-          <p className="mt-1 text-[12px] text-text-tertiary">El arqueo es de una caja y un día.</p>
+          <Icon name="wallet" size={22} className="mx-auto mb-2 text-text-tertiary" />
+          <p className="text-sm text-text-secondary">Elige una sede y una caja arriba.</p>
+          <p className="mt-1 text-[12px] text-text-tertiary">El informe se carga solo; las flechas recorren los días.</p>
         </div>
       ) : cargando && !informe ? (
         <PageSkeleton />
       ) : informe ? (
         <div className="flex flex-col gap-6">
-          {/* Acciones sobre el cierre consultado */}
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-[12px] text-text-tertiary">
-              {informe.arqueo.yaCerrado
-                ? <>Esta caja ya se cerró ese día: se barrieron <strong className="text-text-secondary">{cop(informe.arqueo.excedente)}</strong> y se arrastraron al {fechaCorta(informe.arqueo.proximoDiaHabil)}.</>
-                : <>Este día <strong className="text-text-secondary">aún no se ha cerrado</strong>. El cajón tiene {cop(informe.arqueo.excedente)}.</>}
-            </span>
-            {informe.arqueo.id && (
-              <div className="flex gap-1">
-                <button onClick={() => setDetalleId(informe.arqueo.id)} className="inline-flex items-center gap-1 rounded-md border border-border-default px-2 py-1 text-[12px] text-text-secondary hover:bg-surface-2">
-                  <Icon name="search" size={13} /> Detalle
-                </button>
-                <button onClick={() => void openPdf(informe.arqueo.id!)} className="inline-flex items-center gap-1 rounded-md border border-border-default px-2 py-1 text-[12px] text-text-secondary hover:bg-surface-2">
-                  <Icon name="file-text" size={13} /> PDF
-                </button>
-              </div>
-            )}
-          </div>
-
           <InformeCierre d={informe} />
+
+          {a && (
+            <p className="text-[12px] text-text-tertiary">
+              {a.yaCerrado
+                ? <>El excedente se arrastró al <strong className="text-text-secondary">{fechaCorta(a.proximoDiaHabil)}</strong>. El detalle movimiento a movimiento está en <button onClick={() => setDetalleId(a.id)} className="font-semibold text-brand hover:underline">Movimientos</button>.</>
+                : <>Cuando se cierre, el efectivo se arrastrará al <strong className="text-text-secondary">{fechaCorta(a.proximoDiaHabil)}</strong> (próximo día hábil; el sábado también lo es).</>}
+            </p>
+          )}
 
           {/* Los últimos cierres de esta caja, para saltar a otro día sin salir de aquí */}
           {!!historial?.items?.length && (
-            <section>
+            <section className="shrink-0">
               <h3 className="mb-1 text-[13px] font-semibold text-text-primary">
                 Últimos cierres de {cajaSel?.name ?? "esta caja"}
               </h3>
-              <DataTable
-                autoHeight
+              <PagedTable
                 rows={historial.items}
                 empty="Esta caja no tiene cierres."
                 columns={[
@@ -254,13 +427,7 @@ export default function CierresPage() {
                   { key: "habil", header: "Arrastra a", render: (r) => <span className="text-text-tertiary">{fechaCorta(r.proximoDiaHabil)}</span> },
                   { key: "acciones", header: "", align: "right", render: (r) => (
                     <button
-                      onClick={() => {
-                        const f = String(r.date).slice(0, 10);
-                        setFecha(f);
-                        const q = { cashAccountId, fecha: f };
-                        setConsulta(q);
-                        void consultar(q);
-                      }}
+                      onClick={() => setFecha(String(r.date).slice(0, 10))}
                       className="inline-flex items-center gap-1 rounded-md border border-border-default px-2 py-1 text-[12px] text-text-secondary hover:bg-surface-2"
                     >
                       <Icon name="search" size={13} /> Ver ese día

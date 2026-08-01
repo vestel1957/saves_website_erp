@@ -54,24 +54,27 @@ export const screenKey = (href: string) => "screen" + href.replace(/\//g, ".");
 //    (que estaban enterrados como submódulo dentro de FACTURACIÓN).
 //  · Documentos pasó de REPORTES a CONFIGURACIÓN. CLIENTES/CRM subió tras PRINCIPAL.
 
-// PRINCIPAL — inicio (workspace por rol), Dashboard, Reportes, PlayHub y mensajería.
+// PRINCIPAL — Dashboard, Reportes, PlayHub y mensajería.
+// (El workspace /inicio se retiró 2026-07-24: la raíz redirige a la primera
+// sección accesible, así que el landing tras login vuelve a ser el Dashboard
+// para quien lo pueda ver.)
+// WHATSAPP (2026-07-29) — la BANDEJA, no la configuración.
+// Antes PRINCIPAL tenía un submenú "WhatsApp" que en realidad eran cinco pantallas de
+// configuración (plantillas, masivos, API, bot) más un "Inbox" que ni siquiera era de
+// WhatsApp: era la bitácora de la tabla `mensajes` del legacy. Se separaron los dos
+// oficios: esta hoja es donde se responde a los clientes y vive en PRINCIPAL porque es
+// trabajo de todos los días; la configuración del canal se fue a CONFIGURACIÓN.
+// El contador de chats sin atender lo inyecta el Sidebar por href (ver DYNAMIC_BADGE):
+// aquí no puede ser un `badge` fijo porque depende de quién mire.
 const principal: NavItem[] = [
-  { icon: "gauge", label: "Inicio", href: "/inicio", public: true },
+  // De primera a propósito: es el landing del técnico (`firstAccessibleHref` toma
+  // la primera hoja visible). Lo que necesita al abrir el sistema es qué le toca
+  // hoy y en qué orden; el resto de su trabajo está en /soporte.
+  { icon: "calendar-clock", label: "Mi agenda", href: "/mi-agenda" },
   { icon: "layout-dashboard", label: "Dashboard", href: "/dashboard" },
+  { icon: "message-circle", label: "WhatsApp", href: "/whatsapp" },
   { icon: "map-pin", label: "Mapa", href: "/mapa" },
-  { icon: "bar-chart-3", label: "Reportes", href: "/reportes" },
   { icon: "play", label: "Clientes PlayHub", href: "/playhub", iconClass: "text-error-text" },
-  {
-    icon: "message-circle",
-    label: "WhatsApp",
-    children: [
-      { icon: "message-square", label: "Inbox", href: "/configuracion/mensajes" },
-      { icon: "sparkles", label: "Agente (bot)", href: "/configuracion/chatbot" },
-      { icon: "file-text", label: "Plantillas", href: "/configuracion/whatsapp/plantillas" },
-      { icon: "send", label: "Envío masivo", href: "/configuracion/whatsapp/masivo" },
-      { icon: "settings", label: "Configurar API", href: "/configuracion/whatsapp" },
-    ],
-  },
 ];
 
 // FACTURACIÓN — documentos de venta y promociones. (Tesorería se movió a CAJA / TESORERÍA.)
@@ -87,12 +90,15 @@ const facturacion: NavItem[] = [
 
 // CAJA / TESORERÍA — apertura/cierre de caja + movimientos de tesorería (unificado).
 const cajaTesoreria: NavItem[] = [
-  { icon: "key-round", label: "Apertura de caja", href: "/tesoreria/apertura" },
+  // "Apertura de caja" se retiró del menú (2026-07-29): abrir la caja dejó de ser una
+  // pantalla con formulario y pasó a ser un botón en el panel de la cajera. La base ya
+  // no la teclea quien abre — la fija administración en Cajas y categorías.
   { icon: "lock", label: "Cierre de caja", href: "/tesoreria/cierres" },
   { icon: "banknote", label: "Movimientos", href: "/tesoreria" },
   { icon: "trending-up", label: "Ingresos", href: "/tesoreria/ingresos" },
   { icon: "trending-down", label: "Egresos", href: "/tesoreria/egresos" },
   { icon: "plus", label: "Nueva transacción", href: "/tesoreria/nueva" },
+  { icon: "repeat", label: "Pagos fijos", href: "/tesoreria/pagos-fijos" },
   { icon: "arrow-left-right", label: "Transferencia entre cajas", href: "/tesoreria/transferencia" },
   { icon: "x", label: "Anulaciones", href: "/tesoreria/anulaciones" },
   { icon: "wallet", label: "Cajas y categorías", href: "/tesoreria/cajas" },
@@ -120,8 +126,8 @@ const red: NavItem[] = [
 // aquí, con rutas /mikrotik/* de verdad (no /red/* renombradas: eso deja el menú
 // diciendo una cosa y el gate por área del middleware otra, como pasa con
 // Equipos). Lo que NO se mueve: el MikrotikModal de corte/reconexión sigue
-// colgando de la ficha del abonado (/clientes/[id]) y de /inicio, porque ahí es
-// donde se opera un cliente concreto; y el cambio de plan sigue en su modal.
+// colgando de la ficha del abonado (/clientes/[id]), porque ahí es donde se
+// opera un cliente concreto; y el cambio de plan sigue en su modal.
 const mikrotik: NavItem[] = [
   { icon: "router", label: "Gestión de routers", href: "/mikrotik" },
   { icon: "zap", label: "Operaciones masivas", href: "/mikrotik/masivo" },
@@ -160,6 +166,7 @@ const inventario: NavItem[] = [
       // "Nueva orden" no va en el menú: el botón vive dentro de Órdenes de compra.
       { icon: "shopping-cart", label: "Órdenes de compra", href: "/ordenes" },
       { icon: "wrench", label: "Órdenes de servicio", href: "/ordenes/servicios" },
+      { icon: "clock", label: "Historial de órdenes", href: "/ordenes/historial" },
       { icon: "folder", label: "Categorías de compra", href: "/ordenes/categorias" },
     ],
   },
@@ -173,6 +180,7 @@ const crm: NavItem[] = [
   { icon: "users-round", label: "Grupos de clientes", href: "/clientes/grupos" },
   { icon: "hand-coins", label: "Cobranza / Acuerdos", href: "/cobranza" },
   { icon: "headphones", label: "Soporte técnico", href: "/soporte" },
+  { icon: "calendar-clock", label: "Agendamiento", href: "/soporte/agenda" },
   { icon: "map-pin", label: "Geo-cerca de cierres", href: "/soporte/geocerca" },
 ];
 
@@ -187,18 +195,85 @@ const personas: NavItem[] = [
   { icon: "calendar", label: "Agenda / Eventos", href: "/agenda" },
 ];
 
+// REPORTES (2026-07-28) — vuelve a ser sección propia.
+// Estaba como un único ítem en PRINCIPAL que abría una página con un desplegable
+// de 15 reportes adentro: no se podía enlazar un reporte, ni volver a él con los
+// filtros puestos, ni dar acceso a uno sin darlo a todos. Al partirlo en una ruta
+// por reporte cada uno tiene URL y permiso propios.
+// Los tres grupos separan a QUIÉN le sirve cada reporte, no de dónde salen los
+// datos: gerencia mira plata, operación mira servicio, personal mira gente.
+const reportes: NavItem[] = [
+  { icon: "layout-dashboard", label: "Todos los reportes", href: "/reportes" },
+  {
+    icon: "banknote",
+    label: "Gerencia",
+    children: [
+      { icon: "receipt", label: "Resumen de facturación", href: "/reportes/facturacion" },
+      { icon: "banknote", label: "Recaudo", href: "/reportes/recaudo" },
+      { icon: "landmark", label: "Ventas por sede", href: "/reportes/ventas-sede" },
+      { icon: "trending-up", label: "Ingresos y egresos", href: "/reportes/ingresos-egresos" },
+      { icon: "alert-triangle", label: "Cartera / deudores", href: "/reportes/cartera" },
+      { icon: "calculator", label: "Reporte de IVA", href: "/reportes/iva" },
+    ],
+  },
+  {
+    icon: "headphones",
+    label: "Operación",
+    children: [
+      { icon: "headphones", label: "Órdenes de servicio", href: "/reportes/ordenes" },
+      { icon: "activity", label: "Cortes y activaciones", href: "/reportes/cortes-activaciones" },
+      { icon: "users", label: "Estado de clientes", href: "/reportes/estado-clientes" },
+      { icon: "arrow-left-right", label: "Altas y retiros", href: "/reportes/altas-retiros" },
+    ],
+  },
+  {
+    icon: "contact",
+    label: "Personal",
+    children: [
+      { icon: "hard-hat", label: "Rendimiento de técnicos", href: "/reportes/tecnicos" },
+      { icon: "hand-coins", label: "Recaudo por funcionario", href: "/reportes/recaudo-funcionario" },
+      { icon: "ban", label: "Anulaciones (control)", href: "/reportes/anulaciones" },
+      { icon: "history", label: "Actividad en el sistema", href: "/reportes/actividad" },
+    ],
+  },
+];
+
 // CONFIGURACIÓN — ajustes del sistema (ya sin operación de red ni reportes).
 const configuracion: NavItem[] = [
   { icon: "briefcase", label: "Empresa", href: "/configuracion" },
   { icon: "gauge", label: "Planes de servicio", href: "/configuracion/planes" },
   { icon: "folder", label: "Categorías de transacción", href: "/configuracion/categorias" },
   { icon: "user-cog", label: "Usuarios y roles", href: "/configuracion/usuarios" },
+  // Quién responde por cada frente. Va pegado a Usuarios a propósito: se nombra al
+  // encargado justo después de crear la gente, y es lo que dirige sus avisos.
+  { icon: "contact", label: "Encargados por cargo", href: "/configuracion/responsables" },
+  {
+    icon: "message-circle",
+    label: "Canal de WhatsApp",
+    children: [
+      { icon: "sparkles", label: "Agente (bot)", href: "/configuracion/chatbot" },
+      { icon: "file-text", label: "Plantillas", href: "/configuracion/whatsapp/plantillas" },
+      { icon: "send", label: "Envío masivo", href: "/configuracion/whatsapp/masivo" },
+      { icon: "settings", label: "Configurar API", href: "/configuracion/whatsapp" },
+    ],
+  },
+  // La bitácora de la tabla `mensajes` del legacy. No es WhatsApp (por eso no cuelga
+  // del grupo de arriba): son los avisos y campañas que registraba el sistema viejo.
+  { icon: "message-square", label: "Bitácora de mensajes", href: "/configuracion/mensajes" },
   { icon: "key-round", label: "REST API", href: "/configuracion/api" },
   { icon: "calendar-clock", label: "Cron job", href: "/configuracion/automatizaciones" },
   { icon: "history", label: "Bitácora / auditoría", href: "/configuracion/actividad" },
   // Importar y exportar viven en un solo hub (/configuracion/datos).
   { icon: "file-spreadsheet", label: "Importar / Exportar", href: "/configuracion/datos" },
   { icon: "folder", label: "Documentos", href: "/configuracion/documentos" },
+];
+
+// DOCUMENTACIÓN — manuales de uso del sistema, uno por rol.
+// `public: true` a propósito: NO se le deriva `screen.documentacion`. Quien más
+// necesita saber qué puede hacer es justo el que menos permisos tiene; gatear el
+// manual por área dejaría al técnico sin manual de técnico.
+const documentacion: NavItem[] = [
+  { icon: "book-open", label: "Manuales de uso", href: "/documentacion", public: true },
 ];
 
 /**
@@ -223,7 +298,9 @@ export const navSections: NavSection[] = [
   { title: "MIKROTIK", items: mikrotik },
   { title: "INVENTARIO", items: inventario },
   { title: "PERSONAS / PROYECTOS", items: personas },
+  { title: "REPORTES", items: reportes },
   { title: "CONFIGURACIÓN", items: configuracion },
+  { title: "DOCUMENTACIÓN", items: documentacion },
 ].map((s) => ({ ...s, items: s.items.map(withScreenPerm) }));
 
 /** Aplana un ítem y sus hijos a las hojas con href (para búsqueda/activo/landing). */
@@ -280,6 +357,22 @@ export function activeNavHref(pathname: string): string {
 }
 
 /**
+ * La hoja del sidebar que corresponde EXACTAMENTE a esta ruta, o null.
+ *
+ * Es lo que permite gatear el acceso por URL con la misma llave que gatea el menú:
+ * si a alguien se le quita una pantalla, dejaba de verla en el sidebar pero seguía
+ * entrando escribiendo la ruta. Sólo casa la hoja exacta a propósito: las fichas de
+ * detalle (/clientes/123, /facturacion/9) no son hojas del menú y se siguen
+ * gateando por área, que es como se llega a ellas desde otras pantallas.
+ */
+export function navLeafExacta(pathname: string): NavItem | null {
+  for (const s of navSections) {
+    for (const item of leaves(s.items)) if (item.href === pathname) return item;
+  }
+  return null;
+}
+
+/**
  * ¿La ruta actual ES una hoja del sidebar (una sección propia del menú)?
  * Sirve para decidir si mostrar el botón "Volver": en una sección del menú no
  * hace falta (se navega por el sidebar); solo se muestra en subpáginas que no
@@ -290,8 +383,22 @@ export function isNavLeaf(pathname: string): boolean {
   return navSections.some((s) => leaves(s.items).some((i) => i.href === pathname));
 }
 
+/**
+ * Rutas que existen pero NO cuelgan del menú y aun así merecen su propia miga.
+ * Sin esto el breadcrumb del navbar caía al respaldo (la primera sección del
+ * sidebar), y "Mi perfil" se anunciaba como si fuera el dashboard.
+ */
+const CRUMBS_SUELTAS: { prefijo: string; section: string; label: string }[] = [
+  { prefijo: "/perfil", section: "Mi cuenta", label: "Mi perfil" },
+];
+
 /** Devuelve [sección, etiqueta] del módulo que corresponde a la ruta actual. */
 export function findCrumb(pathname: string): { section: string; label: string } {
+  const suelta = CRUMBS_SUELTAS.find(
+    (c) => pathname === c.prefijo || pathname.startsWith(`${c.prefijo}/`),
+  );
+  if (suelta) return { section: suelta.section, label: suelta.label };
+
   const href = activeNavHref(pathname);
   if (href) {
     for (const s of navSections) {

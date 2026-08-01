@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
 import { Modal } from "@/components/Modal";
 import { Button } from "@/components/ui/Button";
 import { Input, Field } from "@/components/ui/Field";
-import { DataTable } from "@/components/ui/DataTable";
+import { PagedTable } from "@/components/ui/PagedTable";
+import { ListToolbar } from "@/components/ui/ListToolbar";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/components/ui/Toast";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
@@ -69,7 +70,10 @@ function CajaModal({ caja, onClose, onDone }: { caja: CashAccount | "new" | null
         <Field label="Teléfono"><Input value={phone} onChange={(e) => setPhone(e.target.value)} /></Field>
         <Field label="Dirección"><Input value={address} onChange={(e) => setAddress(e.target.value)} /></Field>
         <div className="sm:col-span-2">
-          <Field label="Fondo fijo" hint="La plata que nunca sale del cajón. No entra en el excedente del arqueo.">
+          <Field
+            label="Base de apertura (fondo fijo)"
+            hint="Con cuánto arranca esta caja. Es lo que se registra cuando la cajera pulsa «Abrir caja» (más el arrastre del cierre anterior): ella no la teclea. Nunca sale del cajón y no entra en el excedente del arqueo."
+          >
             <Input type="number" min={0} value={fixedFund} onChange={(e) => setFixedFund(e.target.value)} />
           </Field>
         </div>
@@ -92,6 +96,14 @@ export default function CajasPage() {
   const [toDelete, setToDelete] = useState<CashAccount | null>(null);
   const [newCat, setNewCat] = useState("");
   const [catToDelete, setCatToDelete] = useState<Category | null>(null);
+  const [search, setSearch] = useState("");
+
+  // Filtro en cliente por nombre/número de cuenta sobre lo ya cargado.
+  const shown = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return accounts;
+    return accounts.filter((a) => [a.name, a.accountNumber, a.code].some((v) => (v ?? "").toLowerCase().includes(q)));
+  }, [accounts, search]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -163,7 +175,7 @@ export default function CajasPage() {
 
   return (
     <>
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <PageHeading icon="wallet" title="Cajas y categorías" subtitle="Administra las cajas/bancos y las categorías de movimientos" />
         <Button size="sm" onClick={() => setCajaModal("new")}><Icon name="plus" size={14} /> Nueva caja</Button>
       </div>
@@ -173,10 +185,10 @@ export default function CajasPage() {
           <h2 className="text-[13px] font-bold uppercase tracking-wide text-text-tertiary">Cajas y bancos</h2>
           <span className="text-[12px] text-text-secondary">Saldo total: <b className="text-text-primary">{cop(totalSaldo)}</b></span>
         </div>
-        <DataTable
-          autoHeight
-          rows={accounts}
-          empty="No hay cajas registradas."
+        <ListToolbar search={search} onSearch={setSearch} searchPlaceholder="Buscar caja o banco…" />
+        <PagedTable
+          rows={shown}
+          empty={search ? "Ninguna caja coincide con la búsqueda." : "No hay cajas registradas."}
           columns={[
             { key: "name", header: "Caja / Banco", render: (a: CashAccount) => <span className="font-medium text-text-primary">{a.name}</span> },
             { key: "acc", header: "N.º cuenta", render: (a: CashAccount) => a.accountNumber || "—" },
@@ -184,10 +196,10 @@ export default function CajasPage() {
             { key: "estado", header: "", render: (a: CashAccount) => a.persisted === false ? <span className="text-[11px] text-text-tertiary">derivada</span> : null },
             { key: "acciones", header: "", align: "right" as const, render: (a: CashAccount) => (
               <div className="flex justify-end gap-2">
-                <button type="button" title="Recalcular saldo" onClick={() => recompute(a.id)} className="text-text-tertiary hover:text-brand"><Icon name="refresh-cw" size={14} /></button>
+                <button type="button" title="Recalcular saldo" onClick={() => recompute(a.id)} className="tap text-text-tertiary hover:text-brand"><Icon name="refresh-cw" size={14} /></button>
                 {a.persisted !== false && <>
-                  <button type="button" title="Editar" onClick={() => setCajaModal(a)} className="text-text-tertiary hover:text-brand"><Icon name="pencil" size={14} /></button>
-                  <button type="button" title="Eliminar" onClick={() => setToDelete(a)} className="text-text-tertiary hover:text-error-text"><Icon name="trash" size={14} /></button>
+                  <button type="button" title="Editar" onClick={() => setCajaModal(a)} className="tap text-text-tertiary hover:text-brand"><Icon name="pencil" size={14} /></button>
+                  <button type="button" title="Eliminar" onClick={() => setToDelete(a)} className="tap text-text-tertiary hover:text-error-text"><Icon name="trash" size={14} /></button>
                 </>}
               </div>
             ) },
@@ -207,8 +219,8 @@ export default function CajasPage() {
           {categories.map((c) => (
             <span key={c.id} className="inline-flex items-center gap-1.5 rounded-full border border-border-subtle bg-surface-2 px-3 py-1 text-[12.5px] text-text-primary">
               {c.name}
-              <button type="button" title="Renombrar" onClick={() => renameCat(c)} className="text-text-tertiary hover:text-brand"><Icon name="pencil" size={12} /></button>
-              <button type="button" title="Eliminar" onClick={() => setCatToDelete(c)} className="text-text-tertiary hover:text-error-text"><Icon name="x" size={12} /></button>
+              <button type="button" title="Renombrar" onClick={() => renameCat(c)} className="tap text-text-tertiary hover:text-brand"><Icon name="pencil" size={12} /></button>
+              <button type="button" title="Eliminar" onClick={() => setCatToDelete(c)} className="tap text-text-tertiary hover:text-error-text"><Icon name="x" size={12} /></button>
             </span>
           ))}
         </div>

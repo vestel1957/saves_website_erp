@@ -79,7 +79,7 @@ export default function DevolucionDetallePage() {
 
   return (
     <>
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <PageHeading icon="receipt" title={`Devolución ${data.tid ?? ""}`} subtitle={data.supplier?.name ?? "Proveedor"} />
         <Badge label={STATUS_LABEL[data.status] ?? data.status ?? "—"} tone={STATUS_TONE[data.status ?? ""] ?? "default"} />
       </div>

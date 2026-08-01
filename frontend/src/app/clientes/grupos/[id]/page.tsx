@@ -17,6 +17,7 @@ import { useAuth } from "@/context/AuthProvider";
 import { PERM } from "@/lib/auth";
 import { type SubscriberList, SUB_STATUS_LABEL, SUB_STATUS_TONE, cop, cuentaParams } from "@/lib/subscribers";
 import { useRequest } from "@/lib/useRequest";
+import { useOrden } from "@/lib/useOrden";
 
 export default function SedeClientesPage() {
   const { id } = useParams<{ id: string }>();
@@ -62,9 +63,12 @@ export default function SedeClientesPage() {
 
   // Carga con cancelación: al teclear se aborta la petición en vuelo para que
   // una respuesta lenta no pise a otra más reciente. Ver lib/useRequest.
+  // Pagina en el servidor: el orden viaja en la query.
+  const orden = useOrden();
+
   const { data, cargando: loading, error, refrescar: load } = useRequest<SubscriberList>(
     () => {
-      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize), branchId: String(id) });
+      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize), branchId: String(id), ...orden.params });
       if (search.trim()) qs.set("search", search.trim());
       if (status) qs.set("status", status);
       if (servicio) qs.set("servicio", servicio);
@@ -77,7 +81,7 @@ export default function SedeClientesPage() {
     [id, page, pageSize, search, status, servicio, tecnologia, cuenta],
     { debounceMs: search ? 350 : 0, saltar: authLoading },
   );
-  useEffect(() => { setPage(1); }, [search, status, servicio, tecnologia, cuenta, pageSize]);
+  useEffect(() => { setPage(1); }, [search, status, servicio, tecnologia, cuenta, pageSize, orden.clave]);
 
   if (authLoading) return <PageSkeleton />;
 
@@ -88,6 +92,7 @@ export default function SedeClientesPage() {
       </Link>
       <PageHeading
         icon="warehouse"
+        showBack={false} // ya hay un "Volver a sedes" arriba; dos botones de volver confunden
         title={sedeName || "Sede"}
         subtitle={data ? `${data.total.toLocaleString("es-CO")} clientes en esta sede` : "Clientes de la sede"}
       />
@@ -133,6 +138,8 @@ export default function SedeClientesPage() {
       ) : (
         <>
           <DataTable
+            sort={orden.sort}
+            onSort={orden.onSort}
             rows={data?.items ?? []}
             empty="No se encontraron clientes en esta sede con esos criterios."
             columns={[
@@ -155,12 +162,14 @@ export default function SedeClientesPage() {
                   />
                 ),
               }] : []),
-              { key: "abonado", header: "Abonado", render: (r) => <span className="font-mono text-text-secondary">{r.abonado}</span> },
-              { key: "name", header: "Nombre", render: (r) => <span className="font-medium text-text-primary">{r.name}</span> },
+              { key: "abonado", header: "Abonado", sortable: true, render: (r) => <span className="font-mono text-text-secondary">{r.abonado}</span> },
+              { key: "name", header: "Nombre", sortable: true, render: (r) => <span className="font-medium text-text-primary">{r.name}</span> },
               { key: "doc", header: "Documento", render: (r) => <span className="text-text-secondary">{r.docNumber ?? "—"}</span> },
               { key: "phone", header: "Celular", render: (r) => r.phone ?? "—" },
-              { key: "status", header: "Estado", render: (r) => <Badge label={SUB_STATUS_LABEL[r.status ?? ""] ?? r.status ?? "—"} tone={SUB_STATUS_TONE[r.status ?? ""] ?? "default"} /> },
-              { key: "balance", header: "Saldo", align: "right", render: (r) => <span className={r.balance > 0 ? "font-semibold text-success-text" : "text-text-tertiary"}>{cop(r.balance)}</span> },
+              { key: "status", header: "Estado", sortable: true, render: (r) => <Badge label={SUB_STATUS_LABEL[r.status ?? ""] ?? r.status ?? "—"} tone={SUB_STATUS_TONE[r.status ?? ""] ?? "default"} /> },
+              // Lo que debe = facturas sin pagar. `balance` es el saldo A FAVOR, que es
+              // otra cosa y era lo que se mostraba antes bajo el rótulo "Saldo".
+              { key: "debt", header: "Debe", align: "right", render: (r) => <span className={r.debt > 0 ? "font-semibold text-error-text" : "text-text-tertiary"}>{cop(r.debt)}</span> },
               { key: "go", header: "", align: "right", render: (r) => <Link href={`/clientes/${r.id}`} className="inline-flex items-center gap-1 rounded-lg border border-border-default px-3 py-1.5 text-[12px] font-semibold text-text-secondary transition-colors hover:bg-surface-2">Ver ficha →</Link> },
             ]}
           />

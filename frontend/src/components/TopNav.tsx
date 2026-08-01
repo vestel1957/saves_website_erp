@@ -4,14 +4,13 @@ import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { Icon } from "./Icon";
 import { ThemeToggle } from "./ThemeToggle";
-import { BrandColorPicker } from "./BrandColorPicker";
-import { Dropdown, MenuItem } from "./ui/Dropdown";
-import { toast } from "./ui/Toast";
+import { Dropdown } from "./ui/Dropdown";
 import { CommandPalette, OPEN_COMMAND_EVENT } from "./navbar/CommandPalette";
 import { findCrumb } from "@/lib/nav";
 import { useAuth } from "@/context/AuthProvider";
 import { useSidebar } from "@/context/SidebarProvider";
-import { initials, PERM } from "@/lib/auth";
+import { useNotifications } from "@/context/NotificationsProvider";
+import { PERM } from "@/lib/auth";
 
 /** Alerta de inventario tal como la entrega el backend (/inventory/alerts). */
 type InvAlert = {
@@ -49,13 +48,18 @@ export function TopNav() {
   const router = useRouter();
   const crumb = findCrumb(pathname);
   const { collapsed, toggle, isMobile, openMobile } = useSidebar();
-  const { user, logout, can, authFetch } = useAuth();
-  const avatar = user ? initials(user.name) : "··";
-  const roleLabel = user?.roles?.[0] ?? "Sin rol";
+  const { user, can, authFetch } = useAuth();
 
   const canSeeAlerts = can(PERM.INV_STOCK_READ);
   const [alerts, setAlerts] = useState<InvAlert[]>([]);
-  const unread = alerts.filter((a) => a.status === "PENDIENTE").length;
+  const alertasSinLeer = alerts.filter((a) => a.status === "PENDIENTE").length;
+
+  // La campanita muestra DOS cosas de origen distinto: los avisos personales
+  // (bandeja de WhatsApp y lo que venga después) y las alertas de inventario, que
+  // son de stock y no de nadie en particular. Se cuentan juntas porque para quien
+  // mira es una sola campana.
+  const { items: avisos, unread: avisosSinLeer, marcarTodas, marcar } = useNotifications();
+  const unread = avisosSinLeer + alertasSinLeer;
 
   const loadAlerts = useCallback(async () => {
     if (!user || !canSeeAlerts) return;
@@ -78,7 +82,16 @@ export function TopNav() {
 
   async function markAllRead() {
     setAlerts((list) => list.map((a) => ({ ...a, status: "LEIDA" })));
-    await authFetch("/inventory/alerts/read-all", { method: "POST" }).catch(() => {});
+    await Promise.all([
+      authFetch("/inventory/alerts/read-all", { method: "POST" }).catch(() => {}),
+      marcarTodas(),
+    ]);
+  }
+
+  /** Abre el aviso donde toque y lo da por leído. */
+  function abrirAviso(n: { id: string; link: string | null }) {
+    void marcar(n.id);
+    if (n.link) router.push(n.link);
   }
 
   function openAlert(a: InvAlert) {
@@ -88,7 +101,7 @@ export function TopNav() {
   }
 
   const squareBtn =
-    "flex h-10 w-10 items-center justify-center rounded-lg bg-surface-2 text-text-secondary transition-colors hover:bg-border-subtle";
+    "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-text-secondary transition-colors hover:bg-border-subtle";
 
   return (
     <header className="flex h-16 shrink-0 items-center gap-2 border-b border-border-subtle bg-surface px-4 sm:gap-4 sm:px-6">
@@ -145,7 +158,9 @@ export function TopNav() {
         <Icon name="search" size={16} />
       </button>
 
-      <BrandColorPicker />
+      {/* El selector de color primario NO va aquí: se elige en Preferencias
+          (/perfil?tab=preferencias). Es un ajuste que se toca una vez, no algo
+          que merezca un botón permanente en la barra. */}
 
       <ThemeToggle />
 
@@ -172,15 +187,38 @@ export function TopNav() {
             </button>
           )}
         </div>
-        {alerts.length === 0 ? (
+        {alerts.length === 0 && avisos.length === 0 ? (
           <div className="flex flex-col items-center gap-1.5 px-3 py-6 text-center">
             <Icon name="check" size={18} className="text-text-tertiary" />
-            <span className="text-[12px] text-text-tertiary">
-              {canSeeAlerts ? "Sin alertas de inventario" : "Sin notificaciones"}
-            </span>
+            <span className="text-[12px] text-text-tertiary">Sin notificaciones</span>
           </div>
         ) : (
           <div className="max-h-[360px] overflow-y-auto">
+            {/* Avisos personales primero: son los que piden una acción de QUIEN mira. */}
+            {avisos.slice(0, 20).map((n) => (
+              <button
+                key={n.id}
+                onClick={() => abrirAviso(n)}
+                className={`flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left hover:bg-surface-2 ${
+                  n.leida ? "opacity-60" : ""
+                }`}
+              >
+                <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-soft">
+                  <Icon
+                    name={n.kind.startsWith("whatsapp") ? "message-circle" : "bell"}
+                    size={13}
+                    className="text-brand"
+                  />
+                </span>
+                <div className="flex min-w-0 flex-col">
+                  <span className="text-[12px] font-semibold text-text-primary">{n.title}</span>
+                  {n.body && (
+                    <span className="line-clamp-2 text-[11px] text-text-secondary">{n.body}</span>
+                  )}
+                  <span className="text-[11px] text-text-tertiary">{timeAgo(n.createdAt)}</span>
+                </div>
+              </button>
+            ))}
             {alerts.slice(0, 20).map((a) => {
               const isUnread = a.status === "PENDIENTE";
               return (
@@ -214,52 +252,9 @@ export function TopNav() {
         )}
       </Dropdown>
 
-      {/* usuario */}
-      <Dropdown
-        width={240}
-        trigger={
-          <div className="flex h-9 items-center gap-2 rounded-full bg-surface-2 px-1 pr-2 transition-colors hover:bg-border-subtle">
-            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-accent text-[11px] font-semibold text-white">
-              {avatar}
-            </span>
-            <Icon name="chevron-down" size={14} className="text-text-secondary" />
-          </div>
-        }
-      >
-        {({ close }) => (
-          <>
-            <div className="flex items-center gap-2.5 px-2.5 pb-2 pt-1">
-              <span className="flex h-9 w-9 items-center justify-center rounded-full bg-accent text-[12px] font-semibold text-white">
-                {avatar}
-              </span>
-              <div className="flex min-w-0 flex-col leading-tight">
-                <span className="truncate text-[13px] font-semibold text-text-primary">
-                  {user?.name ?? "Invitado"}
-                </span>
-                <span className="truncate text-[11px] text-text-tertiary">
-                  {user?.email ?? roleLabel}
-                </span>
-              </div>
-            </div>
-            <div className="px-2.5 pb-2">
-              <span className="inline-flex items-center gap-1 rounded-full bg-brand-soft px-2 py-0.5 text-[10px] font-semibold text-brand">
-                <Icon name="shield-check" size={11} /> {roleLabel}
-              </span>
-            </div>
-            <div className="my-1 h-px bg-border-subtle" />
-            <MenuItem onClick={() => { close(); toast("Perfil — módulo en construcción", "user"); }}>
-              <Icon name="user" size={15} className="text-text-tertiary" /> Mi perfil
-            </MenuItem>
-            <MenuItem onClick={() => { close(); toast("Configuración — módulo en construcción", "settings"); }}>
-              <Icon name="settings" size={15} className="text-text-tertiary" /> Configuración
-            </MenuItem>
-            <div className="my-1 h-px bg-border-subtle" />
-            <MenuItem danger onClick={() => { close(); void logout(); }}>
-              <Icon name="log-out" size={15} className="text-error-text" /> Cerrar sesión
-            </MenuItem>
-          </>
-        )}
-      </Dropdown>
+      {/* El menú de usuario (perfil / preferencias / salir) NO va aquí: vive al
+          pie del sidebar, que es donde ya estaba el bloque con el nombre. Tenerlo
+          en los dos sitios era la misma cosa dos veces. */}
 
       {/* overlays montados una vez con el navbar */}
       <CommandPalette />

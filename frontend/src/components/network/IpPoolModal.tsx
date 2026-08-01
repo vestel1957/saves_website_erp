@@ -101,7 +101,7 @@ export function IpPoolModal({
           <Input value={form.name} onChange={set("name")} placeholder="Yopal GPON" />
         </Field>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="IP local" required>
             <Input value={form.ipLocal} onChange={set("ipLocal")} placeholder="10.100.0.1" />
           </Field>
@@ -110,7 +110,7 @@ export function IpPoolModal({
           </Field>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Sede" required>
             <Select value={form.branchId} onChange={set("branchId")}>
               <option value="">— Seleccionar —</option>

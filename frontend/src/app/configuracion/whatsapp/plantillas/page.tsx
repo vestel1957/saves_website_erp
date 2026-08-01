@@ -1,19 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
 import { Modal } from "@/components/Modal";
 import { Button } from "@/components/ui/Button";
 import { Input, Select, Textarea, Field } from "@/components/ui/Field";
 import { Badge } from "@/components/ui/Badge";
-import { DataTable } from "@/components/ui/DataTable";
+import { PagedTable } from "@/components/ui/PagedTable";
+import { ListToolbar } from "@/components/ui/ListToolbar";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/components/ui/Toast";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { useAuth } from "@/context/AuthProvider";
 import { PERM } from "@/lib/auth";
-import { type WaTemplate, type WaTemplateVar, WA_VAR_SOURCES } from "@/lib/whatsapp";
+import { type WaTemplate, type WaTemplateVar, WA_VAR_SOURCES, WA_META_STATUS } from "@/lib/whatsapp";
 import { mensajeDeError } from "@/lib/errores";
 
 const LANGS = [
@@ -33,6 +34,7 @@ function TemplateModal({ tpl, onClose, onDone }: { tpl: WaTemplate | "new" | nul
   const [headerText, setHeaderText] = useState("");
   const [variables, setVariables] = useState<WaTemplateVar[]>([]);
   const [active, setActive] = useState(true);
+  const [submitToMeta, setSubmitToMeta] = useState(true);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -43,7 +45,7 @@ function TemplateModal({ tpl, onClose, onDone }: { tpl: WaTemplate | "new" | nul
       setVariables(tpl.variables ?? []); setActive(tpl.active); setErr(null);
     } else if (tpl === "new") {
       setName(""); setLanguage("es"); setCategory("UTILITY"); setBodyText(""); setHeaderText("");
-      setVariables([]); setActive(true); setErr(null);
+      setVariables([]); setActive(true); setSubmitToMeta(true); setErr(null);
     }
   }, [tpl]);
 
@@ -57,7 +59,7 @@ function TemplateModal({ tpl, onClose, onDone }: { tpl: WaTemplate | "new" | nul
     if (!bodyText.trim()) { setErr("El cuerpo de la plantilla es obligatorio."); return; }
     setSaving(true);
     try {
-      const body = { name: name.trim(), language, category, bodyText, headerText: headerText || undefined, variables, active };
+      const body = { name: name.trim(), language, category, bodyText, headerText: headerText || undefined, variables, active, submitToMeta: !editing && submitToMeta };
       const url = editing ? `/admin/whatsapp/templates/${(tpl as WaTemplate).id}` : `/admin/whatsapp/templates`;
       const res = await authFetch(url, { method: editing ? "PATCH" : "POST", body: JSON.stringify(body) });
       const data = await res.json();
@@ -88,12 +90,24 @@ function TemplateModal({ tpl, onClose, onDone }: { tpl: WaTemplate | "new" | nul
                 <Input className="flex-1" placeholder="Etiqueta" value={v.label} onChange={(e) => updVar(i, { label: e.target.value })} />
                 <Select value={v.source} onChange={(e) => updVar(i, { source: e.target.value })}>{WA_VAR_SOURCES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}</Select>
                 {v.source === "custom" && <Input className="flex-1" placeholder="Valor fijo" value={v.value ?? ""} onChange={(e) => updVar(i, { value: e.target.value })} />}
-                <button type="button" onClick={() => delVar(i)} className="text-text-tertiary hover:text-error-text"><Icon name="x" size={14} /></button>
+                <button type="button" onClick={() => delVar(i)} className="tap text-text-tertiary hover:text-error-text"><Icon name="x" size={14} /></button>
               </div>
             ))}
           </div>
         </div>
         <label className="flex items-center gap-2 text-[13px] text-text-secondary sm:col-span-2"><input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} /> Activa</label>
+        {!editing && (
+          <label className="flex items-start gap-2 text-[13px] text-text-secondary sm:col-span-2">
+            <input type="checkbox" className="mt-0.5" checked={submitToMeta} onChange={(e) => setSubmitToMeta(e.target.checked)} />
+            <span>
+              Enviar a aprobación en Meta
+              <span className="block text-[11px] text-text-tertiary">
+                Crea la plantilla en la cuenta de WhatsApp Business (queda «En revisión» hasta que Meta la apruebe; suele tardar minutos).
+                Meta no permite variables al inicio ni al final del cuerpo.
+              </span>
+            </span>
+          </label>
+        )}
       </div>
       {err && <p className="mt-2 text-[12px] text-error-text">{err}</p>}
       <div className="mt-3 flex justify-end gap-2">
@@ -111,6 +125,14 @@ export default function PlantillasPage() {
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<WaTemplate | "new" | null>(null);
   const [toDelete, setToDelete] = useState<WaTemplate | null>(null);
+  const [search, setSearch] = useState("");
+
+  // Filtro en cliente de las plantillas ya cargadas (nombre, idioma, categoría).
+  const shown = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return templates;
+    return templates.filter((t) => [t.name, t.language, t.category].some((v) => (v ?? "").toLowerCase().includes(q)));
+  }, [templates, search]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -132,26 +154,30 @@ export default function PlantillasPage() {
 
   return (
     <>
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <PageHeading icon="file-text" title="Plantillas de WhatsApp" subtitle="Referencia a las plantillas aprobadas en Meta + mapeo de variables" />
         {isAdmin && <Button size="sm" onClick={() => setModal("new")}><Icon name="plus" size={14} /> Nueva plantilla</Button>}
       </div>
 
       <div className="mt-4">
-        <DataTable
-          autoHeight
-          rows={templates}
-          empty="No hay plantillas. Créalas para poder enviar mensajes masivos."
+        <ListToolbar search={search} onSearch={setSearch} searchPlaceholder="Buscar plantilla…" />
+        <PagedTable
+          rows={shown}
+          empty={search ? "Ninguna plantilla coincide con la búsqueda." : "No hay plantillas. Créalas para poder enviar mensajes masivos."}
           columns={[
             { key: "name", header: "Nombre", render: (t: WaTemplate) => <span className="font-mono text-[13px] text-text-primary">{t.name}</span> },
             { key: "lang", header: "Idioma", render: (t: WaTemplate) => t.language },
             { key: "cat", header: "Categoría", render: (t: WaTemplate) => t.category || "—" },
             { key: "vars", header: "Variables", render: (t: WaTemplate) => (t.variables?.length ?? 0) },
+            { key: "meta", header: "Meta", render: (t: WaTemplate) => {
+              const st = t.metaStatus ? WA_META_STATUS[t.metaStatus] : null;
+              return st ? <Badge label={st.label} tone={st.tone} /> : <span className="text-text-tertiary">—</span>;
+            } },
             { key: "active", header: "Estado", render: (t: WaTemplate) => <Badge label={t.active ? "Activa" : "Inactiva"} tone={t.active ? "success" : "default"} /> },
             ...(isAdmin ? [{ key: "acc", header: "", align: "right" as const, render: (t: WaTemplate) => (
               <div className="flex justify-end gap-2">
-                <button type="button" title="Editar" onClick={() => setModal(t)} className="text-text-tertiary hover:text-brand"><Icon name="pencil" size={14} /></button>
-                <button type="button" title="Eliminar" onClick={() => setToDelete(t)} className="text-text-tertiary hover:text-error-text"><Icon name="trash" size={14} /></button>
+                <button type="button" title="Editar" onClick={() => setModal(t)} className="tap text-text-tertiary hover:text-brand"><Icon name="pencil" size={14} /></button>
+                <button type="button" title="Eliminar" onClick={() => setToDelete(t)} className="tap text-text-tertiary hover:text-error-text"><Icon name="trash" size={14} /></button>
               </div>
             ) }] : []),
           ]}

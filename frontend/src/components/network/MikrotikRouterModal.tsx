@@ -78,7 +78,7 @@ export function MikrotikRouterModal({
   return (
     <Modal open={open} onClose={onClose} title={editing ? "Editar Mikrotik" : "Agregar Mikrotik"} maxWidth="max-w-xl">
       <form onSubmit={submit} className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="IP" required>
             <Input value={form.ip} onChange={set("ip")} placeholder="181.118.150.29" className="font-mono" required />
           </Field>

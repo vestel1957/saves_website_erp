@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import { Icon } from "@/components/Icon";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { DetailHeader } from "@/components/ui/DetailHeader";
 import { Input, Select, Textarea } from "@/components/ui/Field";
 import { toast } from "@/components/ui/Toast";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
@@ -14,6 +15,7 @@ import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import { TICKET_STATUS_LABEL, TICKET_STATUS_TONE, TICKET_PRIORITIES, TICKET_PRIORITY_TONE } from "@/lib/support";
 import { AsignarEquipoModal } from "@/components/soporte/AsignarEquipoModal";
+import { AutenticarOnuOrden } from "@/components/soporte/AutenticarOnuOrden";
 import { ConsumirMaterialModal } from "@/components/soporte/ConsumirMaterialModal";
 import { SignaturePad } from "@/components/support/SignaturePad";
 import { fmtDate } from "@/lib/format";
@@ -208,39 +210,45 @@ export default function OrdenDetallePage() {
 
   return (
     <div className="w-full">
-      <Link href="/soporte" className="mb-1 inline-flex items-center gap-1 text-[12px] text-text-tertiary hover:text-text-secondary"><Icon name="arrow-left" size={13} /> Soporte</Link>
-
-      {/* Encabezado */}
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-[20px] font-bold text-text-primary">{t.subject} <span className="text-text-tertiary">Nº {t.code ?? "—"}</span></h1>
+      {/* Esta pantalla se trabaja desde el celular, en la calle: el encabezado
+          común ya baja los controles a ancho completo en móvil, y los botones de
+          estado se reparten la fila en vez de apiñarse contra el borde derecho. */}
+      <DetailHeader
+        backHref="/soporte"
+        backLabel="Soporte"
+        icon="wrench"
+        title={<>{t.subject} <span className="text-text-tertiary">Nº {t.code ?? "—"}</span></>}
+        badges={
+          <>
             <Badge label={TICKET_STATUS_LABEL[t.status] ?? t.status} tone={TICKET_STATUS_TONE[t.status] ?? "default"} />
             {t.priority && <Badge label={`Prioridad: ${t.priority}`} tone={TICKET_PRIORITY_TONE[t.priority] ?? "default"} />}
-          </div>
-          <p className="text-[12px] text-text-tertiary">Creada {fmtDate(t.created)}{t.finalDate ? ` · Finalizada ${fmtDate(t.finalDate)}` : ""}{t.assigned ? ` · Técnico: ${t.assigned}` : ""}</p>
-        </div>
-        <div className="flex flex-col items-end gap-2">
-          <Button variant="secondary" size="sm" disabled={pdfBusy} onClick={abrirPdf}>
-            <Icon name="download" size={13} /> {pdfBusy ? "Generando…" : "Orden PDF"}
-          </Button>
-          <div className="flex items-center gap-1.5">
-            <span className="text-[11px] font-semibold text-text-tertiary">Prioridad</span>
-            <Select value={t.priority ?? "Media"} disabled={busy} className="w-auto py-1 text-[12px]"
-              onChange={(e) => post(`/support/tickets/${id}/priority`, { priority: e.target.value }, `Prioridad: ${e.target.value}`)}>
-              {TICKET_PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
-            </Select>
-          </div>
-          <div className="flex flex-wrap items-center justify-end gap-1.5">
-            {STATES.filter((x) => x !== t.status).map((x) => (
-              <Button key={x} variant={x === "ANULADA" ? "danger" : "secondary"} size="sm" disabled={busy}
-                onClick={() => void cambiarEstado(x)}>
-                {TICKET_STATUS_LABEL[x] ?? x}
-              </Button>
-            ))}
-          </div>
-        </div>
-      </div>
+          </>
+        }
+        subtitle={<>Creada {fmtDate(t.created)}{t.finalDate ? ` · Finalizada ${fmtDate(t.finalDate)}` : ""}{t.assigned ? ` · Técnico: ${t.assigned}` : ""}</>}
+        actions={
+          <>
+            <Button variant="secondary" size="sm" disabled={pdfBusy} onClick={abrirPdf} className="w-full sm:w-auto">
+              <Icon name="download" size={13} /> {pdfBusy ? "Generando…" : "Orden PDF"}
+            </Button>
+            <div className="flex w-full items-center gap-1.5 sm:w-auto">
+              <span className="text-[11px] font-semibold text-text-tertiary">Prioridad</span>
+              <Select value={t.priority ?? "Media"} disabled={busy} className="flex-1 py-1 text-[12px] sm:w-auto sm:flex-none"
+                onChange={(e) => post(`/support/tickets/${id}/priority`, { priority: e.target.value }, `Prioridad: ${e.target.value}`)}>
+                {TICKET_PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
+              </Select>
+            </div>
+            <div className="flex w-full flex-wrap items-center gap-1.5 sm:w-auto sm:justify-end">
+              {STATES.filter((x) => x !== t.status).map((x) => (
+                <Button key={x} variant={x === "ANULADA" ? "danger" : "secondary"} size="sm" disabled={busy}
+                  className="flex-1 sm:flex-none"
+                  onClick={() => void cambiarEstado(x)}>
+                  {TICKET_STATUS_LABEL[x] ?? x}
+                </Button>
+              ))}
+            </div>
+          </>
+        }
+      />
 
       {/* Ficha del cliente / orden (bloque denso estilo legacy) */}
       <div className="mb-3 rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
@@ -303,7 +311,7 @@ export default function OrdenDetallePage() {
           <div className="flex gap-2">
             <Select value={assign} onChange={(e) => setAssign(e.target.value)}>
               <option value="">— Sin asignar —</option>
-              {techs.map((tt) => <option key={tt.id} value={tt.username || tt.name}>{tt.name}</option>)}
+              {techs.map((tt) => <option key={tt.id} value={tt.name}>{tt.name}</option>)}
             </Select>
             <Button size="sm" disabled={busy} onClick={() => post(`/support/tickets/${id}/assign`, { assigned: assign }, "Técnico asignado")}>Guardar</Button>
           </div>
@@ -317,6 +325,11 @@ export default function OrdenDetallePage() {
         {t.problem && <p className="mt-1 whitespace-pre-wrap text-[13px] text-text-secondary">{t.problem}</p>}
         {t.section && <p className="mt-1 whitespace-pre-wrap text-[12px] text-text-tertiary">{t.section}</p>}
       </div>
+
+      {/* Autenticar la ONU contra la OLT (solo en órdenes que lo requieren).
+          Se monta aquí, junto a la instalación, y no en una pantalla aparte:
+          la velocidad la pone el plan, así que no hay nada más que preguntar. */}
+      <AutenticarOnuOrden ticketId={id} tipo={t.type} estadoOrden={t.status} onDone={reload} />
 
       {/* Equipo asignado + material consumido */}
       <div className="mb-3 rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
@@ -340,6 +353,19 @@ export default function OrdenDetallePage() {
                 {e.nat != null && <span className="text-text-tertiary">N:{e.nat}</span>}
                 {e.vlan != null && <span className="text-text-tertiary">V:{e.vlan}</span>}
                 {e.status && <Badge label={e.status} tone="default" />}
+                {/* El equipo que está autenticado en la OLT, con el plan que le
+                    rige: sin esto había que abrir Red › OLT para saberlo. */}
+                {e.esOnu && (
+                  <>
+                    <Badge label={`ONU${e.onuEstado ? ` · ${e.onuEstado}` : ""}`} tone={/online/i.test(e.onuEstado ?? "") ? "success" : "default"} />
+                    {e.plan && (
+                      <span className="text-text-secondary">
+                        <Icon name="gauge" size={12} className="mr-0.5 inline text-brand" />
+                        {e.plan}{e.megas != null ? ` · ${e.megas} Mbps` : ""}
+                      </span>
+                    )}
+                  </>
+                )}
               </li>
             ))}
           </ul>

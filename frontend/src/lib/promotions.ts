@@ -23,7 +23,6 @@ export function discountLabel(p: { discountFormat?: string | null; percentage: n
 export type PromotionAssignee = {
   id: string;
   name: string;
-  username: string | null;
   email: string | null;
 };
 

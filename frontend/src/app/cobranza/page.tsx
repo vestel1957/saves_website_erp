@@ -7,8 +7,10 @@ import { Icon } from "@/components/Icon";
 import { Button } from "@/components/ui/Button";
 import { Input, Select } from "@/components/ui/Field";
 import { Badge } from "@/components/ui/Badge";
-import { DataTable } from "@/components/ui/DataTable";
+import { PagedTable } from "@/components/ui/PagedTable";
+import { ListToolbar } from "@/components/ui/ListToolbar";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 
@@ -32,6 +34,8 @@ export default function CobranzaPage() {
   const [state, setState] = useState("");
   const [dueFrom, setDueFrom] = useState("");
   const [dueTo, setDueTo] = useState("");
+  const [confirmar, setConfirmar] = useState<{ kind: "borrar-registro"; row: Agreement } | null>(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
 
   const buildQuery = useCallback(() => {
     const p = new URLSearchParams();
@@ -77,13 +81,14 @@ export default function CobranzaPage() {
   }
 
   async function deleteCall(id: string) {
-    if (!confirm("¿Eliminar este registro de cobranza?")) return;
+    setConfirmBusy(true);
     try {
       const res = await authFetch(`/collections/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error();
       toast("Registro eliminado", "check");
       void load();
     } catch { toast("No se pudo eliminar", "alert-triangle"); }
+    finally { setConfirmBusy(false); setConfirmar(null); }
   }
 
   if (authLoading) return <PageSkeleton />;
@@ -92,39 +97,29 @@ export default function CobranzaPage() {
 
   return (
     <>
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <PageHeading icon="hand-coins" title="Cobranza · Acuerdos de pago" subtitle={`${total} acuerdo(s) · ${vencidos} vencido(s)`} />
         <Button variant="secondary" onClick={exportCsv} disabled={exporting}>
           <Icon name="download" size={15} /> {exporting ? "Exportando…" : "Exportar CSV"}
         </Button>
       </div>
 
-      <div className="flex flex-wrap items-end gap-2 rounded-xl border border-border-subtle bg-surface p-3 shadow-sm">
-        <div className="min-w-[200px] flex-1">
-          <label className="mb-1 block text-[11px] font-semibold uppercase text-text-tertiary">Buscar</label>
-          <Input placeholder="Cliente o documento" value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === "Enter" && load()} />
-        </div>
-        <div>
-          <label className="mb-1 block text-[11px] font-semibold uppercase text-text-tertiary">Estado</label>
-          <Select value={state} onChange={(e) => setState(e.target.value)}>
+      {/* La carga sigue siendo manual (Enter o botón «Filtrar»), como antes. */}
+      <form onSubmit={(e) => { e.preventDefault(); void load(); }}>
+        <ListToolbar search={search} onSearch={setSearch} searchPlaceholder="Cliente o documento">
+          <Select value={state} onChange={(e) => setState(e.target.value)} title="Estado">
             <option value="">Todos</option>
             <option value="vigente">Vigentes</option>
             <option value="vencido">Vencidos</option>
           </Select>
-        </div>
-        <div>
-          <label className="mb-1 block text-[11px] font-semibold uppercase text-text-tertiary">Compromiso desde</label>
-          <Input type="date" value={dueFrom} onChange={(e) => setDueFrom(e.target.value)} />
-        </div>
-        <div>
-          <label className="mb-1 block text-[11px] font-semibold uppercase text-text-tertiary">Hasta</label>
-          <Input type="date" value={dueTo} onChange={(e) => setDueTo(e.target.value)} />
-        </div>
-        <Button variant="primary" onClick={load}><Icon name="check" size={15} /> Filtrar</Button>
-      </div>
+          <div className="w-[10rem]"><Input type="date" value={dueFrom} onChange={(e) => setDueFrom(e.target.value)} title="Compromiso desde" /></div>
+          <div className="w-[10rem]"><Input type="date" value={dueTo} onChange={(e) => setDueTo(e.target.value)} title="Compromiso hasta" /></div>
+          <Button type="submit" variant="primary"><Icon name="check" size={15} /> Filtrar</Button>
+        </ListToolbar>
+      </form>
 
       {loading ? <PageSkeleton /> : (
-        <DataTable
+        <PagedTable
           rows={rows}
           empty="No hay acuerdos de pago con estos filtros."
           columns={[
@@ -146,9 +141,48 @@ export default function CobranzaPage() {
             { key: "estadoCliente", header: "Estado", render: (r: Agreement) => <Badge label={r.estadoCliente ?? "—"} tone={r.estadoCliente === "COMPROMISO" ? "warning" : "default"} /> },
             { key: "notes", header: "Notas", render: (r: Agreement) => <span className="text-[12px] text-text-tertiary">{r.notes ?? "—"}</span> },
             { key: "acc", header: "", align: "right", render: (r: Agreement) => (
-              <button onClick={() => deleteCall(r.id)} className="text-text-tertiary hover:text-error-text" title="Eliminar"><Icon name="trash" size={15} /></button>
+              <button onClick={() => setConfirmar({ kind: "borrar-registro", row: r })} className="tap text-text-tertiary hover:text-error-text" title="Eliminar"><Icon name="trash" size={15} /></button>
             ) },
           ]}
+        />
+      )}
+
+      {confirmar && (
+        <ConfirmDialog
+          open
+          busy={confirmBusy}
+          onClose={() => setConfirmar(null)}
+          onConfirm={() => void deleteCall(confirmar.row.id)}
+          tone="danger"
+          icon="trash"
+          title="Eliminar registro de cobranza"
+          confirmLabel="Eliminar registro"
+          message={
+            <>
+              Se borra el acuerdo de la bitácora del cliente y deja de constar el compromiso pactado:
+              el cliente pierde la protección frente al corte masivo.
+            </>
+          }
+          detail={
+            <div className="rounded-lg border border-border-subtle bg-surface-2 p-2.5">
+              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12px]">
+                <dt className="text-text-tertiary">Cliente</dt>
+                <dd className="min-w-0 break-words text-right text-text-primary">
+                  {confirmar.row.cliente}
+                  {confirmar.row.abonado ? <span className="ml-1 font-mono text-text-tertiary">Ab. {confirmar.row.abonado}</span> : null}
+                </dd>
+                <dt className="text-text-tertiary">Responsable</dt>
+                <dd className="text-right text-text-primary">{confirmar.row.responsible ?? "—"}</dd>
+                <dt className="text-text-tertiary">Fecha llamada</dt>
+                <dd className="text-right text-text-primary">{fmtDate(confirmar.row.date)}</dd>
+                <dt className="text-text-tertiary">Compromiso</dt>
+                <dd className="flex items-center justify-end gap-1.5 text-right text-text-primary">
+                  {fmtDate(confirmar.row.dueDate)}
+                  <Badge label={confirmar.row.vencido ? "Vencido" : "Vigente"} tone={confirmar.row.vencido ? "error" : "success"} />
+                </dd>
+              </dl>
+            </div>
+          }
         />
       )}
     </>

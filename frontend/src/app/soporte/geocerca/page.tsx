@@ -10,6 +10,8 @@ import { Button } from "@/components/ui/Button";
 import { toast } from "@/components/ui/Toast";
 import { mensajeDeError } from "@/lib/errores";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
+import { type Column } from "@/components/ui/DataTable";
+import { PagedTable } from "@/components/ui/PagedTable";
 import { LoadError } from "@/components/ui/LoadError";
 import { useAuth } from "@/context/AuthProvider";
 import { useRequest } from "@/lib/useRequest";
@@ -236,7 +238,7 @@ export default function GeocercaPage() {
 
   return (
     <>
-      <div className="flex flex-wrap items-start justify-between gap-2">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <PageHeading
           icon="map-pin"
           title="Geo-cerca de cierres"
@@ -323,62 +325,61 @@ export default function GeocercaPage() {
           </p>
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-border-subtle bg-surface">
-          <table className="w-full min-w-[820px] text-[12.5px]">
-            <thead className="border-b border-border-subtle bg-surface-2 text-left text-text-tertiary">
-              <tr>
-                <th className="px-3 py-2 font-semibold">Orden</th>
-                <th className="px-3 py-2 font-semibold">Tipo</th>
-                <th className="px-3 py-2 font-semibold">Técnico</th>
-                <th className="px-3 py-2 font-semibold">Cliente</th>
-                <th className="px-3 py-2 text-right font-semibold">Distancia</th>
-                <th className="px-3 py-2 font-semibold">Motivo dado</th>
-                <th className="px-3 py-2 font-semibold">Fecha</th>
-              </tr>
-            </thead>
-            <tbody>
-              {d.casos.map((c) => (
-                <tr key={c.id} className="border-b border-border-subtle last:border-0">
-                  <td className="px-3 py-2">
-                    <Link href={`/soporte/${c.id}`} className="font-semibold text-brand hover:underline">
-                      #{c.code ?? "—"}
-                    </Link>
-                  </td>
-                  <td className="px-3 py-2 text-text-secondary">{c.type ?? "—"}</td>
-                  <td className="px-3 py-2 text-text-primary">{c.tecnico ?? "—"}</td>
-                  <td className="px-3 py-2">
-                    {c.cliente ? (
-                      <Link href={`/clientes/${c.cliente.id}`} className="text-text-primary hover:text-brand hover:underline">
-                        {c.cliente.nombre ?? `#${c.cliente.abonado}`}
-                      </Link>
-                    ) : (
-                      "—"
-                    )}
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    <span className="font-bold text-error-text">
-                      {c.distanciaM != null ? formatearDistancia(Math.round(c.distanciaM)) : "—"}
+        <PagedTable
+          columns={[
+            {
+              key: "orden", header: "Orden",
+              render: (c) => (
+                <Link href={`/soporte/${c.id}`} className="font-semibold text-brand hover:underline">
+                  #{c.code ?? "—"}
+                </Link>
+              ),
+            },
+            { key: "tipo", header: "Tipo", render: (c) => <span className="text-text-secondary">{c.type ?? "—"}</span> },
+            { key: "tecnico", header: "Técnico", render: (c) => c.tecnico ?? "—" },
+            {
+              key: "cliente", header: "Cliente",
+              render: (c) =>
+                c.cliente ? (
+                  <Link href={`/clientes/${c.cliente.id}`} className="text-text-primary hover:text-brand hover:underline">
+                    {c.cliente.nombre ?? `#${c.cliente.abonado}`}
+                  </Link>
+                ) : (
+                  "—"
+                ),
+            },
+            {
+              key: "distancia", header: "Distancia", align: "right",
+              render: (c) => (
+                <>
+                  <span className="font-bold text-error-text">
+                    {c.distanciaM != null ? formatearDistancia(Math.round(c.distanciaM)) : "—"}
+                  </span>
+                  {/* La precisión es la diferencia entre "hizo trampa" y "el GPS
+                      no agarraba". Sin ella la distancia sola acusa a ciegas. */}
+                  {c.precisionM != null && (
+                    <span className="block text-[11px] text-text-tertiary">
+                      GPS ±{Math.round(c.precisionM)} m
                     </span>
-                    {/* La precisión es la diferencia entre "hizo trampa" y "el GPS
-                        no agarraba". Sin ella la distancia sola acusa a ciegas. */}
-                    {c.precisionM != null && (
-                      <span className="block text-[11px] text-text-tertiary">
-                        GPS ±{Math.round(c.precisionM)} m
-                      </span>
-                    )}
-                  </td>
-                  <td className="max-w-[260px] px-3 py-2 text-text-secondary">
-                    {c.justificacion ?? (
-                      <span className="text-text-tertiary">— (no se pidió: modo observación)</span>
-                    )}
-                    <Senales lista={c.senales} />
-                  </td>
-                  <td className="px-3 py-2 text-text-tertiary">{c.fecha ? fmtDate(c.fecha) : "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                  )}
+                </>
+              ),
+            },
+            {
+              key: "motivo", header: "Motivo dado",
+              render: (c) => (
+                <div className="max-w-[260px] text-text-secondary">
+                  {c.justificacion ?? (
+                    <span className="text-text-tertiary">— (no se pidió: modo observación)</span>
+                  )}
+                  <Senales lista={c.senales} />
+                </div>
+              ),
+            },
+            { key: "fecha", header: "Fecha", render: (c) => <span className="text-text-tertiary">{c.fecha ? fmtDate(c.fecha) : "—"}</span> },
+          ] satisfies Column<Caso>[]}
+          rows={d.casos}
+        />
       )}
     </>
   );

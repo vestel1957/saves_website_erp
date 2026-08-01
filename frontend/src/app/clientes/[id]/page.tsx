@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { Icon } from "@/components/Icon";
@@ -8,7 +8,10 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Textarea } from "@/components/ui/Field";
 import { PagedTable } from "@/components/ui/PagedTable";
+import { TabStrip } from "@/components/ui/TabStrip";
+import { DetailHeader } from "@/components/ui/DetailHeader";
 import { Modal } from "@/components/Modal";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import dynamic from "next/dynamic";
 import { Dropdown, MenuItem } from "@/components/ui/Dropdown";
@@ -34,6 +37,7 @@ const MikrotikModal = dynamic(() => import("@/components/network/MikrotikModal")
 const ClienteWizardModal = dynamic(() => import("@/components/subscribers/ClienteWizardModal").then((m) => m.ClienteWizardModal), { ssr: false });
 const EditarFacturaModal = dynamic(() => import("@/components/subscribers/EditarFacturaModal").then((m) => m.EditarFacturaModal), { ssr: false });
 const CambiarPlanModal = dynamic(() => import("@/components/subscribers/CambiarPlanModal").then((m) => m.CambiarPlanModal), { ssr: false });
+const CambiarEstadoModal = dynamic(() => import("@/components/subscribers/CambiarEstadoModal").then((m) => m.CambiarEstadoModal), { ssr: false });
 const NuevaOrdenModal = dynamic(() => import("@/components/soporte/NuevaOrdenModal").then((m) => m.NuevaOrdenModal), { ssr: false });
 
 type Detail = any;
@@ -42,6 +46,32 @@ type Detail = any;
 const SERVICE_KIND_ICON: Record<string, string> = {
   INTERNET: "wifi", TV: "tv", PUNTOS: "tv", STREAMING: "play",
 };
+
+/**
+ * De dónde salió el plan cuando no está registrado como servicio: `"factura"` es la
+ * última que se le emitió (de ahí lo lee el legacy) y `"perfil"` es el perfil PPPoE
+ * con el que navega. Los dos se enseñan igual —es lo que el cliente tiene— pero sin
+ * estado, porque ni una factura ni un perfil lo tienen.
+ */
+type Servicio = { kind: string; planName: string | null; price: number | null; status: string | null; source?: "plan" | "factura" | "perfil" };
+
+/**
+ * El plan que se enseña en grande y los demás que tiene contratados.
+ *
+ * Manda el de INTERNET: 3.281 de los 4.769 abonados tienen dos servicios
+ * (internet + televisión) y el que define lo que la gente llama "su plan" es el
+ * de internet. Entre varios del mismo tipo gana el ACTIVO, que es el vigente;
+ * los cortados se enseñan igual (con su estado) porque un plan cortado sigue
+ * siendo el que tiene contratado.
+ */
+function planContratado(services: Servicio[] | undefined) {
+  const lista = services ?? [];
+  if (!lista.length) return { principal: null, otros: [] as Servicio[] };
+  const vivo = (s: Servicio) => s.status === "ACTIVO";
+  const internet = lista.filter((s) => s.kind === "INTERNET");
+  const principal = internet.find(vivo) ?? internet[0] ?? lista.find(vivo) ?? lista[0];
+  return { principal, otros: lista.filter((s) => s !== principal) };
+}
 
 const fmtBytes = (n: number) => {
   if (!n) return "0 B";
@@ -94,7 +124,7 @@ function CopyBtn({ text }: { text?: string | null }) {
         setDone(true);
         setTimeout(() => setDone(false), 1200);
       }}
-      className="shrink-0 text-text-tertiary transition-colors hover:text-text-secondary"
+      className="tap shrink-0 text-text-tertiary transition-colors hover:text-text-secondary"
     >
       <Icon name={done ? "check" : "copy"} size={13} className={done ? "text-success-text" : ""} />
     </button>
@@ -124,29 +154,6 @@ function ContactRow({ icon, value, href, onClick, copy }: { icon: string; value?
   );
 }
 
-/** Botón-ícono para acciones rápidas del encabezado. */
-function QuickAction({ icon, label, href, onClick, tone }: { icon: string; label: string; href?: string | null; onClick?: () => void; tone?: "wa" }) {
-  const disabled = !href && !onClick;
-  const base = "inline-flex h-9 w-9 items-center justify-center rounded-lg border transition-colors";
-  const cls = disabled
-    ? `${base} border-border-subtle text-text-tertiary opacity-40`
-    : tone === "wa"
-      ? `${base} border-success-soft bg-success-soft text-success-text hover:brightness-95`
-      : `${base} border-border-default text-text-secondary hover:bg-surface-2`;
-  if (disabled) return <span title={`${label} no disponible`} className={cls}><Icon name={icon} size={16} /></span>;
-  if (onClick) {
-    return (
-      <button type="button" onClick={onClick} title={label} aria-label={label} className={cls}>
-        <Icon name={icon} size={16} />
-      </button>
-    );
-  }
-  return (
-    <a href={href!} target="_blank" rel="noreferrer" title={label} className={cls}>
-      <Icon name={icon} size={16} />
-    </a>
-  );
-}
 
 /** Botón de acción con relleno de color suave (para la columna Acciones). */
 const ACTION_TONES: Record<string, string> = {
@@ -171,12 +178,38 @@ function ActionBtn({ icon, title, tone = "neutral", onClick }: { icon: string; t
   );
 }
 
-/** Celda de la franja de indicadores del encabezado. */
-function StatCell({ label, tone, children }: { label: string; tone?: "error" | "success" | "default"; children: React.ReactNode }) {
+/**
+ * Ficha compacta para las confirmaciones de borrado: sirve para que el operador
+ * verifique que va a borrar el registro que cree, no el de al lado.
+ */
+function FichaConfirm({ filas }: { filas: [string, React.ReactNode][] }) {
+  return (
+    <div className="rounded-lg border border-border-subtle bg-surface-2 p-2.5">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12px]">
+        {filas.map(([k, v]) => (
+          <Fragment key={k}>
+            <dt className="text-text-tertiary">{k}</dt>
+            <dd className="min-w-0 break-words text-right text-text-primary">{v}</dd>
+          </Fragment>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+/**
+ * Celda de la franja de indicadores del encabezado.
+ *
+ * `destacada` la tiñe con el color de marca. El texto se deja en `text-primary`
+ * (no en `text-brand`) porque el color primario lo elige cada usuario en su
+ * perfil: sobre el fondo tintado, el único que tiene contraste garantizado en
+ * claro y en oscuro es el de siempre.
+ */
+function StatCell({ label, tone, destacada, className = "", title, children }: { label: string; tone?: "error" | "success" | "default"; destacada?: boolean; className?: string; title?: string; children: React.ReactNode }) {
   const valueCls = tone === "error" ? "text-error-text" : tone === "success" ? "text-success-text" : "text-text-primary";
   return (
-    <div className="bg-surface px-4 py-2.5">
-      <div className="mb-0.5 text-[11px] uppercase tracking-wide text-text-tertiary">{label}</div>
+    <div title={title} className={`px-4 py-2.5 ${destacada ? "bg-brand-soft" : "bg-surface"} ${className}`}>
+      <div className={`mb-0.5 text-[11px] uppercase tracking-wide ${destacada ? "font-semibold text-text-secondary" : "text-text-tertiary"}`}>{label}</div>
       <div className={valueCls}>{children}</div>
     </div>
   );
@@ -194,6 +227,7 @@ export default function ClienteDetallePage() {
   const [editOpen, setEditOpen] = useState(false);
   const [mkOpen, setMkOpen] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
+  const [estadoOpen, setEstadoOpen] = useState(false);
   const [ordenOpen, setOrdenOpen] = useState(false);
   const [gpsOpen, setGpsOpen] = useState(false);
   const [tab, setTab] = useState<"resumen" | "facturas" | "cuenta" | "cobranza" | "ordenes" | "equipos" | "playhub" | "historial" | "archivos">("resumen");
@@ -205,6 +239,14 @@ export default function ClienteDetallePage() {
   const [editInvoice, setEditInvoice] = useState<any | null>(null);
   const [infoModal, setInfoModal] = useState<{ type: "promo" | "siigo"; inv: any } | null>(null);
   const [invoices, setInvoices] = useState<any[] | null>(null);
+  // Una sola confirmación con discriminante: la página borra notas, facturas y archivos.
+  const [confirmar, setConfirmar] = useState<
+    | { kind: "nota"; nota: any }
+    | { kind: "factura"; inv: any }
+    | { kind: "archivo"; file: any }
+    | null
+  >(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
 
   const reload = useCallback(() => {
     void authFetch(`/subscribers/${id}`)
@@ -263,13 +305,16 @@ export default function ClienteDetallePage() {
   }
 
   async function deleteNote(nid: string) {
-    if (!confirm("¿Eliminar esta nota?")) return;
+    setConfirmBusy(true);
     try {
       const res = await authFetch(`/subscribers/${id}/notes/${nid}`, { method: "DELETE" });
       if (!res.ok) throw new Error();
       reload();
     } catch {
       toast("No se pudo eliminar", "alert-circle");
+    } finally {
+      setConfirmBusy(false);
+      setConfirmar(null);
     }
   }
 
@@ -291,7 +336,7 @@ export default function ClienteDetallePage() {
   }
 
   async function deleteInvoice(inv: any) {
-    if (!confirm(`¿Eliminar la factura #${inv.tid}? Esta acción no se puede deshacer.`)) return;
+    setConfirmBusy(true);
     try {
       const res = await authFetch(`/subscribers/${id}/invoices/${inv.id}`, { method: "DELETE" });
       if (!res.ok) {
@@ -304,6 +349,9 @@ export default function ClienteDetallePage() {
       reload();
     } catch (e) {
       toast(mensajeDeError(e) ?? "No se pudo eliminar", "alert-circle");
+    } finally {
+      setConfirmBusy(false);
+      setConfirmar(null);
     }
   }
 
@@ -363,7 +411,7 @@ export default function ClienteDetallePage() {
   }
 
   async function deleteFile(f: any) {
-    if (!confirm(`¿Eliminar "${f.name}"?`)) return;
+    setConfirmBusy(true);
     try {
       const res = await authFetch(`/subscribers/${id}/files/${f.id}`, { method: "DELETE" });
       if (!res.ok) throw new Error();
@@ -371,6 +419,9 @@ export default function ClienteDetallePage() {
       loadFiles();
     } catch {
       toast("No se pudo eliminar", "alert-circle");
+    } finally {
+      setConfirmBusy(false);
+      setConfirmar(null);
     }
   }
 
@@ -384,10 +435,10 @@ export default function ClienteDetallePage() {
 
   const tone = SUB_STATUS_TONE[c.status ?? ""] ?? "default";
   const wa = waLink(c.phone1) ?? waLink(c.phone2);
-  const tel = c.phone1 ? `tel:${c.phone1}` : c.phone2 ? `tel:${c.phone2}` : null;
   const mail = c.email ? `mailto:${c.email}` : null;
 
   const anti = antiguedad(c.entryDate);
+  const plan = planContratado(c.services);
 
   const TABS: { key: typeof tab; label: string; icon: string; count?: number }[] = [
     { key: "resumen", label: "Resumen", icon: "user" },
@@ -403,78 +454,56 @@ export default function ClienteDetallePage() {
 
   return (
     <>
-      <Link href="/clientes" className="mb-2 inline-flex items-center gap-1 text-[12px] text-text-tertiary hover:text-text-secondary">
-        <Icon name="arrow-left" size={13} /> Clientes
-      </Link>
-
-      {/* Pestañas */}
-      <div className="mb-4 flex shrink-0 flex-wrap gap-1 border-b border-border-subtle">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            onClick={() => setTab(t.key)}
-            className={`-mb-px flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3.5 py-2 text-[13px] font-semibold transition-colors ${
-              tab === t.key ? "border-brand text-text-primary" : "border-transparent text-text-tertiary hover:text-text-secondary"
-            }`}
-          >
-            <Icon name={t.icon} size={14} className={tab === t.key ? "text-brand" : ""} />
-            {t.label}
-            {t.count != null && (
-              <span className={`rounded-full px-1.5 text-[10px] ${tab === t.key ? "bg-brand-soft text-brand" : "bg-surface-2 text-text-tertiary"}`}>{t.count}</span>
-            )}
-          </button>
-        ))}
-      </div>
-
-      {/* Encabezado — solo visible en Resumen */}
-      {tab === "resumen" && (
-      <div className="mb-4 shrink-0 overflow-hidden rounded-xl border border-border-subtle bg-surface shadow-sm">
-        {/* Fila 1: identidad + acciones */}
-        <div className="flex flex-wrap items-center justify-between gap-4 p-4">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-[17px] font-bold ${STATUS_AVATAR_CLASS[tone]}`}>
-              {initials(c.name)}
-            </div>
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <h1 className="truncate text-[19px] font-bold text-text-primary">{c.name}</h1>
-                <Badge label={SUB_STATUS_LABEL[c.status ?? ""] ?? c.status ?? "—"} tone={tone} />
-              </div>
-              <p className="truncate text-[12px] text-text-tertiary">
-                {c.companyName && <span className="text-text-secondary">{c.companyName} · </span>}
-                Abonado <span className="font-mono font-semibold text-text-secondary">{c.abonado}</span>
-                {c.docNumber && <> · {c.docType} {c.docNumber}</>}
-                {c.branch && <> · {c.branch}</>}
-              </p>
-              {/* Servicios contratados: Internet, TV, etc. (cada uno con su plan) */}
-              {c.services?.length > 0 && (
-                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                  {c.services.map((s: any) => (
-                    <span
-                      key={s.kind}
-                      title={s.price ? `${SERVICE_KIND_LABEL[s.kind as keyof typeof SERVICE_KIND_LABEL] ?? s.kind}: ${s.planName ?? "—"} · ${cop(s.price)}/mes` : undefined}
-                      className={`inline-flex items-center gap-1 rounded-md border border-border-subtle bg-surface-2 px-2 py-0.5 text-[11px] ${s.status && s.status !== "ACTIVO" ? "opacity-60" : ""}`}
-                    >
-                      <Icon name={SERVICE_KIND_ICON[s.kind] ?? "package"} size={12} className="text-text-tertiary" />
-                      <span className="font-semibold text-text-secondary">{SERVICE_KIND_LABEL[s.kind as keyof typeof SERVICE_KIND_LABEL] ?? s.kind}</span>
-                      <span className="text-text-tertiary">·</span>
-                      <span className="text-text-secondary">{s.planName || "sin plan"}</span>
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
+      {/*
+        Encabezado SIEMPRE visible, no solo en Resumen: antes, al pasar a
+        "Facturas" u "Órdenes" desaparecía el nombre del cliente y no quedaba en
+        pantalla ni una pista de a quién pertenecían esos datos.
+      */}
+      <DetailHeader
+        backHref="/clientes"
+        backLabel="Clientes"
+        avatar={
+          <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-[17px] font-bold ${STATUS_AVATAR_CLASS[tone]}`}>
+            {initials(c.name)}
           </div>
-
-          <div className="flex items-center gap-2">
-            <QuickAction icon="message-circle" label="WhatsApp" href={wa} tone="wa" />
-            <QuickAction icon="phone" label="Llamar" href={tel} />
-            <QuickAction icon="mail" label="Correo" href={mail} />
-            <QuickAction icon="map-pin" label="Ubicación y cómo llegar" onClick={() => setGpsOpen(true)} />
-            <Button onClick={() => setPayOpen(true)}>
-              <Icon name="dollar-sign" size={15} /> Registrar pago
-            </Button>
+        }
+        title={c.name}
+        subtitle={
+          <>
+            {c.companyName && <span className="text-text-secondary">{c.companyName} · </span>}
+            Abonado <span className="font-mono font-semibold text-text-secondary">{c.abonado}</span>
+            {c.docNumber && <> · {c.docType} {c.docNumber}</>}
+            {c.branch && <> · {c.branch}</>}
+          </>
+        }
+        /* Servicios contratados: Internet, TV, etc. (cada uno con su plan).
+           Con `undefined` cuando no hay ninguno: un array vacío es "truthy" y
+           dejaría un renglón en blanco bajo el subtítulo. */
+        meta={!c.services?.length ? undefined : c.services.map((s: any) => (
+          <span
+            key={s.kind}
+            title={s.price ? `${SERVICE_KIND_LABEL[s.kind as keyof typeof SERVICE_KIND_LABEL] ?? s.kind}: ${s.planName ?? "—"} · ${cop(s.price)}/mes` : undefined}
+            className={`inline-flex items-center gap-1 rounded-md border border-border-subtle bg-surface-2 px-2 py-0.5 text-[11px] ${s.status && s.status !== "ACTIVO" ? "opacity-60" : ""}`}
+          >
+            <Icon name={SERVICE_KIND_ICON[s.kind] ?? "package"} size={12} className="text-text-tertiary" />
+            <span className="font-semibold text-text-secondary">{SERVICE_KIND_LABEL[s.kind as keyof typeof SERVICE_KIND_LABEL] ?? s.kind}</span>
+            <span className="text-text-tertiary">·</span>
+            <span className="text-text-secondary">{s.planName || "sin plan"}</span>
+          </span>
+        ))}
+        /* Solo las dos acciones que se pulsan todo el día quedan a la vista —cobrar
+           y abrir una orden—; el resto vive en "Acciones". En móvil se reparten una
+           línea entera. */
+        actions={
+          <>
+            <div className="order-last flex w-full gap-2 sm:order-none sm:w-auto">
+              <Button onClick={() => setPayOpen(true)} className="flex-1 sm:flex-none">
+                <Icon name="dollar-sign" size={15} /> Registrar pago
+              </Button>
+              <Button variant="secondary" onClick={() => setOrdenOpen(true)} className="flex-1 sm:flex-none">
+                <Icon name="wrench" size={15} /> Nueva orden
+              </Button>
+            </div>
             <Dropdown
               align="right"
               width={220}
@@ -486,14 +515,22 @@ export default function ClienteDetallePage() {
             >
               {({ close }) => (
                 <>
+                  <MenuItem
+                    href={wa}
+                    disabled={!wa}
+                    title={wa ? undefined : "El cliente no tiene celular registrado"}
+                    onClick={close}
+                  >
+                    <Icon name="message-circle" size={15} /> WhatsApp
+                  </MenuItem>
                   <MenuItem onClick={() => { close(); setMkOpen(true); }}>
                     <Icon name="wifi" size={15} /> Conexión
                   </MenuItem>
                   <MenuItem onClick={() => { close(); setPlanOpen(true); }}>
                     <Icon name="gauge" size={15} /> Cambiar plan
                   </MenuItem>
-                  <MenuItem onClick={() => { close(); setOrdenOpen(true); }}>
-                    <Icon name="wrench" size={15} /> Nueva orden
+                  <MenuItem onClick={() => { close(); setEstadoOpen(true); }}>
+                    <Icon name="toggle-left" size={15} /> Cambiar estado
                   </MenuItem>
                   <MenuItem onClick={() => { close(); setGpsOpen(true); }}>
                     <Icon name="map-pin" size={15} /> Ubicación y cómo llegar
@@ -504,33 +541,101 @@ export default function ClienteDetallePage() {
                 </>
               )}
             </Dropdown>
-          </div>
-        </div>
+          </>
+        }
+      />
 
-        {/* Fila 2: franja de indicadores */}
-        <div className="grid grid-cols-2 gap-px border-t border-border-subtle bg-border-subtle sm:grid-cols-4">
-          <StatCell label="Cartera" tone={c.receivable > 0 ? "error" : "success"}>
+      {/* Pestañas — tira deslizable: nueve pestañas envueltas se comían cuatro
+          renglones de una pantalla de móvil antes del primer dato. */}
+      <TabStrip tabs={TABS} active={tab} onChange={setTab} />
+
+      {/* Franja de indicadores — solo en Resumen */}
+      {tab === "resumen" && (
+        <div className="mb-4 grid shrink-0 grid-cols-2 gap-px overflow-hidden rounded-xl border border-border-subtle bg-border-subtle shadow-sm sm:grid-cols-9">
+          {/* Lo primero de la franja: al abrir un cliente, lo que se pregunta antes
+              que nada es qué tiene contratado. Cada servicio va en su renglón —el de
+              internet manda y la televisión debajo— para que un combo se lea de un
+              vistazo sin apiñar los dos nombres en la misma línea. En móvil la celda
+              se lleva la fila entera: los nombres del catálogo son largos. */}
+          <StatCell
+            label="Plan contratado"
+            destacada
+            className="col-span-2 sm:col-span-3"
+            title={
+              plan.principal?.source === "factura"
+                ? "Según su última factura: este cliente no tiene el plan asignado como servicio en el sistema."
+                : plan.principal?.source === "perfil"
+                  ? "Según el perfil con el que navega: este cliente no tiene plan asignado ni facturas con plan."
+                  : undefined
+            }
+          >
+            {plan.principal ? (
+              <div className="flex flex-col gap-0.5">
+                {[plan.principal, ...plan.otros].map((s: Servicio, i: number) => {
+                  const etiqueta = SERVICE_KIND_LABEL[s.kind as keyof typeof SERVICE_KIND_LABEL] ?? s.kind;
+                  const cortado = s.status && s.status !== "ACTIVO";
+                  return (
+                    <div
+                      key={`${s.kind}-${s.planName ?? i}`}
+                      title={`${etiqueta}${s.price ? ` · ${cop(s.price)}/mes` : ""}${cortado ? ` · ${s.status?.toLowerCase()}` : ""}`}
+                      className={`flex items-center gap-1.5 ${cortado ? "opacity-60" : ""}`}
+                    >
+                      <Icon
+                        name={SERVICE_KIND_ICON[s.kind] ?? "package"}
+                        size={i === 0 ? 18 : 13}
+                        className={`shrink-0 ${i === 0 ? "text-brand" : "text-text-tertiary"}`}
+                      />
+                      <span
+                        className={
+                          i === 0
+                            ? "truncate text-[19px] font-extrabold leading-tight sm:text-[17px] lg:text-[19px]"
+                            : "truncate text-[12px] font-semibold text-text-secondary"
+                        }
+                      >
+                        {s.planName || etiqueta}
+                      </span>
+                      {/* El precio pegado a su propio plan: en un combo, saber cuál de
+                          los dos cuesta qué es justo lo que se viene a mirar. */}
+                      {s.price ? (
+                        <span className="shrink-0 text-[11px] text-text-tertiary">{cop(s.price)}</span>
+                      ) : null}
+                    </div>
+                  );
+                })}
+                {plan.principal.status && plan.principal.status !== "ACTIVO" && (
+                  <span className="text-[11px] text-text-tertiary">{plan.principal.status.toLowerCase()}</span>
+                )}
+              </div>
+            ) : (
+              <>
+                <span className="text-[15px] font-semibold text-text-tertiary">Sin plan registrado</span>
+                {/* Es un vacío de DATOS, no una afirmación sobre el cliente: no lo
+                    tiene asignado, no aparece en sus facturas y no navega con un
+                    perfil que lo diga. Se explica para que nadie lo lea como
+                    "este cliente no tiene servicio". */}
+                <span className="block text-[11px] text-text-tertiary">Ni en sus facturas ni en la red · asígnalo en Acciones ▸ Cambiar plan</span>
+              </>
+            )}
+          </StatCell>
+          <StatCell label="Cartera" tone={c.receivable > 0 ? "error" : "success"} className="sm:col-span-2">
             <span className="text-[17px] font-bold">{cop(c.receivable)}</span>
             <span className="ml-1.5 text-[11px] font-normal text-text-tertiary">{c.dueInvoices} pend.</span>
           </StatCell>
-          <StatCell label="Saldo a favor" tone={c.balance > 0 ? "success" : "default"}>
+          <StatCell label="Saldo a favor" tone={c.balance > 0 ? "success" : "default"} className="sm:col-span-2">
             <span className="text-[17px] font-bold">{cop(c.balance)}</span>
           </StatCell>
-          <StatCell label="Estado">
-            <Badge label={SUB_STATUS_LABEL[c.status ?? ""] ?? c.status ?? "—"} tone={tone} />
-            {c.statusChangedAt && (
-              <span className="block text-[11px] text-text-tertiary">
-                desde {fmtDate(c.statusChangedAt)}
-                {c.previousStatus && <> · antes {SUB_STATUS_LABEL[c.previousStatus] ?? c.previousStatus}</>}
-              </span>
-            )}
-          </StatCell>
-          <StatCell label="Cliente desde">
-            <span className="text-[14px] font-semibold text-text-primary">{fmtDate(c.entryDate)}</span>
-            {anti && <span className="block text-[11px] text-text-tertiary">{anti}</span>}
+          <StatCell label="Estado" className="col-span-2 sm:col-span-2">
+            <button
+              type="button"
+              title="Cambiar estado"
+              onClick={() => setEstadoOpen(true)}
+              className="inline-flex items-center gap-1.5 transition-opacity hover:opacity-75"
+            >
+              <Badge label={SUB_STATUS_LABEL[c.status ?? ""] ?? c.status ?? "—"} tone={tone} size="md" />
+              <Icon name="pencil" size={13} className="text-text-tertiary" />
+            </button>
           </StatCell>
         </div>
-      </div>
       )}
 
       {payOpen && <RegistrarPagoModal subscriberId={id} open={payOpen} onClose={() => setPayOpen(false)} onDone={reload} />}
@@ -545,6 +650,7 @@ export default function ClienteDetallePage() {
         />
       )}
       {mkOpen && <MikrotikModal subscriberId={id} subscriberName={c.name} open={mkOpen} onClose={() => setMkOpen(false)} onDone={reload} />}
+      {estadoOpen && <CambiarEstadoModal subscriberId={id} current={c.status} open={estadoOpen} onClose={() => setEstadoOpen(false)} onDone={reload} />}
       {planOpen && (
         <CambiarPlanModal
           subscriberId={id}
@@ -656,7 +762,8 @@ export default function ClienteDetallePage() {
             <Card title="Contrato / Facturación" icon="file-text">
               <Row label="Suscripción" value={c.suscripcion} />
               <Row label="Fecha contrato" value={fmtDate(c.contractDate)} />
-              <Row label="Fecha ingreso" value={fmtDate(c.entryDate)} />
+              {/* La antigüedad venía en la franja de arriba, donde ahora va el plan. */}
+              <Row label="Fecha ingreso" value={anti ? `${fmtDate(c.entryDate)} · ${anti}` : fmtDate(c.entryDate)} />
               <Row label="Débito acumulado" value={cop(c.debit)} />
               <Row label="Crédito acumulado" value={cop(c.credit)} />
               <Row
@@ -679,7 +786,7 @@ export default function ClienteDetallePage() {
 
           {/* Notas */}
           <Card title={`Notas${c.notes?.length ? ` · ${c.notes.length}` : ""}`} icon="message-square">
-            <div className="mb-3 flex gap-2">
+            <div className="mb-3 flex flex-col gap-2 sm:flex-row">
               <Textarea
                 rows={2}
                 value={noteText}
@@ -687,7 +794,11 @@ export default function ClienteDetallePage() {
                 placeholder="Escribe una observación sobre el cliente…"
                 className="flex-1"
               />
-              <Button onClick={() => void addNote()} disabled={savingNote || !noteText.trim()} className="self-end">
+              <Button
+                onClick={() => void addNote()}
+                disabled={savingNote || !noteText.trim()}
+                className="w-full sm:w-auto sm:self-end"
+              >
                 <Icon name={savingNote ? "loader" : "plus"} size={15} className={savingNote ? "animate-spin" : ""} /> Agregar
               </Button>
             </div>
@@ -700,7 +811,10 @@ export default function ClienteDetallePage() {
                       <p className="whitespace-pre-wrap text-[12px] text-text-primary">{n.body}</p>
                       <p className="text-[10px] text-text-tertiary">{n.author ?? "—"} · {new Date(n.createdAt).toLocaleString("es-CO")}</p>
                     </div>
-                    <button type="button" title="Eliminar" onClick={() => void deleteNote(n.id)} className="shrink-0 text-text-tertiary opacity-0 transition-opacity hover:text-error-text group-hover:opacity-100">
+                    {/* En móvil no hay hover: si se deja oculto tras `group-hover`
+                        el botón de borrar la nota simplemente no existe para quien
+                        entra desde el celular. Visible siempre hasta `sm`. */}
+                    <button type="button" title="Eliminar" onClick={() => setConfirmar({ kind: "nota", nota: n })} className="shrink-0 p-1 text-text-tertiary transition-opacity hover:text-error-text sm:p-0 sm:opacity-0 sm:group-hover:opacity-100">
                       <Icon name="x" size={14} />
                     </button>
                   </li>
@@ -750,6 +864,7 @@ export default function ClienteDetallePage() {
                     <span className="text-[11px] text-text-tertiary">{fmtDate(h.date)}</span>
                   </div>
                   {h.ticket && <span className="text-[10px] text-text-tertiary">Orden #{h.ticket}</span>}
+                  {h.note && <p className="mt-0.5 text-[11px] text-text-tertiary">{h.note}</p>}
                 </li>
               ))}
             </ol>
@@ -768,7 +883,7 @@ export default function ClienteDetallePage() {
             <>
               {/* Resumen + acciones */}
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="grid flex-1 grid-cols-3 gap-px overflow-hidden rounded-xl border border-border-subtle bg-border-subtle">
+                <div className="grid w-full flex-1 grid-cols-1 gap-px overflow-hidden rounded-xl border border-border-subtle bg-border-subtle sm:w-auto sm:grid-cols-3">
                   <div className="bg-surface px-4 py-2.5">
                     <div className="text-[11px] uppercase tracking-wide text-text-tertiary">Total facturado</div>
                     <div className="text-[16px] font-bold text-text-primary">{cop(statement.totalCharges)}</div>
@@ -782,15 +897,17 @@ export default function ClienteDetallePage() {
                     <div className={`text-[16px] font-bold ${statement.balance > 0 ? "text-error-text" : "text-success-text"}`}>{cop(statement.balance)}</div>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
+                {/* Los tres PDF no caben en línea en móvil: se envuelven y cada
+                    uno crece hasta media fila, así siguen siendo pulsables. */}
+                <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
                   <Badge label={statement.pazysalvo ? "A paz y salvo" : "Con saldo pendiente"} tone={statement.pazysalvo ? "success" : "error"} />
-                  <Button variant="secondary" onClick={() => void openPdf(`/subscribers/${id}/paz-y-salvo.pdf`)}>
+                  <Button variant="secondary" className="flex-1 sm:flex-none" onClick={() => void openPdf(`/subscribers/${id}/paz-y-salvo.pdf`)}>
                     <Icon name="shield-check" size={15} /> Paz y salvo
                   </Button>
-                  <Button variant="secondary" onClick={() => void openPdf(`/subscribers/${id}/statement.pdf`)}>
+                  <Button variant="secondary" className="flex-1 sm:flex-none" onClick={() => void openPdf(`/subscribers/${id}/statement.pdf`)}>
                     <Icon name="file-text" size={15} /> Descargar PDF
                   </Button>
-                  <Button variant="secondary" onClick={() => void openPdf(`/subscribers/${id}/contract.pdf`)}>
+                  <Button variant="secondary" className="flex-1 sm:flex-none" onClick={() => void openPdf(`/subscribers/${id}/contract.pdf`)}>
                     <Icon name="file-signature" size={15} /> Contrato
                   </Button>
                 </div>
@@ -873,7 +990,7 @@ export default function ClienteDetallePage() {
                   <ActionBtn icon="gift" title="Promociones" tone="warning" onClick={() => setInfoModal({ type: "promo", inv: r })} />
                   <ActionBtn icon="cloud" title="Factura electrónica (Siigo)" tone="info" onClick={() => setInfoModal({ type: "siigo", inv: r })} />
                   <ActionBtn icon="pencil" title="Editar factura" tone="brand" onClick={() => openEditInvoice(r)} />
-                  <ActionBtn icon="trash" title="Eliminar factura" tone="error" onClick={() => deleteInvoice(r)} />
+                  <ActionBtn icon="trash" title="Eliminar factura" tone="error" onClick={() => setConfirmar({ kind: "factura", inv: r })} />
                 </div>
               ),
             },
@@ -958,14 +1075,14 @@ export default function ClienteDetallePage() {
                     </div>
                   </div>
                   {(f.mimeType?.startsWith("image/") || f.mimeType === "application/pdf") && (
-                    <button type="button" title="Vista previa" onClick={() => void previewFile(f)} className="shrink-0 rounded-lg border border-border-default p-1.5 text-text-secondary transition-colors hover:bg-surface-2">
+                    <button type="button" title="Vista previa" onClick={() => void previewFile(f)} className="tap shrink-0 rounded-lg border border-border-default p-1.5 text-text-secondary transition-colors hover:bg-surface-2">
                       <Icon name="eye" size={15} />
                     </button>
                   )}
-                  <button type="button" title="Descargar" onClick={() => void downloadFile(f)} className="shrink-0 rounded-lg border border-border-default p-1.5 text-text-secondary transition-colors hover:bg-surface-2">
+                  <button type="button" title="Descargar" onClick={() => void downloadFile(f)} className="tap shrink-0 rounded-lg border border-border-default p-1.5 text-text-secondary transition-colors hover:bg-surface-2">
                     <Icon name="download" size={15} />
                   </button>
-                  <button type="button" title="Eliminar" onClick={() => void deleteFile(f)} className="shrink-0 rounded-lg border border-border-default p-1.5 text-error-text transition-colors hover:bg-error-soft">
+                  <button type="button" title="Eliminar" onClick={() => setConfirmar({ kind: "archivo", file: f })} className="tap shrink-0 rounded-lg border border-border-default p-1.5 text-error-text transition-colors hover:bg-error-soft">
                     <Icon name="x" size={15} />
                   </button>
                 </li>
@@ -975,6 +1092,86 @@ export default function ClienteDetallePage() {
             <p className="py-4 text-center text-[12px] text-text-tertiary">Aún no hay archivos para este cliente.</p>
           )}
         </div>
+      )}
+
+      {confirmar?.kind === "nota" && (
+        <ConfirmDialog
+          open
+          busy={confirmBusy}
+          onClose={() => setConfirmar(null)}
+          onConfirm={() => void deleteNote(confirmar.nota.id)}
+          tone="danger"
+          icon="trash"
+          title="Eliminar nota del cliente"
+          confirmLabel="Eliminar nota"
+          message={<>La observación desaparece de la ficha del cliente y no se puede recuperar.</>}
+          detail={
+            <FichaConfirm
+              filas={[
+                ["Nota", <span key="a" className="whitespace-pre-wrap">{confirmar.nota.body}</span>],
+                ["Autor", confirmar.nota.author ?? "—"],
+                ["Fecha", confirmar.nota.createdAt ? new Date(confirmar.nota.createdAt).toLocaleString("es-CO") : "—"],
+              ]}
+            />
+          }
+        />
+      )}
+
+      {confirmar?.kind === "factura" && (
+        <ConfirmDialog
+          open
+          busy={confirmBusy}
+          onClose={() => setConfirmar(null)}
+          onConfirm={() => void deleteInvoice(confirmar.inv)}
+          tone="danger"
+          icon="trash"
+          title="Eliminar factura del cliente"
+          confirmLabel="Eliminar factura"
+          // Toca dinero y no hay vuelta atrás: se teclea el número de factura.
+          requireText={String(confirmar.inv.tid ?? "")}
+          requireHint={<>Para confirmar, escribe el número de factura <span className="font-mono font-semibold text-text-primary">{confirmar.inv.tid}</span></>}
+          message={
+            <>
+              La factura se borra de la cartera del cliente y el saldo pendiente se recalcula.{" "}
+              <b className="text-error-text">No se puede deshacer.</b>
+            </>
+          }
+          detail={
+            <FichaConfirm
+              filas={[
+                ["N° Factura", <span key="a" className="font-mono">{confirmar.inv.tid ?? "—"}</span>],
+                ...(confirmar.inv.date ? ([["Fecha", fmtDate(confirmar.inv.date)]] as [string, React.ReactNode][]) : []),
+                ...(confirmar.inv.total != null ? ([["Importe", <span key="c" className="font-mono">{cop(confirmar.inv.total)}</span>]] as [string, React.ReactNode][]) : []),
+                ...(confirmar.inv.status
+                  ? ([["Estado", <Badge key="d" label={INVOICE_STATUS_LABEL[confirmar.inv.status] ?? confirmar.inv.status} tone={INVOICE_STATUS_TONE[confirmar.inv.status] ?? "default"} />]] as [string, React.ReactNode][])
+                  : []),
+              ]}
+            />
+          }
+        />
+      )}
+
+      {confirmar?.kind === "archivo" && (
+        <ConfirmDialog
+          open
+          busy={confirmBusy}
+          onClose={() => setConfirmar(null)}
+          onConfirm={() => void deleteFile(confirmar.file)}
+          tone="danger"
+          icon="trash"
+          title="Eliminar archivo adjunto"
+          confirmLabel="Eliminar archivo"
+          message={<>El adjunto se borra del expediente del cliente y no se podrá volver a descargar.</>}
+          detail={
+            <FichaConfirm
+              filas={[
+                ["Archivo", confirmar.file.name],
+                ["Tamaño", fmtBytes(confirmar.file.size)],
+                ["Subido", `${fmtDate(confirmar.file.createdAt)}${confirmar.file.uploadedBy ? ` · ${confirmar.file.uploadedBy}` : ""}`],
+              ]}
+            />
+          }
+        />
       )}
     </>
   );

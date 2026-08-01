@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/Button";
 import { Input, Select, Textarea, Field } from "@/components/ui/Field";
 import { Badge } from "@/components/ui/Badge";
 import { DataTable } from "@/components/ui/DataTable";
+import { ListToolbar } from "@/components/ui/ListToolbar";
 import { Pagination } from "@/components/ui/Pagination";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { Modal } from "@/components/Modal";
@@ -16,6 +17,7 @@ import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import { StatCard } from "@/components/ui/StatCard";
 import { useRequest } from "@/lib/useRequest";
+import { useOrden } from "@/lib/useOrden";
 import { mensajeDeError } from "@/lib/errores";
 
 const STATUS_TONE: Record<string, "default" | "success" | "error" | "warning" | "info" | "brand"> = {
@@ -57,9 +59,12 @@ export default function DevolucionesPage() {
 
   // Carga con cancelación: al teclear se aborta la petición en vuelo para que
   // una respuesta lenta no pise a otra más reciente. Ver lib/useRequest.
+  // Pagina en el servidor: el orden viaja en la query.
+  const orden = useOrden();
+
   const { data, cargando: loading, error, refrescar: load } = useRequest<any>(
     () => {
-      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize), ...orden.params });
       if (search.trim()) qs.set("search", search.trim());
       if (status) qs.set("status", status);
       return `/returns?${qs.toString()}`;
@@ -73,7 +78,7 @@ export default function DevolucionesPage() {
     void authFetch("/returns/stats").then((r) => r.json()).then(setStats).catch(() => {});
   }, [authLoading, authFetch]);
 
-  useEffect(() => { setPage(1); }, [search, status, pageSize]);
+  useEffect(() => { setPage(1); }, [search, status, pageSize, orden.clave]);
 
   // Búsqueda de proveedores (debounce)
   useEffect(() => {
@@ -170,19 +175,21 @@ export default function DevolucionesPage() {
       </div>
 
       {/* Filtros + acción */}
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative flex-1 min-w-[220px]">
-          <Icon name="search" size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary" />
-          <Input className="pl-9" placeholder="Buscar por # o proveedor…" value={search} onChange={(e) => setSearch(e.target.value)} />
-        </div>
+      <ListToolbar
+        search={search}
+        onSearch={setSearch}
+        searchPlaceholder="Buscar por # o proveedor…"
+        actions={
+          <Button variant="primary" onClick={() => { resetModal(); setOpen(true); }}>
+            <Icon name="plus" size={15} /> Nueva devolución
+          </Button>
+        }
+      >
         <Select value={status} onChange={(e) => setStatus(e.target.value)} className="w-auto">
           <option value="">Todos los estados</option>
           {Object.keys(STATUS_TONE).map((k) => <option key={k} value={k}>{STATUS_LABEL[k] ?? k}</option>)}
         </Select>
-        <Button variant="primary" onClick={() => { resetModal(); setOpen(true); }}>
-          <Icon name="plus" size={15} /> Nueva devolución
-        </Button>
-      </div>
+      </ListToolbar>
 
       {/* Tabla */}
       {loading && !data ? (
@@ -190,18 +197,20 @@ export default function DevolucionesPage() {
       ) : (
         <>
           <DataTable
+            sort={orden.sort}
+            onSort={orden.onSort}
             rows={data?.items ?? []}
             empty="No se encontraron devoluciones con esos criterios."
             columns={[
-              { key: "tid", header: "#", render: (r: any) => <Link href={`/devoluciones/${r.id}`} className="font-mono font-semibold text-brand hover:underline">{r.tid}</Link> },
-              { key: "supplier", header: "Proveedor", render: (r: any) => <span className="font-medium text-text-primary">{r.supplier ?? "—"}</span> },
-              { key: "date", header: "Fecha", render: (r: any) => <span className="text-text-secondary">{r.date ?? "—"}</span> },
-              { key: "total", header: "Total", align: "right", render: (r: any) => <span className="font-semibold text-text-secondary">{cop(r.total)}</span> },
-              { key: "status", header: "Estado", render: (r: any) => <Badge label={STATUS_LABEL[r.status] ?? r.status ?? "—"} tone={STATUS_TONE[r.status ?? ""] ?? "default"} /> },
-              { key: "itemsCount", header: "# Ítems", align: "right", render: (r: any) => r.itemsCount ?? 0 },
+              { key: "tid", header: "#", sortable: true, render: (r: any) => <Link href={`/devoluciones/${r.id}`} className="font-mono font-semibold text-brand hover:underline">{r.tid}</Link> },
+              { key: "supplier", header: "Proveedor", sortable: true, render: (r: any) => <span className="font-medium text-text-primary">{r.supplier ?? "—"}</span> },
+              { key: "date", header: "Fecha", sortable: true, render: (r: any) => <span className="text-text-secondary">{r.date ?? "—"}</span> },
+              { key: "total", header: "Total", sortable: true, align: "right", render: (r: any) => <span className="font-semibold text-text-secondary">{cop(r.total)}</span> },
+              { key: "status", header: "Estado", sortable: true, render: (r: any) => <Badge label={STATUS_LABEL[r.status] ?? r.status ?? "—"} tone={STATUS_TONE[r.status ?? ""] ?? "default"} /> },
+              { key: "itemsCount", header: "# Ítems", sortable: true, align: "right", render: (r: any) => r.itemsCount ?? 0 },
             ]}
           />
-          {data && data.pages > 1 && (
+          {data && (
             <div className="mt-3">
               <Pagination
                 meta={{ page: data.page, pageSize: data.pageSize, total: data.total, pageCount: data.pages }}
@@ -266,10 +275,14 @@ export default function DevolucionesPage() {
             </div>
           </Field>
 
-          {/* Ítems agregados */}
+          {/* Ítems agregados.
+              `overflow-hidden` recortaba en móvil: con dos inputs y cinco
+              columnas la tabla no baja de ~34 rem, así que el subtotal y el
+              botón de quitar quedaban cortados y sin forma de alcanzarlos.
+              Ahora la tabla se desplaza en horizontal dentro de su marco. */}
           {items.length > 0 && (
-            <div className="overflow-hidden rounded-lg border border-border-subtle">
-              <table className="w-full text-[12px]">
+            <div className="overflow-x-auto rounded-lg border border-border-subtle">
+              <table className="w-full min-w-[34rem] text-[12px]">
                 <thead>
                   <tr className="border-b border-border-subtle bg-surface-2 text-text-tertiary">
                     <th className="px-2 py-1.5 text-left font-semibold">Material</th>

@@ -10,7 +10,10 @@ export type SubscriberRow = {
   email: string | null;
   status: string | null;
   branch: string | null;
+  /** Saldo a favor del abonado (cache de transacciones). NO es lo que debe. */
   balance: number;
+  /** Lo que debe: Σ(total − pagado) de sus facturas sin pagar. */
+  debt: number;
   installTech: string | null;
 };
 
@@ -52,8 +55,8 @@ export const SUB_STATUS_TONE: Record<string, "success" | "error" | "warning" | "
 /** Opciones de filtro adicionales (heredadas del legacy: servicio, tecnología, cuenta). */
 export const SUB_SERVICIO_OPTS: { value: string; label: string }[] = [
   { value: "", label: "Todos los servicios" },
-  { value: "internet", label: "Internet" },
-  { value: "tv", label: "TV" },
+  { value: "internet", label: "Solo Internet" },
+  { value: "tv", label: "Solo TV" },
   { value: "combo", label: "Combo (Internet + TV)" },
 ];
 

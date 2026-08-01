@@ -9,28 +9,19 @@ import { DataTable } from "@/components/ui/DataTable";
 import { Badge } from "@/components/ui/Badge";
 import { Input, Select } from "@/components/ui/Field";
 import { Button } from "@/components/ui/Button";
+import { ListToolbar } from "@/components/ui/ListToolbar";
 import { Pagination } from "@/components/ui/Pagination";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { Modal } from "@/components/Modal";
 import { NuevaOrdenModal } from "@/components/soporte/NuevaOrdenModal";
+import { TecChip } from "@/components/soporte/TecChip";
+import { MisOrdenes } from "@/components/soporte/MisOrdenes";
 import { useAuth } from "@/context/AuthProvider";
-import { type Paged, type TicketRow, type SupportStats, TICKET_STATUS_LABEL, TICKET_STATUS_TONE, TICKET_TYPES, TICKET_PRIORITIES, TICKET_PRIORITY_TONE } from "@/lib/support";
+import { esTecnico, type Paged, type TicketRow, type SupportStats, TICKET_STATUS_LABEL, TICKET_STATUS_TONE, TICKET_TYPES, TICKET_PRIORITIES, TICKET_PRIORITY_TONE } from "@/lib/support";
 import { useRequest } from "@/lib/useRequest";
-
-/** Chip de técnico: inicial en círculo + nombre. Da identidad visual a la columna. */
-function TecChip({ name }: { name: string | null }) {
-  if (!name || !name.trim()) return <span className="text-[12px] text-text-tertiary">Sin asignar</span>;
-  const initials = name.trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
-  // Color estable derivado del nombre (matiz determinístico).
-  let h = 0;
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360;
-  return (
-    <span className="inline-flex items-center gap-1.5">
-      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white" style={{ background: `hsl(${h} 55% 45%)` }}>{initials}</span>
-      <span className="truncate text-[12px] font-medium text-text-primary">{name}</span>
-    </span>
-  );
-}
+import { useOrden } from "@/lib/useOrden";
+import { toast } from "@/components/ui/Toast";
+import { mensajeDeError } from "@/lib/errores";
 
 /** Presets de fecha típicos de operación. */
 function datePresets(): { label: string; from: string; to: string }[] {
@@ -46,9 +37,23 @@ function datePresets(): { label: string; from: string; to: string }[] {
   ];
 }
 
+/**
+ * Soporte tiene DOS pantallas, no una con controles escondidos:
+ *  · Técnico de campo → `MisOrdenes`: sus órdenes, sin filtros ni columna de técnico.
+ *  · Todos los demás  → la vista general de abajo, con su buscador y sus filtros.
+ * El reparto se hace aquí y no dentro, para que ninguna de las dos tenga que ir
+ * preguntándose en cada control quién está mirando.
+ */
 export default function SoportePage() {
+  const { user, loading } = useAuth();
+  if (loading) return <PageSkeleton />;
+  if (esTecnico(user)) return <MisOrdenes />;
+  return <SoporteGeneral />;
+}
+
+function SoporteGeneral() {
   const router = useRouter();
-  const { loading: authLoading, authFetch } = useAuth();
+  const { loading: authLoading, authFetch, user } = useAuth();
   const [stats, setStats] = useState<SupportStats | null>(null);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
@@ -64,6 +69,7 @@ export default function SoportePage() {
   const [pageSize, setPageSize] = useState(25);
   const [nuevaOpen, setNuevaOpen] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const reloadStats = useCallback(() => { void authFetch("/support/stats").then((r) => r.json()).then(setStats).catch(() => {}); }, [authFetch]);
   useEffect(() => { if (!authLoading) reloadStats(); }, [authLoading, reloadStats]);
@@ -71,9 +77,12 @@ export default function SoportePage() {
 
   // Carga con cancelación: al teclear se aborta la petición en vuelo, para que
   // una respuesta lenta no pise a otra más nueva. Ver lib/useRequest.
+  // Pagina en el servidor: el orden viaja en la query.
+  const orden = useOrden();
+
   const { data, cargando: loading, error, refrescar: load } = useRequest<Paged<TicketRow>>(
     () => {
-      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize), ...orden.params });
       if (search.trim()) qs.set("search", search.trim());
       if (status) qs.set("status", status);
       if (type) qs.set("type", type);
@@ -84,11 +93,11 @@ export default function SoportePage() {
       else { if (from) qs.set("from", from); if (to) qs.set("to", to); }
       return `/support/tickets?${qs}`;
     },
-    [page, pageSize, search, status, type, tec, priority, sede, from, to, all],
+    [page, pageSize, search, status, type, tec, priority, sede, from, to, all, orden.clave],
     { debounceMs: search ? 350 : 0, saltar: authLoading },
   );
 
-  useEffect(() => { setPage(1); }, [search, status, type, tec, priority, sede, from, to, all, pageSize]);
+  useEffect(() => { setPage(1); }, [search, status, type, tec, priority, sede, from, to, all, pageSize, orden.clave]);
 
   const activeFilters = useMemo(
     () => [search.trim(), status, type, tec, priority, sede, from, to].filter(Boolean).length + (all ? 1 : 0),
@@ -101,13 +110,42 @@ export default function SoportePage() {
   );
   const clearAll = () => { setSearch(""); setStatus(""); setType(""); setTec(""); setPriority(""); setSede(""); setFrom(""); setTo(""); setAll(false); };
 
+  /** Descarga el Excel con los MISMOS filtros que están puestos en pantalla. */
+  const exportar = async () => {
+    setExporting(true);
+    try {
+      const qs = new URLSearchParams();
+      if (search.trim()) qs.set("search", search.trim());
+      if (status) qs.set("status", status);
+      if (type) qs.set("type", type);
+      if (tec) qs.set("tec", tec);
+      if (priority) qs.set("priority", priority);
+      if (sede) qs.set("sede", sede);
+      if (all) qs.set("all", "1");
+      else { if (from) qs.set("from", from); if (to) qs.set("to", to); }
+      const res = await authFetch(`/support/tickets/export.xlsx?${qs.toString()}`);
+      if (!res.ok) throw new Error("No se pudo exportar");
+      const blob = await res.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `ordenes-soporte-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setExporting(false); }
+  };
+
   if (authLoading) return <PageSkeleton />;
 
   return (
     <>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <PageHeading icon="headphones" title="Soporte" subtitle="Órdenes de trabajo, instalaciones, cortes y reconexiones" />
-        <Button size="sm" onClick={() => setNuevaOpen(true)}><Icon name="plus" size={14} /> Nueva orden</Button>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="secondary" onClick={exportar} disabled={exporting}>
+            <Icon name={exporting ? "loader" : "download"} size={14} className={exporting ? "animate-spin" : ""} /> {exporting ? "Exportando…" : "Exportar Excel"}
+          </Button>
+          <Button size="sm" onClick={() => setNuevaOpen(true)}><Icon name="plus" size={14} /> Nueva orden</Button>
+        </div>
       </div>
 
       <NuevaOrdenModal open={nuevaOpen} onClose={() => setNuevaOpen(false)} onDone={() => { void load(); reloadStats(); }} />
@@ -115,11 +153,7 @@ export default function SoportePage() {
       {/* Buscador + filtros + tabla agrupados con poco espacio entre sí */}
       <div className="flex flex-col gap-2.5">
       {/* Barra de filtros al ancho completo de la tabla */}
-      <div className="flex w-full flex-wrap items-center gap-2">
-        <div className="relative min-w-[240px] flex-1">
-          <Icon name="search" size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary" />
-          <Input className="pl-9" placeholder="Buscar orden, usuario o técnico…" value={search} onChange={(e) => setSearch(e.target.value)} />
-        </div>
+      <ListToolbar search={search} onSearch={setSearch} searchPlaceholder="Buscar orden, usuario o técnico…">
         <Select value={status} onChange={(e) => setStatus(e.target.value)} className="w-auto">
           <option value="">Todos los estados</option>
           {Object.entries(TICKET_STATUS_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
@@ -149,7 +183,7 @@ export default function SoportePage() {
             <Icon name="x" size={13} /> Limpiar ({activeFilters})
           </button>
         )}
-      </div>
+      </ListToolbar>
 
       {/* Modal de filtros por fecha */}
       <Modal open={showFilters} onClose={() => setShowFilters(false)} title="Filtrar por fecha" maxWidth="max-w-lg">
@@ -177,34 +211,26 @@ export default function SoportePage() {
 
       {loading && !data ? <PageSkeleton /> : (
         <div>
-          <div className="mb-2 flex items-center justify-between gap-2 text-[12px] text-text-tertiary">
-            <span>{(data?.total ?? 0).toLocaleString("es-CO")} órdenes {all ? "(histórico completo)" : from || to ? "en el periodo" : `de ${new Date().getFullYear()}`}</span>
-            <span className="flex items-center gap-1.5">Ver
-              <Select value={String(pageSize)} onChange={(e) => setPageSize(Number(e.target.value))} className="w-auto py-1 text-[12px]">
-                {[25, 50, 100].map((n) => <option key={n} value={n}>{n}</option>)}
-              </Select>
-            </span>
-          </div>
-          <DataTable autoHeight rows={data?.items ?? []} empty="No se encontraron órdenes con estos filtros." onRowClick={(r) => router.push(`/soporte/${r.id}`)} columns={[
-            { key: "code", header: "N°", render: (r) => <span className="font-mono text-text-secondary">{r.code ?? r.legacyId}</span> },
-            { key: "priority", header: "Prioridad", render: (r) => r.priority ? <Badge label={r.priority} tone={TICKET_PRIORITY_TONE[r.priority] ?? "default"} /> : <span className="text-text-tertiary">—</span> },
-            { key: "orden", header: "Orden", render: (r) => (
+          <DataTable rows={data?.items ?? []} empty="No se encontraron órdenes con estos filtros." onRowClick={(r) => router.push(`/soporte/${r.id}`)} sort={orden.sort} onSort={orden.onSort} columns={[
+            { key: "code", header: "N°", sortable: true, render: (r) => <span className="font-mono text-text-secondary">{r.code ?? r.legacyId}</span> },
+            { key: "priority", header: "Prioridad", sortable: true, render: (r) => r.priority ? <Badge label={r.priority} tone={TICKET_PRIORITY_TONE[r.priority] ?? "default"} /> : <span className="text-text-tertiary">—</span> },
+            { key: "orden", header: "Orden", sortable: true, render: (r) => (
               <div className="flex min-w-0 flex-col">
                 <span className="truncate text-[11px] text-text-tertiary" title={r.subject}>{r.subject || r.type}</span>
                 <span className="truncate font-medium text-text-primary">{r.type}</span>
               </div>
             ) },
-            { key: "description", header: "Descripción", render: (r) => (
+            { key: "description", header: "Descripción", sortable: true, render: (r) => (
               <span className="block max-w-[280px] truncate text-[12px] text-text-secondary" title={r.description ?? undefined}>{r.description || "—"}</span>
             ) },
-            { key: "client", header: "Usuario", render: (r) => r.subscriberId ? <Link href={`/clientes/${r.subscriberId}`} className="text-brand hover:underline" onClick={(e) => e.stopPropagation()}>{r.client}</Link> : <span className="text-text-secondary">{r.client ?? "—"}</span> },
-            { key: "sede", header: "Sede", render: (r) => <span className="text-[12px] text-text-secondary">{r.sede ?? "—"}</span> },
+            { key: "client", header: "Usuario", sortable: true, render: (r) => r.subscriberId ? <Link href={`/clientes/${r.subscriberId}`} className="text-brand hover:underline" onClick={(e) => e.stopPropagation()}>{r.client}</Link> : <span className="text-text-secondary">{r.client ?? "—"}</span> },
+            { key: "sede", header: "Sede", sortable: true, render: (r) => <span className="text-[12px] text-text-secondary">{r.sede ?? "—"}</span> },
             { key: "barrio", header: "Barrio", render: (r) => <span className="text-[12px] text-text-secondary">{r.barrio ?? "—"}</span> },
-            { key: "tec", header: "Técnico", render: (r) => <TecChip name={r.assigned} /> },
-            { key: "created", header: "Creada", render: (r) => <span className="whitespace-nowrap text-[12px] text-text-secondary">{new Date(r.created).toLocaleDateString("es-CO")}</span> },
-            { key: "status", header: "Estado", render: (r) => <Badge label={TICKET_STATUS_LABEL[r.status] ?? r.status} tone={TICKET_STATUS_TONE[r.status] ?? "default"} /> },
+            { key: "tec", header: "Técnico", sortable: true, render: (r) => <TecChip name={r.assigned} /> },
+            { key: "created", header: "Creada", sortable: true, render: (r) => <span className="whitespace-nowrap text-[12px] text-text-secondary">{new Date(r.created).toLocaleDateString("es-CO")}</span> },
+            { key: "status", header: "Estado", sortable: true, render: (r) => <Badge label={TICKET_STATUS_LABEL[r.status] ?? r.status} tone={TICKET_STATUS_TONE[r.status] ?? "default"} /> },
           ]} />
-          {data && data.pages > 1 && <div className="mt-3"><Pagination meta={{ page: data.page, pageSize: data.pageSize, total: data.total, pageCount: data.pages }} onPage={setPage} onPageSize={setPageSize} /></div>}
+          {data && <div className="mt-3"><Pagination meta={{ page: data.page, pageSize: data.pageSize, total: data.total, pageCount: data.pages }} onPage={setPage} onPageSize={setPageSize} /></div>}
         </div>
       )}
       </div>

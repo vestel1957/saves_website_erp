@@ -1,10 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
 import { Button } from "@/components/ui/Button";
 import { toast } from "@/components/ui/Toast";
+import { type Column } from "@/components/ui/DataTable";
+import { PagedTable } from "@/components/ui/PagedTable";
+import { ListToolbar } from "@/components/ui/ListToolbar";
 import { useAuth } from "@/context/AuthProvider";
 
 type Folder = { id: string; name: string; count: number };
@@ -16,6 +19,7 @@ export default function DocumentosPage() {
   const [docs, setDocs] = useState<Doc[]>([]);
   const [uploading, setUploading] = useState(false);
   const [title, setTitle] = useState("");
+  const [search, setSearch] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(() => {
@@ -50,7 +54,32 @@ export default function DocumentosPage() {
     setTimeout(() => URL.revokeObjectURL(url), 30_000);
   }
 
-  const folderName = (id: string | null) => folders.find((f) => f.id === id)?.name ?? "Sin carpeta";
+  const folderName = useCallback((id: string | null) => folders.find((f) => f.id === id)?.name ?? "Sin carpeta", [folders]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return docs;
+    return docs.filter((d) =>
+      d.title.toLowerCase().includes(q) ||
+      (d.fileName ?? "").toLowerCase().includes(q) ||
+      folderName(d.folderId).toLowerCase().includes(q),
+    );
+  }, [docs, search, folderName]);
+
+  const columns: Column<Doc>[] = [
+    { key: "title", header: "Título", render: (d) => <span className="font-medium">{d.title}</span> },
+    { key: "fileName", header: "Archivo", render: (d) => <span className="text-text-secondary">{d.fileName ?? "—"}</span> },
+    { key: "folder", header: "Carpeta", render: (d) => <span className="text-text-tertiary">{folderName(d.folderId)}</span> },
+    { key: "date", header: "Fecha", render: (d) => <span className="text-text-tertiary">{d.docDate ? new Date(d.docDate).toLocaleDateString("es-CO") : new Date(d.createdAt).toLocaleDateString("es-CO")}</span> },
+    {
+      key: "actions", header: "", align: "right",
+      render: (d) => (
+        <button onClick={() => download(d)} title={d.downloadable ? "Descargar" : "Solo metadata"} className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[12px] ${d.downloadable ? "border-border-default text-text-secondary hover:bg-surface-2" : "border-border-subtle text-text-tertiary"}`}>
+          <Icon name="download" size={13} /> {d.downloadable ? "Descargar" : "—"}
+        </button>
+      ),
+    },
+  ];
 
   return (
     <div className="space-y-4">
@@ -75,35 +104,9 @@ export default function DocumentosPage() {
         </div>
       )}
 
-      <div className="overflow-x-auto rounded-xl border border-border-subtle bg-surface">
-        <table className="w-full text-[13px]">
-          <thead>
-            <tr className="border-b border-border-subtle text-left text-text-tertiary">
-              <th className="py-2 pl-3 pr-3 font-medium">Título</th>
-              <th className="py-2 pr-3 font-medium">Archivo</th>
-              <th className="py-2 pr-3 font-medium">Carpeta</th>
-              <th className="py-2 pr-3 font-medium">Fecha</th>
-              <th className="py-2 pr-3 font-medium"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {docs.length === 0 ? (
-              <tr><td colSpan={5} className="py-6 text-center text-text-tertiary">Sin documentos.</td></tr>
-            ) : docs.map((d) => (
-              <tr key={d.id} className="border-b border-border-subtle/60">
-                <td className="py-1.5 pl-3 pr-3 font-medium">{d.title}</td>
-                <td className="py-1.5 pr-3 text-text-secondary">{d.fileName ?? "—"}</td>
-                <td className="py-1.5 pr-3 text-text-tertiary">{folderName(d.folderId)}</td>
-                <td className="py-1.5 pr-3 text-text-tertiary">{d.docDate ? new Date(d.docDate).toLocaleDateString("es-CO") : new Date(d.createdAt).toLocaleDateString("es-CO")}</td>
-                <td className="py-1.5 pr-3 text-right">
-                  <button onClick={() => download(d)} title={d.downloadable ? "Descargar" : "Solo metadata"} className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[12px] ${d.downloadable ? "border-border-default text-text-secondary hover:bg-surface-2" : "border-border-subtle text-text-tertiary"}`}>
-                    <Icon name="download" size={13} /> {d.downloadable ? "Descargar" : "—"}
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div>
+        <ListToolbar search={search} onSearch={setSearch} searchPlaceholder="Buscar por título, archivo o carpeta…" />
+        <PagedTable columns={columns} rows={filtered} empty="Sin documentos." />
       </div>
     </div>
   );

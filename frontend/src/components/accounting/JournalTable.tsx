@@ -62,7 +62,7 @@ export function JournalTable({
                 <button
                   type="button"
                   onClick={() => onReverse(e.id, e.number)}
-                  className="rounded-md border border-border-subtle px-2 py-0.5 text-[10px] font-semibold text-text-secondary hover:border-error-text hover:text-error-text"
+                  className="min-h-8 rounded-md border border-border-subtle px-2 py-0.5 text-[10px] font-semibold text-text-secondary hover:border-error-text hover:text-error-text"
                   title="Reversar asiento"
                 >
                   Reversar

@@ -83,7 +83,7 @@ export function EditarPerfilModal({
         <Field label="Razón social / Empresa">
           <Input value={f.companyName} onChange={set("companyName")} placeholder="Opcional" />
         </Field>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           <Field label="Tipo doc.">
             <Input value={f.docType} onChange={set("docType")} placeholder="CC, NIT…" />
           </Field>
@@ -106,7 +106,7 @@ export function EditarPerfilModal({
         <Field label="Dirección">
           <Input value={f.addressLine} onChange={set("addressLine")} />
         </Field>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           <Field label="Barrio">
             <Input value={f.neighborhood} onChange={set("neighborhood")} />
           </Field>

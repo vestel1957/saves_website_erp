@@ -5,7 +5,8 @@ import Link from "next/link";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
 import { Button } from "@/components/ui/Button";
-import { Input, Select } from "@/components/ui/Field";
+import { Select } from "@/components/ui/Field";
+import { ListToolbar } from "@/components/ui/ListToolbar";
 import { Badge } from "@/components/ui/Badge";
 import { DataTable } from "@/components/ui/DataTable";
 import { Pagination } from "@/components/ui/Pagination";
@@ -15,6 +16,7 @@ import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import dynamic from "next/dynamic";
 import { useRequest } from "@/lib/useRequest";
+import { useOrden } from "@/lib/useOrden";
 
 const NuevaNotaModal = dynamic(() => import("@/components/billing/NuevaNotaModal").then((m) => m.NuevaNotaModal), { ssr: false });
 
@@ -29,9 +31,12 @@ export default function NotasPage() {
 
   // Carga con cancelación: al teclear se aborta la petición en vuelo para que
   // una respuesta lenta no pise a otra más reciente. Ver lib/useRequest.
+  // Pagina en el servidor: el orden viaja en la query.
+  const orden = useOrden();
+
   const { data, cargando: loading, error, refrescar: load } = useRequest<any>(
     () => {
-      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize), ...orden.params });
       if (search.trim()) qs.set("search", search.trim());
       if (type) qs.set("type", type);
       return `/billing/notes?${qs}`;
@@ -40,7 +45,7 @@ export default function NotasPage() {
     { debounceMs: search ? 350 : 0, saltar: authLoading },
   );
 
-  useEffect(() => { setPage(1); }, [search, type, pageSize]);
+  useEffect(() => { setPage(1); }, [search, type, pageSize, orden.clave]);
 
   if (authLoading) return <PageSkeleton />;
 
@@ -49,35 +54,38 @@ export default function NotasPage() {
       <PageHeading icon="file-text" title="Notas crédito / débito" subtitle="Ajustes sobre facturas (rebaja o recargo)" />
 
       {/* Barra única: búsqueda (se estira) + filtro de tipo + acción, todo en una línea. */}
-      <div className="mb-3 -mt-2 flex items-center gap-2">
-        <div className="relative min-w-0 flex-1">
-          <Icon name="search" size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary" />
-          <Input className="pl-9" placeholder="Buscar por N° de factura, cliente o descripción…" value={search} onChange={(e) => setSearch(e.target.value)} />
-        </div>
+      <ListToolbar
+        search={search}
+        onSearch={setSearch}
+        searchPlaceholder="Buscar por N° de factura, cliente o descripción…"
+        actions={
+          <Button onClick={() => setOpenNew(true)} className="shrink-0 whitespace-nowrap">
+            <Icon name="plus" size={15} className="mr-1.5" />
+            Nueva nota
+          </Button>
+        }
+      >
         <Select value={type} onChange={(e) => setType(e.target.value)} className="w-auto shrink-0">
           <option value="">Todos los tipos</option>
           <option value="CREDITO">Nota crédito</option>
           <option value="DEBITO">Nota débito</option>
         </Select>
-        <Button onClick={() => setOpenNew(true)} className="shrink-0 whitespace-nowrap">
-          <Icon name="plus" size={15} className="mr-1.5" />
-          Nueva nota
-        </Button>
-      </div>
+      </ListToolbar>
 
       {loading && !data ? <PageSkeleton /> : (
         <>
           <DataTable
-            autoHeight
+            sort={orden.sort}
+            onSort={orden.onSort}
             rows={data?.items ?? []}
             empty="No se encontraron notas."
             columns={[
-              { key: "date", header: "Fecha", render: (r: any) => (r.date ? new Date(r.date).toLocaleDateString("es-CO") : "—") },
-              { key: "type", header: "Tipo", render: (r: any) => <Badge label={r.type === "CREDITO" ? "Crédito" : "Débito"} tone={r.type === "CREDITO" ? "success" : "warning"} /> },
-              { key: "tid", header: "Factura", render: (r: any) => r.invoiceId ? <Link href={`/facturacion/${r.invoiceId}`} className="font-mono text-brand hover:underline">#{r.tid}</Link> : "—" },
+              { key: "date", header: "Fecha", sortable: true, render: (r: any) => (r.date ? new Date(r.date).toLocaleDateString("es-CO") : "—") },
+              { key: "type", header: "Tipo", sortable: true, render: (r: any) => <Badge label={r.type === "CREDITO" ? "Crédito" : "Débito"} tone={r.type === "CREDITO" ? "success" : "warning"} /> },
+              { key: "tid", header: "Factura", sortable: true, render: (r: any) => r.invoiceId ? <Link href={`/facturacion/${r.invoiceId}`} className="font-mono text-brand hover:underline">#{r.tid}</Link> : "—" },
               { key: "sub", header: "Cliente", render: (r: any) => <span className="text-text-secondary">{r.subscriber}</span> },
-              { key: "desc", header: "Descripción", render: (r: any) => <span className="text-text-tertiary">{r.description || "—"}</span> },
-              { key: "amount", header: "Monto", align: "right", render: (r: any) => <span className={`font-semibold ${r.type === "CREDITO" ? "text-success-text" : "text-warning-text"}`}>{r.type === "CREDITO" ? "-" : "+"}{cop(r.amount)}</span> },
+              { key: "desc", header: "Descripción", sortable: true, render: (r: any) => <span className="text-text-tertiary">{r.description || "—"}</span> },
+              { key: "amount", header: "Monto", sortable: true, align: "right", render: (r: any) => <span className={`font-semibold ${r.type === "CREDITO" ? "text-success-text" : "text-warning-text"}`}>{r.type === "CREDITO" ? "-" : "+"}{cop(r.amount)}</span> },
               { key: "detalle", header: "Detalles", align: "right", render: (r: any) => (
                 <button
                   type="button"

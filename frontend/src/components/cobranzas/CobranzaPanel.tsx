@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Input, Select, Field } from "@/components/ui/Field";
 import { Modal } from "@/components/Modal";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { mensajeDeError } from "@/lib/errores";
@@ -36,6 +37,8 @@ export function CobranzaPanel({ subscriberId }: { subscriberId: string }) {
   const [time, setTime] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [notes, setNotes] = useState("");
+  const [confirmar, setConfirmar] = useState<{ kind: "borrar-registro"; call: Call } | null>(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -71,12 +74,13 @@ export function CobranzaPanel({ subscriberId }: { subscriberId: string }) {
   }
 
   async function remove(id: string) {
-    if (!confirm("¿Eliminar este registro?")) return;
+    setConfirmBusy(true);
     try {
       const res = await authFetch(`/collections/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error();
       toast("Eliminado", "check"); void load();
     } catch { toast("No se pudo eliminar", "alert-triangle"); }
+    finally { setConfirmBusy(false); setConfirmar(null); }
   }
 
   const isAgreement = responseDetail === "Acuerdo de Pago";
@@ -107,7 +111,7 @@ export function CobranzaPanel({ subscriberId }: { subscriberId: string }) {
                 </div>
                 {c.notes && <div className="mt-0.5 text-[12px] text-text-secondary">{c.notes}</div>}
               </div>
-              <button onClick={() => remove(c.id)} className="text-text-tertiary hover:text-error-text" title="Eliminar"><Icon name="trash" size={15} /></button>
+              <button onClick={() => setConfirmar({ kind: "borrar-registro", call: c })} className="tap text-text-tertiary hover:text-error-text" title="Eliminar"><Icon name="trash" size={15} /></button>
             </div>
           ))}
         </div>

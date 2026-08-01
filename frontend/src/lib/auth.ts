@@ -32,13 +32,16 @@ export const PERM = {
   HR_ACCESS_MANAGE: "hr.access.manage",
   USERS_MANAGE: "system.users.manage",
   WHATSAPP_MANAGE: "system.whatsapp",
+  WHATSAPP_INBOX: "whatsapp.inbox",
   SYSTEM_ADMIN: "system.admin",
+  PURCHASES_APPROVE: "purchases.approve",
   // áreas de acceso Vestel (visibilidad de secciones del sidebar)
   AREA_GERENCIA: "area.gerencia",
   AREA_ADMINISTRACION: "area.administracion",
   AREA_CONTABILIDAD: "area.contabilidad",
   AREA_TECNICOS: "area.tecnicos",
   AREA_SISTEMAS: "area.sistemas",
+  AREA_CAJA: "area.caja",
   // inventory
   INV_ADMIN: "inventory.admin",
   INV_PRODUCTS_READ: "inventory.products.read",

@@ -217,7 +217,7 @@ export default function ProyectoDetallePage() {
 
   return (
     <>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <PageHeading icon="layers" title={data.name} subtitle={data.subscriber?.name ? `Cliente: ${data.subscriber.name}` : "Sin cliente asignado"} />
         <div className="flex flex-wrap items-center gap-2">
           <Badge label={STATUS_LABEL[data.status] ?? data.status} tone={statusTone(data.status)} />

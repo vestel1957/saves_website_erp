@@ -13,6 +13,7 @@ export function DonutChart({
   centerLabel,
   centerValue,
   valueFormat = (n) => n.toLocaleString("es-CO"),
+  gap = 2,
 }: {
   data: Slice[];
   size?: number;
@@ -20,6 +21,9 @@ export function DonutChart({
   centerLabel?: string;
   centerValue?: string;
   valueFormat?: (n: number) => string;
+  /** Separación en px entre porciones. Dos rellenos que se tocan se leen como uno
+   *  solo; el hueco es lo que los separa sin gastar otro color. */
+  gap?: number;
 }) {
   const total = data.reduce((a, b) => a + b.value, 0);
   if (total <= 0) return <ChartEmpty />;
@@ -37,6 +41,8 @@ export function DonutChart({
         {data.map((d, i) => {
           const frac = d.value / total;
           const len = frac * circ;
+          // Con una sola porción no hay nada de qué separarla: el hueco sería una muesca.
+          const arco = data.length > 1 ? Math.max(len - gap, 0.5) : len;
           const color = d.color ?? colorAt(i);
           const el = (
             <circle
@@ -47,7 +53,7 @@ export function DonutChart({
               fill="none"
               stroke={color}
               strokeWidth={thickness}
-              strokeDasharray={`${len} ${circ - len}`}
+              strokeDasharray={`${arco} ${circ - arco}`}
               strokeDashoffset={-offset}
               strokeLinecap="butt"
               transform={`rotate(-90 ${cx} ${cy})`}

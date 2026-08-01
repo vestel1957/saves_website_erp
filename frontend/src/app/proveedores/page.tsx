@@ -6,6 +6,7 @@ import { Icon } from "@/components/Icon";
 import { Button } from "@/components/ui/Button";
 import { Input, Select, Field } from "@/components/ui/Field";
 import { DataTable } from "@/components/ui/DataTable";
+import { ListToolbar } from "@/components/ui/ListToolbar";
 import { Pagination } from "@/components/ui/Pagination";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { Modal } from "@/components/Modal";
@@ -14,6 +15,7 @@ import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/format";
 import { useRequest } from "@/lib/useRequest";
+import { useOrden } from "@/lib/useOrden";
 import { mensajeDeError } from "@/lib/errores";
 
 const CATEGORY_LABEL: Record<number, string> = { 1: "Productos", 2: "Servicios" };
@@ -48,17 +50,20 @@ export default function ProveedoresPage() {
 
   // Carga con cancelación: al teclear se aborta la petición en vuelo para que
   // una respuesta lenta no pise a otra más reciente. Ver lib/useRequest.
+  // Pagina en el servidor: el orden viaja en la query.
+  const orden = useOrden();
+
   const { data, cargando: loading, error, refrescar: load } = useRequest<any>(
     () => {
-      const qs = new URLSearchParams({ category: String(tab), page: String(page), pageSize: String(pageSize) });
+      const qs = new URLSearchParams({ category: String(tab), page: String(page), pageSize: String(pageSize), ...orden.params });
       if (search.trim()) qs.set("search", search.trim());
       return `/orders/suppliers?${qs.toString()}`;
     },
-    [tab, page, pageSize, search],
+    [tab, page, pageSize, search, orden.clave],
     { debounceMs: search ? 350 : 0, saltar: authLoading },
   );
 
-  useEffect(() => { setPage(1); }, [tab, search, pageSize]);
+  useEffect(() => { setPage(1); }, [tab, search, pageSize, orden.clave]);
 
   const submit = async () => {
     if (!form.name.trim()) { toast("El nombre es obligatorio", "alert-triangle"); return; }
@@ -138,15 +143,16 @@ export default function ProveedoresPage() {
       </div>
 
       {/* Filtros + acción */}
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative flex-1 min-w-[220px]">
-          <Icon name="search" size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary" />
-          <Input className="pl-9" placeholder="Buscar por nombre, NIT o ciudad…" value={search} onChange={(e) => setSearch(e.target.value)} />
-        </div>
-        <Button variant="primary" onClick={() => { setForm(EMPTY_FORM); setOpen(true); }}>
-          <Icon name="plus" size={15} /> Nuevo proveedor
-        </Button>
-      </div>
+      <ListToolbar
+        search={search}
+        onSearch={setSearch}
+        searchPlaceholder="Buscar por nombre, NIT o ciudad…"
+        actions={
+          <Button variant="primary" onClick={() => { setForm(EMPTY_FORM); setOpen(true); }}>
+            <Icon name="plus" size={15} /> Nuevo proveedor
+          </Button>
+        }
+      />
 
       {/* Tabla */}
       {loading && !data ? (
@@ -154,25 +160,27 @@ export default function ProveedoresPage() {
       ) : (
         <>
           <DataTable
+            sort={orden.sort}
+            onSort={orden.onSort}
             rows={data?.items ?? []}
             empty="No se encontraron proveedores con esos criterios."
             columns={[
-              { key: "name", header: "Nombre", render: (r: any) => <span className="font-medium text-text-primary">{r.name}</span> },
-              { key: "nit", header: "NIT", render: (r: any) => <span className="text-text-secondary">{r.nit ?? "—"}</span> },
-              { key: "phone", header: "Teléfono", render: (r: any) => r.phone ?? "—" },
-              { key: "city", header: "Ciudad", render: (r: any) => r.city ?? "—" },
-              { key: "bank", header: "Banco", render: (r: any) => r.bank ?? "—" },
-              { key: "orders", header: "# Órdenes", align: "right", render: (r: any) => <span className="font-semibold text-text-secondary">{r.orders ?? 0}</span> },
+              { key: "name", header: "Nombre", sortable: true, render: (r: any) => <span className="font-medium text-text-primary">{r.name}</span> },
+              { key: "nit", header: "NIT", sortable: true, render: (r: any) => <span className="text-text-secondary">{r.nit ?? "—"}</span> },
+              { key: "phone", header: "Teléfono", sortable: true, render: (r: any) => r.phone ?? "—" },
+              { key: "city", header: "Ciudad", sortable: true, render: (r: any) => r.city ?? "—" },
+              { key: "bank", header: "Banco", sortable: true, render: (r: any) => r.bank ?? "—" },
+              { key: "orders", header: "# Órdenes", sortable: true, align: "right", render: (r: any) => <span className="font-semibold text-text-secondary">{r.orders ?? 0}</span> },
               { key: "actions", header: "", align: "right", render: (r: any) => (
                 <div className="flex justify-end gap-2">
-                  <button type="button" title="Estado de cuenta" onClick={() => showStatement(r)} className="text-text-tertiary hover:text-brand"><Icon name="scroll-text" size={14} /></button>
-                  <button type="button" title="Editar" onClick={() => editSupplier(r)} className="text-text-tertiary hover:text-brand"><Icon name="pencil" size={14} /></button>
-                  <button type="button" title="Eliminar" onClick={() => setToDelete(r)} className="text-text-tertiary hover:text-error-text"><Icon name="trash" size={14} /></button>
+                  <button type="button" title="Estado de cuenta" onClick={() => showStatement(r)} className="tap text-text-tertiary hover:text-brand"><Icon name="scroll-text" size={14} /></button>
+                  <button type="button" title="Editar" onClick={() => editSupplier(r)} className="tap text-text-tertiary hover:text-brand"><Icon name="pencil" size={14} /></button>
+                  <button type="button" title="Eliminar" onClick={() => setToDelete(r)} className="tap text-text-tertiary hover:text-error-text"><Icon name="trash" size={14} /></button>
                 </div>
               ) },
             ]}
           />
-          {data && data.pages > 1 && (
+          {data && (
             <div className="mt-3">
               <Pagination
                 meta={{ page: data.page, pageSize: data.pageSize, total: data.total, pageCount: data.pages }}
@@ -238,7 +246,7 @@ export default function ProveedoresPage() {
           <p className="py-6 text-center text-[13px] text-text-tertiary">Cargando…</p>
         ) : statement ? (
           <div className="flex flex-col gap-4">
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               {([["Total comprado", statement.totals?.totalOrdered], ["Pagado", statement.totals?.totalPaid], ["Saldo", statement.totals?.saldo]] as const).map(([lbl, val]) => (
                 <div key={lbl} className="rounded-lg border border-border-subtle bg-surface-2 p-3 text-center">
                   <div className="text-[15px] font-bold tabular-nums text-text-primary">{cop(Number(val) || 0)}</div>
@@ -248,7 +256,7 @@ export default function ProveedoresPage() {
             </div>
             <div>
               <h3 className="mb-1 text-[12px] font-bold uppercase tracking-wide text-text-tertiary">Órdenes</h3>
-              <DataTable autoHeight rows={statement.orders ?? []} empty="Sin órdenes."
+              <DataTable rows={statement.orders ?? []} empty="Sin órdenes."
                 columns={[
                   { key: "tid", header: "#", render: (o: any) => <span className="font-mono">#{o.tid}</span> },
                   { key: "total", header: "Total", align: "right", render: (o: any) => cop(o.total) },
@@ -259,7 +267,7 @@ export default function ProveedoresPage() {
             </div>
             <div>
               <h3 className="mb-1 text-[12px] font-bold uppercase tracking-wide text-text-tertiary">Pagos</h3>
-              <DataTable autoHeight rows={statement.payments ?? []} empty="Sin pagos registrados."
+              <DataTable rows={statement.payments ?? []} empty="Sin pagos registrados."
                 columns={[
                   { key: "date", header: "Fecha", render: (p: any) => p.date ? new Date(p.date).toLocaleDateString("es-CO") : "—" },
                   { key: "amount", header: "Monto", align: "right", render: (p: any) => cop(p.amount) },

@@ -11,6 +11,7 @@ import { cop } from "@/lib/subscribers";
 import { type CashAccount, PAY_METHODS, BANKS, isBankMethod } from "@/lib/cobranzas";
 import { SubscriberPicker, type PickedSub } from "@/components/cobranzas/SubscriberPicker";
 import { mensajeDeError } from "@/lib/errores";
+import { useMiCaja } from "@/lib/useMiCaja";
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -47,6 +48,59 @@ function useTxCategories(open: boolean) {
   return categories;
 }
 
+/**
+ * Selector de caja compartido por los modales que mueven plata.
+ *
+ * Quien está acotado (la cajera) ve UNA opción —la suya— y no puede dejarlo en
+ * blanco: un movimiento sin caja no entra en su cierre y luego no lo ve ni ella.
+ * El resto sigue pudiendo elegir, incluido "sin caja". El backend impone lo mismo
+ * con un 403 (`treasury/caja-scope.ts`); esto evita el viaje en balde.
+ */
+function CajaField({ accounts, value, onChange }: {
+  accounts: CashAccount[];
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const { bloqueada, acotado } = useMiCaja();
+  // El valor por defecto lo pone este componente (y no cada modal): si lo pusieran
+  // los dos, el del modal pisaría la caja fija con la primera de la lista.
+  useEffect(() => {
+    if (bloqueada) { onChange(String(bloqueada.id)); return; }
+    if (!value && accounts.length) onChange(String(accounts[0].id));
+  }, [bloqueada, accounts, value, onChange]);
+  return (
+    <Field label="Caja / cuenta" required={acotado} hint={bloqueada ? "Tu caja asignada" : undefined}>
+      <Select value={value} onChange={(e) => onChange(e.target.value)} disabled={!!bloqueada}>
+        {!acotado && <option value="">— Sin caja —</option>}
+        {bloqueada
+          ? <option value={bloqueada.id}>{bloqueada.name}</option>
+          : accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+      </Select>
+    </Field>
+  );
+}
+
+/**
+ * Selector de método de pago compartido. La cajera solo administra EFECTIVO:
+ * consignaciones y cheques los registra contabilidad. Se fija aquí (y el backend
+ * lo vuelve a imponer en `cobranzas.service`) para que el modal no ofrezca algo
+ * que el servidor va a rechazar.
+ */
+function MetodoField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const { acotado } = useMiCaja();
+  useEffect(() => { if (acotado && value !== "Cash") onChange("Cash"); }, [acotado, value, onChange]);
+  return (
+    <Field label="Método" hint={acotado ? "La caja solo maneja efectivo" : undefined}>
+      <Select value={value} onChange={(e) => onChange(e.target.value)} disabled={acotado}>
+        {PAY_METHODS
+          .filter((m) => m.value !== "Balance")
+          .filter((m) => !acotado || m.value === "Cash")
+          .map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+      </Select>
+    </Field>
+  );
+}
+
 /** Selector de categoría compartido por los modales de ingreso y egreso. */
 function CategoriaField({ categories, value, onChange }: { categories: string[]; value: string; onChange: (v: string) => void }) {
   return (
@@ -77,7 +131,7 @@ export function EgresoModal({ open, onClose, onDone }: { open: boolean; onClose:
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => { if (open) { setAmount(""); setNote(""); setPayerName(""); setFile(null); setErr(null); } }, [open]);
-  useEffect(() => { if (accounts.length && !cashAccountId) setCashAccountId(String(accounts[0].id)); }, [accounts, cashAccountId]);
+  // El default de la caja lo pone <CajaField/> (respeta la caja fija de la cajera).
   useEffect(() => { if (categories.length && !category) setCategory(categories[0]); }, [categories, category]);
 
   async function submit() {
@@ -118,9 +172,9 @@ export function EgresoModal({ open, onClose, onDone }: { open: boolean; onClose:
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <Field label="Monto" required><Input type="number" min={0} value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" autoFocus /></Field>
         <CategoriaField categories={categories} value={category} onChange={setCategory} />
-        <Field label="Método"><Select value={method} onChange={(e) => setMethod(e.target.value)}>{PAY_METHODS.filter((m) => m.value !== "Balance").map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}</Select></Field>
+        <MetodoField value={method} onChange={setMethod} />
         {isBankMethod(method) && <Field label="Banco"><Select value={bank} onChange={(e) => setBank(e.target.value)}>{BANKS.map((b) => <option key={b} value={b}>{b}</option>)}</Select></Field>}
-        <Field label="Caja / cuenta"><Select value={cashAccountId} onChange={(e) => setCashAccountId(e.target.value)}><option value="">— Sin caja —</option>{accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</Select></Field>
+        <CajaField accounts={accounts} value={cashAccountId} onChange={setCashAccountId} />
         <Field label="Beneficiario"><Input value={payerName} onChange={(e) => setPayerName(e.target.value)} placeholder="A quién se paga" /></Field>
         <Field label="Fecha"><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></Field>
         <div className="sm:col-span-2"><Field label="Nota"><Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} /></Field></div>
@@ -162,7 +216,7 @@ export function IngresoLibreModal({ open, onClose, onDone }: { open: boolean; on
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => { if (open) { setAmount(""); setNote(""); setPayerName(""); setPayerSub(null); setFile(null); setErr(null); } }, [open]);
-  useEffect(() => { if (accounts.length && !cashAccountId) setCashAccountId(String(accounts[0].id)); }, [accounts, cashAccountId]);
+  // El default de la caja lo pone <CajaField/> (respeta la caja fija de la cajera).
   useEffect(() => { if (categories.length && !category) setCategory(categories[0]); }, [categories, category]);
 
   async function submit() {
@@ -208,9 +262,9 @@ export function IngresoLibreModal({ open, onClose, onDone }: { open: boolean; on
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <Field label="Monto" required><Input type="number" min={0} value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" autoFocus /></Field>
         <CategoriaField categories={categories} value={category} onChange={setCategory} />
-        <Field label="Método"><Select value={method} onChange={(e) => setMethod(e.target.value)}>{PAY_METHODS.filter((m) => m.value !== "Balance").map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}</Select></Field>
+        <MetodoField value={method} onChange={setMethod} />
         {isBankMethod(method) && <Field label="Banco"><Select value={bank} onChange={(e) => setBank(e.target.value)}>{BANKS.map((b) => <option key={b} value={b}>{b}</option>)}</Select></Field>}
-        <Field label="Caja / cuenta"><Select value={cashAccountId} onChange={(e) => setCashAccountId(e.target.value)}><option value="">— Sin caja —</option>{accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</Select></Field>
+        <CajaField accounts={accounts} value={cashAccountId} onChange={setCashAccountId} />
         <Field label="Fecha"><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></Field>
         {/* Paridad legacy ("Search Payer"): el ingreso puede quedar ligado a un
             cliente. No toca sus facturas; solo deja constancia de quién pagó. */}

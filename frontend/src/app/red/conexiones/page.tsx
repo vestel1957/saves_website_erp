@@ -5,7 +5,8 @@ import Link from "next/link";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
 import { Button } from "@/components/ui/Button";
-import { Input, Select, Field } from "@/components/ui/Field";
+import { Select, Field } from "@/components/ui/Field";
+import { ListToolbar } from "@/components/ui/ListToolbar";
 import { Combobox, type ComboItem } from "@/components/ui/Combobox";
 import { Badge } from "@/components/ui/Badge";
 import { DataTable } from "@/components/ui/DataTable";
@@ -16,6 +17,7 @@ import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { SubscriberPicker, type PickedSub } from "@/components/cobranzas/SubscriberPicker";
 import { useRequest } from "@/lib/useRequest";
+import { useOrden } from "@/lib/useOrden";
 import { mensajeDeError } from "@/lib/errores";
 
 export default function ConexionesPage() {
@@ -35,22 +37,25 @@ export default function ConexionesPage() {
 
   // Carga con cancelación: al teclear se aborta la petición en vuelo para que
   // una respuesta lenta no pise a otra más reciente. Ver lib/useRequest.
+  // Pagina en el servidor: el orden viaja en la query.
+  const orden = useOrden();
+
   const { data, cargando: loading, error, refrescar: load } = useRequest<any>(
     () => {
-      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize), ...orden.params });
       if (search.trim()) qs.set("search", search.trim());
       if (status) qs.set("status", status);
       if (branchId) qs.set("branchId", branchId);
       if (napId) qs.set("napId", napId);
       return `/network/ports?${qs}`;
     },
-    [page, pageSize, search, status, branchId, napId],
+    [page, pageSize, search, status, branchId, napId, orden.clave],
     { debounceMs: search ? 350 : 0, saltar: authLoading },
   );
 
   useEffect(() => {
     setPage(1);
-  }, [search, status, branchId, napId, pageSize]);
+  }, [search, status, branchId, napId, pageSize, orden.clave]);
 
   // Sedes (para el filtro).
   useEffect(() => {
@@ -126,20 +131,7 @@ export default function ConexionesPage() {
         />
       </div>
 
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <div className="relative min-w-[220px] flex-1">
-          <Icon
-            name="search"
-            size={15}
-            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary"
-          />
-          <Input
-            className="pl-9"
-            placeholder="Buscar por puerto, NAP o cliente…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </div>
+      <ListToolbar search={search} onSearch={setSearch} searchPlaceholder="Buscar por puerto, NAP o cliente…">
         <Select value={branchId} onChange={(e) => setBranchId(e.target.value)} className="w-auto">
           <option value="">Todas las sedes</option>
           {branches.map((b) => (
@@ -166,24 +158,28 @@ export default function ConexionesPage() {
           <option value="Disponible">Disponible</option>
           <option value="Ocupado">Ocupado</option>
         </Select>
-      </div>
+      </ListToolbar>
 
       {loading && !data ? (
         <PageSkeleton />
       ) : (
         <>
           <DataTable
+            sort={orden.sort}
+            onSort={orden.onSort}
             rows={data?.items ?? []}
             empty="No se encontraron puertos."
             columns={[
               {
                 key: "port",
+                sortable: true,
                 header: "Puerto",
                 render: (r: any) => <span className="font-mono text-text-secondary">{r.port}</span>,
               },
-              { key: "nap", header: "NAP", render: (r: any) => r.nap ?? "—" },
+              { key: "nap", header: "NAP", sortable: true, render: (r: any) => r.nap ?? "—" },
               {
                 key: "status",
+                sortable: true,
                 header: "Estado",
                 render: (r: any) => (
                   <Badge label={r.status ?? "—"} tone={r.status === "Ocupado" ? "success" : "default"} />
@@ -191,6 +187,7 @@ export default function ConexionesPage() {
               },
               {
                 key: "client",
+                sortable: true,
                 header: "Cliente",
                 render: (r: any) =>
                   r.client ? (
@@ -227,7 +224,7 @@ export default function ConexionesPage() {
               },
             ]}
           />
-          {data && data.pages > 1 && (
+          {data && (
             <div className="mt-3">
               <Pagination
                 meta={{ page: data.page, pageSize: data.pageSize, total: data.total, pageCount: data.pages }}

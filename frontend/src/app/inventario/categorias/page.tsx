@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { PageHeading } from "@/components/ui/PageHeading";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Modal } from "@/components/Modal";
@@ -25,6 +26,8 @@ export default function CategoriasMaterialPage() {
   const [editing, setEditing] = useState<Category | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [busy, setBusy] = useState(false);
+  const [confirmar, setConfirmar] = useState<Category | null>(null);
+  const [borrando, setBorrando] = useState(false);
 
   const load = useCallback(() => {
     setErr(false);
@@ -56,7 +59,7 @@ export default function CategoriasMaterialPage() {
   }
 
   async function remove(c: Category) {
-    if (!confirm(`¿Eliminar la categoría "${c.title}"?`)) return;
+    setBorrando(true);
     try {
       const res = await authFetch(`/inventory/categories/${c.id}`, { method: "DELETE" });
       const data = await res.json().catch(() => null);
@@ -65,12 +68,15 @@ export default function CategoriasMaterialPage() {
       load();
     } catch (e) {
       toast((e as Error).message, "alert-circle");
+    } finally {
+      setBorrando(false);
+      setConfirmar(null);
     }
   }
 
   return (
     <div className="space-y-4">
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <PageHeading
           icon="boxes"
           title="Categorías de material"
@@ -98,15 +104,17 @@ export default function CategoriasMaterialPage() {
                   <span className="truncate text-[14px] font-semibold text-text-primary group-hover:text-brand">{c.title}</span>
                   <Badge tone={c.materials > 0 ? "info" : "default"} label={`${c.materials} material(es)`} />
                   {c.value > 0 && <Badge tone="default" label={cop(c.value)} />}
-                  <Icon name="chevron-right" size={14} className="shrink-0 text-brand opacity-0 transition-opacity group-hover:opacity-100" />
+                  {/* En táctil no hay hover: el chevron es la única pista de que
+                      la fila se abre, así que en móvil se deja visible. */}
+                  <Icon name="chevron-right" size={14} className="shrink-0 text-brand transition-opacity sm:opacity-0 sm:group-hover:opacity-100" />
                 </div>
                 {c.extra && <div className="mt-0.5 text-[12px] text-text-tertiary">{c.extra}</div>}
               </Link>
               <div className="flex shrink-0 items-center gap-1">
-                <button type="button" onClick={() => openEdit(c)} className="rounded-md p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-text-primary" title="Editar">
+                <button type="button" onClick={() => openEdit(c)} className="tap rounded-md p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-text-primary" title="Editar">
                   <Icon name="pencil" size={15} />
                 </button>
-                <button type="button" onClick={() => remove(c)} className="rounded-md p-1.5 text-text-tertiary hover:bg-error-soft hover:text-error-text" title="Eliminar">
+                <button type="button" onClick={() => setConfirmar(c)} className="tap rounded-md p-1.5 text-text-tertiary hover:bg-error-soft hover:text-error-text" title="Eliminar">
                   <Icon name="trash" size={15} />
                 </button>
               </div>
@@ -131,6 +139,55 @@ export default function CategoriasMaterialPage() {
           </div>
         </Modal>
       )}
+
+      {confirmar && (
+        <ConfirmDialog
+          open
+          busy={borrando}
+          onClose={() => setConfirmar(null)}
+          onConfirm={() => void remove(confirmar)}
+          tone="danger"
+          icon="trash"
+          title="Eliminar categoría de material"
+          confirmLabel="Eliminar categoría"
+          message={
+            confirmar.materials > 0 ? (
+              <>
+                Esta categoría todavía agrupa <b>{confirmar.materials} material(es)</b> del inventario,
+                así que el sistema rechazará el borrado. Muévelos a otra categoría antes de eliminarla.
+              </>
+            ) : (
+              <>
+                La categoría desaparece del catálogo y dejará de estar disponible al clasificar
+                materiales. No se puede deshacer.
+              </>
+            )
+          }
+          detail={<CategoriaResumen cat={confirmar} />}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Ficha compacta de la categoría dentro de la confirmación. */
+function CategoriaResumen({ cat }: { cat: Category }) {
+  const filas: [string, React.ReactNode][] = [
+    ["Nombre", cat.title],
+    ["Materiales", <Badge key="m" tone={cat.materials > 0 ? "info" : "default"} label={`${cat.materials} material(es)`} />],
+    ["Valor en stock", <span key="v" className="font-mono">{cop(cat.value)}</span>],
+    ...(cat.extra ? ([["Nota", cat.extra]] as [string, React.ReactNode][]) : []),
+  ];
+  return (
+    <div className="rounded-lg border border-border-subtle bg-surface-2 p-2.5">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12px]">
+        {filas.map(([k, v]) => (
+          <Fragment key={k}>
+            <dt className="text-text-tertiary">{k}</dt>
+            <dd className="text-right text-text-primary">{v}</dd>
+          </Fragment>
+        ))}
+      </dl>
     </div>
   );
 }

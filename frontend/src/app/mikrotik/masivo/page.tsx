@@ -7,10 +7,13 @@ import { Icon } from "@/components/Icon";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/Modal";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/components/ui/Toast";
 import { LoadError } from "@/components/ui/LoadError";
 import { useAuth } from "@/context/AuthProvider";
+import { BotonOrden, useTablaOrdenable } from "@/components/ui/tabla-ordenable";
 import { SUB_STATUS_LABEL, SUB_STATUS_TONE, cop } from "@/lib/subscribers";
+import type { MkMode } from "@/lib/mikrotik";
 
 type Plan = { plan: string | null; price: number } | null;
 type Row = { id: string; name: string; abonado: number; status: string | null; docNumber: string | null; phone?: string | null; branch?: string | null; balance?: number; debt?: number; internet?: Plan; tv?: Plan };
@@ -45,6 +48,14 @@ export default function OperacionesMasivasPage() {
   const [allMatching, setAllMatching] = useState(false); // operar sobre TODOS los que cumplen el filtro
 
   const [confirmCut, setConfirmCut] = useState(false);
+  const [confirmRestore, setConfirmRestore] = useState(false);
+  // Qué servicio operan Cortar/Reconectar: internet (Mikrotik/PPPoE) o TV
+  // (TR-069 u OLT según el equipo de cada abonado, resuelto en el backend).
+  const [servicioOp, setServicioOp] = useState<"internet" | "tv">("internet");
+  // Gate dry-run/LIVE del Mikrotik: en dry-run no se toca el router, así que la
+  // confirmación no exige teclear nada.
+  const [mkMode, setMkMode] = useState<MkMode | null>(null);
+  const live = !!mkMode?.live;
   const [waOpen, setWaOpen] = useState(false);
   const [waMsg, setWaMsg] = useState("Hola {nombre}, le recordamos que su servicio Vestel (abonado {abonado}) presenta saldo pendiente. Acérquese a pagar para evitar la suspensión. Gracias.");
   const [busy, setBusy] = useState(false);
@@ -57,6 +68,11 @@ export default function OperacionesMasivasPage() {
       .catch(() => setBranchesErr(true));
   }, [authFetch]);
   useEffect(() => { if (!authLoading) loadBranches(); }, [authLoading, loadBranches]);
+
+  useEffect(() => {
+    if (authLoading) return;
+    void authFetch("/network/mikrotik/mode").then((r) => r.json()).then(setMkMode).catch(() => {});
+  }, [authLoading, authFetch]);
 
   const load = useCallback(() => {
     if (!sede) return;
@@ -101,6 +117,18 @@ export default function OperacionesMasivasPage() {
   function openSede(b: BranchStat) { setSede(b); setSedeParam(b.id || "all"); setStatus(""); setServicio(""); setCuenta(""); setDeuda(""); setTecnologia(""); setSearch(""); setSel(new Set()); setRows([]); }
   function backToSedes() { setSede(null); setSedeParam(null); loadBranches(); }
 
+  // Ordena la vista cargada. La selección va por id, así que reordenar no
+  // desmarca a nadie ni cambia a quién se le aplica la acción masiva.
+  const t = useTablaOrdenable(rows, {
+    abonado: (r) => r.abonado,
+    cliente: (r) => r.name,
+    internet: (r) => r.internet?.plan,
+    tv: (r) => r.tv?.plan,
+    telefono: (r) => r.phone,
+    estado: (r) => r.status,
+    debe: (r) => r.debt,
+  });
+
   const allChecked = rows.length > 0 && sel.size === rows.length;
   const toggleAll = () => { setAllMatching(false); setSel(allChecked ? new Set() : new Set(rows.map((r) => r.id))); };
   const toggle = (id: string) => { setAllMatching(false); setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }); };
@@ -115,13 +143,30 @@ export default function OperacionesMasivasPage() {
   async function runBatch(kind: "cut" | "reconnect") {
     setBusy(true);
     try {
-      const res = allMatching
-        ? await authFetch(`/subscribers/bulk/${kind}`, { method: "POST", body: JSON.stringify(filter()) })
-        : await authFetch(`/network/${kind}-batch`, { method: "POST", body: JSON.stringify({ ids: [...sel] }) });
+      let res: Response;
+      if (servicioOp === "tv") {
+        // TV: el backend resuelve el equipo de cada abonado (TR-069 u OLT).
+        const accion = kind === "cut" ? "tv-cut" : "tv-restore";
+        res = allMatching
+          ? await authFetch(`/subscribers/bulk/${accion}`, { method: "POST", body: JSON.stringify(filter()) })
+          : await authFetch(`/network/genieacs/${accion}-subscribers`, { method: "POST", body: JSON.stringify({ ids: [...sel] }) });
+      } else {
+        res = allMatching
+          ? await authFetch(`/subscribers/bulk/${kind}`, { method: "POST", body: JSON.stringify(filter()) })
+          : await authFetch(`/network/${kind}-batch`, { method: "POST", body: JSON.stringify({ ids: [...sel] }) });
+      }
       const d = await res.json();
       if (!res.ok) { toast(d?.message ?? "Error", "x"); return; }
-      const dry = d.results?.[0]?.dryRun;
-      toast(`${kind === "cut" ? "Corte" : "Reconexión"}: ${d.ok}/${d.total} OK${dry ? " (dry-run)" : ""}`, "check");
+      if (servicioOp === "tv") {
+        const partes = [`${d.done ?? 0}/${d.total ?? count} OK`];
+        if (d.failed) partes.push(`${d.failed} fallidos`);
+        if (d.sinEquipo) partes.push(`${d.sinEquipo} sin equipo identificado`);
+        if (d.compromisosProtegidos) partes.push(`${d.compromisosProtegidos} protegidos por compromiso`);
+        toast(`${kind === "cut" ? "Corte de TV" : "Alta de TV"}: ${partes.join(" · ")}${d.dryRun ? " (dry-run)" : ""}`, d.failed ? "x" : "check");
+      } else {
+        const dry = d.results?.[0]?.dryRun;
+        toast(`${kind === "cut" ? "Corte" : "Reconexión"}: ${d.ok}/${d.total} OK${dry ? " (dry-run)" : ""}`, "check");
+      }
       load();
     } catch (e) { toast((e as Error).message, "x"); }
     finally { setBusy(false); setConfirmCut(false); }
@@ -129,7 +174,6 @@ export default function OperacionesMasivasPage() {
 
   async function restoreBranch() {
     if (!sede?.id) return;
-    if (!confirm(`¿Restaurar/sincronizar los secrets PPP de ${sede.name}? Recrea o actualiza en el Mikrotik el secret de cada abonado activo/cortado (recuperación tras formateo). Respeta el modo dry-run.`)) return;
     setBusy(true);
     try {
       const res = await authFetch(`/network/mikrotik/restore-branch/${sede.id}`, { method: "POST", body: JSON.stringify({}) });
@@ -137,7 +181,7 @@ export default function OperacionesMasivasPage() {
       if (!res.ok) { toast(d?.message ?? "Error", "x"); return; }
       toast(`${d.dryRun ? "DRY-RUN: " : ""}Restaurados ${d.ok}/${d.total}${d.failed ? ` · ${d.failed} con error` : ""}`, "check");
     } catch (e) { toast((e as Error).message, "x"); }
-    finally { setBusy(false); }
+    finally { setBusy(false); setConfirmRestore(false); }
   }
 
   async function sendWhatsapp() {
@@ -204,10 +248,10 @@ export default function OperacionesMasivasPage() {
   // ── PASO 2: clientes de la sede ──────────────────────────────────
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <PageHeading icon="wifi-off" title={sede.name} subtitle="Corte, reconexión y mensajería en lote." />
         <div className="flex items-center gap-2">
-          <Button variant="secondary" size="sm" disabled={busy || !sede.id} onClick={restoreBranch}><Icon name="refresh-cw" size={14} /> Restaurar secrets</Button>
+          <Button variant="secondary" size="sm" disabled={busy || !sede.id} onClick={() => setConfirmRestore(true)}><Icon name="refresh-cw" size={14} /> Restaurar secrets</Button>
           <Button variant="secondary" size="sm" onClick={backToSedes}><Icon name="arrow-left" size={14} /> Sedes</Button>
         </div>
       </div>
@@ -266,12 +310,24 @@ export default function OperacionesMasivasPage() {
         <span className="text-[13px] text-text-secondary">
           <b className="text-text-primary">{count}</b> {allMatching ? "que cumplen el filtro" : "seleccionados"} · {total} en el filtro
         </span>
-        <div className="ml-auto flex gap-2">
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {/* Qué se corta/reconecta: internet (Mikrotik) o TV (TR-069/OLT según el equipo). */}
+          <label className="flex items-center gap-1.5 text-[12px] text-text-secondary">
+            Servicio
+            <select
+              value={servicioOp}
+              onChange={(e) => setServicioOp(e.target.value as "internet" | "tv")}
+              className="rounded-lg border border-border-default bg-surface px-2 py-1.5 text-[13px] font-medium"
+            >
+              <option value="internet">Internet</option>
+              <option value="tv">TV</option>
+            </select>
+          </label>
           <Button variant="danger" disabled={count === 0 || busy} onClick={() => setConfirmCut(true)}>
-            <Icon name="wifi-off" size={15} /> Cortar
+            <Icon name={servicioOp === "tv" ? "tv" : "wifi-off"} size={15} /> Cortar {servicioOp === "tv" ? "TV" : "Internet"}
           </Button>
           <Button variant="secondary" disabled={count === 0 || busy} onClick={() => runBatch("reconnect")}>
-            <Icon name="wifi" size={15} /> Reconectar
+            <Icon name={servicioOp === "tv" ? "tv" : "wifi"} size={15} /> Reconectar {servicioOp === "tv" ? "TV" : "Internet"}
           </Button>
           <Button disabled={count === 0 || busy} onClick={() => setWaOpen(true)}>
             <Icon name="message-circle" size={15} /> WhatsApp
@@ -301,13 +357,13 @@ export default function OperacionesMasivasPage() {
           <thead>
             <tr className="border-b border-border-subtle text-left text-text-tertiary">
               <th className="w-10 py-2 pl-3"><input type="checkbox" checked={allChecked} onChange={toggleAll} /></th>
-              <th className="py-2 pr-3 font-medium">Abonado</th>
-              <th className="py-2 pr-3 font-medium">Cliente</th>
-              <th className="py-2 pr-3 font-medium">Internet</th>
-              <th className="py-2 pr-3 font-medium">TV</th>
-              <th className="py-2 pr-3 font-medium">Teléfono</th>
-              <th className="py-2 pr-3 font-medium">Estado</th>
-              <th className="py-2 pr-3 text-right font-medium">Debe</th>
+              <th className="py-2 pr-3 font-medium"><BotonOrden t={t} clave="abonado">Abonado</BotonOrden></th>
+              <th className="py-2 pr-3 font-medium"><BotonOrden t={t} clave="cliente">Cliente</BotonOrden></th>
+              <th className="py-2 pr-3 font-medium"><BotonOrden t={t} clave="internet">Internet</BotonOrden></th>
+              <th className="py-2 pr-3 font-medium"><BotonOrden t={t} clave="tv">TV</BotonOrden></th>
+              <th className="py-2 pr-3 font-medium"><BotonOrden t={t} clave="telefono">Teléfono</BotonOrden></th>
+              <th className="py-2 pr-3 font-medium"><BotonOrden t={t} clave="estado">Estado</BotonOrden></th>
+              <th className="py-2 pr-3 text-right font-medium"><BotonOrden t={t} clave="debe">Debe</BotonOrden></th>
             </tr>
           </thead>
           <tbody>
@@ -315,7 +371,7 @@ export default function OperacionesMasivasPage() {
               <tr><td colSpan={8} className="py-6 text-center text-text-tertiary">Cargando…</td></tr>
             ) : rows.length === 0 ? (
               <tr><td colSpan={8} className="py-6 text-center text-text-tertiary">Sin clientes para este filtro.</td></tr>
-            ) : rows.map((r) => (
+            ) : t.filas.map((r) => (
               <tr key={r.id} className={`border-b border-border-subtle/60 ${sel.has(r.id) ? "bg-brand-soft/40" : ""}`}>
                 <td className="py-1.5 pl-3"><input type="checkbox" checked={sel.has(r.id)} onChange={() => toggle(r.id)} /></td>
                 <td className="py-1.5 pr-3 font-mono">{r.abonado}</td>
@@ -346,13 +402,43 @@ export default function OperacionesMasivasPage() {
       {total > rows.length && <p className="text-[12px] text-text-tertiary">Mostrando los primeros {rows.length} de {total}. Afina el filtro (estado / búsqueda) para abarcar el resto.</p>}
 
       {/* Confirmar corte */}
-      <Modal open={confirmCut} onClose={() => setConfirmCut(false)} title="Confirmar corte masivo">
-        <p className="text-[13px] text-text-secondary">Se cortará el servicio de <b>{count}</b> clientes de <b>{sede.name}</b> en el Mikrotik.{allMatching && count > 200 ? " Esta operación puede tardar varios minutos." : ""} ¿Continuar?</p>
+      <Modal open={confirmCut} onClose={() => setConfirmCut(false)} title={servicioOp === "tv" ? "Confirmar corte de TV masivo" : "Confirmar corte masivo"}>
+        <p className="text-[13px] text-text-secondary">
+          {servicioOp === "tv"
+            ? <>Se apagará la <b>señal de TV</b> de <b>{count}</b> clientes de <b>{sede.name}</b>. El sistema resuelve el equipo de cada uno (CPE TR-069 o puerto CATV en la OLT); los que no tengan equipo identificable quedan reportados sin tocar.</>
+            : <>Se cortará el servicio de <b>{count}</b> clientes de <b>{sede.name}</b> en el Mikrotik.</>}
+          {allMatching && count > 200 ? " Esta operación puede tardar varios minutos." : ""} ¿Continuar?
+        </p>
         <div className="mt-4 flex gap-2">
-          <Button variant="danger" disabled={busy} onClick={() => runBatch("cut")}>{busy ? "Cortando…" : "Sí, cortar"}</Button>
+          <Button variant="danger" disabled={busy} onClick={() => runBatch("cut")}>{busy ? "Cortando…" : servicioOp === "tv" ? "Sí, cortar TV" : "Sí, cortar"}</Button>
           <Button variant="ghost" onClick={() => setConfirmCut(false)}>Cancelar</Button>
         </div>
       </Modal>
+
+      {/* Restaurar/sincronizar secrets de la sede */}
+      <ConfirmDialog
+        open={confirmRestore}
+        busy={busy}
+        onClose={() => setConfirmRestore(false)}
+        onConfirm={() => void restoreBranch()}
+        tone={live ? "danger" : "primary"}
+        icon="refresh-cw"
+        title="Restaurar secrets PPP de la sede"
+        confirmLabel={busy ? "Restaurando…" : "Restaurar secrets"}
+        // En LIVE se reescribe la configuración de TODOS los abonados de la
+        // sede en el router: se exige teclear el nombre para que sea deliberado.
+        requireText={live ? sede.name : undefined}
+        requireHint={<>Escriba el nombre de la sede <span className="font-mono font-semibold text-text-primary">{sede.name}</span> para confirmar</>}
+        message={
+          <>
+            Se recreará o actualizará en el Mikrotik el secret PPP de <b>cada abonado
+            activo o cortado</b> de {sede.name}, respetando su estado actual.{" "}
+            {live
+              ? <b className="text-error-text">Se escribe en el router de producción y puede tardar varios minutos.</b>
+              : <>Está en <b>dry-run</b>: se calcula el plan sin tocar el router.</>}
+          </>
+        }
+      />
 
       {/* WhatsApp masivo */}
       <Modal open={waOpen} onClose={() => setWaOpen(false)} title={`WhatsApp a ${count} clientes`}>

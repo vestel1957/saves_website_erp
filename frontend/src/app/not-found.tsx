@@ -17,7 +17,7 @@ export default function NotFound() {
         </p>
       </div>
       <Link
-        href="/inicio"
+        href="/"
         className="rounded-lg bg-brand px-4 py-2 text-[13px] font-semibold text-on-brand transition-colors hover:bg-brand-hover"
       >
         Ir al inicio

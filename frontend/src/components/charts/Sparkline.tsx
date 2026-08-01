@@ -25,8 +25,16 @@ export function Sparkline({
   const line = smoothPath(pts);
   const gid = `spark-${Math.round(points[0])}-${points.length}-${Math.round(max)}`;
 
+  // Alto fijo: con `h-auto` el navegador respetaba la proporción 120×36 y en una
+  // tarjeta ancha la mini-línea se estiraba hasta ocupar 100px de alto.
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="h-auto w-full" preserveAspectRatio="none" role="img">
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      className="w-full"
+      style={{ height }}
+      preserveAspectRatio="none"
+      role="img"
+    >
       {area && (
         <>
           <defs>

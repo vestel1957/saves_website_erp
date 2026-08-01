@@ -57,7 +57,7 @@ export function NuevaPlantillaModal({ open, onClose, onDone }: { open: boolean; 
     <Modal open={open} onClose={onClose} title="Nueva plantilla recurrente" maxWidth="max-w-2xl">
       <div className="flex flex-col gap-3">
         <Field label="Cliente" required><SubscriberPicker value={sub} onChange={setSub} /></Field>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Periodicidad">
             <Select value={rec} onChange={(e) => setRec(e.target.value)}>{PERIODS.map((p) => <option key={p} value={p}>{p}</option>)}</Select>
           </Field>

@@ -10,6 +10,7 @@ import { Pagination } from "@/components/ui/Pagination";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
+import { useOrden } from "@/lib/useOrden";
 import { cop } from "@/lib/subscribers";
 import { type TxRow, type TxList, TX_TYPE_LABEL, TX_TYPE_TONE } from "@/lib/treasury";
 import { fmtDate } from "@/lib/format";
@@ -44,7 +45,7 @@ function ComprobanteCell({ tx, onChange }: { tx: TxRow; onChange: () => void }) 
   if (tx.attach) {
     return (
       <button type="button" onClick={ver} title={tx.attachName ?? "Ver comprobante"}
-        className="inline-flex items-center gap-1 text-[12px] font-medium text-brand hover:underline">
+        className="inline-flex min-h-8 items-center gap-1 text-[12px] font-medium text-brand hover:underline">
         <Icon name="file-text" size={13} /> Ver
       </button>
     );
@@ -82,19 +83,21 @@ export function TxTable({
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
+  // Pagina en el servidor: el orden viaja en la query.
+  const orden = useOrden();
 
   const load = useCallback(async () => {
     setLoading(true);
-    const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+    const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize), ...orden.params });
     if (search.trim()) qs.set("search", search.trim());
     if (params.type) qs.set("type", params.type);
     if (params.status) qs.set("status", params.status);
     try { setData(await (await authFetch(`/treasury/transactions?${qs}`)).json()); }
     finally { setLoading(false); }
-  }, [authFetch, page, pageSize, search, params.type, params.status]);
+  }, [authFetch, page, pageSize, search, params.type, params.status, orden.clave]);
 
   useEffect(() => { if (!authLoading) { const t = setTimeout(load, search ? 350 : 0); return () => clearTimeout(t); } }, [authLoading, load, refreshKey]);
-  useEffect(() => { setPage(1); }, [search, pageSize]);
+  useEffect(() => { setPage(1); }, [search, pageSize, orden.clave]);
 
   if (authLoading || (loading && !data)) return <PageSkeleton />;
 
@@ -106,22 +109,23 @@ export function TxTable({
       </div>
 
       <DataTable
-        autoHeight
+        sort={orden.sort}
+        onSort={orden.onSort}
         rows={data?.items ?? []}
         empty={empty}
         columns={[
-          { key: "date", header: "Fecha", render: (r: TxRow) => fmtDate(r.date) },
-          { key: "type", header: "Tipo", render: (r: TxRow) => <Badge label={TX_TYPE_LABEL[r.type] ?? r.type} tone={TX_TYPE_TONE[r.type] ?? "info"} /> },
+          { key: "date", header: "Fecha", sortable: true, render: (r: TxRow) => fmtDate(r.date) },
+          { key: "type", header: "Tipo", sortable: true, render: (r: TxRow) => <Badge label={TX_TYPE_LABEL[r.type] ?? r.type} tone={TX_TYPE_TONE[r.type] ?? "info"} /> },
           { key: "payer", header: "Pagador / Beneficiario", render: (r: TxRow) => r.subscriberId
             ? <Link href={`/clientes/${r.subscriberId}`} className="font-medium text-brand hover:underline">{r.payer}</Link>
             : <span className="text-text-primary">{r.payer}</span> },
-          { key: "cat", header: "Categoría", render: (r: TxRow) => <span className="text-text-secondary">{r.category}</span> },
-          { key: "fact", header: "Factura", render: (r: TxRow) => r.invoiceTid ? <span className="font-mono text-text-tertiary">#{r.invoiceTid}</span> : "—" },
-          { key: "method", header: "Método", render: (r: TxRow) => r.method ?? "—" },
+          { key: "cat", header: "Categoría", sortable: true, render: (r: TxRow) => <span className="text-text-secondary">{r.category}</span> },
+          { key: "fact", header: "Factura", sortable: true, render: (r: TxRow) => r.invoiceTid ? <span className="font-mono text-text-tertiary">#{r.invoiceTid}</span> : "—" },
+          { key: "method", header: "Método", sortable: true, render: (r: TxRow) => r.method ?? "—" },
           { key: "amount", header: "Monto", align: "right" as const, render: (r: TxRow) => <span className={`font-semibold ${r.type === "EXPENSE" ? "text-error-text" : "text-success-text"}`}>{r.type === "EXPENSE" ? "-" : "+"}{cop(r.amount)}</span> },
           { key: "comprobante", header: "Comprobante", render: (r: TxRow) => <ComprobanteCell tx={r} onChange={load} /> },
           ...(extraColumns ?? []),
-          { key: "status", header: "Estado", render: (r: TxRow) => <Badge label={r.status === "ANULADA" ? "Anulada" : "Vigente"} tone={r.status === "ANULADA" ? "error" : "default"} /> },
+          { key: "status", header: "Estado", sortable: true, render: (r: TxRow) => <Badge label={r.status === "ANULADA" ? "Anulada" : "Vigente"} tone={r.status === "ANULADA" ? "error" : "default"} /> },
           ...(rowAction ? [{ key: "acciones", header: "", align: "right" as const, render: rowAction }] : []),
         ]}
       />

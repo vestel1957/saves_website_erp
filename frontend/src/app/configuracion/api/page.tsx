@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
-import { AuthNotice } from "@/components/ui/DataTable";
+import { AuthNotice, DataTable, type Column } from "@/components/ui/DataTable";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Field, Input } from "@/components/ui/Field";
@@ -162,64 +162,64 @@ export default function ApiPage() {
       {/* Listado */}
       <div className="mt-4 rounded-xl border border-border-subtle bg-surface p-5">
         <h2 className="mb-3 text-[14px] font-semibold text-text-primary">Claves ({keys.length})</h2>
-        {keys.length === 0 ? (
-          <p className="text-[13px] text-text-tertiary">Aún no hay claves. Crea una arriba.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-[12.5px]">
-              <thead>
-                <tr className="border-b border-border-subtle text-left text-[11px] uppercase tracking-wide text-text-tertiary">
-                  <th className="py-2 pr-3 font-semibold">Clave</th>
-                  <th className="py-2 pr-3 font-semibold">Permisos</th>
-                  <th className="py-2 pr-3 font-semibold">Uso</th>
-                  <th className="py-2 pr-3 font-semibold">Estado</th>
-                  <th className="py-2 pr-0 text-right font-semibold">Acciones</th>
-                </tr>
-              </thead>
-              <tbody>
-                {keys.map((k) => (
-                  <tr key={k.id} className="border-b border-border-subtle/60">
-                    <td className="py-2.5 pr-3">
-                      <div className="font-semibold text-text-primary">{k.name}</div>
-                      <code className="text-[11px] text-text-tertiary">{k.keyPrefix}</code>
-                      {k.legacy && <span className="ml-1 text-[10px] text-text-tertiary">· legacy</span>}
-                    </td>
-                    <td className="py-2.5 pr-3">
-                      <div className="flex flex-wrap gap-1">
-                        {k.scopes.map((s) => <Badge key={s} label={s} tone="info" />)}
-                      </div>
-                    </td>
-                    <td className="py-2.5 pr-3 text-text-secondary">
-                      {k.usageCount > 0 ? (
-                        <>
-                          {k.usageCount} llamadas
-                          {k.lastUsedAt && <div className="text-[11px] text-text-tertiary">
-                            últ: {new Date(k.lastUsedAt).toLocaleDateString("es-CO")}{k.lastUsedIp ? ` · ${k.lastUsedIp}` : ""}
-                          </div>}
-                        </>
-                      ) : <span className="text-text-tertiary">sin uso</span>}
-                    </td>
-                    <td className="py-2.5 pr-3">
-                      {k.revoked ? <Badge label="Revocada" tone="error" />
-                        : k.active ? <Badge label="Activa" tone="success" />
-                        : <Badge label="Inactiva" tone="warning" />}
-                    </td>
-                    <td className="py-2.5 pr-0 text-right">
-                      {!k.revoked && (
-                        <div className="inline-flex gap-1.5">
-                          <Button size="sm" variant="ghost" onClick={() => toggleActive(k)}>
-                            {k.active ? "Desactivar" : "Activar"}
-                          </Button>
-                          <Button size="sm" variant="danger" onClick={() => revoke(k.id)}>Revocar</Button>
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+        <DataTable
+          columns={[
+            {
+              key: "name", header: "Clave",
+              render: (k) => (
+                <>
+                  <div className="font-semibold text-text-primary">{k.name}</div>
+                  <code className="text-[11px] text-text-tertiary">{k.keyPrefix}</code>
+                  {k.legacy && <span className="ml-1 text-[10px] text-text-tertiary">· legacy</span>}
+                </>
+              ),
+            },
+            {
+              key: "scopes", header: "Permisos",
+              render: (k) => (
+                <div className="flex flex-wrap gap-1">
+                  {k.scopes.map((s) => <Badge key={s} label={s} tone="info" />)}
+                </div>
+              ),
+            },
+            {
+              key: "usage", header: "Uso",
+              render: (k) => (
+                <span className="text-text-secondary">
+                  {k.usageCount > 0 ? (
+                    <>
+                      {k.usageCount} llamadas
+                      {k.lastUsedAt && <div className="text-[11px] text-text-tertiary">
+                        últ: {new Date(k.lastUsedAt).toLocaleDateString("es-CO")}{k.lastUsedIp ? ` · ${k.lastUsedIp}` : ""}
+                      </div>}
+                    </>
+                  ) : <span className="text-text-tertiary">sin uso</span>}
+                </span>
+              ),
+            },
+            {
+              key: "status", header: "Estado",
+              render: (k) =>
+                k.revoked ? <Badge label="Revocada" tone="error" />
+                  : k.active ? <Badge label="Activa" tone="success" />
+                  : <Badge label="Inactiva" tone="warning" />,
+            },
+            {
+              key: "actions", header: "Acciones", align: "right",
+              render: (k) =>
+                !k.revoked && (
+                  <div className="inline-flex gap-1.5">
+                    <Button size="sm" variant="ghost" onClick={() => toggleActive(k)}>
+                      {k.active ? "Desactivar" : "Activar"}
+                    </Button>
+                    <Button size="sm" variant="danger" onClick={() => revoke(k.id)}>Revocar</Button>
+                  </div>
+                ),
+            },
+          ] satisfies Column<ApiKeyRow>[]}
+          rows={keys}
+          empty="Aún no hay claves. Crea una arriba."
+        />
       </div>
 
       {/* Documentación */}

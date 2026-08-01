@@ -4,10 +4,13 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Pagination } from "@/components/ui/Pagination";
+import { DataTable, type Column } from "@/components/ui/DataTable";
+import { ListToolbar } from "@/components/ui/ListToolbar";
 import { Button } from "@/components/ui/Button";
 import { Icon } from "@/components/Icon";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
+import { useOrden } from "@/lib/useOrden";
 import { fmtDate } from "@/lib/format";
 import { mensajeDeError } from "@/lib/errores";
 
@@ -21,13 +24,16 @@ export default function PlayhubPage() {
   const [search, setSearch] = useState("");
   const [syncing, setSyncing] = useState(false);
 
+  // Pagina en el servidor: el orden viaja en la query.
+  const orden = useOrden();
+
   const load = useCallback(() => {
-    const qs = new URLSearchParams({ page: String(page), pageSize: "30" });
+    const qs = new URLSearchParams({ page: String(page), pageSize: "30" , ...orden.params });
     if (search) qs.set("search", search);
     void authFetch(`/extras/playhub?${qs.toString()}`).then((r) => (r.ok ? r.json() : null)).then(setData).catch(() => {});
-  }, [authFetch, page, search]);
+  }, [authFetch, page, search, orden.clave]);
   useEffect(() => { load(); }, [load]);
-  useEffect(() => { setPage(1); }, [search]);
+  useEffect(() => { setPage(1); }, [search, orden.clave]);
 
   async function syncAll() {
     setSyncing(true);
@@ -42,7 +48,7 @@ export default function PlayhubPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <PageHeading icon="tv" title="PlayHub / IPTV" subtitle="Suscripciones de televisión por streaming." />
         <Button size="sm" variant="secondary" onClick={syncAll} disabled={syncing}><Icon name={syncing ? "loader" : "refresh-cw"} size={14} className={syncing ? "animate-spin" : ""} /> {syncing ? "Sincronizando…" : "Sincronizar todo"}</Button>
       </div>
@@ -57,38 +63,31 @@ export default function PlayhubPage() {
         </div>
       )}
 
-      <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar por usuario, producto o voucher…" className="w-full max-w-md rounded-lg border border-border-default bg-surface px-3 py-2 text-[13px]" />
-
-      <div className="overflow-x-auto rounded-xl border border-border-subtle bg-surface">
-        <table className="w-full text-[13px]">
-          <thead>
-            <tr className="border-b border-border-subtle text-left text-text-tertiary">
-              <th className="py-2 pl-3 pr-3 font-medium">Cliente</th>
-              <th className="py-2 pr-3 font-medium">Usuario</th>
-              <th className="py-2 pr-3 font-medium">Producto</th>
-              <th className="py-2 pr-3 font-medium">Voucher</th>
-              <th className="py-2 pr-3 font-medium">Últ. sync</th>
-            </tr>
-          </thead>
-          <tbody>
-            {!data ? (
-              <tr><td colSpan={5} className="py-6 text-center text-text-tertiary">Cargando…</td></tr>
-            ) : data.items.length === 0 ? (
-              <tr><td colSpan={5} className="py-6 text-center text-text-tertiary">Sin suscripciones.</td></tr>
-            ) : data.items.map((r) => (
-              <tr key={r.id} className="border-b border-border-subtle/60">
-                <td className="py-1.5 pl-3 pr-3">
+      <div>
+        <ListToolbar search={search} onSearch={setSearch} searchPlaceholder="Buscar por usuario, producto o voucher…" />
+        <DataTable
+        sort={orden.sort}
+        onSort={orden.onSort}
+          columns={[
+            {
+              key: "cliente", header: "Cliente", sortable: true,
+              render: (r) => (
+                <>
                   {r.subscriberId ? <Link href={`/clientes/${r.subscriberId}`} className="text-brand hover:underline">{r.subscriberName ?? "—"}</Link> : (r.subscriberName ?? "—")}
                   {r.abonado != null && <span className="ml-1 text-[11px] text-text-tertiary">#{r.abonado}</span>}
-                </td>
-                <td className="py-1.5 pr-3 font-mono text-[12px]">{r.nameS ?? "—"}</td>
-                <td className="py-1.5 pr-3">{r.productName ?? r.productId ?? "—"}</td>
-                <td className="py-1.5 pr-3 text-text-secondary">{r.voucher ?? "—"}</td>
-                <td className="py-1.5 pr-3 text-text-tertiary">{fmtDate(r.syncedAt)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                </>
+              ),
+            },
+            { key: "nameS", header: "Usuario", sortable: true, render: (r) => <span className="font-mono text-[12px]">{r.nameS ?? "—"}</span> },
+            { key: "producto", header: "Producto", sortable: true, render: (r) => r.productName ?? r.productId ?? "—" },
+            { key: "voucher", header: "Voucher", sortable: true, render: (r) => <span className="text-text-secondary">{r.voucher ?? "—"}</span> },
+            { key: "syncedAt", header: "Últ. sync", sortable: true, render: (r) => <span className="text-text-tertiary">{fmtDate(r.syncedAt)}</span> },
+          ] satisfies Column<Row>[]}
+          rows={data?.items ?? []}
+          loading={!data}
+          loadingText="Cargando…"
+          empty="Sin suscripciones."
+        />
       </div>
       {data && data.pages > 1 && <Pagination meta={{ page: data.page, pageSize: data.pageSize, total: data.total, pageCount: data.pages }} onPage={setPage} />}
     </div>

@@ -119,7 +119,7 @@ function RutaVista() {
 
   return (
     <div className="flex h-[calc(100vh-7rem)] min-h-[520px] flex-col">
-      <div className="flex flex-wrap items-start justify-between gap-2">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <PageHeading icon="navigation" title="Cómo llegar" subtitle={nombre} showBack={false} />
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="secondary" size="sm" onClick={() => (volverA ? router.push(volverA) : router.back())}>

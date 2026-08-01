@@ -51,7 +51,8 @@ export function BulkWhatsappModal({
     setLoading(true);
     try {
       const t: WaTemplate[] = await authFetch("/admin/whatsapp/templates").then((r) => (r.ok ? r.json() : []));
-      const active = t.filter((x) => x.active);
+      // Solo plantillas activas y aprobadas en Meta (PENDING/REJECTED fallarían al enviar).
+      const active = t.filter((x) => x.active && (x.metaStatus == null || x.metaStatus === "APPROVED"));
       setTemplates(active);
       if (active.length) setTemplateName((prev) => prev || active[0].name);
     } finally {

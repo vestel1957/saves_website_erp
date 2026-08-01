@@ -12,6 +12,7 @@ import { cop } from "@/lib/subscribers";
 import { type CashAccount, PAY_METHODS, BANKS, isBankMethod } from "@/lib/cobranzas";
 import { SubscriberPicker, type PickedSub } from "@/components/cobranzas/SubscriberPicker";
 import { mensajeDeError } from "@/lib/errores";
+import { useMiCaja } from "@/lib/useMiCaja";
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -28,6 +29,9 @@ type TxType = "Income" | "Expense";
 export default function NuevaTransaccionPage() {
   const router = useRouter();
   const { loading: authLoading, authFetch } = useAuth();
+  // Quien está acotado (la cajera) escribe en SU caja y no puede elegir otra ni
+  // dejarla en blanco: un movimiento sin caja no aparecería en su cierre.
+  const { bloqueada, acotado, sinCaja } = useMiCaja();
 
   const [type, setType] = useState<TxType>("Income");
   const [accounts, setAccounts] = useState<CashAccount[]>([]);
@@ -54,7 +58,11 @@ export default function NuevaTransaccionPage() {
       .catch(() => {});
   }, [authLoading, authFetch]);
 
-  useEffect(() => { if (accounts.length && !cashAccountId) setCashAccountId(String(accounts[0].id)); }, [accounts, cashAccountId]);
+  // A la cajera se le fija la suya; al resto se le propone la primera de la lista.
+  useEffect(() => {
+    if (bloqueada) { setCashAccountId(String(bloqueada.id)); return; }
+    if (accounts.length && !cashAccountId) setCashAccountId(String(accounts[0].id));
+  }, [accounts, cashAccountId, bloqueada]);
   useEffect(() => { if (categories.length && !category) setCategory(categories[0]); }, [categories, category]);
 
   const submit = useCallback(async () => {
@@ -99,13 +107,20 @@ export default function NuevaTransaccionPage() {
 
   const esIngreso = type === "Income";
   const montoNum = Number(amount) || 0;
-  const cuentaNombre = accounts.find((a) => String(a.id) === cashAccountId)?.name;
+  const cuentaNombre = bloqueada?.name ?? accounts.find((a) => String(a.id) === cashAccountId)?.name;
   const metodoLabel = PAY_METHODS.find((m) => m.value === method)?.label ?? method;
   const quienLabel = sub?.name ?? (payerName.trim() || null);
 
   return (
     <>
       <PageHeading icon="plus" title="Nueva transacción" subtitle="Registra un ingreso o un egreso de caja" />
+
+      {sinCaja && (
+        <div className="mb-3 flex items-start gap-2 rounded-xl border border-warning-subtle bg-warning-soft px-3.5 py-3 text-[13px] text-warning-text">
+          <Icon name="alert-triangle" size={16} className="mt-0.5 shrink-0" />
+          <span>No tienes una caja asignada, así que no puedes registrar movimientos. Pídele a administración que te asigne la de tu sede.</span>
+        </div>
+      )}
 
       {/* Formulario ancho a la izquierda + resumen sticky a la derecha: aprovecha el
           espacio horizontal y deja el monto y los botones siempre a la vista. */}
@@ -148,17 +163,33 @@ export default function NuevaTransaccionPage() {
                 {categories.map((c) => <option key={c} value={c}>{c}</option>)}
               </Select>
             </Field>
-            <Field label="Caja / cuenta">
-              <Select value={cashAccountId} onChange={(e) => setCashAccountId(e.target.value)}>
-                <option value="">— Sin caja —</option>
-                {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+            <Field
+              label="Caja / cuenta"
+              required={acotado}
+              hint={bloqueada ? "Tu caja asignada. El movimiento entra en tu cierre." : undefined}
+            >
+              <Select
+                value={cashAccountId}
+                onChange={(e) => setCashAccountId(e.target.value)}
+                disabled={!!bloqueada}
+              >
+                {/* "Sin caja" sólo para quien no está acotado: a la cajera le dejaría
+                    el movimiento fuera de su propio arqueo. */}
+                {!acotado && <option value="">— Sin caja —</option>}
+                {bloqueada
+                  ? <option value={bloqueada.id}>{bloqueada.name}</option>
+                  : accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
               </Select>
             </Field>
 
-            <Field label="Método">
-              {/* "Saldo a favor" solo aplica al pagar facturas, no a un asiento libre. */}
-              <Select value={method} onChange={(e) => setMethod(e.target.value)}>
-                {PAY_METHODS.filter((m) => m.value !== "Balance").map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+            <Field label="Método" hint={acotado ? "La caja solo maneja efectivo" : undefined}>
+              {/* "Saldo a favor" solo aplica al pagar facturas, no a un asiento libre.
+                  La cajera solo administra EFECTIVO: consignaciones y cheques los
+                  registra contabilidad (el backend lo vuelve a imponer). */}
+              <Select value={method} onChange={(e) => setMethod(e.target.value)} disabled={acotado}>
+                {PAY_METHODS.filter((m) => m.value !== "Balance")
+                  .filter((m) => !acotado || m.value === "Cash")
+                  .map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
               </Select>
             </Field>
             {isBankMethod(method) ? (

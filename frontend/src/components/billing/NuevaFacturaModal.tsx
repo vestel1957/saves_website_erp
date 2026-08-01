@@ -5,14 +5,29 @@ import { useRouter } from "next/navigation";
 import { Modal } from "@/components/Modal";
 import { Icon } from "@/components/Icon";
 import { Button } from "@/components/ui/Button";
-import { Input, Field } from "@/components/ui/Field";
+import { Input, Select, Field } from "@/components/ui/Field";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { SubscriberPicker, type PickedSub } from "@/components/cobranzas/SubscriberPicker";
+import { ConceptoPicker } from "@/components/billing/ConceptoPicker";
 import { cop } from "@/lib/subscribers";
 import { mensajeDeError } from "@/lib/errores";
 
-type Item = { productName?: string; description: string; qty: number; price: number; taxRate: number };
+type Item = { productName?: string; productId?: number; description: string; qty: number; price: number; taxRate: number };
+
+/**
+ * Tipo de factura: el `tipo_factura` del legacy (select "Factura" de `newinvoice.php`).
+ *
+ * Allá el select también listaba Nota Crédito y Nota Débito para roleid > 3; aquí no
+ * van: una nota cuelga de una factura existente y se emite desde la factura
+ * (Facturación ▸ Notas), no se crea suelta.
+ */
+type Kind = "FIJA" | "RECURRENTE";
+const KINDS: { value: Kind; label: string; hint: string }[] = [
+  { value: "FIJA", label: "Fija", hint: "Cargo puntual: instalación, reconexión, traslado, venta de equipo." },
+  { value: "RECURRENTE", label: "Recurrente", hint: "Mensualidad del servicio: lleva periodo y sale por mes en el recibo de caja." },
+];
+
 const today = () => new Date().toISOString().slice(0, 10);
 const emptyItem = (): Item => ({ description: "", qty: 1, price: 0, taxRate: 0 });
 
@@ -36,7 +51,7 @@ export function NuevaFacturaModal({
   const [sub, setSub] = useState<PickedSub | null>(null);
   const [items, setItems] = useState<Item[]>([emptyItem()]);
   const [invoiceDate, setInvoiceDate] = useState(today());
-  const [dueDate, setDueDate] = useState("");
+  const [kind, setKind] = useState<Kind>("FIJA");
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -47,7 +62,7 @@ export function NuevaFacturaModal({
     setSub(null);
     setItems([emptyItem()]);
     setInvoiceDate(today());
-    setDueDate("");
+    setKind("FIJA");
     setNotes("");
     setSaving(false);
     setErr(null);
@@ -71,20 +86,27 @@ export function NuevaFacturaModal({
     const r = await authFetch(`/billing/subscribers/${sub.id}/last-invoice`);
     const d = await r.json();
     if (!d.found || !d.items.length) { toast("El cliente no tiene factura previa para clonar", "info"); return; }
-    setItems(d.items.map((x: any) => ({ productName: x.productName, description: x.description, qty: x.qty, price: x.price, taxRate: x.taxRate })));
+    setItems(d.items.map((x: any) => ({ productName: x.productName, productId: x.productId, description: x.description, qty: x.qty, price: x.price, taxRate: x.taxRate })));
     toast("Ítems clonados de la última factura");
   }
 
   async function submit() {
     setErr(null);
     if (!sub) { setErr("Selecciona un cliente."); return; }
-    const clean = items.filter((it) => it.description.trim() && Number(it.price) >= 0);
+    const clean = items.filter((it) => it.description.trim());
     if (!clean.length) { setErr("Agrega al menos un ítem con descripción."); return; }
+    // El precio y el IVA ya no se escriben: los pone el producto. Una línea escrita a
+    // mano se quedaría en $ 0, así que se bloquea aquí en vez de dejar salir una
+    // factura en cero que después hay que anular.
+    if (clean.some((it) => !it.productId && !(Number(it.price) > 0))) {
+      setErr("Elige cada concepto del catálogo: el precio y el IVA los pone el producto.");
+      return;
+    }
     setSaving(true);
     try {
       const res = await authFetch(`/billing/invoices`, {
         method: "POST",
-        body: JSON.stringify({ subscriberId: sub.id, invoiceDate, dueDate: dueDate || undefined, notes: notes || undefined, items: clean }),
+        body: JSON.stringify({ subscriberId: sub.id, invoiceDate, kind, notes: notes || undefined, items: clean }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "No se pudo crear la factura");
@@ -95,7 +117,9 @@ export function NuevaFacturaModal({
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="Nueva factura" maxWidth="max-w-4xl">
+    // max-w-5xl: con 4xl la columna de descripción se queda sin aire y trunca el
+    // concepto elegido, que es justo lo que hay que revisar antes de crear.
+    <Modal open={open} onClose={onClose} title="Nueva factura" maxWidth="max-w-5xl">
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="lg:col-span-2 flex flex-col gap-4">
           {/* Cliente */}
@@ -110,18 +134,36 @@ export function NuevaFacturaModal({
           {/* Ítems */}
           <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
             <div className="mb-2 text-[13px] font-bold text-text-primary">Ítems</div>
+            <p className="mb-2 text-[11px] text-text-tertiary">
+              El precio y el IVA los pone el producto: elige el concepto del catálogo.
+            </p>
             <div className="flex flex-col gap-2">
-              <div className="hidden grid-cols-[1fr_70px_110px_70px_110px_32px] gap-2 px-1 text-[11px] font-semibold text-text-tertiary sm:grid">
-                <span>Descripción</span><span className="text-right">Cant.</span><span className="text-right">Precio</span><span className="text-right">IVA%</span><span className="text-right">Subtotal</span><span />
+              <div className="hidden grid-cols-[1fr_70px_110px_60px_110px_32px] gap-2 px-1 text-[11px] font-semibold text-text-tertiary sm:grid">
+                <span>Descripción</span><span className="text-right">Cant.</span><span className="text-right">Precio</span><span className="text-right">IVA</span><span className="text-right">Subtotal</span><span />
               </div>
               {items.map((it, i) => {
                 const sub2 = (Number(it.qty) || 0) * (Number(it.price) || 0);
+                // Sin producto y sin precio la línea no se puede facturar: se marca en
+                // el acto, no al pulsar "Crear factura".
+                const sinPrecio = !!it.description.trim() && !it.productId && !(Number(it.price) > 0);
                 return (
-                  <div key={i} className="grid grid-cols-2 gap-2 sm:grid-cols-[1fr_70px_110px_70px_110px_32px]">
-                    <Input className="col-span-2 sm:col-span-1" placeholder="Descripción / servicio" value={it.description} onChange={(e) => setItem(i, { description: e.target.value })} />
+                  <div key={i} className="grid grid-cols-2 gap-2 sm:grid-cols-[1fr_70px_110px_60px_110px_32px]">
+                    <ConceptoPicker
+                      className="col-span-2 sm:col-span-1"
+                      value={it.description}
+                      // Elegir del catálogo trae el precio y el IVA vigentes. Escribir a
+                      // mano solo sirve para buscar: la línea queda sin producto y sin
+                      // precio, porque ese par ya no se digita.
+                      onPick={(p) => setItem(i, { description: p.name, productName: p.name, productId: p.productId, price: p.price, taxRate: p.taxRate })}
+                      onText={(t) => setItem(i, { description: t, productName: undefined, productId: undefined, price: 0, taxRate: 0 })}
+                    />
                     <Input type="number" min={0} className="text-right" value={it.qty} onChange={(e) => setItem(i, { qty: Number(e.target.value) })} />
-                    <Input type="number" min={0} className="text-right" value={it.price} onChange={(e) => setItem(i, { price: Number(e.target.value) })} />
-                    <Input type="number" min={0} className="text-right" value={it.taxRate} onChange={(e) => setItem(i, { taxRate: Number(e.target.value) })} />
+                    <div className={`flex items-center justify-end text-[12px] ${sinPrecio ? "text-error-text" : "font-medium text-text-secondary"}`}>
+                      {sinPrecio ? "Elige del catálogo" : cop(it.price)}
+                    </div>
+                    <div className="flex items-center justify-end text-[12px] text-text-tertiary">
+                      {it.taxRate > 0 ? `${it.taxRate}%` : "—"}
+                    </div>
                     <div className="flex items-center justify-end text-[12px] font-medium text-text-secondary">{cop(sub2)}</div>
                     <button type="button" onClick={() => setItems((p) => p.filter((_, idx) => idx !== i))} disabled={items.length === 1}
                       className="flex items-center justify-center rounded-md text-text-tertiary hover:text-error-text disabled:opacity-30"><Icon name="x" size={16} /></button>
@@ -140,8 +182,16 @@ export function NuevaFacturaModal({
           <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
             <div className="mb-2 text-[13px] font-bold text-text-primary">Datos</div>
             <div className="flex flex-col gap-2">
-              <Field label="Fecha factura"><Input type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} /></Field>
-              <Field label="Vencimiento" hint="Vacío = +30 días"><Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} /></Field>
+              <Field label="Tipo de factura" hint={KINDS.find((k) => k.value === kind)?.hint}>
+                <Select value={kind} onChange={(e) => setKind(e.target.value as Kind)}>
+                  {KINDS.map((k) => <option key={k.value} value={k.value}>{k.label}</option>)}
+                </Select>
+              </Field>
+              {/* El vencimiento ya no se elige: lo pone el día de corte configurado
+                  (`billing.dueDay`), igual para todas las facturas. */}
+              <Field label="Fecha factura" hint="El vencimiento lo pone el día de corte configurado">
+                <Input type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} />
+              </Field>
               <Field label="Nota"><Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Opcional" /></Field>
             </div>
           </div>

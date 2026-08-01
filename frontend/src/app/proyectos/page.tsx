@@ -17,6 +17,7 @@ import { cop } from "@/lib/subscribers";
 import { SubscriberPicker, type PickedSub } from "@/components/cobranzas/SubscriberPicker";
 import { StatCard } from "@/components/ui/StatCard";
 import { useRequest } from "@/lib/useRequest";
+import { useOrden } from "@/lib/useOrden";
 import { mensajeDeError } from "@/lib/errores";
 
 const STATUS_OPTS = ["Waiting", "Pending", "Progress", "Finished", "Terminated"];
@@ -77,9 +78,12 @@ export default function ProyectosPage() {
 
   // Carga con cancelación: al teclear se aborta la petición en vuelo para que
   // una respuesta lenta no pise a otra más reciente. Ver lib/useRequest.
+  // Pagina en el servidor: el orden viaja en la query.
+  const orden = useOrden();
+
   const { data, cargando: loading, error, refrescar: load } = useRequest<any>(
     () => {
-      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize), ...orden.params });
       if (search.trim()) qs.set("search", search.trim());
       if (status) qs.set("status", status);
       return `/projects?${qs}`;
@@ -88,7 +92,7 @@ export default function ProyectosPage() {
     { debounceMs: search ? 350 : 0, saltar: authLoading },
   );
 
-  useEffect(() => { setPage(1); }, [search, status, pageSize]);
+  useEffect(() => { setPage(1); }, [search, status, pageSize, orden.clave]);
 
   function resetForm() {
     setName(""); setSub(null); setFStatus("Waiting"); setFPriority("Medium");
@@ -129,7 +133,7 @@ export default function ProyectosPage() {
 
   return (
     <>
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <PageHeading icon="layers" title="Proyectos" subtitle="Gestión de proyectos, hitos y tareas" />
         <Button size="sm" onClick={() => setOpen(true)}><Icon name="plus" size={14} /> Nuevo proyecto</Button>
       </div>
@@ -155,16 +159,18 @@ export default function ProyectosPage() {
       {loading && !data ? <PageSkeleton /> : (
         <>
           <DataTable
+            sort={orden.sort}
+            onSort={orden.onSort}
             rows={data?.items ?? []}
             empty="No se encontraron proyectos."
             columns={[
-              { key: "name", header: "Nombre", render: (r: any) => <Link href={`/proyectos/${r.id}`} className="font-medium text-brand hover:underline">{r.name}</Link> },
-              { key: "client", header: "Cliente", render: (r: any) => <span className="text-text-secondary">{r.client || "—"}</span> },
-              { key: "status", header: "Estado", render: (r: any) => <Badge label={STATUS_LABEL[r.status] ?? r.status} tone={statusTone(r.status)} /> },
-              { key: "priority", header: "Prioridad", render: (r: any) => <span className="text-text-secondary">{PRIORITY_LABEL[r.priority] ?? (r.priority || "—")}</span> },
-              { key: "progress", header: "Avance", render: (r: any) => <ProgressBar value={r.progress} /> },
-              { key: "worth", header: "Presupuesto", align: "right", render: (r: any) => <span className="font-semibold text-text-primary">{cop(r.worth ?? 0)}</span> },
-              { key: "milestones", header: "Hitos", align: "right", render: (r: any) => <span className="text-text-secondary">{r.milestones ?? 0}</span> },
+              { key: "name", header: "Nombre", sortable: true, render: (r: any) => <Link href={`/proyectos/${r.id}`} className="font-medium text-brand hover:underline">{r.name}</Link> },
+              { key: "client", header: "Cliente", sortable: true, render: (r: any) => <span className="text-text-secondary">{r.client || "—"}</span> },
+              { key: "status", header: "Estado", sortable: true, render: (r: any) => <Badge label={STATUS_LABEL[r.status] ?? r.status} tone={statusTone(r.status)} /> },
+              { key: "priority", header: "Prioridad", sortable: true, render: (r: any) => <span className="text-text-secondary">{PRIORITY_LABEL[r.priority] ?? (r.priority || "—")}</span> },
+              { key: "progress", header: "Avance", sortable: true, render: (r: any) => <ProgressBar value={r.progress} /> },
+              { key: "worth", header: "Presupuesto", sortable: true, align: "right", render: (r: any) => <span className="font-semibold text-text-primary">{cop(r.worth ?? 0)}</span> },
+              { key: "milestones", header: "Hitos", sortable: true, align: "right", render: (r: any) => <span className="text-text-secondary">{r.milestones ?? 0}</span> },
             ]}
           />
           {data && data.pages > 1 && (
@@ -181,7 +187,7 @@ export default function ProyectosPage() {
           <Field label="Cliente">
             <SubscriberPicker value={sub} onChange={setSub} />
           </Field>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Field label="Estado">
               <Select value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
                 {STATUS_OPTS.map((s) => <option key={s} value={s}>{STATUS_LABEL[s] ?? s}</option>)}
@@ -193,7 +199,7 @@ export default function ProyectosPage() {
               </Select>
             </Field>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Field label="Avance (%)">
               <Input type="number" min={0} max={100} value={progress} onChange={(e) => setProgress(e.target.value)} />
             </Field>
@@ -201,7 +207,7 @@ export default function ProyectosPage() {
               <Input type="number" min={0} value={worth} onChange={(e) => setWorth(e.target.value)} placeholder="0" />
             </Field>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Field label="Fecha inicio">
               <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
             </Field>

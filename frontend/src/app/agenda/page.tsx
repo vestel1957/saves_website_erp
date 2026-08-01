@@ -5,7 +5,7 @@ import Link from "next/link";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
 import { Button } from "@/components/ui/Button";
-import { Input, Textarea, Field } from "@/components/ui/Field";
+import { Input, Select, Textarea, Field } from "@/components/ui/Field";
 import { DataTable } from "@/components/ui/DataTable";
 import { Pagination } from "@/components/ui/Pagination";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
@@ -13,7 +13,18 @@ import { Modal } from "@/components/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
+import { useOrden } from "@/lib/useOrden";
 import { mensajeDeError } from "@/lib/errores";
+import { TICKET_PRIORITIES, TICKET_PRIORITY_TONE } from "@/lib/support";
+
+/** Mismo pintado de prioridad que en soporte: un color por nivel. */
+const TONO_BADGE: Record<string, string> = {
+  error: "bg-error-soft text-error-text",
+  warning: "bg-warning-soft text-warning-text",
+  info: "bg-info-soft text-info-text",
+  success: "bg-success-soft text-success-text",
+  default: "bg-surface-2 text-text-secondary",
+};
 
 const toLocalInput = (iso: string | null) => {
   if (!iso) return "";
@@ -37,10 +48,14 @@ export default function AgendaPage() {
   // ── Stats ─────────────────────────────────────────────────────────────────
   const [stats, setStats] = useState<any>(null);
 
+  // Pagina en el servidor: el orden viaja en la query.
+  const orden = useOrden();
+
   const loadEvents = useCallback(async () => {
     setLoading(true);
     try {
-      const url = `/omni/events?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&page=${page}&pageSize=${pageSize}`;
+      const qs = new URLSearchParams({ from, to, page: String(page), pageSize: String(pageSize), ...orden.params });
+      const url = `/omni/events?${qs}`;
       const d: any = await (await authFetch(url)).json();
       setRows(d.items ?? []);
       setTotal(d.total ?? 0);
@@ -48,7 +63,7 @@ export default function AgendaPage() {
     } finally {
       setLoading(false);
     }
-  }, [authFetch, from, to, page, pageSize]);
+  }, [authFetch, from, to, page, pageSize, orden.clave]);
 
   const loadStats = useCallback(async () => {
     const d: any = await (await authFetch("/omni/events/stats")).json();
@@ -59,6 +74,10 @@ export default function AgendaPage() {
     void loadEvents();
   }, [loadEvents]);
 
+  // Cambiar el rango vuelve a la página 1: mantener la página vieja sobre un
+  // rango nuevo mostraba una página que ya no existía.
+  useEffect(() => { setPage(1); }, [from, to, pageSize, orden.clave]);
+
   useEffect(() => {
     void loadStats();
   }, [loadStats]);
@@ -68,14 +87,14 @@ export default function AgendaPage() {
   const [savingEv, setSavingEv] = useState(false);
   const [toDelete, setToDelete] = useState<any>(null);
 
-  function openNew() { setEv({ title: "", start: "", end: "", description: "", color: "#6366f1" }); setEventModal("new"); }
-  function openEdit(r: any) { setEv({ title: r.title ?? "", start: toLocalInput(r.start), end: toLocalInput(r.end), description: r.description ?? "", color: r.color ?? "#6366f1" }); setEventModal(r); }
+  function openNew() { setEv({ title: "", start: "", end: "", description: "", color: "#6366f1", priority: "Media" }); setEventModal("new"); }
+  function openEdit(r: any) { setEv({ title: r.title ?? "", start: toLocalInput(r.start), end: toLocalInput(r.end), description: r.description ?? "", color: r.color ?? "#6366f1", priority: r.priority ?? "Media" }); setEventModal(r); }
 
   async function submitEvent() {
     if (!ev.start) { toast("Indica la fecha/hora de inicio", "alert-triangle"); return; }
     setSavingEv(true);
     try {
-      const body: any = { title: ev.title || undefined, description: ev.description || undefined, color: ev.color, start: new Date(ev.start).toISOString(), end: ev.end ? new Date(ev.end).toISOString() : undefined };
+      const body: any = { title: ev.title || undefined, description: ev.description || undefined, color: ev.color, priority: ev.priority || "Media", start: new Date(ev.start).toISOString(), end: ev.end ? new Date(ev.end).toISOString() : undefined };
       const editing = eventModal && eventModal !== "new";
       const res = await authFetch(editing ? `/omni/events/${eventModal.id}` : "/omni/events", { method: editing ? "PATCH" : "POST", body: JSON.stringify(body) });
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.message || "No se pudo guardar");
@@ -96,6 +115,7 @@ export default function AgendaPage() {
   const columns = [
     {
       key: "start",
+      sortable: true,
       header: "Inicio",
       render: (r: any) =>
         r.start
@@ -109,6 +129,7 @@ export default function AgendaPage() {
     },
     {
       key: "title",
+      sortable: true,
       header: "Título",
       render: (r: any) => (
         <span className="flex items-center gap-2">
@@ -122,20 +143,30 @@ export default function AgendaPage() {
     },
     {
       key: "description",
+      sortable: true,
       header: "Descripción",
       render: (r: any) => <span className="text-text-secondary">{r.description || "—"}</span>,
     },
     {
+      key: "priority",
+      header: "Prioridad",
+      render: (r: any) => {
+        const tono = TICKET_PRIORITY_TONE[r.priority ?? ""] ?? "default";
+        return <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${TONO_BADGE[tono]}`}>{r.priority ?? "Media"}</span>;
+      },
+    },
+    {
       key: "orderNo",
+      sortable: true,
       header: "Orden",
       render: (r: any) =>
         r.orderNo ? <span className="font-mono text-[12px] text-text-secondary">#{r.orderNo}</span> : "—",
     },
-    { key: "assignedBy", header: "Asignó", render: (r: any) => r.assignedBy || "—" },
+    { key: "assignedBy", header: "Asignó", sortable: true, render: (r: any) => r.assignedBy || "—" },
     { key: "actions", header: "", align: "right" as const, render: (r: any) => (
       <div className="flex justify-end gap-2">
-        <button type="button" title="Editar" onClick={() => openEdit(r)} className="text-text-tertiary hover:text-brand"><Icon name="pencil" size={14} /></button>
-        <button type="button" title="Eliminar" onClick={() => setToDelete(r)} className="text-text-tertiary hover:text-error-text"><Icon name="trash" size={14} /></button>
+        <button type="button" title="Editar" onClick={() => openEdit(r)} className="tap text-text-tertiary hover:text-brand"><Icon name="pencil" size={14} /></button>
+        <button type="button" title="Eliminar" onClick={() => setToDelete(r)} className="tap text-text-tertiary hover:text-error-text"><Icon name="trash" size={14} /></button>
       </div>
     ) },
   ];
@@ -201,7 +232,7 @@ export default function AgendaPage() {
           </Button>
         </form>
 
-        <DataTable columns={columns} rows={rows} empty="No hay eventos en el rango seleccionado" />
+        <DataTable columns={columns} rows={rows} empty="No hay eventos en el rango seleccionado" sort={orden.sort} onSort={orden.onSort} />
 
         {total > 0 && (
           <Pagination
@@ -221,6 +252,11 @@ export default function AgendaPage() {
           <Field label="Inicio" required><Input type="datetime-local" value={ev.start} onChange={(e) => setEv({ ...ev, start: e.target.value })} /></Field>
           <Field label="Fin"><Input type="datetime-local" value={ev.end} onChange={(e) => setEv({ ...ev, end: e.target.value })} /></Field>
           <Field label="Color"><Input type="color" value={ev.color} onChange={(e) => setEv({ ...ev, color: e.target.value })} /></Field>
+          <Field label="Prioridad">
+            <Select value={ev.priority ?? "Media"} onChange={(e) => setEv({ ...ev, priority: e.target.value })}>
+              {TICKET_PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
+            </Select>
+          </Field>
           <div className="sm:col-span-2"><Field label="Descripción"><Textarea rows={2} value={ev.description} onChange={(e) => setEv({ ...ev, description: e.target.value })} /></Field></div>
         </div>
         <div className="mt-3 flex justify-end gap-2">

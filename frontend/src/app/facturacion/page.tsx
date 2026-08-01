@@ -1,16 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
 import { DataTable } from "@/components/ui/DataTable";
 import { Badge } from "@/components/ui/Badge";
 import { Input, Select, Field } from "@/components/ui/Field";
+import { ListToolbar } from "@/components/ui/ListToolbar";
 import { Pagination } from "@/components/ui/Pagination";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import dynamic from "next/dynamic";
 import { toast } from "@/components/ui/Toast";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useAuth } from "@/context/AuthProvider";
 import { PERM } from "@/lib/auth";
 import { INVOICE_STATUS_LABEL, INVOICE_STATUS_TONE, cop } from "@/lib/subscribers";
@@ -19,6 +21,7 @@ import {
 } from "@/lib/billing";
 import { fmtDate } from "@/lib/format";
 import { useRequest } from "@/lib/useRequest";
+import { useOrden } from "@/lib/useOrden";
 import { mensajeDeError } from "@/lib/errores";
 
 const NuevaFacturaModal = dynamic(() => import("@/components/billing/NuevaFacturaModal").then((m) => m.NuevaFacturaModal), { ssr: false });
@@ -31,6 +34,7 @@ export default function FacturacionPage() {
   const canEmit = isSuperadmin || can(PERM.AREA_CONTABILIDAD);
   const [eMode, setEMode] = useState<{ live: boolean } | null>(null);
   const [emittingId, setEmittingId] = useState<string | null>(null);
+  const [confirmar, setConfirmar] = useState<InvoiceRow | null>(null);
   const [stats, setStats] = useState<BillingStats | null>(null);
   const [branches, setBranches] = useState<{ id: string; name: string }[]>([]);
 
@@ -61,6 +65,9 @@ export default function FacturacionPage() {
     from && { key: "from", label: `Desde ${from}`, clear: () => setFrom("") },
     to && { key: "to", label: `Hasta ${to}`, clear: () => setTo("") },
   ].filter(Boolean) as { key: string; label: string; clear: () => void }[];
+
+  // El listado pagina en el servidor, así que el orden va con él.
+  const orden = useOrden();
 
   // Construye el querystring de filtros (compartido por load y export).
   const filterQs = useCallback((extra?: Record<string, string>) => {
@@ -111,14 +118,14 @@ export default function FacturacionPage() {
   // una respuesta lenta no pise a otra más reciente. Ver lib/useRequest.
   const { data, cargando: loading, error, refrescar: load } = useRequest<InvoiceList>(
     () => {
-      const qs = filterQs({ page: String(page), pageSize: String(pageSize) });
+      const qs = filterQs({ page: String(page), pageSize: String(pageSize), ...orden.params });
       return `/billing/invoices?${qs.toString()}`;
     },
-    [filterQs, page, pageSize],
+    [filterQs, page, pageSize, orden.clave],
     { debounceMs: search ? 350 : 0, saltar: authLoading || !hydrated },
   );
 
-  useEffect(() => { setPage(1); }, [search, status, ron, branchId, from, to, overdue, pageSize]);
+  useEffect(() => { setPage(1); }, [search, status, ron, branchId, from, to, overdue, pageSize, orden.clave]);
 
   function clearFilters() {
     setSearch(""); setStatus(""); setRon(""); setBranchId(""); setFrom(""); setTo(""); setOverdue(false);
@@ -178,11 +185,6 @@ export default function FacturacionPage() {
   }
 
   async function emitEinvoice(r: InvoiceRow) {
-    const live = !!eMode?.live;
-    const warn = live
-      ? `Vas a EMITIR ante la DIAN la factura #${r.tid} (${r.subscriber}). Es un acto legal e irreversible. ¿Continuar?`
-      : `Modo PRUEBA (DRY-RUN): se construirá el payload de la factura #${r.tid} SIN enviarlo a la DIAN. ¿Continuar?`;
-    if (!confirm(warn)) return;
     setEmittingId(r.id);
     try {
       const res = await authFetch(`/einvoice/emit/${r.id}`, { method: "POST" });
@@ -195,6 +197,7 @@ export default function FacturacionPage() {
       toast(mensajeDeError(e) ?? "Error al emitir", "alert-circle");
     } finally {
       setEmittingId(null);
+      setConfirmar(null);
     }
   }
 
@@ -233,7 +236,7 @@ export default function FacturacionPage() {
 
   return (
     <>
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <PageHeading
           icon="receipt"
           title="Facturación"
@@ -284,12 +287,19 @@ export default function FacturacionPage() {
       )}
 
       {/* Barra compacta: buscar + accesos rápidos. Los filtros avanzados viven en un panel colapsable. */}
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative min-w-[200px] flex-1">
-          <Icon name="search" size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary" />
-          <Input className="pl-9" placeholder="Buscar por N° factura, cliente, documento o abonado…" value={search} onChange={(e) => setSearch(e.target.value)} />
-        </div>
-
+      <ListToolbar
+        search={search}
+        onSearch={setSearch}
+        searchPlaceholder="Buscar por N° factura, cliente, documento o abonado…"
+        actions={
+          data && (
+            <span className="whitespace-nowrap text-[12px] text-text-tertiary">
+              <span className="font-semibold text-text-secondary">{data.total.toLocaleString("es-CO")}</span> facturas · saldo{" "}
+              <span className="font-semibold text-error-text">{cop(data.sum?.balance ?? 0)}</span>
+            </span>
+          )
+        }
+      >
         <button
           type="button"
           onClick={() => setOverdue((v) => !v)}
@@ -318,14 +328,7 @@ export default function FacturacionPage() {
         >
           <Icon name={exporting ? "loader" : "download"} size={14} className={exporting ? "animate-spin" : ""} /> <span className="hidden sm:inline">{exporting ? "Exportando…" : "Exportar"}</span>
         </button>
-
-        {data && (
-          <span className="ml-auto whitespace-nowrap text-[12px] text-text-tertiary">
-            <span className="font-semibold text-text-secondary">{data.total.toLocaleString("es-CO")}</span> facturas · saldo{" "}
-            <span className="font-semibold text-error-text">{cop(data.sum?.balance ?? 0)}</span>
-          </span>
-        )}
-      </div>
+      </ListToolbar>
 
       {/* Panel de filtros avanzados (colapsable). */}
       {filtersOpen && (
@@ -379,45 +382,46 @@ export default function FacturacionPage() {
       )}
 
       {loading && !data ? <PageSkeleton /> : (
-        <div className="flex min-h-0 flex-1 flex-col gap-3">
+        <div className="flex flex-col gap-3">
           <DataTable
-            fill
             rows={data?.items ?? []}
             empty="No se encontraron facturas."
+            sort={orden.sort}
+            onSort={orden.onSort}
             columns={[
-              { key: "tid", header: "N°", render: (r) => <span className="font-mono text-text-secondary">{r.tid}</span> },
-              { key: "sub", header: "Cliente", render: (r) => r.subscriberId
+              { key: "tid", header: "N°", sortable: true, render: (r) => <span className="font-mono text-text-secondary">{r.tid}</span> },
+              { key: "sub", header: "Cliente", sortable: true, render: (r) => r.subscriberId
                 ? <Link href={`/clientes/${r.subscriberId}`} className="font-medium text-brand hover:underline">{r.subscriber}</Link>
                 : <span className="font-medium text-text-primary">{r.subscriber}</span> },
-              { key: "service", header: "Servicio", render: (r) => <span className="text-text-secondary">{r.service ?? "—"}</span> },
-              { key: "date", header: "Fecha", render: (r) => fmtDate(r.date) },
-              { key: "due", header: "Vence", render: (r) => (
+              { key: "service", header: "Servicio", sortable: true, render: (r) => <span className="text-text-secondary">{r.service ?? "—"}</span> },
+              { key: "date", header: "Fecha", sortable: true, render: (r) => fmtDate(r.date) },
+              { key: "due", header: "Vence", sortable: true, render: (r) => (
                 <span className={isOverdue(r) ? "inline-flex items-center gap-1 font-semibold text-error-text" : "text-text-secondary"}>
                   {isOverdue(r) && <Icon name="alert-triangle" size={12} />}{fmtDate(r.dueDate)}
                 </span>
               ) },
-              { key: "total", header: "Total", align: "right", render: (r) => cop(r.total) },
+              { key: "total", header: "Total", sortable: true, align: "right", render: (r) => cop(r.total) },
               { key: "balance", header: "Saldo", align: "right", render: (r) => <span className={r.balance > 0 ? "font-semibold text-error-text" : "text-text-tertiary"}>{cop(r.balance)}</span> },
-              { key: "status", header: "Pago", render: (r) => <Badge label={INVOICE_STATUS_LABEL[r.status] ?? r.status} tone={INVOICE_STATUS_TONE[r.status] ?? "default"} /> },
+              { key: "status", header: "Pago", sortable: true, render: (r) => <Badge label={INVOICE_STATUS_LABEL[r.status] ?? r.status} tone={INVOICE_STATUS_TONE[r.status] ?? "default"} /> },
               { key: "actions", header: "", align: "right", render: (r) => (
                 <div className="flex items-center justify-end gap-1">
                   <button type="button" onClick={() => openPdf(r.id)} title="Ver / imprimir PDF"
-                    className="rounded-lg border border-border-default p-1.5 text-text-secondary transition-colors hover:bg-surface-2"><Icon name="file-text" size={14} /></button>
+                    className="tap rounded-lg border border-border-default p-1.5 text-text-secondary transition-colors hover:bg-surface-2"><Icon name="file-text" size={14} /></button>
                   <button type="button" onClick={() => sendWhatsapp(r.id, r.tid)} disabled={sendingId === r.id} title="Enviar por WhatsApp"
-                    className="rounded-lg border border-border-default p-1.5 text-text-secondary transition-colors hover:bg-surface-2 disabled:opacity-40">
+                    className="tap rounded-lg border border-border-default p-1.5 text-text-secondary transition-colors hover:bg-surface-2 disabled:opacity-40">
                     <Icon name={sendingId === r.id ? "loader" : "message-circle"} size={14} className={sendingId === r.id ? "animate-spin" : ""} /></button>
                   <button type="button" onClick={() => sendEmail(r.id, r.tid)} disabled={sendingId === r.id} title="Enviar por correo"
-                    className="rounded-lg border border-border-default p-1.5 text-text-secondary transition-colors hover:bg-surface-2 disabled:opacity-40">
+                    className="tap rounded-lg border border-border-default p-1.5 text-text-secondary transition-colors hover:bg-surface-2 disabled:opacity-40">
                     <Icon name={sendingId === r.id ? "loader" : "mail"} size={14} className={sendingId === r.id ? "animate-spin" : ""} /></button>
                   {canEmit && (r.eInvoiceFlag === "Factura Electronica Creada"
                     ? <>
                         <span title="Factura electrónica ya emitida" className="inline-flex rounded-lg border border-success/40 bg-success-soft p-1.5 text-success-text"><Icon name="file-signature" size={14} /></span>
                         <button type="button" onClick={() => creditNote(r)} disabled={emittingId === r.id} title={eMode?.live ? "Nota crédito (DIAN)" : "Nota crédito (DRY-RUN)"}
-                          className="rounded-lg border border-border-default p-1.5 text-text-secondary transition-colors hover:bg-surface-2 disabled:opacity-40">
+                          className="tap rounded-lg border border-border-default p-1.5 text-text-secondary transition-colors hover:bg-surface-2 disabled:opacity-40">
                           <Icon name={emittingId === r.id ? "loader" : "receipt"} size={14} className={emittingId === r.id ? "animate-spin" : ""} /></button>
                       </>
-                    : <button type="button" onClick={() => emitEinvoice(r)} disabled={emittingId === r.id} title={eMode?.live ? "Emitir e-factura (DIAN)" : "Emitir e-factura (DRY-RUN)"}
-                        className="rounded-lg border border-border-default p-1.5 text-text-secondary transition-colors hover:bg-surface-2 disabled:opacity-40">
+                    : <button type="button" onClick={() => setConfirmar(r)} disabled={emittingId === r.id} title={eMode?.live ? "Emitir e-factura (DIAN)" : "Emitir e-factura (DRY-RUN)"}
+                        className="tap rounded-lg border border-border-default p-1.5 text-text-secondary transition-colors hover:bg-surface-2 disabled:opacity-40">
                         <Icon name={emittingId === r.id ? "loader" : "file-signature"} size={14} className={emittingId === r.id ? "animate-spin" : ""} /></button>)}
                   <Link href={`/facturacion/${r.id}`} title="Ver detalle"
                     className="inline-flex items-center rounded-lg border border-border-default px-2.5 py-1.5 text-[12px] font-semibold text-text-secondary transition-colors hover:bg-surface-2">Ver</Link>
@@ -425,11 +429,65 @@ export default function FacturacionPage() {
               ) },
             ]}
           />
-          {data && data.pages > 1 && (
+          {data && (
             <Pagination meta={{ page: data.page, pageSize: data.pageSize, total: data.total, pageCount: data.pages }} onPage={setPage} onPageSize={setPageSize} />
           )}
         </div>
       )}
+
+      {confirmar && (
+        <ConfirmDialog
+          open
+          busy={emittingId === confirmar.id}
+          onClose={() => setConfirmar(null)}
+          onConfirm={() => void emitEinvoice(confirmar)}
+          tone={eMode?.live ? "danger" : "primary"}
+          icon="file-signature"
+          title={eMode?.live ? "Emitir factura ante la DIAN" : "Probar emisión (dry-run)"}
+          confirmLabel={eMode?.live ? "Emitir ante la DIAN" : "Construir payload"}
+          // Solo en LIVE se exige teclear el número: en dry-run no sale nada hacia la DIAN.
+          requireText={eMode?.live ? String(confirmar.tid) : undefined}
+          requireHint={<>Para confirmar, escribe el número de factura <span className="font-mono font-semibold text-text-primary">{confirmar.tid}</span></>}
+          message={
+            eMode?.live ? (
+              <>
+                La factura #{confirmar.tid} se timbrará ante la DIAN y quedará con número y CUFE
+                oficiales. <b className="text-error-text">Es un acto legal irreversible</b>: para
+                deshacerlo hay que emitir una nota crédito.
+              </>
+            ) : (
+              <>
+                Estás en <b>modo prueba (dry-run)</b>: solo se construye el payload de la factura
+                #{confirmar.tid} para validarlo. No se envía nada a la DIAN ni se timbra.
+              </>
+            )
+          }
+          detail={<FacturaResumen r={confirmar} />}
+        />
+      )}
     </>
+  );
+}
+
+/** Ficha compacta de la factura que se va a timbrar: la fila es fácil de confundir. */
+function FacturaResumen({ r }: { r: InvoiceRow }) {
+  const filas: [string, React.ReactNode][] = [
+    ["Factura", <span key="a" className="font-mono">#{r.tid}</span>],
+    ["Cliente", <span key="b">{r.subscriber}</span>],
+    ["Fecha", <span key="c">{fmtDate(r.date)}</span>],
+    ["Total", <span key="d" className="font-mono font-semibold">{cop(r.total)}</span>],
+    ["Pago", <Badge key="e" label={INVOICE_STATUS_LABEL[r.status] ?? r.status} tone={INVOICE_STATUS_TONE[r.status] ?? "default"} />],
+  ];
+  return (
+    <div className="rounded-lg border border-border-subtle bg-surface-2 p-2.5">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12px]">
+        {filas.map(([k, v]) => (
+          <Fragment key={k}>
+            <dt className="text-text-tertiary">{k}</dt>
+            <dd className="text-right text-text-primary">{v}</dd>
+          </Fragment>
+        ))}
+      </dl>
+    </div>
   );
 }

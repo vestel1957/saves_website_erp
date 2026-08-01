@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Icon } from "@/components/Icon";
 
 /**
@@ -21,11 +21,26 @@ export default function Error({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  const [verDetalle, setVerDetalle] = useState(false);
+
   useEffect(() => {
     // Al menos queda en la consola del navegador con su `digest`, que es lo que
     // permite cruzarlo con el log del servidor.
     console.error("Error no controlado en la interfaz:", error);
   }, [error]);
+
+  /**
+   * El `digest` sólo existe cuando el error viene del servidor: si revienta en el
+   * navegador, el recuadro salía VACÍO y quien reportaba no tenía nada que copiar —
+   * "se rompió la pantalla" y a adivinar. El detalle real va detrás de un botón para
+   * no asustar a quien sólo quiere reintentar, pero está a un clic de una captura.
+   */
+  const detalle = [
+    error?.message,
+    error?.digest ? `digest: ${error.digest}` : null,
+    typeof window !== "undefined" ? `ruta: ${window.location.pathname}` : null,
+    error?.stack?.split("\n").slice(0, 6).join("\n"),
+  ].filter(Boolean).join("\n");
 
   return (
     <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 px-6 text-center">
@@ -38,10 +53,21 @@ export default function Error({
         </p>
       </div>
 
-      {error.digest && (
-        <code className="rounded-md bg-surface-2 px-2 py-1 text-[11px] text-text-tertiary">
-          {error.digest}
-        </code>
+      {detalle && (
+        <div className="w-full max-w-2xl">
+          <button
+            type="button"
+            onClick={() => setVerDetalle((v) => !v)}
+            className="text-[12px] font-semibold text-brand hover:underline"
+          >
+            {verDetalle ? "Ocultar el detalle técnico" : "Ver el detalle técnico"}
+          </button>
+          {verDetalle && (
+            <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-surface-2 p-3 text-left text-[11px] leading-relaxed text-text-secondary">
+              {detalle}
+            </pre>
+          )}
+        </div>
       )}
 
       <div className="flex gap-2">
@@ -53,7 +79,7 @@ export default function Error({
           Reintentar
         </button>
         <a
-          href="/inicio"
+          href="/"
           className="rounded-lg border border-border-default px-4 py-2 text-[13px] font-semibold text-text-primary transition-colors hover:bg-surface-2"
         >
           Ir al inicio

@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Field";
 import { Badge } from "@/components/ui/Badge";
-import { DataTable } from "@/components/ui/DataTable";
+import { PagedTable } from "@/components/ui/PagedTable";
+import { ListToolbar } from "@/components/ui/ListToolbar";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
@@ -35,7 +36,16 @@ export default function ImportarPagosPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [date, setDate] = useState("");
+  const [rowSearch, setRowSearch] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // Filtro en cliente de las filas del lote abierto (documento, referencia, estado).
+  const shownRows = useMemo(() => {
+    const q = rowSearch.trim().toLowerCase();
+    const rows = current?.rows ?? [];
+    if (!q) return rows;
+    return rows.filter((r) => [r.documento, r.reference, r.status, r.message].some((v) => (v ?? "").toLowerCase().includes(q)));
+  }, [current, rowSearch]);
 
   const loadList = useCallback(async () => {
     setLoading(true);
@@ -79,6 +89,14 @@ export default function ImportarPagosPage() {
       if (!res.ok) throw new Error(d?.message || "No se pudo procesar");
       setCurrent(d);
       toast(`Procesado · ${d.appliedRows} aplicado(s), ${d.errorRows + d.notFoundRows} con problema`, "check");
+      // La reconexión va aparte del pago: puede aplicar todo y aun así dejar a
+      // alguien cortado si el router o la OLT no contestaron. Eso se dice, no se calla.
+      const r = d.reconexion;
+      if (r?.total) {
+        const detalle = `${r.internet} internet · ${r.tv} TV${r.dryRun ? " (simulado)" : ""}`;
+        if (r.fallidos) toast(`OJO: ${r.fallidos} cliente(s) pagaron y NO se reconectaron (${detalle}). Reintenta desde Red.`, "alert-triangle");
+        else toast(`Servicio reconectado a ${r.total} cliente(s): ${detalle}`, "wifi");
+      }
       void loadList();
     } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setBusy(false); }
   }
@@ -141,9 +159,10 @@ export default function ImportarPagosPage() {
             </div>
           )}
 
-          <DataTable
-            rows={current.rows ?? []}
-            empty="Sin filas."
+          <ListToolbar search={rowSearch} onSearch={setRowSearch} searchPlaceholder="Buscar por documento, referencia o estado…" />
+          <PagedTable
+            rows={shownRows}
+            empty={rowSearch ? "Ninguna fila coincide con la búsqueda." : "Sin filas."}
             columns={[
               { key: "rowNumber", header: "#", render: (r: Row) => <span className="text-text-tertiary">{r.rowNumber}</span> },
               { key: "documento", header: "Documento", render: (r: Row) => <span className="font-medium text-text-primary">{r.documento}</span> },
@@ -161,7 +180,7 @@ export default function ImportarPagosPage() {
       <div>
         <h2 className="mb-2 text-[13px] font-bold text-text-primary">Cargues recientes</h2>
         {loading ? <PageSkeleton /> : (
-          <DataTable
+          <PagedTable
             rows={batches}
             empty="Aún no hay cargues de pagos."
             columns={[
@@ -171,7 +190,7 @@ export default function ImportarPagosPage() {
               { key: "totalRows", header: "Filas", align: "right", render: (b: Batch) => b.totalRows },
               { key: "appliedRows", header: "Aplicados", align: "right", render: (b: Batch) => <span className="text-success-text">{b.appliedRows}</span> },
               { key: "appliedAmount", header: "Monto aplicado", align: "right", render: (b: Batch) => cop(b.appliedAmount) },
-              { key: "acc", header: "", align: "right", render: (b: Batch) => <button onClick={() => discard(b.id)} className="text-text-tertiary hover:text-error-text" title="Eliminar"><Icon name="trash" size={15} /></button> },
+              { key: "acc", header: "", align: "right", render: (b: Batch) => <button onClick={() => discard(b.id)} className="tap text-text-tertiary hover:text-error-text" title="Eliminar"><Icon name="trash" size={15} /></button> },
             ]}
           />
         )}

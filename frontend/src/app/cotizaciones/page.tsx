@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
@@ -8,11 +8,14 @@ import { Button } from "@/components/ui/Button";
 import { Input, Select, Textarea, Field } from "@/components/ui/Field";
 import { Badge } from "@/components/ui/Badge";
 import { DataTable } from "@/components/ui/DataTable";
+import { ListToolbar } from "@/components/ui/ListToolbar";
 import { Pagination } from "@/components/ui/Pagination";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { Modal } from "@/components/Modal";
 import { toast } from "@/components/ui/Toast";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useAuth } from "@/context/AuthProvider";
+import { useOrden } from "@/lib/useOrden";
 import { cop } from "@/lib/subscribers";
 import { SubscriberPicker, type PickedSub } from "@/components/cobranzas/SubscriberPicker";
 import { mensajeDeError } from "@/lib/errores";
@@ -36,11 +39,17 @@ export default function CotizacionesPage() {
   const [pageSize, setPageSize] = useState(25);
   const [pages, setPages] = useState(1);
   const [search, setSearch] = useState("");
+  const [confirmar, setConfirmar] = useState<any | null>(null);
+  const [convirtiendo, setConvirtiendo] = useState(false);
+
+  // Pagina en el servidor: el orden viaja en la query.
+  const orden = useOrden();
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const url = `/omni/quotes?search=${encodeURIComponent(search)}&page=${page}&pageSize=${pageSize}`;
+      const qs = new URLSearchParams({ search, page: String(page), pageSize: String(pageSize), ...orden.params });
+      const url = `/omni/quotes?${qs}`;
       const d: any = await (await authFetch(url)).json();
       setRows(d.items ?? []);
       setTotal(d.total ?? 0);
@@ -48,7 +57,7 @@ export default function CotizacionesPage() {
     } finally {
       setLoading(false);
     }
-  }, [authFetch, search, page, pageSize]);
+  }, [authFetch, search, page, pageSize, orden.clave]);
 
   useEffect(() => {
     void load();
@@ -116,9 +125,13 @@ export default function CotizacionesPage() {
     }
   };
 
-  async function convertQuote(r: any) {
+  function pedirConversion(r: any) {
     if (!r.subscriberId) { toast("La cotización no tiene cliente asignado", "alert-triangle"); return; }
-    if (!confirm(`¿Convertir la cotización #${r.tid} en factura de venta?`)) return;
+    setConfirmar(r);
+  }
+
+  async function convertQuote(r: any) {
+    setConvirtiendo(true);
     try {
       const res = await authFetch(`/omni/quotes/${r.id}/convert`, { method: "POST" });
       const d = await res.json();
@@ -126,6 +139,7 @@ export default function CotizacionesPage() {
       toast(`Factura #${d.tid} creada desde la cotización`, "check");
       void load();
     } catch (e) { toast(mensajeDeError(e), "alert-triangle"); }
+    finally { setConvirtiendo(false); setConfirmar(null); }
   }
 
   async function setQuoteStatus(r: any, status: string) {
@@ -149,8 +163,8 @@ export default function CotizacionesPage() {
       render: (r: any) =>
         r.date ? new Date(r.date).toLocaleDateString("es-CO", { day: "2-digit", month: "short", year: "numeric" }) : "—",
     },
-    { key: "total", header: "Total", align: "right" as const, render: (r: any) => cop(Number(r.total || 0)) },
-    { key: "status", header: "Estado", render: (r: any) => <Badge label={r.status || "—"} tone={statusTone(r.status)} /> },
+    { key: "total", header: "Total", sortable: true, align: "right" as const, render: (r: any) => cop(Number(r.total || 0)) },
+    { key: "status", header: "Estado", sortable: true, render: (r: any) => <Badge label={r.status || "—"} tone={statusTone(r.status)} /> },
     {
       key: "itemsCount",
       header: "Ítems",
@@ -163,7 +177,7 @@ export default function CotizacionesPage() {
           <button type="button" title="Marcar aceptada" onClick={() => setQuoteStatus(r, "accepted")} className="text-text-tertiary hover:text-success-text"><Icon name="check" size={14} /></button>
         )}
         {r.status !== "converted" && (
-          <button type="button" title="Convertir a factura" onClick={() => convertQuote(r)} className="text-text-tertiary hover:text-brand"><Icon name="receipt" size={14} /></button>
+          <button type="button" title="Convertir a factura" onClick={() => pedirConversion(r)} className="tap text-text-tertiary hover:text-brand"><Icon name="receipt" size={14} /></button>
         )}
       </div>
     ) },
@@ -187,40 +201,22 @@ export default function CotizacionesPage() {
         </div>
       </div>
 
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
+      <ListToolbar
+        search={search}
+        onSearch={(v) => { setPage(1); setSearch(v); }}
+        searchPlaceholder="Buscar por cliente o número…"
+      />
+
+      <DataTable columns={columns} rows={rows} empty="Aún no hay cotizaciones" sort={orden.sort} onSort={orden.onSort} />
+
+      <Pagination
+        meta={{ page, pageSize, total, pageCount: pages }}
+        onPage={setPage}
+        onPageSize={(s) => {
+          setPageSize(s);
           setPage(1);
-          void load();
         }}
-        className="flex items-center gap-2"
-      >
-        <div className="relative flex-1">
-          <Icon name="search" size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary" />
-          <Input
-            className="pl-9"
-            placeholder="Buscar por cliente o número…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </div>
-        <Button type="submit" variant="secondary">
-          <Icon name="search" size={14} /> Buscar
-        </Button>
-      </form>
-
-      <DataTable columns={columns} rows={rows} empty="Aún no hay cotizaciones" />
-
-      {total > 0 && (
-        <Pagination
-          meta={{ page, pageSize, total, pageCount: pages }}
-          onPage={setPage}
-          onPageSize={(s) => {
-            setPageSize(s);
-            setPage(1);
-          }}
-        />
-      )}
+      />
 
       <Modal open={open} onClose={() => setOpen(false)} title="Nueva cotización" maxWidth="max-w-2xl">
         <div className="flex flex-col gap-4">

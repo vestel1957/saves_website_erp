@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Icon } from "@/components/Icon";
 import { PageHeading } from "@/components/ui/PageHeading";
-import { DataTable } from "@/components/ui/DataTable";
+import { PagedTable } from "@/components/ui/PagedTable";
+import { ListToolbar } from "@/components/ui/ListToolbar";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { toast } from "@/components/ui/Toast";
@@ -32,6 +33,7 @@ export default function OltPanelPage() {
   const [loading, setLoading] = useState(true);
   const [testing, setTesting] = useState<string | null>(null);
   const [editOlt, setEditOlt] = useState<OltRow | null>(null);
+  const [search, setSearch] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -63,11 +65,20 @@ export default function OltPanelPage() {
     }
   };
 
+  // Filtro en cliente sobre lo ya cargado (nombre, marca, tecnología, IP, sede).
+  const shown = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return olts;
+    return olts.filter((o) =>
+      [o.name, o.brand, o.tech, o.ip, o.branch].some((v) => (v ?? "").toLowerCase().includes(q)),
+    );
+  }, [olts, search]);
+
   if (authLoading || (loading && !dash)) return <PageSkeleton />;
 
   return (
     <>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <PageHeading icon="router" title="Gestión OLT" />
         <div className="flex items-center gap-2">
           {mode && (
@@ -88,9 +99,11 @@ export default function OltPanelPage() {
         </div>
       )}
 
-      <DataTable
-        rows={olts}
-        empty="No hay OLTs registradas."
+      <ListToolbar search={search} onSearch={setSearch} searchPlaceholder="Buscar por nombre, marca, IP o sede…" />
+
+      <PagedTable
+        rows={shown}
+        empty={search ? "Ninguna OLT coincide con la búsqueda." : "No hay OLTs registradas."}
         onRowClick={(o) => nav.push(`/red/olt/${o.id}`)}
         columns={[
           { key: "name", header: "Nombre", render: (o) => (
@@ -110,13 +123,13 @@ export default function OltPanelPage() {
           { key: "acc", header: "Acciones", align: "right", render: (o) => (
             <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
               <button title="Probar conexión" disabled={testing === o.id} onClick={() => test(o)}
-                className="rounded p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-brand disabled:opacity-50">
+                className="tap rounded p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-brand disabled:opacity-50">
                 <Icon name={testing === o.id ? "loader" : "zap"} size={15} className={testing === o.id ? "animate-spin" : ""} />
               </button>
               <button title="Editar / configurar defaults" onClick={() => setEditOlt(o)}
-                className="rounded p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-brand"><Icon name="pencil" size={15} /></button>
+                className="tap rounded p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-brand"><Icon name="pencil" size={15} /></button>
               <button title="Operar" onClick={() => nav.push(`/red/olt/${o.id}`)}
-                className="rounded p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-brand"><Icon name="play" size={15} /></button>
+                className="tap rounded p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-brand"><Icon name="play" size={15} /></button>
             </div>
           ) },
         ]}

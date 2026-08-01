@@ -168,7 +168,7 @@ export default function MapaPage() {
 
   return (
     <div className="flex h-[calc(100vh-7rem)] min-h-[520px] flex-col">
-      <div className="flex flex-wrap items-start justify-between gap-2">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <PageHeading
           icon="map-pin"
           title="Mapa"

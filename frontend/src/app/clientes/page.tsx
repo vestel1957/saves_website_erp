@@ -8,7 +8,8 @@ import { Icon } from "@/components/Icon";
 import { DataTable } from "@/components/ui/DataTable";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import { Input, Select } from "@/components/ui/Field";
+import { Select } from "@/components/ui/Field";
+import { ListToolbar } from "@/components/ui/ListToolbar";
 import { ClienteWizardModal } from "@/components/subscribers/ClienteWizardModal";
 import { SubscriberFilters } from "@/components/subscribers/SubscriberFilters";
 import { Pagination } from "@/components/ui/Pagination";
@@ -16,9 +17,10 @@ import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { useAuth } from "@/context/AuthProvider";
 import {
   type SubscriberList, type Branch,
-  SUB_STATUS_LABEL, SUB_STATUS_TONE, cop, cuentaParams,
+  SUB_STATUS_LABEL, SUB_STATUS_TONE, cuentaParams,
 } from "@/lib/subscribers";
 import { useRequest } from "@/lib/useRequest";
+import { useOrden } from "@/lib/useOrden";
 import { LoadError } from "@/components/ui/LoadError";
 
 export default function ClientesPage() {
@@ -35,6 +37,9 @@ export default function ClientesPage() {
   const [cuenta, setCuenta] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
+  // El listado se pagina en el servidor, así que el orden también: ordenar aquí
+  // solo movería las 25 filas de la página.
+  const orden = useOrden();
 
   // Carga catálogos una vez.
   useEffect(() => {
@@ -53,7 +58,10 @@ export default function ClientesPage() {
     refrescar: load,
   } = useRequest<SubscriberList>(
     () => {
-      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+      // withPlan: la tabla enseña qué tiene contratado cada cliente. El backend lo
+      // busca en el servicio registrado y, si no lo tiene, en sus facturas o en el
+      // perfil de red (ver `serviciosDeRespaldo`).
+      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize), withPlan: "1", ...orden.params });
       if (search.trim()) qs.set("search", search.trim());
       if (status) qs.set("status", status);
       if (branchId) qs.set("branchId", branchId);
@@ -64,12 +72,13 @@ export default function ClientesPage() {
       if (cp.deuda) qs.set("deuda", cp.deuda);
       return `/subscribers?${qs.toString()}`;
     },
-    [page, pageSize, search, status, branchId, servicio, tecnologia, cuenta],
+    [page, pageSize, search, status, branchId, servicio, tecnologia, cuenta, orden.clave],
     { debounceMs: search ? 350 : 0, saltar: authLoading },
   );
 
-  // Al cambiar filtros, vuelve a página 1.
-  useEffect(() => { setPage(1); }, [search, status, branchId, servicio, tecnologia, cuenta, pageSize]);
+  // Al cambiar filtros o el orden, vuelve a página 1: lo que el usuario busca al
+  // ordenar está al principio, no en la página en la que estaba.
+  useEffect(() => { setPage(1); }, [search, status, branchId, servicio, tecnologia, cuenta, pageSize, orden.clave]);
 
   if (authLoading) return <PageSkeleton />;
 
@@ -82,16 +91,16 @@ export default function ClientesPage() {
       />
 
       {/* Filtros */}
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <div className="relative flex-1 min-w-[220px]">
-          <Icon name="search" size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary" />
-          <Input
-            className="pl-9"
-            placeholder="Buscar por nombre, documento, celular o abonado…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </div>
+      <ListToolbar
+        search={search}
+        onSearch={setSearch}
+        searchPlaceholder="Buscar por nombre, documento, celular o abonado…"
+        actions={
+          <Button onClick={() => setCreateOpen(true)}>
+            <Icon name="user-plus" size={15} /> Nuevo cliente
+          </Button>
+        }
+      >
         <Select value={status} onChange={(e) => setStatus(e.target.value)} className="w-auto">
           <option value="">Todos los estados</option>
           {Object.entries(SUB_STATUS_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
@@ -104,10 +113,7 @@ export default function ClientesPage() {
           servicio={servicio} tecnologia={tecnologia} cuenta={cuenta}
           onServicio={setServicio} onTecnologia={setTecnologia} onCuenta={setCuenta}
         />
-        <Button className="ml-auto" onClick={() => setCreateOpen(true)}>
-          <Icon name="user-plus" size={15} /> Nuevo cliente
-        </Button>
-      </div>
+      </ListToolbar>
 
       <ClienteWizardModal
         mode="create"
@@ -128,18 +134,43 @@ export default function ClientesPage() {
           <DataTable
             rows={data?.items ?? []}
             empty="No se encontraron clientes con esos criterios."
+            sort={orden.sort}
+            onSort={orden.onSort}
             columns={[
-              { key: "abonado", header: "Abonado", render: (r) => <span className="font-mono text-text-secondary">{r.abonado}</span> },
-              { key: "name", header: "Nombre", render: (r) => <span className="font-medium text-text-primary">{r.name}</span> },
-              { key: "doc", header: "Documento", render: (r) => <span className="text-text-secondary">{r.docNumber ?? "—"}</span> },
-              { key: "phone", header: "Celular", render: (r) => r.phone ?? "—" },
-              { key: "branch", header: "Sede", render: (r) => r.branch ?? "—" },
-              { key: "status", header: "Estado", render: (r) => <Badge label={SUB_STATUS_LABEL[r.status ?? ""] ?? r.status ?? "—"} tone={SUB_STATUS_TONE[r.status ?? ""] ?? "default"} /> },
-              { key: "balance", header: "Saldo", align: "right", render: (r) => <span className={r.balance > 0 ? "font-semibold text-success-text" : "text-text-tertiary"}>{cop(r.balance)}</span> },
+              { key: "abonado", header: "Abonado", sortable: true, render: (r) => <span className="font-mono text-text-secondary">{r.abonado}</span> },
+              { key: "name", header: "Nombre", sortable: true, render: (r) => <span className="font-medium text-text-primary">{r.name}</span> },
+              { key: "doc", header: "Documento", sortable: true, render: (r) => <span className="text-text-secondary">{r.docNumber ?? "—"}</span> },
+              { key: "phone", header: "Celular", sortable: true, render: (r) => r.phone ?? "—" },
+              { key: "branch", header: "Sede", sortable: true, render: (r) => r.branch ?? "—" },
+              {
+                key: "plan",
+                header: "Plan",
+                render: (r: any) => {
+                  const partes = [r.internet, r.tv].filter(Boolean) as { plan: string | null }[];
+                  if (!partes.length) return <span className="text-text-tertiary">—</span>;
+                  return (
+                    <div className="flex flex-col leading-tight">
+                      {r.internet?.plan && (
+                        <span className="flex items-center gap-1 font-semibold text-text-primary">
+                          <Icon name="wifi" size={12} className="shrink-0 text-brand" />
+                          {r.internet.plan}
+                        </span>
+                      )}
+                      {r.tv?.plan && (
+                        <span className="flex items-center gap-1 text-[11px] text-text-secondary">
+                          <Icon name="tv" size={11} className="shrink-0 text-text-tertiary" />
+                          {r.tv.plan}
+                        </span>
+                      )}
+                    </div>
+                  );
+                },
+              },
+              { key: "status", header: "Estado", sortable: true, render: (r) => <Badge label={SUB_STATUS_LABEL[r.status ?? ""] ?? r.status ?? "—"} tone={SUB_STATUS_TONE[r.status ?? ""] ?? "default"} /> },
               { key: "go", header: "", align: "right", render: (r) => <Link href={`/clientes/${r.id}`} className="inline-flex items-center gap-1 rounded-lg border border-border-default px-3 py-1.5 text-[12px] font-semibold text-text-secondary transition-colors hover:bg-surface-2">Ver ficha →</Link> },
             ]}
           />
-          {data && data.pages > 1 && (
+          {data && (
             <div className="mt-3">
               <Pagination
                 meta={{ page: data.page, pageSize: data.pageSize, total: data.total, pageCount: data.pages }}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
@@ -11,10 +11,12 @@ import { Pagination } from "@/components/ui/Pagination";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { Modal } from "@/components/Modal";
 import { toast } from "@/components/ui/Toast";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useAuth } from "@/context/AuthProvider";
 import { PERM } from "@/lib/auth";
 import { fmtDate } from "@/lib/format";
 import { useRequest } from "@/lib/useRequest";
+import { useOrden } from "@/lib/useOrden";
 import { mensajeDeError } from "@/lib/errores";
 
 const n = (v: number) => (v ?? 0).toLocaleString("es-CO");
@@ -32,6 +34,7 @@ export default function EfacturaPage() {
   // Por sede
   const [branches, setBranches] = useState<Branch[] | null>(null);
   const [emittingBranch, setEmittingBranch] = useState<string | null>(null);
+  const [confirmar, setConfirmar] = useState<Branch | null>(null);
 
   // Histórico
   const [stats, setStats] = useState<any>(null);
@@ -60,18 +63,21 @@ export default function EfacturaPage() {
 
   // Carga con cancelación: al teclear se aborta la petición en vuelo, para que
   // una respuesta lenta no pise a otra más nueva. Ver lib/useRequest.
+  // El histórico pagina en el servidor: el orden viaja en la query.
+  const orden = useOrden();
+
   const { data, cargando: loading, error, refrescar: load } = useRequest<any>(
     () => {
-      const qs = new URLSearchParams({ page: String(page), pageSize: "25" });
+      const qs = new URLSearchParams({ page: String(page), pageSize: "25", ...orden.params });
       if (search.trim()) qs.set("search", search.trim());
       if (type) qs.set("type", type);
       if (all) qs.set("all", all);
       return `/einvoice?${qs}`;
     },
-    [page, search, type, all],
+    [page, search, type, all, orden.clave],
     { debounceMs: search ? 350 : 0, saltar: authLoading || tab !== "historico" },
   );
-  useEffect(() => { setPage(1); }, [search, type, all]);
+  useEffect(() => { setPage(1); }, [search, type, all, orden.clave]);
 
   async function openDetail(rid: string) {
     setDetail({ loading: true });
@@ -109,11 +115,6 @@ export default function EfacturaPage() {
   }
 
   async function emitBranch(b: Branch) {
-    const live = !!eMode?.live;
-    const warn = live
-      ? `Vas a EMITIR ante la DIAN las facturas pendientes de la sede ${b.name} (clientes marcados). Es un acto legal e irreversible. ¿Continuar?`
-      : `Modo PRUEBA (DRY-RUN): se construirán los payloads de la sede ${b.name} SIN enviar nada a la DIAN. ¿Continuar?`;
-    if (!confirm(warn)) return;
     setEmittingBranch(b.id);
     try {
       const res = await authFetch(`/einvoice/emit-branch/${b.id}`, { method: "POST" });
@@ -129,6 +130,7 @@ export default function EfacturaPage() {
       toast(mensajeDeError(e) ?? "Error al emitir la sede", "alert-circle");
     } finally {
       setEmittingBranch(null);
+      setConfirmar(null);
     }
   }
 
@@ -172,7 +174,7 @@ export default function EfacturaPage() {
                     className="inline-flex items-center gap-1.5 rounded-lg border border-border-default bg-surface px-3 py-1.5 text-[12px] font-semibold text-text-secondary transition-colors hover:bg-surface-2">
                     <Icon name="users" size={14} /> Ver clientes
                   </Link>
-                  <button type="button" onClick={() => emitBranch(r)} disabled={emittingBranch === r.id}
+                  <button type="button" onClick={() => setConfirmar(r)} disabled={emittingBranch === r.id}
                     title={eMode?.live ? "Emitir e-factura de la sede (DIAN)" : "Emitir e-factura de la sede (DRY-RUN)"}
                     className="inline-flex items-center gap-1.5 rounded-lg bg-brand px-3 py-1.5 text-[12px] font-semibold text-on-brand transition-colors hover:bg-brand-hover disabled:opacity-50">
                     <Icon name={emittingBranch === r.id ? "loader" : "file-signature"} size={14} className={emittingBranch === r.id ? "animate-spin" : ""} /> {emittingBranch === r.id ? "Emitiendo…" : "Emitir e-factura"}
@@ -203,13 +205,13 @@ export default function EfacturaPage() {
 
           {loading && !data ? <PageSkeleton /> : (
             <>
-              <DataTable rows={data?.items ?? []} empty="Sin facturas electrónicas." columns={[
-                { key: "date", header: "Fecha", render: (r: any) => fmtDate(r.date) },
-                { key: "client", header: "Cliente", render: (r: any) => r.subscriberId ? <Link href={`/clientes/${r.subscriberId}`} className="text-brand hover:underline">{r.client}</Link> : <span>{r.client}</span> },
-                { key: "serv", header: "Servicio", render: (r: any) => <span className="text-text-secondary">{r.services ?? "—"}</span> },
-                { key: "type", header: "Tipo", render: (r: any) => <Badge label={r.type} tone="info" /> },
-                { key: "fact", header: "Factura", render: (r: any) => r.invoiceTid ? <span className="font-mono text-text-tertiary">#{r.invoiceTid}</span> : "—" },
-                { key: "dian", header: "N° DIAN", render: (r: any) => r.dianNumber ? <span className="font-mono text-success-text">{r.dianNumber}</span> : <span className="text-text-tertiary">—</span> },
+              <DataTable rows={data?.items ?? []} empty="Sin facturas electrónicas." sort={orden.sort} onSort={orden.onSort} columns={[
+                { key: "date", header: "Fecha", sortable: true, render: (r: any) => fmtDate(r.date) },
+                { key: "client", header: "Cliente", sortable: true, render: (r: any) => r.subscriberId ? <Link href={`/clientes/${r.subscriberId}`} className="text-brand hover:underline">{r.client}</Link> : <span>{r.client}</span> },
+                { key: "serv", header: "Servicio", sortable: true, render: (r: any) => <span className="text-text-secondary">{r.services ?? "—"}</span> },
+                { key: "type", header: "Tipo", sortable: true, render: (r: any) => <Badge label={r.type} tone="info" /> },
+                { key: "fact", header: "Factura", sortable: true, render: (r: any) => r.invoiceTid ? <span className="font-mono text-text-tertiary">#{r.invoiceTid}</span> : "—" },
+                { key: "dian", header: "N° DIAN", sortable: true, render: (r: any) => r.dianNumber ? <span className="font-mono text-success-text">{r.dianNumber}</span> : <span className="text-text-tertiary">—</span> },
                 { key: "go", header: "", align: "right", render: (r: any) => <button onClick={() => openDetail(r.id)} className="rounded-lg border border-border-default px-3 py-1.5 text-[12px] font-semibold text-text-secondary hover:bg-surface-2">Ver</button> },
               ]} />
               {data && data.pages > 1 && <div className="mt-3"><Pagination meta={{ page: data.page, pageSize: data.pageSize, total: data.total, pageCount: data.pages }} onPage={setPage} /></div>}
@@ -260,6 +262,64 @@ export default function EfacturaPage() {
           </div>
         )}
       </Modal>
+
+      {confirmar && (
+        <ConfirmDialog
+          open
+          busy={emittingBranch === confirmar.id}
+          onClose={() => setConfirmar(null)}
+          onConfirm={() => void emitBranch(confirmar)}
+          tone={eMode?.live ? "danger" : "primary"}
+          icon="file-signature"
+          title={eMode?.live ? "Emitir en lote ante la DIAN" : "Probar emisión en lote (dry-run)"}
+          confirmLabel={eMode?.live ? "Emitir la sede ante la DIAN" : "Construir payloads"}
+          // Emisión masiva: en LIVE se exige teclear el nombre de la sede, porque
+          // el error no afecta a una factura sino a todas las de la sede.
+          requireText={eMode?.live ? confirmar.name : undefined}
+          requireHint={<>Para confirmar, escribe el nombre de la sede <span className="font-mono font-semibold text-text-primary">{confirmar.name}</span></>}
+          message={
+            eMode?.live ? (
+              <>
+                Se timbrarán ante la DIAN, de una sola vez, las facturas pendientes de todos los
+                clientes marcados de <b>{confirmar.name}</b> ({n(confirmar.tv)} con TV y{" "}
+                {n(confirmar.internet)} con Internet, sobre {n(confirmar.subscribers)} clientes).{" "}
+                <b className="text-error-text">Cada una queda emitida legalmente y no se puede
+                deshacer</b>: corregirlas exige una nota crédito por factura.
+              </>
+            ) : (
+              <>
+                Estás en <b>modo prueba (dry-run)</b>: se construyen los payloads de las facturas
+                pendientes de <b>{confirmar.name}</b> ({n(confirmar.tv)} marcados TV y{" "}
+                {n(confirmar.internet)} marcados Internet) solo para validarlos. No se envía nada
+                a la DIAN.
+              </>
+            )
+          }
+          detail={<SedeResumen b={confirmar} />}
+        />
+      )}
     </>
+  );
+}
+
+/** Ficha compacta de la sede: qué volumen se va a timbrar de golpe. */
+function SedeResumen({ b }: { b: Branch }) {
+  const filas: [string, React.ReactNode][] = [
+    ["Sede", <span key="a" className="font-semibold">{b.name}</span>],
+    ["Clientes", <span key="b" className="font-mono">{n(b.subscribers)}</span>],
+    ["Marcados TV", <span key="c" className="font-mono">{n(b.tv)}</span>],
+    ["Marcados Internet", <span key="d" className="font-mono">{n(b.internet)}</span>],
+  ];
+  return (
+    <div className="rounded-lg border border-border-subtle bg-surface-2 p-2.5">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12px]">
+        {filas.map(([k, v]) => (
+          <Fragment key={k}>
+            <dt className="text-text-tertiary">{k}</dt>
+            <dd className="text-right text-text-primary">{v}</dd>
+          </Fragment>
+        ))}
+      </dl>
+    </div>
   );
 }

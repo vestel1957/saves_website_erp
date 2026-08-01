@@ -53,7 +53,7 @@ export function Pagination({
             <select
               value={pageSize}
               onChange={(e) => onPageSize(Number(e.target.value))}
-              className="rounded-md border border-border-subtle bg-surface px-1.5 py-1 text-[12px] font-semibold text-text-secondary"
+              className="min-h-8 rounded-md border border-border-subtle bg-surface px-1.5 py-1 text-[12px] font-semibold text-text-secondary"
             >
               {PAGE_SIZES.map((s) => (
                 <option key={s} value={s}>{s}</option>
@@ -63,7 +63,7 @@ export function Pagination({
         )}
       </div>
 
-      <div className="flex items-center gap-1">
+      {pageCount > 1 && <div className="flex items-center gap-1">
         <button className={navBtn} onClick={() => onPage(page - 1)} disabled={page <= 1} aria-label="Anterior">
           <Icon name="arrow-left" size={14} />
         </button>
@@ -97,7 +97,7 @@ export function Pagination({
         <button className={navBtn} onClick={() => onPage(page + 1)} disabled={page >= pageCount} aria-label="Siguiente">
           <Icon name="arrow-right" size={14} />
         </button>
-      </div>
+      </div>}
     </div>
   );
 }

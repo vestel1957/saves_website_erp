@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { PageHeading } from "@/components/ui/PageHeading";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Modal } from "@/components/Modal";
@@ -20,6 +21,8 @@ export default function CategoriasCompraPage() {
   const [editing, setEditing] = useState<Category | null>(null);
   const [name, setName] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [confirmar, setConfirmar] = useState<Category | null>(null);
+  const [borrando, setBorrando] = useState(false);
 
   const load = useCallback(() => {
     setErr(false);
@@ -51,7 +54,7 @@ export default function CategoriasCompraPage() {
   }
 
   async function remove(c: Category) {
-    if (!confirm(`¿Eliminar la categoría de compra "${c.name}"?`)) return;
+    setBorrando(true);
     try {
       const res = await authFetch(`/orders/categories/${c.id}`, { method: "DELETE" });
       const data = await res.json().catch(() => null);
@@ -60,12 +63,15 @@ export default function CategoriasCompraPage() {
       load();
     } catch (e) {
       toast((e as Error).message, "alert-circle");
+    } finally {
+      setBorrando(false);
+      setConfirmar(null);
     }
   }
 
   return (
     <div className="space-y-4">
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <PageHeading
           icon="shopping-cart"
           title="Categorías de compra"
@@ -89,10 +95,10 @@ export default function CategoriasCompraPage() {
                 <Badge tone={c.orders > 0 ? "info" : "default"} label={`${c.orders} orden(es)`} />
               </div>
               <div className="flex shrink-0 items-center gap-1">
-                <button type="button" onClick={() => openEdit(c)} className="rounded-md p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-text-primary" title="Editar">
+                <button type="button" onClick={() => openEdit(c)} className="tap rounded-md p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-text-primary" title="Editar">
                   <Icon name="pencil" size={15} />
                 </button>
-                <button type="button" onClick={() => remove(c)} className="rounded-md p-1.5 text-text-tertiary hover:bg-error-soft hover:text-error-text" title="Eliminar">
+                <button type="button" onClick={() => setConfirmar(c)} className="tap rounded-md p-1.5 text-text-tertiary hover:bg-error-soft hover:text-error-text" title="Eliminar">
                   <Icon name="trash" size={15} />
                 </button>
               </div>
@@ -114,6 +120,53 @@ export default function CategoriasCompraPage() {
           </div>
         </Modal>
       )}
+
+      {confirmar && (
+        <ConfirmDialog
+          open
+          busy={borrando}
+          onClose={() => setConfirmar(null)}
+          onConfirm={() => void remove(confirmar)}
+          tone="danger"
+          icon="trash"
+          title="Eliminar categoría de compra"
+          confirmLabel="Eliminar categoría"
+          message={
+            confirmar.orders > 0 ? (
+              <>
+                Hay <b>{confirmar.orders} orden(es) de compra</b> clasificadas con esta categoría,
+                así que el sistema rechazará el borrado. Reclasifícalas antes de eliminarla.
+              </>
+            ) : (
+              <>
+                La categoría desaparece del catálogo y dejará de estar disponible al crear
+                órdenes de compra. No se puede deshacer.
+              </>
+            )
+          }
+          detail={<CategoriaResumen cat={confirmar} />}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Ficha compacta de la categoría dentro de la confirmación. */
+function CategoriaResumen({ cat }: { cat: Category }) {
+  const filas: [string, React.ReactNode][] = [
+    ["Nombre", cat.name],
+    ["Órdenes", <Badge key="o" tone={cat.orders > 0 ? "info" : "default"} label={`${cat.orders} orden(es)`} />],
+  ];
+  return (
+    <div className="rounded-lg border border-border-subtle bg-surface-2 p-2.5">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12px]">
+        {filas.map(([k, v]) => (
+          <Fragment key={k}>
+            <dt className="text-text-tertiary">{k}</dt>
+            <dd className="text-right text-text-primary">{v}</dd>
+          </Fragment>
+        ))}
+      </dl>
     </div>
   );
 }

@@ -1,5 +1,27 @@
 // Constantes compartidas del módulo de Recursos Humanos (empleados + documentos).
 
+/**
+ * Cargos del legacy (`Staff.role` = `aauth_users.roleid`). Espejo de
+ * `backend/src/staff/cargos-legacy.ts`, que es la fuente: las etiquetas que se ven
+ * en una fila o en una ficha vienen del backend en `roleLabel`; este mapa es solo
+ * para los selectores (filtro de la lista y el desplegable de edición), donde hace
+ * falta el código numérico.
+ *
+ * Ojo con tocarlo: el 2 es el TÉCNICO y el 3 el CAJERO, aunque el número sugiera lo
+ * contrario. Estuvieron cambiados y por eso el sistema entero llamaba "Cajero" a
+ * Luis Fabián (usuario `Fabiantecnico`, 12.938 órdenes de campo, cero caja) y
+ * "Técnico" a Sonia (usuario `SoniaCajera`, 124.811 movimientos de caja). Si vas a
+ * cambiar el mapa, cámbialo primero en el backend.
+ */
+export const CARGOS_LEGACY: [string, string][] = [
+  ["2", "Técnico"],
+  ["3", "Cajero"],
+  ["4", "Administrativo"],
+  ["5", "Administrador"],
+];
+
+export const CARGO_LABEL: Record<string, string> = Object.fromEntries(CARGOS_LEGACY);
+
 export const EMPLOYEE_STATUS: [string, string][] = [
   ["ACTIVE", "Activo"],
   ["ON_LEAVE", "Incapacidad / licencia"],

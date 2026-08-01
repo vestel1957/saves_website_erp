@@ -28,11 +28,23 @@ export function headerDate(d = new Date()): string {
 // conviven variantes que no son equivalentes (sólo fecha, fecha+hora, estilos
 // distintos), así que aquí van las dos canónicas y cada pantalla usa la que toca.
 
+/**
+ * Medianoche UTC exacta = valor "solo fecha": así serializa el backend sus columnas
+ * de día (invoiceDate, dueDate…, construidas con Date.UTC a las 00:00:00.000Z).
+ * Esas hay que pintarlas en UTC: en Bogotá (UTC-5) la factura del 01/08 se veía
+ * como 31/07 porque el navegador la corría a las 7 p. m. del día anterior.
+ * Un timestamp real (createdAt, pagos) prácticamente nunca cae en la medianoche
+ * UTC exacta, así que esos siguen saliendo en hora local, que es lo que se espera.
+ */
+const esSoloFecha = (f: Date) =>
+  f.getUTCHours() === 0 && f.getUTCMinutes() === 0 && f.getUTCSeconds() === 0 && f.getUTCMilliseconds() === 0;
+
 /** Fecha corta es-CO. Nulo/vacío → guion largo, que es lo que espera la UI. */
 export function fmtDate(d: string | Date | null | undefined): string {
   if (!d) return "—";
   const fecha = d instanceof Date ? d : new Date(d);
-  return Number.isNaN(fecha.getTime()) ? "—" : fecha.toLocaleDateString("es-CO");
+  if (Number.isNaN(fecha.getTime())) return "—";
+  return fecha.toLocaleDateString("es-CO", esSoloFecha(fecha) ? { timeZone: "UTC" } : undefined);
 }
 
 /** Fecha y hora es-CO, para hilos, auditoría y movimientos. */

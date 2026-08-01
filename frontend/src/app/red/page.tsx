@@ -46,7 +46,7 @@ export default function RedPage() {
 
   return (
     <>
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <PageHeading icon="activity" title="Red / ISP" subtitle="Infraestructura Mikrotik, OLT/ONU, NAPs y equipos" />
         <div className="flex gap-2">
           <Link href="/red/onus" className="inline-flex items-center gap-1.5 rounded-lg border border-border-default px-3 py-2 text-[12px] font-semibold text-text-secondary hover:bg-surface-2"><Icon name="activity" size={14} /> ONUs</Link>

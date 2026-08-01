@@ -8,6 +8,10 @@ import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { LoadError } from "@/components/ui/LoadError";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
+import { esCajera } from "@/lib/treasury";
+import { esTecnico } from "@/lib/support";
+import { PanelCaja } from "@/components/treasury/PanelCaja";
+import { PanelTecnico } from "@/components/support/PanelTecnico";
 
 function compact(n: number): string {
   const a = Math.abs(n);
@@ -92,7 +96,28 @@ function AreaChart({ serie }: { serie: { month: string; income: number; expense:
   );
 }
 
+/**
+ * El dashboard no es uno solo: depende de a qué se dedique quien entra.
+ *
+ * · Cajera   → su caja: el informe del recaudo del día (ver `PanelCaja`).
+ * · Técnico  → su rendimiento (`PanelTecnico`). Sus órdenes NO van aquí desde
+ *              2026-07-31: se atienden en `/soporte`, que ya sólo le muestra las suyas.
+ * · Los demás → el panel ejecutivo de siempre (abonados, cartera, recaudo, red).
+ *
+ * Se decide con los permisos que ya trae la sesión, así que no hay ni parpadeo ni una
+ * llamada de más: ni la cajera ni el técnico piden `/dashboard` (que además les
+ * respondería 403, porque ese endpoint sigue siendo de gerencia). Cada panel se sirve
+ * de sus propios endpoints, ya acotados a quien pregunta.
+ */
 export default function DashboardPage() {
+  const { loading: authLoading, user } = useAuth();
+  if (authLoading) return <PageSkeleton />;
+  if (esCajera(user)) return <PanelCaja />;
+  if (esTecnico(user)) return <PanelTecnico />;
+  return <PanelEjecutivo />;
+}
+
+function PanelEjecutivo() {
   const { loading: authLoading, authFetch } = useAuth();
   const [d, setD] = useState<any>(null);
   const [err, setErr] = useState(false);

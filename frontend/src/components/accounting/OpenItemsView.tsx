@@ -1,5 +1,8 @@
+"use client";
+
 import type { AgingBuckets, OpenItems } from "@/lib/accounting-types";
 import { fullCurrency } from "@/lib/format";
+import { BotonOrden, useTablaOrdenable } from "@/components/ui/tabla-ordenable";
 
 const fmtDate = (iso: string) =>
   new Date(iso).toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "numeric" });
@@ -18,6 +21,16 @@ export function OpenItemsView({
   data: OpenItems;
   aging: AgingBuckets;
 }) {
+  // Ordena solo los documentos: la fila de total pendiente va aparte.
+  const t = useTablaOrdenable(data.items, {
+    doc: (it) => it.number,
+    tercero: (it) => it.party,
+    vence: (it) => it.dueDate,
+    total: (it) => it.total,
+    saldo: (it) => it.balance,
+    estado: (it) => it.status,
+  });
+
   const buckets = [
     { label: "Corriente", value: aging.current },
     { label: "1–30 días", value: aging.d1_30 },
@@ -91,12 +104,12 @@ export function OpenItemsView({
         <table className="w-full min-w-[640px]">
           <thead>
             <tr className="border-b border-border-subtle bg-surface-2 text-[10px] uppercase tracking-wider text-text-tertiary">
-              <th className="px-4 py-2.5 text-left font-semibold">Documento</th>
-              <th className="px-4 py-2.5 text-left font-semibold">Tercero</th>
-              <th className="px-4 py-2.5 text-left font-semibold">Vencimiento</th>
-              <th className="px-4 py-2.5 text-right font-semibold">Total</th>
-              <th className="px-4 py-2.5 text-right font-semibold">Saldo</th>
-              <th className="px-4 py-2.5 text-right font-semibold">Estado</th>
+              <th className="px-4 py-2.5 text-left font-semibold"><BotonOrden t={t} clave="doc">Documento</BotonOrden></th>
+              <th className="px-4 py-2.5 text-left font-semibold"><BotonOrden t={t} clave="tercero">Tercero</BotonOrden></th>
+              <th className="px-4 py-2.5 text-left font-semibold"><BotonOrden t={t} clave="vence">Vencimiento</BotonOrden></th>
+              <th className="px-4 py-2.5 text-right font-semibold"><BotonOrden t={t} clave="total">Total</BotonOrden></th>
+              <th className="px-4 py-2.5 text-right font-semibold"><BotonOrden t={t} clave="saldo">Saldo</BotonOrden></th>
+              <th className="px-4 py-2.5 text-right font-semibold"><BotonOrden t={t} clave="estado">Estado</BotonOrden></th>
             </tr>
           </thead>
           <tbody>
@@ -107,7 +120,7 @@ export function OpenItemsView({
                 </td>
               </tr>
             )}
-            {data.items.map((it) => (
+            {t.filas.map((it) => (
               <tr
                 key={it.invoiceId ?? it.billId}
                 className="border-b border-border-subtle last:border-0 hover:bg-surface-2"

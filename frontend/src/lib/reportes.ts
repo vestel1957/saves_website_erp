@@ -9,18 +9,143 @@ export const monthLabel = (m: string) => {
   return `${MONTHS[Number(mm) - 1] ?? mm} ${(y || "").slice(2)}`;
 };
 
-export const REPORTS: { key: string; label: string; icon: string; dated: boolean; endpoint?: string }[] = [
-  { key: "facturacion", label: "Resumen de facturación", icon: "receipt", dated: false, endpoint: "/billing/stats" },
-  { key: "recaudo", label: "Recaudo", icon: "banknote", dated: true },
-  { key: "ventas-sede", label: "Ventas por sede", icon: "receipt", dated: true },
-  { key: "ingresos-egresos", label: "Ingresos y egresos", icon: "trending-up", dated: false },
-  { key: "ordenes", label: "Órdenes de servicio", icon: "headphones", dated: true },
-  { key: "top-deudores", label: "Cartera / deudores", icon: "alert-triangle", dated: false },
-  { key: "estadisticas-servicios", label: "Estado de clientes", icon: "users", dated: false },
-  { key: "cortes-activaciones", label: "Cortes y activaciones", icon: "activity", dated: true },
-  { key: "movimientos", label: "Altas y retiros", icon: "trending-up", dated: true },
-  { key: "iva", label: "Reporte de IVA", icon: "calculator", dated: true },
+/** Grupos del menú de reportes: a quién le sirve cada uno. */
+export type ReportGroup = "gerencia" | "operacion" | "personal";
+
+/**
+ * Un filtro extra de un reporte, más allá del rango de fechas.
+ *
+ * Las opciones se leen de la PROPIA respuesta del reporte (`from`) en vez de
+ * pedirlas por separado: el backend ya sabe qué sedes tienen órdenes o qué cajas
+ * movieron plata, y así el filtro nunca ofrece un valor que daría cero.
+ */
+export type ReportFilter = {
+  /** Nombre del parámetro en la query. */
+  param: string;
+  label: string;
+  /** De dónde salen las opciones dentro de la respuesta. */
+  from: (data: any) => { value: string; label: string }[];
+};
+
+export type ReportMeta = {
+  key: string;
+  label: string;
+  icon: string;
+  dated: boolean;
+  group: ReportGroup;
+  /** Qué contesta el reporte, en una línea. Se muestra bajo el título y en el índice. */
+  desc: string;
+  /** Endpoint del backend. Por defecto `/reports/<key>`. */
+  endpoint?: string;
+  filters?: ReportFilter[];
+};
+
+const opciones = (get: (d: any) => any[], value: (x: any) => string, label: (x: any) => string): ReportFilter["from"] =>
+  (d: any) => (get(d) ?? []).map((x: any) => ({ value: value(x), label: label(x) }));
+
+export const REPORTS: ReportMeta[] = [
+  // ── Gerencia: la plata ────────────────────────────────────────────────────
+  // Tendencias va primero: es el único reporte con MEMORIA (lee las fotos diarias
+  // de MetricPoint en vez de calcular sobre las tablas vivas), y por tanto el único
+  // que contesta "cuántos teníamos y cuántos tenemos".
+  { key: "tendencias", label: "Tendencias e histórico", icon: "trending-up", dated: true, group: "gerencia",
+    desc: "Evolución de cualquier indicador y comparación contra el periodo anterior",
+    filters: [
+      { param: "metrica", label: "Indicador", from: opciones((d) => d?.opciones?.metricas, (x) => x.id, (x) => x.nombre) },
+      { param: "agrupar", label: "Agrupar", from: () => [{ value: "mes", label: "Por mes" }, { value: "dia", label: "Por día" }] },
+      { param: "sede", label: "Sede", from: opciones((d) => d?.opciones?.sedes, (x) => x.id, (x) => x.nombre) },
+    ] },
+  { key: "facturacion", label: "Resumen de facturación", icon: "receipt", dated: false, group: "gerencia",
+    desc: "Cuánto se facturó, cuánto se pagó y cuánta cartera quedó", endpoint: "/billing/stats" },
+  { key: "recaudo", label: "Recaudo", icon: "banknote", dated: true, group: "gerencia",
+    desc: "Ingresos vigentes por caja y por método de pago",
+    filters: [{ param: "sede", label: "Sede", from: opciones((d) => d?.opciones?.sedes, (x) => x.id, (x) => x.nombre) }] },
+  { key: "ventas-sede", label: "Ventas por sede", icon: "landmark", dated: true, group: "gerencia",
+    desc: "Facturación de cada sede en el periodo" },
+  { key: "ingresos-egresos", label: "Ingresos y egresos", icon: "trending-up", dated: false, group: "gerencia",
+    desc: "Balance mensual: qué entró, qué salió y qué quedó" },
+  { key: "cartera", label: "Cartera / deudores", icon: "alert-triangle", dated: false, group: "gerencia",
+    desc: "Los clientes que más deben y cuántas facturas tienen en mora", endpoint: "/reports/top-deudores",
+    filters: [{ param: "sede", label: "Sede", from: opciones((d) => d?.opciones?.sedes, (x) => x.id, (x) => x.nombre) }] },
+  { key: "iva", label: "Reporte de IVA", icon: "calculator", dated: true, group: "gerencia",
+    desc: "Base gravable, exenta e IVA por documento, para la declaración",
+    filters: [
+      { param: "tipo", label: "Tipo", from: () => [{ value: "ventas", label: "Ventas" }, { value: "compras", label: "Compras" }] },
+      // Solo recorta las VENTAS: una compra es a un proveedor y no tiene sede.
+      { param: "sede", label: "Sede", from: opciones((d) => d?.opciones?.sedes, (x) => x.id, (x) => x.nombre) },
+    ] },
+
+  // Propios de un ISP: no describen el ERP, describen el negocio de vender internet.
+  { key: "indice-recaudo", label: "Índice de recaudo", icon: "percent", dated: true, group: "gerencia",
+    desc: "De lo que se factura, cuánto entra de verdad",
+    filters: [{ param: "sede", label: "Sede", from: opciones((d) => d?.opciones?.sedes, (x) => x.id, (x) => x.nombre) }] },
+  { key: "arpu", label: "ARPU por abonado", icon: "banknote", dated: true, group: "gerencia",
+    desc: "Cuánto deja cada cliente al mes, facturado y recaudado",
+    filters: [{ param: "sede", label: "Sede", from: opciones((d) => d?.opciones?.sedes, (x) => x.id, (x) => x.nombre) }] },
+  { key: "permanencia", label: "Antigüedad y permanencia", icon: "history", dated: false, group: "gerencia",
+    desc: "De los que entraron cada año, cuántos siguen",
+    filters: [{ param: "sede", label: "Sede", from: opciones((d) => d?.opciones?.sedes, (x) => x.id, (x) => x.nombre) }] },
+
+  // ── Operación: el servicio ────────────────────────────────────────────────
+  { key: "capacidad-red", label: "Capacidad de red (NAPs)", icon: "plug", dated: false, group: "operacion",
+    desc: "Puertos libres y ocupados por NAP: dónde se puede instalar sin obra",
+    filters: [{ param: "sede", label: "Sede", from: opciones((d) => d?.opciones?.sedes, (x) => x.id, (x) => x.nombre) }] },
+  { key: "reincidencia", label: "Reincidencia de cortes", icon: "refresh-cw", dated: true, group: "operacion",
+    desc: "Clientes que entran en ciclo de corte y reconexión",
+    filters: [{ param: "sede", label: "Sede", from: opciones((d) => d?.opciones?.sedes, (x) => x.id, (x) => x.nombre) }] },
+  { key: "ordenes", label: "Órdenes de servicio", icon: "headphones", dated: true, group: "operacion",
+    desc: "Volumen de órdenes por estado, tipo y técnico asignado",
+    // La sede sale del abonado de la orden (la orden no la lleva). Es el recorte que
+    // más se pide de viva voz: "las órdenes de Villanueva en junio".
+    filters: [{ param: "sede", label: "Sede", from: opciones((d) => d?.opciones?.sedes, (x) => x.id, (x) => x.nombre) }] },
+  { key: "cortes-activaciones", label: "Cortes y activaciones", icon: "activity", dated: true, group: "operacion",
+    desc: "Cuántos clientes se cortaron, activaron, suspendieron o retiraron",
+    filters: [{ param: "sede", label: "Sede", from: opciones((d) => d?.opciones?.sedes, (x) => x.id, (x) => x.nombre) }] },
+  { key: "estado-clientes", label: "Estado de clientes", icon: "users", dated: false, group: "operacion",
+    desc: "Cómo está repartida la base de clientes por estado y por sede", endpoint: "/reports/estadisticas-servicios" },
+  { key: "altas-retiros", label: "Altas y retiros", icon: "arrow-left-right", dated: true, group: "operacion",
+    desc: "Clientes nuevos contra clientes que se fueron", endpoint: "/reports/movimientos",
+    filters: [{ param: "sede", label: "Sede", from: opciones((d) => d?.opciones?.sedes, (x) => x.id, (x) => x.nombre) }] },
+
+  // ── Personal: la gente ────────────────────────────────────────────────────
+  { key: "tecnicos", label: "Rendimiento de técnicos", icon: "hard-hat", dated: true, group: "personal",
+    desc: "Re-visita, cumplimiento y carga de cada técnico de campo",
+    filters: [
+      { param: "sede", label: "Sede", from: opciones((d) => d?.opciones?.sedes, (x) => x.id, (x) => x.nombre) },
+      { param: "tipo", label: "Tipo de orden", from: opciones((d) => d?.opciones?.tipos, (x) => x, (x) => x) },
+      { param: "prioridad", label: "Prioridad", from: opciones((d) => d?.opciones?.prioridades, (x) => x, (x) => x) },
+    ] },
+  { key: "recaudo-funcionario", label: "Recaudo por funcionario", icon: "hand-coins", dated: true, group: "personal",
+    desc: "Cuánto recaudó cada persona, por caja y método",
+    filters: [
+      { param: "metodo", label: "Método", from: opciones((d) => d?.porMetodo, (x) => x.metodo, (x) => x.metodo) },
+      { param: "caja", label: "Caja", from: opciones((d) => d?.porCaja, (x) => x.caja, (x) => x.caja) },
+    ] },
+  { key: "anulaciones", label: "Anulaciones (control)", icon: "ban", dated: true, group: "personal",
+    desc: "Quién anuló qué, por cuánto y cuántos días después del cobro",
+    filters: [
+      { param: "quien", label: "Funcionario", from: opciones((d) => d?.porQuien, (x) => x.quien, (x) => x.quien) },
+      { param: "sede", label: "Sede", from: opciones((d) => d?.opciones?.sedes, (x) => x.id, (x) => x.nombre) },
+    ] },
+  { key: "actividad", label: "Actividad en el sistema", icon: "history", dated: true, group: "personal",
+    desc: "Qué se tocó en el sistema, por quién y en qué módulo",
+    filters: [
+      { param: "usuario", label: "Usuario", from: opciones((d) => d?.filtros?.usuarios, (x) => x.id, (x) => x.nombre) },
+      { param: "modulo", label: "Módulo", from: opciones((d) => d?.filtros?.modulos, (x) => x, (x) => x) },
+      { param: "accion", label: "Operación", from: opciones((d) => d?.filtros?.acciones, (x) => x, (x) => x) },
+    ] },
 ];
+
+export const REPORT_GROUPS: { key: ReportGroup; title: string; hint: string }[] = [
+  { key: "gerencia", title: "Gerencia", hint: "La plata: facturación, recaudo, cartera e impuestos" },
+  { key: "operacion", title: "Operación", hint: "El servicio: órdenes, cortes y estado de la base" },
+  { key: "personal", title: "Personal", hint: "La gente: rendimiento, recaudo y control" },
+];
+
+/** Ruta de un reporte. Cada uno vive en su propia URL para poder enlazarlo. */
+export const reportHref = (key: string) => `/reportes/${key}`;
+
+export const findReport = (key: string) => REPORTS.find((r) => r.key === key);
 
 /** Presets de rango de fecha típicos de gerencia. */
 export function datePresets(): { label: string; from: string; to: string }[] {
@@ -102,7 +227,124 @@ export function buildExportDoc(rep: string, label: string, data: any, from: stri
         rows: (data.porTecnico ?? []).map((r: any) => ({ cells: [r.tecnico, r.count] })),
       });
       break;
-    case "estadisticas-servicios":
+    case "tecnicos": {
+      const eq = data.equipo;
+      doc.subtitle = `${periodo} · solo trabajo de campo${eq ? ` · re-visita del equipo ${eq.revisitaPct ?? "—"}%` : ""}`;
+      doc.tables.push({
+        heading: "Rendimiento por técnico",
+        columns: [
+          { label: "Técnico" },
+          { label: "Cerradas", align: "right" },
+          { label: "Sin cerrar", align: "right" },
+          { label: "Antigüedad (días)", align: "right" },
+          { label: "Re-visitas", align: "right" },
+          { label: "Re-visita %", align: "right" },
+          { label: "Con firma %", align: "right" },
+          { label: "Con foto %", align: "right" },
+          { label: "Ciclo (h)", align: "right" },
+        ],
+        rows: (data.tecnicos ?? []).map((r: any) => ({
+          cells: [
+            `${r.nombre}${r.muestraSuficiente ? "" : " (muestra baja)"}`,
+            r.cerradas, r.abiertas, r.antiguedadDias ?? "—", r.revisitas,
+            r.revisitaPct ?? "—", r.firmaPct ?? "—", r.evidenciaPct ?? "—", r.cicloHoras ?? "—",
+          ],
+        })),
+      });
+      if (eq) {
+        doc.tables.push({
+          heading: "Referencia del equipo",
+          columns: [{ label: "Indicador" }, { label: "Valor", align: "right" }],
+          rows: [
+            { cells: ["Órdenes de campo cerradas", eq.cerradas] },
+            { cells: ["Clientes que volvieron a llamar", eq.revisitas] },
+            { cells: ["Re-visita del equipo (%)", eq.revisitaPct ?? "—"], bold: true },
+            { cells: ["Mediana por técnico (%)", eq.medianaRevisita ?? "—"] },
+            { cells: ["Técnicos medidos", eq.tecnicos] },
+            { cells: [`Con al menos ${eq.muestraMinima} órdenes cerradas`, eq.conMuestra] },
+            { cells: ["Órdenes de campo sin técnico asignado", data.sinAtribuir ?? 0] },
+          ],
+        });
+      }
+      break;
+    }
+    case "recaudo-funcionario":
+      doc.tables.push({
+        heading: "Recaudo por funcionario",
+        columns: [
+          { label: "Funcionario" },
+          { label: "Movimientos", align: "right" },
+          { label: "Total recaudado", align: "right", money: true },
+          { label: "Promedio", align: "right", money: true },
+          { label: "Participación %", align: "right" },
+        ],
+        rows: [
+          ...(data.funcionarios ?? []).map((r: any) => ({
+            cells: [r.nombre, r.movimientos, r.total, r.promedio, r.participacion],
+          })),
+          { cells: ["TOTAL", data.movimientos ?? 0, data.total ?? 0, "", 100], bold: true },
+        ],
+      });
+      doc.tables.push({
+        heading: "Por caja",
+        columns: [{ label: "Caja" }, { label: "Movimientos", align: "right" }, { label: "Total", align: "right", money: true }],
+        rows: (data.porCaja ?? []).map((r: any) => ({ cells: [r.caja, r.movimientos, r.total] })),
+      });
+      break;
+    case "anulaciones":
+      doc.subtitle = `${periodo} · ${data.total ?? 0} anulaciones (${data.tasaPct ?? 0}% de ${data.movimientosPeriodo ?? 0} movimientos)`;
+      doc.tables.push({
+        heading: "Por funcionario",
+        columns: [
+          { label: "Funcionario" },
+          { label: "Anulaciones", align: "right" },
+          { label: "Monto", align: "right", money: true },
+          { label: "La más tardía (días)", align: "right" },
+        ],
+        rows: (data.porQuien ?? []).map((r: any) => ({ cells: [r.quien, r.n, r.monto, r.maxDias] })),
+      });
+      doc.tables.push({
+        heading: "Detalle de anulaciones",
+        columns: [
+          { label: "Anulada el" },
+          { label: "Quién" },
+          { label: "Monto", align: "right", money: true },
+          { label: "Días después", align: "right" },
+          { label: "Cliente" },
+          { label: "Caja" },
+          { label: "Motivo" },
+        ],
+        rows: (data.casos ?? []).map((r: any) => ({
+          cells: [
+            new Date(r.fecha).toLocaleDateString("es-CO"),
+            r.quien, r.monto, r.diasDespues ?? "—",
+            r.cliente?.nombre ?? r.pagador ?? "—",
+            r.caja ?? "—", r.motivo || r.detalle || "—",
+          ],
+        })),
+      });
+      break;
+    case "actividad":
+      doc.subtitle = `${periodo} · ${data.total ?? 0} eventos · la bitácora NO cubre todas las operaciones`;
+      doc.tables.push({
+        heading: "Por usuario",
+        columns: [{ label: "Usuario" }, { label: "Eventos", align: "right" }],
+        rows: (data.porUsuario ?? []).map((r: any) => ({ cells: [r.nombre, r.eventos] })),
+      });
+      doc.tables.push({
+        heading: "Por módulo",
+        columns: [{ label: "Módulo" }, { label: "Eventos", align: "right" }],
+        rows: (data.porModulo ?? []).map((r: any) => ({ cells: [r.modulo, r.eventos] })),
+      });
+      doc.tables.push({
+        heading: "Últimos eventos",
+        columns: [{ label: "Cuándo" }, { label: "Quién" }, { label: "Módulo" }, { label: "Operación" }, { label: "IP" }],
+        rows: (data.eventos ?? []).map((r: any) => ({
+          cells: [new Date(r.fecha).toLocaleString("es-CO"), r.usuario, r.modulo, r.operacion, r.ip ?? "—"],
+        })),
+      });
+      break;
+    case "estado-clientes":
       doc.tables.push({
         heading: "Base por sede",
         columns: [
@@ -126,7 +368,7 @@ export function buildExportDoc(rep: string, label: string, data: any, from: stri
         ],
       });
       break;
-    case "movimientos":
+    case "altas-retiros":
       doc.tables.push({
         columns: [{ label: "Movimiento" }, { label: "Cantidad", align: "right" }],
         rows: [
@@ -136,7 +378,7 @@ export function buildExportDoc(rep: string, label: string, data: any, from: stri
         ],
       });
       break;
-    case "top-deudores":
+    case "cartera":
       doc.tables.push({
         columns: [
           { label: "Abonado" },

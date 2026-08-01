@@ -24,13 +24,34 @@ export type OltDashboard = {
 };
 
 export type Board = { slot: string; board: string; status: string; gpon: boolean; epon: boolean };
-export type LiveOnu = { fsp: string; ont_id: string; sn: string; control_flag: string; run_state: string; config_state: string; match_state: string; rx_power: string };
+export type LiveOnu = {
+  fsp: string; ont_id: string; sn: string; control_flag: string;
+  run_state: string; config_state: string; match_state: string; rx_power: string;
+  /** Cruce con el inventario local (por SN): abonado vinculado, si lo hay. */
+  client?: string | null; subscriberId?: string | null; description?: string | null;
+};
 export type AutofindOnu = {
   fsp: string; sn: string; sn_full: string; password: string; loid: string;
   /** Campos extra del autofind (pueden venir vacíos según el modelo de ONU). */
   mac?: string; model?: string; vendor?: string; version?: string;
 };
 export type Profile = { id: string; name: string };
+
+/** Ocupación de un slot: cuántas ONUs cuelgan de cada puerto PON. */
+export type SlotPortSummary = { port: number; total: number; online: number; offline: number };
+export type SlotSummary = { slot: number; total: number; online: number; offline: number; ports: SlotPortSummary[] };
+
+/**
+ * Tabla de tráfico de la OLT: es donde se limita la velocidad del abonado.
+ * `mbps` es el PIR (techo) ya convertido; `cirMbps` el mínimo garantizado.
+ */
+export type TrafficTable = { id: string; cir: string; pir: string; mbps: number | null; cirMbps: number | null };
+
+/** Etiqueta legible para un selector de velocidad. */
+export function trafficLabel(t: TrafficTable): string {
+  if (t.mbps === null) return `${t.id} · sin límite`;
+  return `${t.id} · ${t.mbps.toLocaleString("es-CO")} Mbps`;
+}
 export type SystemInfo = { model: string; version: string; patch: string; uptime: string };
 
 export type InvOnu = {
@@ -48,6 +69,11 @@ export type OltLog = {
 export type ProvisionResult = {
   ok: boolean; dryRun: boolean; message?: string; error?: string;
   commands?: string[]; ontId?: string; raw?: string;
+  verificacion?: {
+    ok: boolean; run_state: string | null; config_state: string | null;
+    match_state: string | null; servicePorts: string[]; avisos: string[];
+    nota?: string | null;
+  } | null;
 };
 
 export type Paged<T> = { items: T[]; total: number; page: number; pageSize: number; pages: number };

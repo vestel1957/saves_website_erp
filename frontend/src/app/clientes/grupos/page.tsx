@@ -5,9 +5,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
-import { Input } from "@/components/ui/Field";
 import { Badge } from "@/components/ui/Badge";
-import { DataTable } from "@/components/ui/DataTable";
+import { PagedTable } from "@/components/ui/PagedTable";
+import { ListToolbar } from "@/components/ui/ListToolbar";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { LoadError } from "@/components/ui/LoadError";
 import { useAuth } from "@/context/AuthProvider";
@@ -38,18 +38,14 @@ export default function GruposClientesPage() {
     <div className="space-y-4">
       <PageHeading icon="users-round" title="Grupos de clientes" subtitle="Abonados agrupados por sede" />
 
-      <div className="relative max-w-md">
-        <Icon name="search" size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary" />
-        <Input className="pl-9" placeholder="Buscar sede…" value={search} onChange={(e) => setSearch(e.target.value)} />
-      </div>
+      <ListToolbar search={search} onSearch={setSearch} searchPlaceholder="Buscar sede…" />
 
       {err && !branches ? (
         <LoadError message="No se pudieron cargar las sedes." onRetry={load} />
       ) : !branches ? (
         <PageSkeleton />
       ) : (
-        <DataTable
-          autoHeight
+        <PagedTable
           rows={shown}
           empty={search ? "Ninguna sede coincide con la búsqueda." : "No hay sedes registradas."}
           onRowClick={(b: BranchStat) => router.push(`/clientes/grupos/${b.id}`)}

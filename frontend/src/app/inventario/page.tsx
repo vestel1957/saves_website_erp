@@ -8,12 +8,14 @@ import { Button } from "@/components/ui/Button";
 import { Input, Select, Textarea, Field } from "@/components/ui/Field";
 import { Badge } from "@/components/ui/Badge";
 import { DataTable } from "@/components/ui/DataTable";
+import { ListToolbar } from "@/components/ui/ListToolbar";
 import { Pagination } from "@/components/ui/Pagination";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { Modal } from "@/components/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
+import { useOrden } from "@/lib/useOrden";
 import { cop } from "@/lib/subscribers";
 import { StatCard } from "@/components/ui/StatCard";
 import { mensajeDeError } from "@/lib/errores";
@@ -72,6 +74,8 @@ export default function MaterialPage() {
     setWarehouses(Array.isArray(whs) ? whs : []);
   }, [authFetch]);
 
+  const orden = useOrden();
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -82,6 +86,8 @@ export default function MaterialPage() {
       if (lowStock) params.set("lowStock", "1");
       params.set("page", String(page));
       params.set("pageSize", "25");
+      // El listado pagina en el servidor: el orden va con la consulta.
+      for (const [k, v] of Object.entries(orden.params)) params.set(k, v);
       const [s, d] = await Promise.all([
         (await authFetch("/inventory/stats")).json(),
         (await authFetch(`/inventory/materials?${params.toString()}`)).json(),
@@ -91,7 +97,7 @@ export default function MaterialPage() {
     } finally {
       setLoading(false);
     }
-  }, [authFetch, search, categoryId, warehouseId, lowStock, page]);
+  }, [authFetch, search, categoryId, warehouseId, lowStock, page, orden.clave]);
 
   useEffect(() => { if (!authLoading) void loadRefs(); }, [authLoading, loadRefs]);
   useEffect(() => { if (!authLoading) void load(); }, [authLoading, load]);
@@ -175,21 +181,21 @@ export default function MaterialPage() {
   }
 
   const columns = useMemo(() => [
-    { key: "name", header: "Nombre", render: (r: any) => <span className="font-medium text-text-primary">{r.name}</span> },
-    { key: "code", header: "Código", render: (r: any) => <span className="text-text-secondary">{r.code || "—"}</span> },
-    { key: "category", header: "Categoría", render: (r: any) => <span className="text-text-secondary">{r.category || "—"}</span> },
-    { key: "warehouse", header: "Bodega", render: (r: any) => <span className="text-text-secondary">{r.warehouse || "—"}</span> },
-    { key: "price", header: "Precio", align: "right" as const, render: (r: any) => <span>{cop(r.price ?? 0)}</span> },
-    { key: "qty", header: "Stock", align: "right" as const, render: (r: any) => r.low ? <Badge label={`${r.qty ?? 0} · Bajo`} tone="error" /> : <span>{r.qty ?? 0}</span> },
+    { key: "name", header: "Nombre", sortable: true, render: (r: any) => <span className="font-medium text-text-primary">{r.name}</span> },
+    { key: "code", header: "Código", sortable: true, render: (r: any) => <span className="text-text-secondary">{r.code || "—"}</span> },
+    { key: "category", header: "Categoría", sortable: true, render: (r: any) => <span className="text-text-secondary">{r.category || "—"}</span> },
+    { key: "warehouse", header: "Bodega", sortable: true, render: (r: any) => <span className="text-text-secondary">{r.warehouse || "—"}</span> },
+    { key: "price", header: "Precio", sortable: true, align: "right" as const, render: (r: any) => <span>{cop(r.price ?? 0)}</span> },
+    { key: "qty", header: "Stock", sortable: true, align: "right" as const, render: (r: any) => r.low ? <Badge label={`${r.qty ?? 0} · Bajo`} tone="error" /> : <span>{r.qty ?? 0}</span> },
     { key: "value", header: "Valor", align: "right" as const, render: (r: any) => <span className="font-semibold">{cop(r.value ?? 0)}</span> },
     {
       key: "acciones", header: "", align: "right" as const,
       render: (r: any) => (
         <div className="flex justify-end gap-1">
-          <button type="button" onClick={() => void openEdit(r)} className="rounded-md p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-text-primary" title="Editar">
+          <button type="button" onClick={() => void openEdit(r)} className="tap rounded-md p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-text-primary" title="Editar">
             <Icon name="pencil" size={15} />
           </button>
-          <button type="button" onClick={() => setDelRow(r)} className="rounded-md p-1.5 text-text-tertiary hover:bg-error-soft hover:text-error-text" title="Eliminar">
+          <button type="button" onClick={() => setDelRow(r)} className="tap rounded-md p-1.5 text-text-tertiary hover:bg-error-soft hover:text-error-text" title="Eliminar">
             <Icon name="trash" size={15} />
           </button>
         </div>
@@ -204,7 +210,7 @@ export default function MaterialPage() {
 
   return (
     <>
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <PageHeading icon="boxes" title="Material" subtitle="Inventario de materiales y existencias" />
         <div className="flex items-center gap-2">
           <Link href="/inventario/traspasos"><Button variant="secondary" size="sm"><Icon name="arrow-left" size={14} />Traspasos</Button></Link>
@@ -226,28 +232,25 @@ export default function MaterialPage() {
         </div>
       )}
 
-      <div className="flex flex-wrap items-end gap-2">
-        <Field label="Buscar">
-          <Input value={search} onChange={(e) => { setPage(1); setSearch(e.target.value); }} placeholder="Nombre o código…" />
-        </Field>
-        <Field label="Categoría">
-          <Select value={categoryId} onChange={(e) => { setPage(1); setCategoryId(e.target.value); }}>
-            <option value="">Todas</option>
-            {categories.map((c: any) => <option key={c.id} value={c.id}>{c.title}</option>)}
-          </Select>
-        </Field>
-        <Field label="Bodega">
-          <Select value={warehouseId} onChange={(e) => { setPage(1); setWarehouseId(e.target.value); }}>
-            <option value="">Todas</option>
-            {warehouses.map((w: any) => <option key={w.id} value={w.id}>{w.title}</option>)}
-          </Select>
-        </Field>
+      <ListToolbar
+        search={search}
+        onSearch={(v) => { setPage(1); setSearch(v); }}
+        searchPlaceholder="Buscar material por nombre o código…"
+      >
+        <Select value={categoryId} onChange={(e) => { setPage(1); setCategoryId(e.target.value); }} className="w-auto">
+          <option value="">Todas las categorías</option>
+          {categories.map((c: any) => <option key={c.id} value={c.id}>{c.title}</option>)}
+        </Select>
+        <Select value={warehouseId} onChange={(e) => { setPage(1); setWarehouseId(e.target.value); }} className="w-auto">
+          <option value="">Todas las bodegas</option>
+          {warehouses.map((w: any) => <option key={w.id} value={w.id}>{w.title}</option>)}
+        </Select>
         <Button variant={lowStock ? "primary" : "secondary"} size="md" onClick={() => { setPage(1); setLowStock((v) => !v); }}>
           <Icon name="alert-triangle" size={14} />Solo stock bajo
         </Button>
-      </div>
+      </ListToolbar>
 
-      <DataTable rows={rows} empty="No hay materiales." columns={columns} />
+      <DataTable rows={rows} empty="No hay materiales." columns={columns} sort={orden.sort} onSort={orden.onSort} />
 
       {data && (
         <Pagination
@@ -261,7 +264,7 @@ export default function MaterialPage() {
           <Field label="Nombre" required>
             <Input value={form.name} onChange={set("name")} placeholder="Nombre del material" />
           </Field>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Field label="Código"><Input value={form.code} onChange={set("code")} /></Field>
             <Field label="Categoría">
               <Select value={form.categoryId} onChange={set("categoryId")}>
@@ -282,7 +285,7 @@ export default function MaterialPage() {
               </Select>
             </Field>
           )}
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             <Field label="Precio"><Input type="number" value={form.price} onChange={set("price")} /></Field>
             <Field label="Costo"><Input type="number" value={form.cost} onChange={set("cost")} /></Field>
             <Field label="IVA %"><Input type="number" value={form.taxRate} onChange={set("taxRate")} /></Field>

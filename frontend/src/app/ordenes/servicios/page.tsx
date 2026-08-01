@@ -14,6 +14,7 @@ import { OrdersFilterButton, EMPTY_FILTERS, countActiveFilters, type OrderFilter
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import { useRequest } from "@/lib/useRequest";
+import { useOrden } from "@/lib/useOrden";
 
 function statusTone(status: string): "default" | "success" | "error" | "warning" {
   if (status === "recibido" || status === "finalizado") return "success";
@@ -40,9 +41,12 @@ export default function OrdenesServiciosPage() {
 
   // Carga con cancelación: al teclear se aborta la petición en vuelo para que
   // una respuesta lenta no pise a otra más reciente. Ver lib/useRequest.
+  // Pagina en el servidor: el orden viaja en la query.
+  const orden = useOrden();
+
   const { data, cargando: loading, error, refrescar: load } = useRequest<any>(
     () => {
-      const qs = new URLSearchParams({ kind: "servicio", page: String(page), pageSize: String(pageSize) });
+      const qs = new URLSearchParams({ kind: "servicio", page: String(page), pageSize: String(pageSize), ...orden.params });
       if (search.trim()) qs.set("search", search.trim());
       if (filters.status) qs.set("status", filters.status);
       if (filters.category) qs.set("category", filters.category);
@@ -58,7 +62,7 @@ export default function OrdenesServiciosPage() {
     { debounceMs: search ? 350 : 0, saltar: authLoading },
   );
 
-  useEffect(() => { setPage(1); }, [search, filters, pageSize]);
+  useEffect(() => { setPage(1); }, [search, filters, pageSize, orden.clave]);
 
   if (authLoading) return <PageSkeleton />;
 
@@ -66,7 +70,7 @@ export default function OrdenesServiciosPage() {
 
   return (
     <>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <PageHeading
           icon="wrench"
           title="Órdenes de servicio"
@@ -97,16 +101,18 @@ export default function OrdenesServiciosPage() {
       {loading && !data ? <PageSkeleton /> : (
         <>
           <DataTable
+            sort={orden.sort}
+            onSort={orden.onSort}
             rows={data?.items ?? []}
             empty="No se encontraron órdenes de servicio."
             columns={[
-              { key: "tid", header: "N°", render: (r: any) => <Link href={`/ordenes/${r.id}`} className="font-mono font-medium text-brand hover:underline">{r.tid}</Link> },
-              { key: "supplier", header: "Proveedor", render: (r: any) => <span className="font-medium text-text-primary">{r.supplier}</span> },
-              { key: "branchRef", header: "Sede", render: (r: any) => (r.branchRef ? <Badge label={r.branchRef} tone="info" /> : <span className="text-text-tertiary">—</span>) },
-              { key: "date", header: "Fecha", render: (r: any) => (r.date ? new Date(r.date).toLocaleDateString("es-CO") : "—") },
-              { key: "total", header: "Total", align: "right", render: (r: any) => cop(r.total) },
-              { key: "status", header: "Estado", render: (r: any) => <Badge label={r.status} tone={statusTone(r.status)} /> },
-              { key: "itemsCount", header: "Ítems", align: "right", render: (r: any) => <span className="text-text-secondary">{r.itemsCount}</span> },
+              { key: "tid", header: "N°", sortable: true, render: (r: any) => <Link href={`/ordenes/${r.id}`} className="font-mono font-medium text-brand hover:underline">{r.tid}</Link> },
+              { key: "supplier", header: "Proveedor", sortable: true, render: (r: any) => <span className="font-medium text-text-primary">{r.supplier}</span> },
+              { key: "branchRef", header: "Sede", sortable: true, render: (r: any) => (r.branchRef ? <Badge label={r.branchRef} tone="info" /> : <span className="text-text-tertiary">—</span>) },
+              { key: "date", header: "Fecha", sortable: true, render: (r: any) => (r.date ? new Date(r.date).toLocaleDateString("es-CO") : "—") },
+              { key: "total", header: "Total", sortable: true, align: "right", render: (r: any) => cop(r.total) },
+              { key: "status", header: "Estado", sortable: true, render: (r: any) => <Badge label={r.status} tone={statusTone(r.status)} /> },
+              { key: "itemsCount", header: "Ítems", sortable: true, align: "right", render: (r: any) => <span className="text-text-secondary">{r.itemsCount}</span> },
             ]}
           />
           {data && data.pages > 1 && (

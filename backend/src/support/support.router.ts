@@ -197,6 +197,13 @@ supportRouter.post(
 );
 
 supportRouter.get(
+  '/tickets/export.xlsx',
+  autenticar,
+  exigirArea('tecnicos', 'administracion', 'caja'),
+  manejar((req, res) => support.ticketsXlsx(res, req.query.search as string, req.query.status as string, req.query.type as string, req.query.tec as string, req.query.priority as string, req.query.sede as string, req.query.from as string, req.query.to as string, req.query.all as string, usuarioDe(req))),
+);
+
+supportRouter.get(
   '/tickets/:id',
   autenticar,
   exigirArea('tecnicos', 'administracion', 'caja'),
@@ -304,11 +311,4 @@ supportRouter.post(
   autenticar,
   exigirArea('tecnicos', 'administracion', 'caja'),
   manejar((req) => support.thread(req.params.id, validar(ThreadDto, req.body), usuarioDe(req))),
-);
-
-supportRouter.get(
-  '/tickets/export.xlsx',
-  autenticar,
-  exigirArea('tecnicos', 'administracion', 'caja'),
-  manejar((req, res) => support.ticketsXlsx(res, req.query.search as string, req.query.status as string, req.query.type as string, req.query.tec as string, req.query.priority as string, req.query.sede as string, req.query.from as string, req.query.to as string, req.query.all as string, usuarioDe(req))),
 );

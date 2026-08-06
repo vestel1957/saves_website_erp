@@ -33,6 +33,20 @@ tasksRouter.post(
   manejar((req) => tasks.create(validar(CreateTaskDto, req.body), usuarioDe(req))),
 );
 
+tasksRouter.get(
+  '/assignees',
+  autenticar,
+  exigirArea('administracion', 'gerencia', 'tecnicos', 'caja'),
+  manejar((req) => tasks.assignees()),
+);
+
+tasksRouter.get(
+  '/stats',
+  autenticar,
+  exigirArea('administracion', 'gerencia', 'tecnicos', 'caja'),
+  manejar((req) => tasks.stats(usuarioDe(req))),
+);
+
 tasksRouter.delete(
   '/:id',
   autenticar,
@@ -52,18 +66,4 @@ tasksRouter.patch(
   autenticar,
   exigirArea('administracion', 'gerencia', 'tecnicos', 'caja'),
   manejar((req) => tasks.update(req.params.id, validar(UpdateTaskDto, req.body))),
-);
-
-tasksRouter.get(
-  '/assignees',
-  autenticar,
-  exigirArea('administracion', 'gerencia', 'tecnicos', 'caja'),
-  manejar((req) => tasks.assignees()),
-);
-
-tasksRouter.get(
-  '/stats',
-  autenticar,
-  exigirArea('administracion', 'gerencia', 'tecnicos', 'caja'),
-  manejar((req) => tasks.stats(usuarioDe(req))),
 );

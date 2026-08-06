@@ -32,6 +32,13 @@ returnsRouter.post(
   manejar((req) => returns.create(validar(CreateReturnDto, req.body), usuarioDe(req))),
 );
 
+returnsRouter.get(
+  '/stats',
+  autenticar,
+  exigirArea('administracion'),
+  manejar((req) => returns.stats()),
+);
+
 returnsRouter.delete(
   '/:id',
   autenticar,
@@ -51,11 +58,4 @@ returnsRouter.post(
   autenticar,
   exigirArea('administracion'),
   manejar((req) => returns.pay(req.params.id, validar(PayReturnDto, req.body), usuarioDe(req))),
-);
-
-returnsRouter.get(
-  '/stats',
-  autenticar,
-  exigirArea('administracion'),
-  manejar((req) => returns.stats()),
 );

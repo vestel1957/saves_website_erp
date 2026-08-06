@@ -15,6 +15,7 @@ import compression from 'compression';
 import cors from 'cors';
 import helmet from 'helmet';
 import { manejadorDeErrores, rutaNoEncontrada } from './http/manejador-errores';
+import { verificarRutasOAbortar } from './http/rutas-tapadas';
 
 export interface OpcionesApp {
   /** Routers ya montados, con su prefijo (sin `/api`, que se añade aquí). */
@@ -83,6 +84,12 @@ export function crearApp(opciones: OpcionesApp): Express {
 
   // Bitácora: debe ver `req.body` ya parseado y engancharse antes que los handlers.
   app.use(opciones.auditoria);
+
+  // Antes de montar nada: si una ruta paramétrica deja a otra literal
+  // inalcanzable, morir aquí y con nombres y apellidos. Es el fallo que dejó 22
+  // endpoints devolviendo 404 en silencio tras el port a Express — ver
+  // `rutas-tapadas.ts`.
+  verificarRutasOAbortar(opciones.rutas);
 
   // Todas las rutas cuelgan de /api, como hacía `setGlobalPrefix('api')`.
   for (const { prefijo, router } of opciones.rutas) {

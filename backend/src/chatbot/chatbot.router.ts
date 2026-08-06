@@ -104,6 +104,13 @@ chatbotRouter.get(
   manejar((req) => chatbot.links_()),
 );
 
+chatbotRouter.get(
+  '/chatbot/vinculos/candidatos',
+  autenticar,
+  exigirPermisos(APP_PERMISSIONS.WHATSAPP_MANAGE),
+  manejar((req) => chatbot.candidatos()),
+);
+
 chatbotRouter.delete(
   '/chatbot/vinculos/:userId',
   autenticar,
@@ -116,11 +123,4 @@ chatbotRouter.put(
   autenticar,
   exigirPermisos(APP_PERMISSIONS.WHATSAPP_MANAGE),
   manejar((req) => chatbot.link(req.params.userId, validar(LinkPhoneDto, req.body))),
-);
-
-chatbotRouter.get(
-  '/chatbot/vinculos/candidatos',
-  autenticar,
-  exigirPermisos(APP_PERMISSIONS.WHATSAPP_MANAGE),
-  manejar((req) => chatbot.candidatos()),
 );

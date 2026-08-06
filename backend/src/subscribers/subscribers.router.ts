@@ -51,6 +51,101 @@ subscribersRouter.post(
 );
 
 subscribersRouter.get(
+  '/branches',
+  autenticar,
+  exigirArea('administracion', 'contabilidad', 'tecnicos', 'caja'),
+  manejar((req) => subscribers.branches(usuarioDe(req))),
+);
+
+subscribersRouter.get(
+  '/branches-stats',
+  autenticar,
+  exigirArea('administracion', 'contabilidad', 'tecnicos', 'caja'),
+  manejar((req) => subscribers.branchesStats(usuarioDe(req))),
+);
+
+subscribersRouter.post(
+  '/bulk/cut',
+  autenticar,
+  exigirArea('administracion', 'contabilidad', 'tecnicos', 'caja'),
+  exigirPermisos(APP_PERMISSIONS.NETWORK_CUT),
+  manejar((req) => subscribers.bulkCut(validar(BulkFilterDto, req.body), usuarioDe(req))),
+);
+
+subscribersRouter.post(
+  '/bulk/message',
+  autenticar,
+  exigirArea('administracion', 'contabilidad', 'tecnicos', 'caja'),
+  manejar((req) => subscribers.bulkMessage(validar(BulkMessageDto, req.body), usuarioDe(req))),
+);
+
+subscribersRouter.post(
+  '/bulk/reconnect',
+  autenticar,
+  exigirArea('administracion', 'contabilidad', 'tecnicos', 'caja'),
+  exigirPermisos(APP_PERMISSIONS.NETWORK_RECONNECT),
+  manejar((req) => subscribers.bulkReconnect(validar(BulkFilterDto, req.body), usuarioDe(req))),
+);
+
+subscribersRouter.post(
+  '/bulk/tv-cut',
+  autenticar,
+  exigirArea('administracion', 'contabilidad', 'tecnicos', 'caja'),
+  exigirPermisos(APP_PERMISSIONS.NETWORK_CUT),
+  manejar((req) => subscribers.bulkTvCut(validar(BulkFilterDto, req.body), usuarioDe(req))),
+);
+
+subscribersRouter.post(
+  '/bulk/tv-restore',
+  autenticar,
+  exigirArea('administracion', 'contabilidad', 'tecnicos', 'caja'),
+  exigirPermisos(APP_PERMISSIONS.NETWORK_RECONNECT),
+  manejar((req) => subscribers.bulkTvRestore(validar(BulkFilterDto, req.body), usuarioDe(req))),
+);
+
+subscribersRouter.post(
+  '/check-duplicates',
+  autenticar,
+  exigirArea('administracion', 'contabilidad', 'tecnicos', 'caja'),
+  manejar((req) => subscribers.checkDuplicates(validar(CheckDuplicatesDto, req.body))),
+);
+
+subscribersRouter.get(
+  '/geo/cities',
+  autenticar,
+  exigirArea('administracion', 'contabilidad', 'tecnicos', 'caja'),
+  manejar((req) => subscribers.geoCities(req.query.department as string)),
+);
+
+subscribersRouter.get(
+  '/geo/departments',
+  autenticar,
+  exigirArea('administracion', 'contabilidad', 'tecnicos', 'caja'),
+  manejar((req) => subscribers.geoDepartments()),
+);
+
+subscribersRouter.get(
+  '/geo/localities',
+  autenticar,
+  exigirArea('administracion', 'contabilidad', 'tecnicos', 'caja'),
+  manejar((req) => subscribers.geoLocalities(req.query.city as string)),
+);
+
+subscribersRouter.get(
+  '/geo/neighborhoods',
+  autenticar,
+  exigirArea('administracion', 'contabilidad', 'tecnicos', 'caja'),
+  manejar((req) => subscribers.geoNeighborhoods(req.query.locality as string)),
+);
+
+subscribersRouter.get(
+  '/stats',
+  autenticar,
+  exigirArea('administracion', 'contabilidad', 'tecnicos', 'caja'),
+  manejar((req) => subscribers.stats()),
+);
+
+subscribersRouter.get(
   '/:id',
   autenticar,
   exigirArea('administracion', 'contabilidad', 'tecnicos', 'caja'),
@@ -269,99 +364,4 @@ subscribersRouter.patch(
   autenticar,
   exigirArea('administracion', 'contabilidad', 'tecnicos', 'caja'),
   manejar((req) => subscribers.changeStatus(req.params.id, validar(ChangeStatusDto, req.body), usuarioDe(req))),
-);
-
-subscribersRouter.get(
-  '/branches',
-  autenticar,
-  exigirArea('administracion', 'contabilidad', 'tecnicos', 'caja'),
-  manejar((req) => subscribers.branches(usuarioDe(req))),
-);
-
-subscribersRouter.get(
-  '/branches-stats',
-  autenticar,
-  exigirArea('administracion', 'contabilidad', 'tecnicos', 'caja'),
-  manejar((req) => subscribers.branchesStats(usuarioDe(req))),
-);
-
-subscribersRouter.post(
-  '/bulk/cut',
-  autenticar,
-  exigirArea('administracion', 'contabilidad', 'tecnicos', 'caja'),
-  exigirPermisos(APP_PERMISSIONS.NETWORK_CUT),
-  manejar((req) => subscribers.bulkCut(validar(BulkFilterDto, req.body), usuarioDe(req))),
-);
-
-subscribersRouter.post(
-  '/bulk/message',
-  autenticar,
-  exigirArea('administracion', 'contabilidad', 'tecnicos', 'caja'),
-  manejar((req) => subscribers.bulkMessage(validar(BulkMessageDto, req.body), usuarioDe(req))),
-);
-
-subscribersRouter.post(
-  '/bulk/reconnect',
-  autenticar,
-  exigirArea('administracion', 'contabilidad', 'tecnicos', 'caja'),
-  exigirPermisos(APP_PERMISSIONS.NETWORK_RECONNECT),
-  manejar((req) => subscribers.bulkReconnect(validar(BulkFilterDto, req.body), usuarioDe(req))),
-);
-
-subscribersRouter.post(
-  '/bulk/tv-cut',
-  autenticar,
-  exigirArea('administracion', 'contabilidad', 'tecnicos', 'caja'),
-  exigirPermisos(APP_PERMISSIONS.NETWORK_CUT),
-  manejar((req) => subscribers.bulkTvCut(validar(BulkFilterDto, req.body), usuarioDe(req))),
-);
-
-subscribersRouter.post(
-  '/bulk/tv-restore',
-  autenticar,
-  exigirArea('administracion', 'contabilidad', 'tecnicos', 'caja'),
-  exigirPermisos(APP_PERMISSIONS.NETWORK_RECONNECT),
-  manejar((req) => subscribers.bulkTvRestore(validar(BulkFilterDto, req.body), usuarioDe(req))),
-);
-
-subscribersRouter.post(
-  '/check-duplicates',
-  autenticar,
-  exigirArea('administracion', 'contabilidad', 'tecnicos', 'caja'),
-  manejar((req) => subscribers.checkDuplicates(validar(CheckDuplicatesDto, req.body))),
-);
-
-subscribersRouter.get(
-  '/geo/cities',
-  autenticar,
-  exigirArea('administracion', 'contabilidad', 'tecnicos', 'caja'),
-  manejar((req) => subscribers.geoCities(req.query.department as string)),
-);
-
-subscribersRouter.get(
-  '/geo/departments',
-  autenticar,
-  exigirArea('administracion', 'contabilidad', 'tecnicos', 'caja'),
-  manejar((req) => subscribers.geoDepartments()),
-);
-
-subscribersRouter.get(
-  '/geo/localities',
-  autenticar,
-  exigirArea('administracion', 'contabilidad', 'tecnicos', 'caja'),
-  manejar((req) => subscribers.geoLocalities(req.query.city as string)),
-);
-
-subscribersRouter.get(
-  '/geo/neighborhoods',
-  autenticar,
-  exigirArea('administracion', 'contabilidad', 'tecnicos', 'caja'),
-  manejar((req) => subscribers.geoNeighborhoods(req.query.locality as string)),
-);
-
-subscribersRouter.get(
-  '/stats',
-  autenticar,
-  exigirArea('administracion', 'contabilidad', 'tecnicos', 'caja'),
-  manejar((req) => subscribers.stats()),
 );

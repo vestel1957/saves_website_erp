@@ -41,6 +41,13 @@ accountingRouter.post(
   manejar((req) => accounting.createAccount(validar(CreateAccountDto, req.body))),
 );
 
+accountingRouter.get(
+  '/accounts/tree',
+  autenticar,
+  exigirArea('administracion', 'contabilidad', 'gerencia'),
+  manejar((req) => accounting.tree(req.query.all as string)),
+);
+
 accountingRouter.delete(
   '/accounts/:id',
   autenticar,
@@ -53,13 +60,6 @@ accountingRouter.patch(
   autenticar,
   exigirArea('administracion', 'contabilidad'),
   manejar((req) => accounting.updateAccount(req.params.id, validar(UpdateAccountDto, req.body))),
-);
-
-accountingRouter.get(
-  '/accounts/tree',
-  autenticar,
-  exigirArea('administracion', 'contabilidad', 'gerencia'),
-  manejar((req) => accounting.tree(req.query.all as string)),
 );
 
 accountingRouter.get(

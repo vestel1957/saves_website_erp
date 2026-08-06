@@ -26,6 +26,14 @@ paymentImportsRouter.get(
   manejar((req) => paymentImports.list()),
 );
 
+paymentImportsRouter.post(
+  '/upload',
+  autenticar,
+  exigirArea('administracion'),
+  subirUno('file', { limits: { fileSize: 20 * 1024 * 1024 } }),
+  manejar((req) => paymentImports.upload(ficheroDe(req), req.body?.date, usuarioDe(req))),
+);
+
 paymentImportsRouter.delete(
   '/:id',
   autenticar,
@@ -45,12 +53,4 @@ paymentImportsRouter.post(
   autenticar,
   exigirArea('administracion'),
   manejar((req) => paymentImports.process(req.params.id, usuarioDe(req))),
-);
-
-paymentImportsRouter.post(
-  '/upload',
-  autenticar,
-  exigirArea('administracion'),
-  subirUno('file', { limits: { fileSize: 20 * 1024 * 1024 } }),
-  manejar((req) => paymentImports.upload(ficheroDe(req), req.body?.date, usuarioDe(req))),
 );

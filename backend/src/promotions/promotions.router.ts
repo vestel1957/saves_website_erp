@@ -39,27 +39,6 @@ promotionsRouter.post(
   manejar((req) => promotions.create(validar(CreatePromotionDto, req.body), usuarioDe(req))),
 );
 
-promotionsRouter.delete(
-  '/:id',
-  autenticar,
-  exigirPermisos(APP_PERMISSIONS.SYSTEM_ADMIN),
-  manejar((req) => promotions.remove(req.params.id)),
-);
-
-promotionsRouter.put(
-  '/:id',
-  autenticar,
-  exigirPermisos(APP_PERMISSIONS.SYSTEM_ADMIN),
-  manejar((req) => promotions.update(req.params.id, validar(UpdatePromotionDto, req.body), usuarioDe(req))),
-);
-
-promotionsRouter.get(
-  '/:id/applications',
-  autenticar,
-  exigirPermisos(APP_PERMISSIONS.SYSTEM_ADMIN),
-  manejar((req) => promotions.applications(req.params.id)),
-);
-
 promotionsRouter.post(
   '/audience',
   autenticar,
@@ -93,4 +72,25 @@ promotionsRouter.delete(
   autenticar,
   exigirPermisos(APP_PERMISSIONS.SYSTEM_ADMIN),
   manejar((req) => promotions.removeTemplate(req.params.id)),
+);
+
+promotionsRouter.delete(
+  '/:id',
+  autenticar,
+  exigirPermisos(APP_PERMISSIONS.SYSTEM_ADMIN),
+  manejar((req) => promotions.remove(req.params.id)),
+);
+
+promotionsRouter.put(
+  '/:id',
+  autenticar,
+  exigirPermisos(APP_PERMISSIONS.SYSTEM_ADMIN),
+  manejar((req) => promotions.update(req.params.id, validar(UpdatePromotionDto, req.body), usuarioDe(req))),
+);
+
+promotionsRouter.get(
+  '/:id/applications',
+  autenticar,
+  exigirPermisos(APP_PERMISSIONS.SYSTEM_ADMIN),
+  manejar((req) => promotions.applications(req.params.id)),
 );

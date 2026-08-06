@@ -26,16 +26,16 @@ responsibilitiesRouter.get(
   manejar((req) => responsibilities.list()),
 );
 
-responsibilitiesRouter.put(
-  '/:post',
-  autenticar,
-  exigirArea('sistemas', 'gerencia'),
-  manejar((req) => responsibilities.set(req.params.post, validar(SetHoldersDto, req.body), usuarioDe(req))),
-);
-
 responsibilitiesRouter.get(
   '/assignable',
   autenticar,
   exigirArea('sistemas', 'gerencia'),
   manejar((req) => responsibilities.assignable()),
+);
+
+responsibilitiesRouter.put(
+  '/:post',
+  autenticar,
+  exigirArea('sistemas', 'gerencia'),
+  manejar((req) => responsibilities.set(req.params.post, validar(SetHoldersDto, req.body), usuarioDe(req))),
 );

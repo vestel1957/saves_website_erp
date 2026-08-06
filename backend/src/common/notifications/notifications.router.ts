@@ -24,12 +24,6 @@ notificationsRouter.get(
 );
 
 notificationsRouter.post(
-  '/:id/read',
-  autenticar,
-  manejar((req) => notifications.read(usuarioDe(req), req.params.id)),
-);
-
-notificationsRouter.post(
   '/read-all',
   autenticar,
   manejar((req) => notifications.readAll(usuarioDe(req))),
@@ -39,4 +33,10 @@ notificationsRouter.post(
   '/read-group',
   autenticar,
   manejar((req) => notifications.readGroup(usuarioDe(req), req.body)),
+);
+
+notificationsRouter.post(
+  '/:id/read',
+  autenticar,
+  manejar((req) => notifications.read(usuarioDe(req), req.params.id)),
 );

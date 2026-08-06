@@ -75,6 +75,42 @@ function codigoPorDefecto(req: Request): number {
  */
 export function crearRouter(...comunes: Middleware[]): Router {
   const router = Router();
+  anotarRegistros(router);
   if (comunes.length) router.use(...(comunes as RequestHandler[]));
   return router;
+}
+
+/**
+ * Qué rutas declaró cada router, en el ORDEN en que las registró.
+ *
+ * Express guarda las suyas en `router.stack`, pero como expresiones regulares ya
+ * compiladas: recuperar de ahí que el patrón era `/:id` es adivinar. Se anotan al
+ * vuelo, que es exacto y no depende de internals del framework.
+ *
+ * Lo consume `rutas-tapadas.ts` para abortar el arranque si una ruta paramétrica
+ * deja a otra literal inalcanzable.
+ */
+const REGISTROS = new WeakMap<Router, Array<{ metodo: string; ruta: string }>>();
+
+const VERBOS = ['get', 'post', 'put', 'patch', 'delete', 'all'] as const;
+
+function anotarRegistros(router: Router): void {
+  const registradas: Array<{ metodo: string; ruta: string }> = [];
+  REGISTROS.set(router, registradas);
+
+  for (const verbo of VERBOS) {
+    const original = router[verbo].bind(router) as (...args: unknown[]) => Router;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (router as any)[verbo] = (ruta: unknown, ...resto: unknown[]) => {
+      // Sólo interesan las rutas declaradas como cadena; nadie usa aquí las
+      // formas con array ni con expresión regular.
+      if (typeof ruta === 'string') registradas.push({ metodo: verbo, ruta });
+      return original(ruta, ...resto);
+    };
+  }
+}
+
+/** Rutas que un router registró, en orden. Vacío si no salió de `crearRouter`. */
+export function rutasDe(router: Router): Array<{ metodo: string; ruta: string }> {
+  return REGISTROS.get(router) ?? [];
 }

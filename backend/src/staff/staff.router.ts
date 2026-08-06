@@ -44,6 +44,27 @@ staffRouter.post(
 );
 
 staffRouter.get(
+  '/areas',
+  autenticar,
+  exigirArea('administracion', 'gerencia'),
+  manejar((req) => staff.areas()),
+);
+
+staffRouter.get(
+  '/role-catalog',
+  autenticar,
+  exigirArea('administracion', 'gerencia'),
+  manejar((req) => staff.roleCatalog()),
+);
+
+staffRouter.get(
+  '/stats',
+  autenticar,
+  exigirArea('administracion', 'gerencia'),
+  manejar((req) => staff.stats()),
+);
+
+staffRouter.get(
   '/:id',
   autenticar,
   exigirArea('administracion', 'gerencia'),
@@ -189,25 +210,4 @@ staffRouter.patch(
   exigirArea('administracion', 'gerencia'),
   exigirPermisos(APP_PERMISSIONS.SYSTEM_ADMIN),
   manejar((req) => staff.setRoles(req.params.id, validar(SetStaffRolesDto, req.body), usuarioDe(req))),
-);
-
-staffRouter.get(
-  '/areas',
-  autenticar,
-  exigirArea('administracion', 'gerencia'),
-  manejar((req) => staff.areas()),
-);
-
-staffRouter.get(
-  '/role-catalog',
-  autenticar,
-  exigirArea('administracion', 'gerencia'),
-  manejar((req) => staff.roleCatalog()),
-);
-
-staffRouter.get(
-  '/stats',
-  autenticar,
-  exigirArea('administracion', 'gerencia'),
-  manejar((req) => staff.stats()),
 );

@@ -52,18 +52,18 @@ extrasRouter.post(
   manejar((req) => extras.uploadDocument(ficheroDe(req), req.body)),
 );
 
-extrasRouter.get(
-  '/documents/:id/download',
-  autenticar,
-  exigirArea('sistemas', 'administracion'),
-  manejar((req, res) => extras.download(req.params.id, res)),
-);
-
 extrasRouter.post(
   '/documents/folder',
   autenticar,
   exigirArea('sistemas', 'administracion'),
   manejar((req) => extras.createFolder(req.body)),
+);
+
+extrasRouter.get(
+  '/documents/:id/download',
+  autenticar,
+  exigirArea('sistemas', 'administracion'),
+  manejar((req, res) => extras.download(req.params.id, res)),
 );
 
 extrasRouter.get(

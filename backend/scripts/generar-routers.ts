@@ -171,6 +171,36 @@ function rutaRelativa(rutaCompleta: string, base: string): string {
   return `/${limpia}`;
 }
 
+/**
+ * Orden en que se registran las rutas dentro de un router.
+ *
+ * Express prueba las rutas EN EL ORDEN EN QUE SE REGISTRAN y se queda con la
+ * primera que encaja: `/:id` acepta cualquier segmento, así que si se registra
+ * antes que `/stats`, la petición a `/stats` acaba en el manejador del detalle
+ * con `id = 'stats'`. Compila, arranca y devuelve 404 "no encontrado" en
+ * producción — que es justo lo que pasó con `/tasks/assignees` y otros 21
+ * endpoints: el orden aquí era `localeCompare` a secas y ':' (0x3A) va antes
+ * que cualquier letra, así que TODOS los literales quedaban tapados.
+ *
+ * Nest no tenía el problema porque respetaba el orden de los decoradores en el
+ * controlador, donde los literales ya estaban escritos arriba.
+ *
+ * Se ordena por especificidad, segmento a segmento: lo literal antes que lo
+ * paramétrico, y entre iguales alfabético para que el fichero generado sea
+ * estable entre corridas.
+ */
+function porEspecificidad(a: { ruta: string }, b: { ruta: string }): number {
+  const sa = a.ruta.split('/');
+  const sb = b.ruta.split('/');
+  for (let i = 0; i < Math.min(sa.length, sb.length); i++) {
+    const paramA = sa[i].startsWith(':');
+    const paramB = sb[i].startsWith(':');
+    if (paramA !== paramB) return paramA ? 1 : -1; // el literal, primero
+    if (sa[i] !== sb[i]) return sa[i].localeCompare(sb[i]);
+  }
+  return sa.length - sb.length;
+}
+
 // ---------------------------------------------------------------------------
 // Imports del controlador que hay que arrastrar al router
 // ---------------------------------------------------------------------------
@@ -336,7 +366,7 @@ for (const [controlador, lista] of porControlador) {
   };
 
   const lineas: string[] = [];
-  for (const e of lista.sort((a, b) => a.ruta.localeCompare(b.ruta))) {
+  for (const e of lista.sort(porEspecificidad)) {
     const mws = middlewaresDe(e);
     const args = e.parametros.map((p) => expresionDe(p, avisos, `${e.metodo} ${e.ruta}`));
 

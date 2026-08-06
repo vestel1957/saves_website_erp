@@ -32,27 +32,6 @@ projectsRouter.post(
   manejar((req) => projects.create(validar(CreateProjectDto, req.body))),
 );
 
-projectsRouter.get(
-  '/:id',
-  autenticar,
-  exigirArea('administracion', 'gerencia'),
-  manejar((req) => projects.detail(req.params.id)),
-);
-
-projectsRouter.patch(
-  '/:id',
-  autenticar,
-  exigirArea('administracion', 'gerencia'),
-  manejar((req) => projects.update(req.params.id, validar(UpdateProjectDto, req.body))),
-);
-
-projectsRouter.post(
-  '/:id/milestones',
-  autenticar,
-  exigirArea('administracion', 'gerencia'),
-  manejar((req) => projects.addMilestone(req.params.id, validar(MilestoneDto, req.body))),
-);
-
 projectsRouter.delete(
   '/milestones/:mid',
   autenticar,
@@ -72,4 +51,25 @@ projectsRouter.get(
   autenticar,
   exigirArea('administracion', 'gerencia'),
   manejar((req) => projects.stats()),
+);
+
+projectsRouter.get(
+  '/:id',
+  autenticar,
+  exigirArea('administracion', 'gerencia'),
+  manejar((req) => projects.detail(req.params.id)),
+);
+
+projectsRouter.patch(
+  '/:id',
+  autenticar,
+  exigirArea('administracion', 'gerencia'),
+  manejar((req) => projects.update(req.params.id, validar(UpdateProjectDto, req.body))),
+);
+
+projectsRouter.post(
+  '/:id/milestones',
+  autenticar,
+  exigirArea('administracion', 'gerencia'),
+  manejar((req) => projects.addMilestone(req.params.id, validar(MilestoneDto, req.body))),
 );

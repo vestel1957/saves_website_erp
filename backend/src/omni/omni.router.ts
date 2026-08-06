@@ -32,20 +32,6 @@ omniRouter.post(
   manejar((req) => omni.createEvent(validar(EventDto, req.body), usuarioDe(req))),
 );
 
-omniRouter.delete(
-  '/events/:id',
-  autenticar,
-  exigirArea('contabilidad', 'administracion', 'caja'),
-  manejar((req) => omni.deleteEvent(req.params.id)),
-);
-
-omniRouter.patch(
-  '/events/:id',
-  autenticar,
-  exigirArea('contabilidad', 'administracion', 'caja'),
-  manejar((req) => omni.updateEvent(req.params.id, validar(UpdateEventDto, req.body))),
-);
-
 omniRouter.get(
   '/events/filters',
   autenticar,
@@ -58,6 +44,20 @@ omniRouter.get(
   autenticar,
   exigirArea('contabilidad', 'administracion', 'caja'),
   manejar((req) => omni.eventsStats(req.query.search as string, req.query.from as string, req.query.to as string, req.query.priority as string, req.query.assignedBy as string)),
+);
+
+omniRouter.delete(
+  '/events/:id',
+  autenticar,
+  exigirArea('contabilidad', 'administracion', 'caja'),
+  manejar((req) => omni.deleteEvent(req.params.id)),
+);
+
+omniRouter.patch(
+  '/events/:id',
+  autenticar,
+  exigirArea('contabilidad', 'administracion', 'caja'),
+  manejar((req) => omni.updateEvent(req.params.id, validar(UpdateEventDto, req.body))),
 );
 
 omniRouter.get(

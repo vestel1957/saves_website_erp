@@ -54,6 +54,13 @@ billingRouter.post(
   manejar((req) => billing.create(validar(CreateInvoiceDto, req.body), usuarioDe(req))),
 );
 
+billingRouter.post(
+  '/invoices/generate',
+  autenticar,
+  exigirArea('contabilidad'),
+  manejar((req) => billing.generate(validar(GenerateInvoicesDto, req.body), usuarioDe(req))),
+);
+
 billingRouter.get(
   '/invoices/:id',
   autenticar,
@@ -103,13 +110,6 @@ billingRouter.post(
   manejar((req) => billing.sendWhatsapp(req.params.id)),
 );
 
-billingRouter.post(
-  '/invoices/generate',
-  autenticar,
-  exigirArea('contabilidad'),
-  manejar((req) => billing.generate(validar(GenerateInvoicesDto, req.body), usuarioDe(req))),
-);
-
 billingRouter.get(
   '/notes',
   autenticar,
@@ -129,6 +129,13 @@ billingRouter.post(
   autenticar,
   exigirArea('contabilidad'),
   manejar((req) => billing.recCreate(validar(CreateRecurringDto, req.body), usuarioDe(req))),
+);
+
+billingRouter.get(
+  '/recurring/stats',
+  autenticar,
+  exigirArea('contabilidad', 'caja'),
+  manejar((req) => billing.recStats()),
 );
 
 billingRouter.delete(
@@ -157,13 +164,6 @@ billingRouter.post(
   autenticar,
   exigirArea('contabilidad'),
   manejar((req) => billing.recToggle(req.params.id, req.body)),
-);
-
-billingRouter.get(
-  '/recurring/stats',
-  autenticar,
-  exigirArea('contabilidad', 'caja'),
-  manejar((req) => billing.recStats()),
 );
 
 billingRouter.get(

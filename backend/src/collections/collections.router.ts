@@ -27,13 +27,6 @@ collectionsRouter.post(
   manejar((req) => collections.create(validar(CreateCallDto, req.body), usuarioDe(req))),
 );
 
-collectionsRouter.delete(
-  '/:id',
-  autenticar,
-  exigirArea('administracion', 'caja'),
-  manejar((req) => collections.remove(req.params.id)),
-);
-
 collectionsRouter.get(
   '/agreements',
   autenticar,
@@ -60,4 +53,11 @@ collectionsRouter.get(
   autenticar,
   exigirArea('administracion', 'caja'),
   manejar((req) => collections.bySubscriber(req.params.subscriberId)),
+);
+
+collectionsRouter.delete(
+  '/:id',
+  autenticar,
+  exigirArea('administracion', 'caja'),
+  manejar((req) => collections.remove(req.params.id)),
 );

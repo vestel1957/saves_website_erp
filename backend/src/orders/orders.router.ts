@@ -43,6 +43,90 @@ ordersRouter.post(
   manejar((req) => orders.create(validar(CreateOrderDto, req.body), usuarioDe(req))),
 );
 
+ordersRouter.get(
+  '/branches',
+  autenticar,
+  exigirArea('administracion'),
+  manejar((req) => orders.branches()),
+);
+
+ordersRouter.get(
+  '/categories',
+  autenticar,
+  exigirArea('administracion'),
+  manejar((req) => orders.categories()),
+);
+
+ordersRouter.post(
+  '/categories',
+  autenticar,
+  exigirArea('administracion'),
+  manejar((req) => orders.createCategory(validar(CategoryNameDto, req.body))),
+);
+
+ordersRouter.delete(
+  '/categories/:id',
+  autenticar,
+  exigirArea('administracion'),
+  manejar((req) => orders.deleteCategory(req.params.id)),
+);
+
+ordersRouter.patch(
+  '/categories/:id',
+  autenticar,
+  exigirArea('administracion'),
+  manejar((req) => orders.updateCategory(req.params.id, validar(CategoryNameDto, req.body))),
+);
+
+ordersRouter.get(
+  '/export.xlsx',
+  autenticar,
+  exigirArea('administracion'),
+  manejar((req, res) => orders.exportXlsx(res, req.query.kind as string, req.query.status as string, req.query.search as string, req.query.category as string, req.query.branch as string, req.query.supplier as string, req.query.from as string, req.query.to as string)),
+);
+
+ordersRouter.get(
+  '/stats',
+  autenticar,
+  exigirArea('administracion'),
+  manejar((req) => orders.stats()),
+);
+
+ordersRouter.get(
+  '/suppliers',
+  autenticar,
+  exigirArea('administracion'),
+  manejar((req) => orders.suppliers(req.query.category as string, req.query.search as string, req.query.page as string, req.query.pageSize as string, req.query.sortBy as string, req.query.sortDir as string)),
+);
+
+ordersRouter.post(
+  '/suppliers',
+  autenticar,
+  exigirArea('administracion'),
+  manejar((req) => orders.createSupplier(validar(CreateSupplierDto, req.body))),
+);
+
+ordersRouter.delete(
+  '/suppliers/:id',
+  autenticar,
+  exigirArea('administracion'),
+  manejar((req) => orders.deleteSupplier(req.params.id)),
+);
+
+ordersRouter.patch(
+  '/suppliers/:id',
+  autenticar,
+  exigirArea('administracion'),
+  manejar((req) => orders.updateSupplier(req.params.id, validar(CreateSupplierDto, req.body))),
+);
+
+ordersRouter.get(
+  '/suppliers/:id/statement',
+  autenticar,
+  exigirArea('administracion'),
+  manejar((req) => orders.supplierStatement(req.params.id)),
+);
+
 ordersRouter.delete(
   '/:id',
   autenticar,
@@ -163,88 +247,4 @@ ordersRouter.post(
   autenticar,
   exigirArea('administracion'),
   manejar((req) => orders.receive(req.params.id, validar(ReceiveOrderDto, req.body), usuarioDe(req))),
-);
-
-ordersRouter.get(
-  '/branches',
-  autenticar,
-  exigirArea('administracion'),
-  manejar((req) => orders.branches()),
-);
-
-ordersRouter.get(
-  '/categories',
-  autenticar,
-  exigirArea('administracion'),
-  manejar((req) => orders.categories()),
-);
-
-ordersRouter.post(
-  '/categories',
-  autenticar,
-  exigirArea('administracion'),
-  manejar((req) => orders.createCategory(validar(CategoryNameDto, req.body))),
-);
-
-ordersRouter.delete(
-  '/categories/:id',
-  autenticar,
-  exigirArea('administracion'),
-  manejar((req) => orders.deleteCategory(req.params.id)),
-);
-
-ordersRouter.patch(
-  '/categories/:id',
-  autenticar,
-  exigirArea('administracion'),
-  manejar((req) => orders.updateCategory(req.params.id, validar(CategoryNameDto, req.body))),
-);
-
-ordersRouter.get(
-  '/export.xlsx',
-  autenticar,
-  exigirArea('administracion'),
-  manejar((req, res) => orders.exportXlsx(res, req.query.kind as string, req.query.status as string, req.query.search as string, req.query.category as string, req.query.branch as string, req.query.supplier as string, req.query.from as string, req.query.to as string)),
-);
-
-ordersRouter.get(
-  '/stats',
-  autenticar,
-  exigirArea('administracion'),
-  manejar((req) => orders.stats()),
-);
-
-ordersRouter.get(
-  '/suppliers',
-  autenticar,
-  exigirArea('administracion'),
-  manejar((req) => orders.suppliers(req.query.category as string, req.query.search as string, req.query.page as string, req.query.pageSize as string, req.query.sortBy as string, req.query.sortDir as string)),
-);
-
-ordersRouter.post(
-  '/suppliers',
-  autenticar,
-  exigirArea('administracion'),
-  manejar((req) => orders.createSupplier(validar(CreateSupplierDto, req.body))),
-);
-
-ordersRouter.delete(
-  '/suppliers/:id',
-  autenticar,
-  exigirArea('administracion'),
-  manejar((req) => orders.deleteSupplier(req.params.id)),
-);
-
-ordersRouter.patch(
-  '/suppliers/:id',
-  autenticar,
-  exigirArea('administracion'),
-  manejar((req) => orders.updateSupplier(req.params.id, validar(CreateSupplierDto, req.body))),
-);
-
-ordersRouter.get(
-  '/suppliers/:id/statement',
-  autenticar,
-  exigirArea('administracion'),
-  manejar((req) => orders.supplierStatement(req.params.id)),
 );

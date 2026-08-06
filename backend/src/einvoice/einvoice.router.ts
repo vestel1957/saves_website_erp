@@ -29,20 +29,6 @@ einvoiceRouter.get(
 );
 
 einvoiceRouter.get(
-  '/:id',
-  autenticar,
-  exigirArea('contabilidad'),
-  manejar((req) => einvoice.detail(req.params.id)),
-);
-
-einvoiceRouter.post(
-  '/:id/retry',
-  autenticar,
-  exigirArea('contabilidad'),
-  manejar((req) => einvoice.retry(req.params.id, usuarioDe(req))),
-);
-
-einvoiceRouter.get(
   '/accounts',
   autenticar,
   exigirArea('contabilidad'),
@@ -92,17 +78,17 @@ einvoiceRouter.post(
 );
 
 einvoiceRouter.post(
-  '/emit-branch/:branchId',
-  autenticar,
-  exigirArea('contabilidad'),
-  manejar((req) => einvoice.emitBranch(req.params.branchId, usuarioDe(req))),
-);
-
-einvoiceRouter.post(
   '/emit/:invoiceId',
   autenticar,
   exigirArea('contabilidad'),
   manejar((req) => einvoice.emitInvoice(req.params.invoiceId, usuarioDe(req))),
+);
+
+einvoiceRouter.post(
+  '/emit-branch/:branchId',
+  autenticar,
+  exigirArea('contabilidad'),
+  manejar((req) => einvoice.emitBranch(req.params.branchId, usuarioDe(req))),
 );
 
 einvoiceRouter.get(
@@ -124,4 +110,18 @@ einvoiceRouter.patch(
   autenticar,
   exigirArea('contabilidad'),
   manejar((req) => einvoice.setEflags(req.params.id, validar(SetEflagsDto, req.body))),
+);
+
+einvoiceRouter.get(
+  '/:id',
+  autenticar,
+  exigirArea('contabilidad'),
+  manejar((req) => einvoice.detail(req.params.id)),
+);
+
+einvoiceRouter.post(
+  '/:id/retry',
+  autenticar,
+  exigirArea('contabilidad'),
+  manejar((req) => einvoice.retry(req.params.id, usuarioDe(req))),
 );

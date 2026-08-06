@@ -133,6 +133,12 @@ authRouter.post(
   manejar((req) => auth.createUser(validar(CreateUserDto, req.body))),
 );
 
+authRouter.get(
+  '/users/options',
+  autenticar,
+  manejar((req) => auth.userOptions()),
+);
+
 authRouter.patch(
   '/users/:id',
   autenticar,
@@ -187,10 +193,4 @@ authRouter.patch(
   autenticar,
   exigirPermisos(APP_PERMISSIONS.USERS_MANAGE),
   manejar((req) => auth.setScreens(req.params.id, validar(SetScreensDto, req.body))),
-);
-
-authRouter.get(
-  '/users/options',
-  autenticar,
-  manejar((req) => auth.userOptions()),
 );

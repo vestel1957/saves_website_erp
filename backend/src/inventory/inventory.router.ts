@@ -137,6 +137,18 @@ inventoryRouter.post(
   manejar((req) => inventory.createMaterial(validar(CreateMaterialDto, req.body), usuarioDe(req))),
 );
 
+inventoryRouter.post(
+  '/materials/import',
+  autenticar,
+  exigirArea('administracion', 'tecnicos'),
+  subirUno('file', {
+    storage: memoryStorage(),
+    limits: { fileSize: 10 * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => cb(null, /spreadsheet|excel|\.xlsx$/.test(file.mimetype) || file.originalname.toLowerCase().endsWith('.xlsx')),
+  }),
+  manejar((req) => inventory.importMaterials(ficheroDe(req))),
+);
+
 inventoryRouter.delete(
   '/materials/:id',
   autenticar,
@@ -156,18 +168,6 @@ inventoryRouter.patch(
   autenticar,
   exigirArea('administracion', 'tecnicos'),
   manejar((req) => inventory.updateMaterial(req.params.id, validar(UpdateMaterialDto, req.body), usuarioDe(req))),
-);
-
-inventoryRouter.post(
-  '/materials/import',
-  autenticar,
-  exigirArea('administracion', 'tecnicos'),
-  subirUno('file', {
-    storage: memoryStorage(),
-    limits: { fileSize: 10 * 1024 * 1024 },
-    fileFilter: (_req, file, cb) => cb(null, /spreadsheet|excel|\.xlsx$/.test(file.mimetype) || file.originalname.toLowerCase().endsWith('.xlsx')),
-  }),
-  manejar((req) => inventory.importMaterials(ficheroDe(req))),
 );
 
 inventoryRouter.get(

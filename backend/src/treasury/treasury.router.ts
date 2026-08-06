@@ -98,6 +98,13 @@ treasuryRouter.get(
 );
 
 treasuryRouter.get(
+  '/cash-closes/summary',
+  autenticar,
+  exigirArea('contabilidad', 'administracion', 'caja'),
+  manejar((req) => treasury.cashClosesSummary(req.query.group as string, req.query.from as string, req.query.to as string, req.query.all as string, req.query.cashAccountId as string, usuarioDe(req))),
+);
+
+treasuryRouter.get(
   '/cash-closes/:id',
   autenticar,
   exigirArea('contabilidad', 'administracion', 'caja'),
@@ -109,13 +116,6 @@ treasuryRouter.get(
   autenticar,
   exigirArea('contabilidad', 'administracion', 'caja'),
   manejar((req, res) => treasury.cashClosePdf(req.params.id, res, usuarioDe(req))),
-);
-
-treasuryRouter.get(
-  '/cash-closes/summary',
-  autenticar,
-  exigirArea('contabilidad', 'administracion', 'caja'),
-  manejar((req) => treasury.cashClosesSummary(req.query.group as string, req.query.from as string, req.query.to as string, req.query.all as string, req.query.cashAccountId as string, usuarioDe(req))),
 );
 
 treasuryRouter.get(

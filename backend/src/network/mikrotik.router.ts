@@ -21,6 +21,64 @@ const mikrotik = new MikrotikController(mikrotikAdminService);
 
 export const mikrotikRouter = crearRouter();
 mikrotikRouter.get(
+  '/mikrotik/branches',
+  autenticar,
+  exigirArea('tecnicos', 'administracion'),
+  moduloRed,
+  manejar((req) => mikrotik.branches()),
+);
+
+mikrotikRouter.get(
+  '/mikrotik/mode',
+  autenticar,
+  exigirArea('tecnicos', 'administracion'),
+  moduloRed,
+  manejar((req) => mikrotik.mode()),
+);
+
+mikrotikRouter.get(
+  '/mikrotik/routers',
+  autenticar,
+  exigirArea('tecnicos', 'administracion'),
+  moduloRed,
+  manejar((req) => mikrotik.routers()),
+);
+
+mikrotikRouter.post(
+  '/mikrotik/routers',
+  autenticar,
+  exigirArea('tecnicos', 'administracion'),
+  exigirPermisos(APP_PERMISSIONS.NETWORK_ROUTERS_MANAGE),
+  moduloRed,
+  manejar((req) => mikrotik.create(validar(RouterUpsertDto, req.body), usuarioDe(req))),
+);
+
+mikrotikRouter.delete(
+  '/mikrotik/routers/:id',
+  autenticar,
+  exigirArea('tecnicos', 'administracion'),
+  moduloRed,
+  manejar((req) => mikrotik.remove(req.params.id, usuarioDe(req))),
+);
+
+mikrotikRouter.patch(
+  '/mikrotik/routers/:id',
+  autenticar,
+  exigirArea('tecnicos', 'administracion'),
+  exigirPermisos(APP_PERMISSIONS.NETWORK_ROUTERS_MANAGE),
+  moduloRed,
+  manejar((req) => mikrotik.update(req.params.id, validar(RouterUpsertDto, req.body), usuarioDe(req))),
+);
+
+mikrotikRouter.post(
+  '/mikrotik/routers/:id/default',
+  autenticar,
+  exigirArea('tecnicos', 'administracion'),
+  moduloRed,
+  manejar((req) => mikrotik.setDefault(req.params.id, usuarioDe(req))),
+);
+
+mikrotikRouter.get(
   '/mikrotik/:id/active',
   autenticar,
   exigirArea('tecnicos', 'administracion'),
@@ -100,62 +158,4 @@ mikrotikRouter.post(
   exigirArea('tecnicos', 'administracion'),
   moduloRed,
   manejar((req) => mikrotik.test(req.params.id, usuarioDe(req))),
-);
-
-mikrotikRouter.get(
-  '/mikrotik/branches',
-  autenticar,
-  exigirArea('tecnicos', 'administracion'),
-  moduloRed,
-  manejar((req) => mikrotik.branches()),
-);
-
-mikrotikRouter.get(
-  '/mikrotik/mode',
-  autenticar,
-  exigirArea('tecnicos', 'administracion'),
-  moduloRed,
-  manejar((req) => mikrotik.mode()),
-);
-
-mikrotikRouter.get(
-  '/mikrotik/routers',
-  autenticar,
-  exigirArea('tecnicos', 'administracion'),
-  moduloRed,
-  manejar((req) => mikrotik.routers()),
-);
-
-mikrotikRouter.post(
-  '/mikrotik/routers',
-  autenticar,
-  exigirArea('tecnicos', 'administracion'),
-  exigirPermisos(APP_PERMISSIONS.NETWORK_ROUTERS_MANAGE),
-  moduloRed,
-  manejar((req) => mikrotik.create(validar(RouterUpsertDto, req.body), usuarioDe(req))),
-);
-
-mikrotikRouter.delete(
-  '/mikrotik/routers/:id',
-  autenticar,
-  exigirArea('tecnicos', 'administracion'),
-  moduloRed,
-  manejar((req) => mikrotik.remove(req.params.id, usuarioDe(req))),
-);
-
-mikrotikRouter.patch(
-  '/mikrotik/routers/:id',
-  autenticar,
-  exigirArea('tecnicos', 'administracion'),
-  exigirPermisos(APP_PERMISSIONS.NETWORK_ROUTERS_MANAGE),
-  moduloRed,
-  manejar((req) => mikrotik.update(req.params.id, validar(RouterUpsertDto, req.body), usuarioDe(req))),
-);
-
-mikrotikRouter.post(
-  '/mikrotik/routers/:id/default',
-  autenticar,
-  exigirArea('tecnicos', 'administracion'),
-  moduloRed,
-  manejar((req) => mikrotik.setDefault(req.params.id, usuarioDe(req))),
 );

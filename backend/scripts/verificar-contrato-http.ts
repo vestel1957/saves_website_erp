@@ -17,6 +17,24 @@
  * Un 404 significa que la ruta no está montada. Un 200 en una ruta protegida
  * significa que se cayó el guard: eso es una brecha, y se reporta como tal.
  *
+ * ─── POR QUÉ HACE FALTA UN TOKEN (y por qué sin él esto dio un VERDE FALSO) ───
+ *
+ * Sin credenciales, `autenticar` responde 401 ANTES de que Express resuelva qué
+ * handler atiende la ruta. O sea que el 401 sólo prueba que hay ALGO montado en ese
+ * camino, no que sea lo correcto.
+ *
+ * Ese matiz costó caro: tras el port a Express, el generador ordenaba las rutas
+ * alfabéticamente y ':' (0x3A) va antes que cualquier letra, así que `/:id` quedó por
+ * delante de todos los literales y se comió 22 endpoints (`/orders/stats`,
+ * `/staff/areas`, `/tasks/assignees`…). Esta verificación los dio por buenos —los tres
+ * devolvían 401, como cualquier ruta sana— y el fallo llegó a producción.
+ *
+ * Con token la distinción es nítida: en una ruta LITERAL, un 404 ya no puede
+ * explicarse por falta de credenciales; significa que la petición acabó en el handler
+ * equivocado (típicamente el del detalle, buscando un id que se llama "stats").
+ *
+ *   TOKEN=<jwt> npx ts-node --transpile-only scripts/verificar-contrato-http.ts
+ *
  * Uso:
  *   npx ts-node --transpile-only scripts/verificar-contrato-http.ts
  *   BASE_URL=http://127.0.0.1:3061 npx ts-node --transpile-only scripts/verificar-contrato-http.ts
@@ -33,6 +51,13 @@ import type { Endpoint } from './extraer-contrato-http';
 const BASE = process.env.BASE_URL ?? 'http://127.0.0.1:3061';
 const CONTRATO = path.join(__dirname, '..', 'contrato-http.json');
 const INCLUIR_ESCRITURAS = process.argv.includes('--incluir-escrituras');
+/** JWT de un superusuario. Sin él la comprobación es ciega a las rutas tapadas. */
+const TOKEN = process.env.TOKEN ?? '';
+
+/** ¿La ruta es literal (sin parámetros)? En esas, un 404 es un fallo real. */
+function esLiteral(ruta: string): boolean {
+  return !ruta.includes(':');
+}
 
 /** Rellena :id, :phone… con un valor inofensivo que no existirá en la BD. */
 function rutaConcreta(ruta: string): string {
@@ -56,7 +81,12 @@ async function main() {
   const endpoints: Endpoint[] = JSON.parse(fs.readFileSync(CONTRATO, 'utf8'));
 
   const aProbar = endpoints.filter((e) => e.metodo === 'GET' || INCLUIR_ESCRITURAS);
-  console.log(`Verificando ${aProbar.length} de ${endpoints.length} endpoints contra ${BASE}\n`);
+  console.log(
+    `Verificando ${aProbar.length} de ${endpoints.length} endpoints contra ${BASE}` +
+      (TOKEN
+        ? ' · CON token (detecta rutas tapadas)\n'
+        : ' · SIN token — no distingue una ruta tapada de una sana; usa TOKEN=<jwt>\n'),
+  );
 
   const fallos: Fallo[] = [];
   let ok = 0;
@@ -72,7 +102,11 @@ async function main() {
 
     let status: number | string;
     try {
-      const r = await fetch(url, { method: metodo, redirect: 'manual' });
+      const r = await fetch(url, {
+        method: metodo,
+        redirect: 'manual',
+        headers: TOKEN ? { authorization: `Bearer ${TOKEN}` } : undefined,
+      });
       status = r.status;
     } catch (err) {
       status = `error: ${(err as Error).message}`;
@@ -97,9 +131,36 @@ async function main() {
       continue;
     }
 
-    if (status === 404) {
-      fallos.push({ endpoint: e, status, motivo: 'la ruta NO está montada', gravedad: 'FALTA' });
-    } else if (!e.publico && (status === 200 || status === 201)) {
+    if (status === 404 && TOKEN && !esLiteral(e.ruta)) {
+      // Ruta PARAMÉTRICA con token: el 404 es la respuesta correcta, porque el id
+      // que se manda es inventado y no existe en la base. Contarlo como fallo haría
+      // que la verificación gritara en 60 rutas sanas y nadie volviera a mirarla.
+      ok++;
+    } else if (status === 404) {
+      fallos.push({
+        endpoint: e,
+        status,
+        motivo:
+          TOKEN && esLiteral(e.ruta)
+            ? 'ruta literal con 404: revísala — puede estar tapada, o el recurso simplemente no existir para este usuario'
+            : 'la ruta NO está montada',
+        // Con token, un 404 en ruta literal es CANDIDATO, no veredicto: también lo da
+        // un recurso que no existe (un usuario sin foto, un día sin cierre de caja).
+        // Quien dictamina las rutas tapadas es el candado de arranque
+        // (`core/http/rutas-tapadas.ts`), que compara el orden real de registro y
+        // aborta el proceso. Aquí se avisa para que alguien mire; allí se impide.
+        gravedad: TOKEN && esLiteral(e.ruta) ? 'AVISO' : 'FALTA',
+      });
+    } else if (TOKEN && esLiteral(e.ruta) && status === 400) {
+      // Un 400 en una ruta literal suele ser el handler del detalle quejándose de
+      // un id con forma inválida: otra cara de la misma ruta tapada.
+      fallos.push({
+        endpoint: e,
+        status,
+        motivo: 'ruta literal con 400: revísala — puede estar tapada, o faltarle parámetros obligatorios',
+        gravedad: 'AVISO',
+      });
+    } else if (!TOKEN && !e.publico && (status === 200 || status === 201)) {
       fallos.push({
         endpoint: e,
         status,

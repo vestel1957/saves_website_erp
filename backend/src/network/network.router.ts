@@ -57,14 +57,6 @@ networkRouter.post(
   manejar((req) => network.createEquipment(validar(CreateEquipmentDto, req.body), usuarioDe(req))),
 );
 
-networkRouter.get(
-  '/equipment-warehouses',
-  autenticar,
-  exigirArea('tecnicos', 'administracion'),
-  moduloRed,
-  manejar((req) => network.equipmentWarehouses(usuarioDe(req))),
-);
-
 networkRouter.post(
   '/equipment/:id/assign',
   autenticar,
@@ -79,6 +71,14 @@ networkRouter.post(
   exigirArea('tecnicos', 'administracion'),
   moduloRed,
   manejar((req) => network.unassignEquipment(req.params.id)),
+);
+
+networkRouter.get(
+  '/equipment-warehouses',
+  autenticar,
+  exigirArea('tecnicos', 'administracion'),
+  moduloRed,
+  manejar((req) => network.equipmentWarehouses(usuarioDe(req))),
 );
 
 networkRouter.get(

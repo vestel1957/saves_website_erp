@@ -31,6 +31,13 @@ apiKeysRouter.post(
   manejar((req) => apiKeys.create(req.body, usuarioDe(req))),
 );
 
+apiKeysRouter.get(
+  '/api-keys/scopes',
+  autenticar,
+  exigirPermisos('system.admin'),
+  manejar((req) => apiKeys.scopes()),
+);
+
 apiKeysRouter.patch(
   '/api-keys/:id',
   autenticar,
@@ -43,11 +50,4 @@ apiKeysRouter.post(
   autenticar,
   exigirPermisos('system.admin'),
   manejar((req) => apiKeys.revoke(req.params.id)),
-);
-
-apiKeysRouter.get(
-  '/api-keys/scopes',
-  autenticar,
-  exigirPermisos('system.admin'),
-  manejar((req) => apiKeys.scopes()),
 );

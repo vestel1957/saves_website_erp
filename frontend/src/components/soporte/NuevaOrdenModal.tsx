@@ -8,7 +8,7 @@ import { Input, Select, Textarea, Field } from "@/components/ui/Field";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { SubscriberPicker, type PickedSub } from "@/components/cobranzas/SubscriberPicker";
-import { mensajeDeError } from "@/lib/errores";
+import { listaJson, mensajeDeError } from "@/lib/errores";
 import { TICKET_PRIORITIES } from "@/lib/support";
 
 /** Una clase de orden con sus detalles, tal como la sirve `/support/order-catalog`. */
@@ -49,8 +49,8 @@ export function NuevaOrdenModal({ open, onClose, onDone, fixedSub }: { open: boo
     if (!open) return;
     setSub(fixedSub ?? null); setAssigned(""); setSection(""); setErr(null);
     setClase("servicio"); setType(""); setPriority("Media"); setAgendar(false); setFecha(hoy());
-    void authFetch("/support/technicians").then((r) => r.json()).then(setTechs).catch(() => {});
-    void authFetch("/support/order-catalog").then((r) => r.json()).then(setCatalogo).catch(() => {});
+    void authFetch("/support/technicians").then(listaJson).then(setTechs).catch(() => {});
+    void authFetch("/support/order-catalog").then(listaJson).then(setCatalogo).catch(() => {});
   }, [open, authFetch, fixedSub]);
 
   const claseActual = useMemo(() => catalogo.find((c) => c.clase === clase) ?? null, [catalogo, clase]);

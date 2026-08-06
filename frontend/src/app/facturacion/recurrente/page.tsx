@@ -18,7 +18,7 @@ import { cop } from "@/lib/subscribers";
 import { StatCard } from "@/components/ui/StatCard";
 import { useRequest } from "@/lib/useRequest";
 import { useOrden } from "@/lib/useOrden";
-import { mensajeDeError } from "@/lib/errores";
+import { mensajeDeError, objetoJson } from "@/lib/errores";
 
 export default function RecurrentePage() {
   const { loading: authLoading, authFetch } = useAuth();
@@ -30,7 +30,7 @@ export default function RecurrentePage() {
   const [confirmar, setConfirmar] = useState<any | null>(null);
 
   const loadStats = useCallback(() => {
-    void authFetch("/billing/recurring/stats").then((r) => r.json()).then(setStats).catch(() => {});
+    void authFetch("/billing/recurring/stats").then(objetoJson).then(setStats).catch(() => {});
   }, [authFetch]);
 
   // Carga con cancelación: al teclear se aborta la petición en vuelo para que

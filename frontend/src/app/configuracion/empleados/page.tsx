@@ -17,7 +17,7 @@ import { useAuth } from "@/context/AuthProvider";
 import { StatCard } from "@/components/ui/StatCard";
 import { useRequest } from "@/lib/useRequest";
 import { useOrden } from "@/lib/useOrden";
-import { mensajeDeError } from "@/lib/errores";
+import { listaJson, mensajeDeError, objetoJson } from "@/lib/errores";
 import { CARGOS_LEGACY } from "@/lib/hr";
 
 const emptyForm = {
@@ -59,8 +59,8 @@ export default function EmpleadosPage() {
   // Carga catálogos una vez.
   useEffect(() => {
     if (authLoading) return;
-    void authFetch("/staff/stats").then((r) => r.json()).then(setStats).catch(() => {});
-    void authFetch("/staff/areas").then((r) => r.json()).then(setAreas).catch(() => {});
+    void authFetch("/staff/stats").then(objetoJson).then(setStats).catch(() => {});
+    void authFetch("/staff/areas").then(listaJson).then(setAreas).catch(() => {});
   }, [authLoading, authFetch]);
 
   // Carga con cancelación: al teclear se aborta la petición en vuelo para que
@@ -105,7 +105,7 @@ export default function EmpleadosPage() {
       setOpenNew(false);
       setForm(emptyForm);
       await load();
-      void authFetch("/staff/stats").then((r) => r.json()).then(setStats).catch(() => {});
+      void authFetch("/staff/stats").then(objetoJson).then(setStats).catch(() => {});
     } catch (e) {
       toast(mensajeDeError(e, "No se pudo crear el empleado."), "alert-triangle");
     } finally {

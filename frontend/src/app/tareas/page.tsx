@@ -17,7 +17,7 @@ import { fmtDate } from "@/lib/format";
 import { StatCard } from "@/components/ui/StatCard";
 import { useRequest } from "@/lib/useRequest";
 import { useOrden } from "@/lib/useOrden";
-import { mensajeDeError } from "@/lib/errores";
+import { listaJson, mensajeDeError, objetoJson } from "@/lib/errores";
 
 type Task = {
   id: string; legacyId: number; name: string | null; status: string; priority: string;
@@ -67,13 +67,13 @@ export default function TareasPage() {
   const [deleting, setDeleting] = useState(false);
 
   const loadStats = useCallback(() => {
-    void authFetch("/tasks/stats").then((r) => r.json()).then(setStats).catch(() => {});
+    void authFetch("/tasks/stats").then(objetoJson).then(setStats).catch(() => {});
   }, [authFetch]);
 
   useEffect(() => {
     if (authLoading) return;
     loadStats();
-    void authFetch("/tasks/assignees").then((r) => r.json()).then(setAssignees).catch(() => {});
+    void authFetch("/tasks/assignees").then(listaJson<{ id: number; name: string }>).then(setAssignees).catch(() => {});
   }, [authLoading, authFetch, loadStats]);
 
   // Carga con cancelación: al teclear se aborta la petición en vuelo para que

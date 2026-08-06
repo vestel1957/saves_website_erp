@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useState } from "react";
+import { listaJson, objetoJson } from "@/lib/errores";
 import Link from "next/link";
 import { Icon } from "@/components/Icon";
 import { PageHeading } from "@/components/ui/PageHeading";
@@ -41,8 +42,8 @@ export default function InventarioOnusPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    void authFetch("/network/olt/olts").then((r) => r.json()).then(setOlts).catch(() => {});
-    void authFetch("/network/olt/mode").then((r) => r.json()).then(setMode).catch(() => {});
+    void authFetch("/network/olt/olts").then(listaJson).then(setOlts).catch(() => {});
+    void authFetch("/network/olt/mode").then(objetoJson).then(setMode).catch(() => {});
   }, [authLoading, authFetch]);
 
   // Carga con cancelación: al teclear se aborta la petición en vuelo, para que

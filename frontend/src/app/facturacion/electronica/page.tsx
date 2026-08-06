@@ -17,7 +17,7 @@ import { PERM } from "@/lib/auth";
 import { fmtDate } from "@/lib/format";
 import { useRequest } from "@/lib/useRequest";
 import { useOrden } from "@/lib/useOrden";
-import { mensajeDeError } from "@/lib/errores";
+import { mensajeDeError, objetoJson } from "@/lib/errores";
 
 const n = (v: number) => (v ?? 0).toLocaleString("es-CO");
 
@@ -52,7 +52,7 @@ export default function EfacturaPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    void authFetch("/einvoice/stats").then((r) => r.json()).then(setStats).catch(() => {});
+    void authFetch("/einvoice/stats").then(objetoJson).then(setStats).catch(() => {});
     void authFetch("/einvoice/mode").then((r) => (r.ok ? r.json() : null)).then(setEMode).catch(() => {});
     void authFetch("/einvoice/branches").then((r) => (r.ok ? r.json() : [])).then(setBranches).catch(() => setBranches([]));
   }, [authLoading, authFetch]);
@@ -94,7 +94,7 @@ export default function EfacturaPage() {
   useEffect(() => { if (!authLoading && tab === "errores") void loadErrors(); }, [authLoading, tab, loadErrors]);
 
   function refreshStats() {
-    void authFetch("/einvoice/stats").then((r) => r.json()).then(setStats).catch(() => {});
+    void authFetch("/einvoice/stats").then(objetoJson).then(setStats).catch(() => {});
   }
 
   async function retry(row: any) {

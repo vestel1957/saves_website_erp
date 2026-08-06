@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useState } from "react";
+import { objetoJson } from "@/lib/errores";
 import { useParams } from "next/navigation";
 import { Icon } from "@/components/Icon";
 import { DetailHeader } from "@/components/ui/DetailHeader";
@@ -61,7 +62,7 @@ export default function OperarMikrotikPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    void authFetch("/network/mikrotik/mode").then((r) => r.json()).then(setMode).catch(() => {});
+    void authFetch("/network/mikrotik/mode").then(objetoJson).then(setMode).catch(() => {});
     void authFetch("/network/mikrotik/routers").then((r) => r.json())
       .then((list: MkRouter[]) => setRouter(list.find((x) => x.id === id) ?? null)).catch(() => {});
   }, [authLoading, authFetch, id]);

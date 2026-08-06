@@ -18,7 +18,7 @@ import { SubscriberPicker, type PickedSub } from "@/components/cobranzas/Subscri
 import { StatCard } from "@/components/ui/StatCard";
 import { useRequest } from "@/lib/useRequest";
 import { useOrden } from "@/lib/useOrden";
-import { mensajeDeError } from "@/lib/errores";
+import { mensajeDeError, objetoJson } from "@/lib/errores";
 
 const STATUS_OPTS = ["Waiting", "Pending", "Progress", "Finished", "Terminated"];
 const PRIORITY_OPTS = ["Low", "Medium", "High", "Urgent"];
@@ -68,7 +68,7 @@ export default function ProyectosPage() {
   const [note, setNote] = useState("");
 
   const loadStats = useCallback(() => {
-    void authFetch("/projects/stats").then((r) => r.json()).then(setStats).catch(() => {});
+    void authFetch("/projects/stats").then(objetoJson).then(setStats).catch(() => {});
   }, [authFetch]);
 
   useEffect(() => {

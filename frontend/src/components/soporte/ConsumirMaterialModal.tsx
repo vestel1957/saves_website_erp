@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/Field";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
-import { mensajeDeError } from "@/lib/errores";
+import { listaJson, mensajeDeError } from "@/lib/errores";
 
 type Mat = { id: string; name: string; code: string | null; price: number; qty: number; warehouse: string | null };
 type Line = { material: Mat; qty: number };
@@ -32,7 +32,7 @@ export function ConsumirMaterialModal({ open, onClose, onDone, ticketId }: { ope
     if (!open) return;
     const q = search.trim();
     const h = setTimeout(() => {
-      void authFetch(`/support/materials/search?search=${encodeURIComponent(q)}`).then((r) => r.json()).then(setResults).catch(() => setResults([]));
+      void authFetch(`/support/materials/search?search=${encodeURIComponent(q)}`).then(listaJson).then(setResults).catch(() => setResults([]));
     }, 250);
     return () => clearTimeout(h);
   }, [search, open, authFetch]);

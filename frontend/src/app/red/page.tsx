@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { listaJson, objetoJson } from "@/lib/errores";
 import Link from "next/link";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { TabBar, type Tab } from "@/components/accounting/TabBar";
@@ -36,10 +37,10 @@ export default function RedPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    void authFetch("/network/stats").then((r) => r.json()).then(setStats).catch(() => {});
-    void authFetch("/network/mikrotiks").then((r) => r.json()).then(setMks).catch(() => {});
-    void authFetch("/network/olts").then((r) => r.json()).then(setOlts).catch(() => {});
-    void authFetch("/network/naps?pageSize=10").then((r) => r.json()).then(setNaps).catch(() => {});
+    void authFetch("/network/stats").then(objetoJson).then(setStats).catch(() => {});
+    void authFetch("/network/mikrotiks").then(listaJson).then(setMks).catch(() => {});
+    void authFetch("/network/olts").then(listaJson).then(setOlts).catch(() => {});
+    void authFetch("/network/naps?pageSize=10").then(objetoJson).then(setNaps).catch(() => {});
   }, [authLoading, authFetch]);
 
   if (authLoading || !stats) return <PageSkeleton />;

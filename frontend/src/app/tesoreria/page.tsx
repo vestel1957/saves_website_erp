@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { listaJson, objetoJson } from "@/lib/errores";
 import Link from "next/link";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
@@ -52,13 +53,13 @@ export default function TesoreriaPage() {
   const [anularTx, setAnularTx] = useState<{ id: string; payer: string; amount: number } | null>(null);
 
   const loadStats = useCallback(() => {
-    void authFetch("/treasury/stats").then((r) => r.json()).then(setStats).catch(() => {});
+    void authFetch("/treasury/stats").then(objetoJson).then(setStats).catch(() => {});
   }, [authFetch]);
 
   useEffect(() => {
     if (authLoading) return;
     loadStats();
-    void authFetch("/treasury/categories").then((r) => r.json()).then(setCats).catch(() => {});
+    void authFetch("/treasury/categories").then(listaJson).then(setCats).catch(() => {});
   }, [authLoading, authFetch, loadStats]);
 
   // Carga con cancelación: al teclear se aborta la petición en vuelo para que

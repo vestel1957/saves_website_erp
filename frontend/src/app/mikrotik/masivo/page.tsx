@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { objetoJson } from "@/lib/errores";
 import Link from "next/link";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
@@ -71,7 +72,7 @@ export default function OperacionesMasivasPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    void authFetch("/network/mikrotik/mode").then((r) => r.json()).then(setMkMode).catch(() => {});
+    void authFetch("/network/mikrotik/mode").then(objetoJson).then(setMkMode).catch(() => {});
   }, [authLoading, authFetch]);
 
   const load = useCallback(() => {

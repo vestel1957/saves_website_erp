@@ -15,7 +15,7 @@ import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import { SedesAccedeField } from "@/components/usuarios/SedesAccedeField";
 import { fmtDate } from "@/lib/format";
-import { mensajeDeError } from "@/lib/errores";
+import { listaJson, mensajeDeError } from "@/lib/errores";
 import { FirmaOtpModal } from "@/components/FirmaOtpModal";
 import { cargarPasswordPolicy, pedirPasswordCode, PIE_CODIGO_AJENO, type PasswordOtpPolicy } from "@/lib/passwordOtp";
 import { DocumentosEmpleado } from "@/components/empleados/DocumentosEmpleado";
@@ -279,7 +279,7 @@ function PermisosCard({ staffId }: { staffId: string }) {
   // Carga el catálogo de roles (solo si es superusuario y hay cuenta vinculada).
   useEffect(() => {
     if (!isSuperadmin || !data?.linked || roleCat) return;
-    authFetch("/staff/role-catalog").then((r) => r.json()).then(setRoleCat).catch(() => {});
+    authFetch("/staff/role-catalog").then(listaJson).then(setRoleCat).catch(() => {});
   }, [isSuperadmin, data, roleCat, authFetch]);
 
   const currentRoleKeys = useMemo(() => new Set((data?.roles ?? []).map((r) => r.key)), [data]);
@@ -809,7 +809,7 @@ function EditarEmpleadoModal({
     f.areaId = emp.areaId ?? "";
     f.entryDate = toDateInput(emp.entryDate);
     setForm(f);
-    void authFetch("/staff/areas").then((r) => r.json()).then(setAreas).catch(() => {});
+    void authFetch("/staff/areas").then(listaJson).then(setAreas).catch(() => {});
   }, [open, emp, authFetch]);
 
   const setF = (k: string, v: string) => setForm((f: any) => ({ ...f, [k]: v }));

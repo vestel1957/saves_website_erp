@@ -22,7 +22,7 @@ import {
 import { fmtDate } from "@/lib/format";
 import { useRequest } from "@/lib/useRequest";
 import { useOrden } from "@/lib/useOrden";
-import { mensajeDeError } from "@/lib/errores";
+import { listaJson, mensajeDeError, objetoJson } from "@/lib/errores";
 
 const NuevaFacturaModal = dynamic(() => import("@/components/billing/NuevaFacturaModal").then((m) => m.NuevaFacturaModal), { ssr: false });
 const GenerarFacturasModal = dynamic(() => import("@/components/billing/GenerarFacturasModal").then((m) => m.GenerarFacturasModal), { ssr: false });
@@ -83,7 +83,7 @@ export default function FacturacionPage() {
   }, [search, status, ron, branchId, from, to, overdue]);
 
   const loadStats = useCallback(() => {
-    void authFetch("/billing/stats").then((r) => r.json()).then(setStats).catch(() => {});
+    void authFetch("/billing/stats").then(objetoJson).then(setStats).catch(() => {});
   }, [authFetch]);
 
   // Hidrata los filtros desde la URL al montar (deep-links / recargar).
@@ -110,7 +110,7 @@ export default function FacturacionPage() {
   useEffect(() => {
     if (authLoading) return;
     loadStats();
-    void authFetch("/subscribers/branches").then((r) => r.json()).then(setBranches).catch(() => {});
+    void authFetch("/subscribers/branches").then(listaJson).then(setBranches).catch(() => {});
     if (canEmit) void authFetch("/einvoice/mode").then((r) => (r.ok ? r.json() : null)).then(setEMode).catch(() => {});
   }, [authLoading, authFetch, loadStats, canEmit]);
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { objetoJson } from "@/lib/errores";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Icon } from "@/components/Icon";
@@ -138,7 +139,7 @@ function OperarOltVista() {
 
   useEffect(() => {
     if (authLoading) return;
-    void authFetch("/network/olt/mode").then((r) => r.json()).then(setMode).catch(() => {});
+    void authFetch("/network/olt/mode").then(objetoJson).then(setMode).catch(() => {});
     void authFetch("/network/olt/olts").then((r) => r.json()).then((list: OltRow[]) => setOlt(list.find((o) => o.id === id) ?? null)).catch(() => {});
   }, [authLoading, authFetch, id]);
 

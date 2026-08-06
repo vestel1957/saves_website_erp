@@ -20,7 +20,7 @@ import { AutenticarOnuOrden } from "@/components/soporte/AutenticarOnuOrden";
 import { ConsumirMaterialModal } from "@/components/soporte/ConsumirMaterialModal";
 import { SignaturePad } from "@/components/support/SignaturePad";
 import { fmtDate } from "@/lib/format";
-import { mensajeDeError } from "@/lib/errores";
+import { listaJson, mensajeDeError } from "@/lib/errores";
 import { CapturarGps } from "@/components/map/CapturarGps";
 import { MOTIVO_GEO, distMetros, pedirUbicacion } from "@/lib/geo";
 
@@ -178,7 +178,7 @@ export default function OrdenDetallePage() {
   useEffect(() => {
     if (authLoading) return;
     reload();
-    void authFetch("/support/technicians").then((r) => r.json()).then(setTechs).catch(() => {});
+    void authFetch("/support/technicians").then(listaJson).then(setTechs).catch(() => {});
   }, [authLoading, reload, authFetch]);
 
   async function post(url: string, body: any, okMsg: string) {

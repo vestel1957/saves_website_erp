@@ -16,7 +16,7 @@ import { useAuth } from "@/context/AuthProvider";
 import type { Nap, Paged, BranchOpt, VlanOpt } from "@/lib/network";
 import { useRequest } from "@/lib/useRequest";
 import { useOrden } from "@/lib/useOrden";
-import { mensajeDeError } from "@/lib/errores";
+import { listaJson, mensajeDeError } from "@/lib/errores";
 
 export default function NapsPage() {
   const { loading: authLoading, authFetch } = useAuth();
@@ -177,7 +177,7 @@ function CreateNapModal({ open, branch, onClose, onCreated }: { open: boolean; b
   useEffect(() => {
     if (!open) return;
     setName(""); setVlanId(""); setPortCount("16"); setAddress(""); setGps(""); setErr(null);
-    void authFetch(`/network/vlans?branchId=${branch.id}`).then((r) => r.json()).then(setVlans).catch(() => setVlans([]));
+    void authFetch(`/network/vlans?branchId=${branch.id}`).then(listaJson).then(setVlans).catch(() => setVlans([]));
   }, [open, branch.id, authFetch]);
 
   async function submit() {

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { objetoJson } from "@/lib/errores";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { PageHeading } from "@/components/ui/PageHeading";
@@ -110,7 +111,7 @@ export function MisOrdenes() {
     { saltar: authLoading, debounceMs: search ? 350 : 0 },
   );
 
-  const cargarStats = () => { void authFetch("/support/stats").then((r) => r.json()).then(setStats).catch(() => {}); };
+  const cargarStats = () => { void authFetch("/support/stats").then(objetoJson).then(setStats).catch(() => {}); };
   useEffect(() => { if (!authLoading) cargarStats(); }, [authLoading]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { setPage(1); }, [pageSize, orden.clave, search, status, type, priority, from, to]);

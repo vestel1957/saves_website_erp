@@ -15,7 +15,7 @@ import { Field, Input } from "@/components/ui/Field";
 import { SedesAccedeField } from "@/components/usuarios/SedesAccedeField";
 import { Modal } from "@/components/Modal";
 import { StatCard } from "@/components/ui/StatCard";
-import { mensajeDeError } from "@/lib/errores";
+import { listaJson, mensajeDeError } from "@/lib/errores";
 import { FirmaOtpModal } from "@/components/FirmaOtpModal";
 import { cargarPasswordPolicy, pedirPasswordCode, PIE_CODIGO_AJENO, type PasswordOtpPolicy } from "@/lib/passwordOtp";
 
@@ -922,7 +922,7 @@ function RoleBuilderModal({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    void authFetch("/auth/permissions").then((r) => r.json()).then(setCatalog).catch(() => setError("No se pudo cargar el catálogo de permisos."));
+    void authFetch("/auth/permissions").then(listaJson).then(setCatalog).catch(() => setError("No se pudo cargar el catálogo de permisos."));
   }, [authFetch]);
 
   // Agrupa el catálogo por `group`, conservando el orden de aparición.

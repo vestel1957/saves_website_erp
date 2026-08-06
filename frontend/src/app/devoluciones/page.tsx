@@ -18,7 +18,7 @@ import { cop } from "@/lib/subscribers";
 import { StatCard } from "@/components/ui/StatCard";
 import { useRequest } from "@/lib/useRequest";
 import { useOrden } from "@/lib/useOrden";
-import { mensajeDeError } from "@/lib/errores";
+import { mensajeDeError, objetoJson } from "@/lib/errores";
 
 const STATUS_TONE: Record<string, "default" | "success" | "error" | "warning" | "info" | "brand"> = {
   DRAFT: "default",
@@ -75,7 +75,7 @@ export default function DevolucionesPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    void authFetch("/returns/stats").then((r) => r.json()).then(setStats).catch(() => {});
+    void authFetch("/returns/stats").then(objetoJson).then(setStats).catch(() => {});
   }, [authLoading, authFetch]);
 
   useEffect(() => { setPage(1); }, [search, status, pageSize, orden.clave]);
@@ -153,7 +153,7 @@ export default function DevolucionesPage() {
       toast("Devolución creada");
       setOpen(false);
       resetModal();
-      void authFetch("/returns/stats").then((r) => r.json()).then(setStats).catch(() => {});
+      void authFetch("/returns/stats").then(objetoJson).then(setStats).catch(() => {});
       await load();
     } catch (e) {
       toast(mensajeDeError(e, "No se pudo crear la devolución"), "alert-triangle");

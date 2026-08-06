@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { listaJson } from "@/lib/errores";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { PageHeading } from "@/components/ui/PageHeading";
@@ -44,7 +45,7 @@ export default function ClientesPage() {
   // Carga catálogos una vez.
   useEffect(() => {
     if (authLoading) return;
-    void authFetch("/subscribers/branches").then((r) => r.json()).then(setBranches).catch(() => {});
+    void authFetch("/subscribers/branches").then(listaJson).then(setBranches).catch(() => {});
   }, [authLoading, authFetch]);
 
   // Carga con cancelación: al teclear en el filtro, la petición en vuelo se aborta.

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { listaJson } from "@/lib/errores";
 import Link from "next/link";
 import { Icon } from "@/components/Icon";
 import { PageHeading } from "@/components/ui/PageHeading";
@@ -33,7 +34,7 @@ export default function EquiposPage() {
     if (q) setSearch(q);
   }, []);
 
-  useEffect(() => { if (!authLoading) void authFetch("/network/warehouses").then((r) => r.json()).then(setWarehouses).catch(() => {}); }, [authLoading, authFetch]);
+  useEffect(() => { if (!authLoading) void authFetch("/network/warehouses").then(listaJson).then(setWarehouses).catch(() => {}); }, [authLoading, authFetch]);
 
   // Carga con cancelación: al teclear se aborta la petición en vuelo, para que
   // una respuesta lenta no pise a otra más nueva. Ver lib/useRequest.

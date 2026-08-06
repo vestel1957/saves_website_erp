@@ -21,7 +21,7 @@ import { esTecnico, type Paged, type TicketRow, type SupportStats, TICKET_STATUS
 import { useRequest } from "@/lib/useRequest";
 import { useOrden } from "@/lib/useOrden";
 import { toast } from "@/components/ui/Toast";
-import { mensajeDeError } from "@/lib/errores";
+import { mensajeDeError, objetoJson } from "@/lib/errores";
 
 /** Presets de fecha típicos de operación. */
 function datePresets(): { label: string; from: string; to: string }[] {
@@ -71,9 +71,9 @@ function SoporteGeneral() {
   const [showFilters, setShowFilters] = useState(false);
   const [exporting, setExporting] = useState(false);
 
-  const reloadStats = useCallback(() => { void authFetch("/support/stats").then((r) => r.json()).then(setStats).catch(() => {}); }, [authFetch]);
+  const reloadStats = useCallback(() => { void authFetch("/support/stats").then(objetoJson).then(setStats).catch(() => {}); }, [authFetch]);
   useEffect(() => { if (!authLoading) reloadStats(); }, [authLoading, reloadStats]);
-  useEffect(() => { if (!authLoading) void authFetch("/support/filter-options").then((r) => r.json()).then(setOptions).catch(() => {}); }, [authLoading, authFetch]);
+  useEffect(() => { if (!authLoading) void authFetch("/support/filter-options").then(objetoJson).then(setOptions).catch(() => {}); }, [authLoading, authFetch]);
 
   // Carga con cancelación: al teclear se aborta la petición en vuelo, para que
   // una respuesta lenta no pise a otra más nueva. Ver lib/useRequest.

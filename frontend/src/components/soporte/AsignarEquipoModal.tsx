@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/Button";
 import { Input, Select, Field } from "@/components/ui/Field";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
-import { mensajeDeError } from "@/lib/errores";
+import { listaJson, mensajeDeError } from "@/lib/errores";
 
 const INSTALL_TYPES = ["FTTH", "EOC", "HFC", "Radioenlace", "Otro"];
 
@@ -32,7 +32,7 @@ export function AsignarEquipoModal({ open, onClose, onDone, ticketId }: { open: 
   useEffect(() => {
     if (!open) return;
     setMac(""); setInstallType(INSTALL_TYPES[0]); setSerial(""); setPort(""); setVlan(""); setNat(""); setMaster(""); setMeters(""); setAccessories(""); setEquipmentId(""); setErr(null);
-    void authFetch("/support/equipment/available").then((r) => r.json()).then(setStock).catch(() => setStock([]));
+    void authFetch("/support/equipment/available").then(listaJson).then(setStock).catch(() => setStock([]));
   }, [open, authFetch]);
 
   /** Al elegir una unidad de stock, pre-llena MAC/serial/tipo. */

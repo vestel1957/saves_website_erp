@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Field, Input, Select } from "@/components/ui/Field";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
-import { mensajeDeError } from "@/lib/errores";
+import { listaJson, mensajeDeError } from "@/lib/errores";
 
 type PlanRow = { subscriberId: string; action: "BILL" | "SKIP" | "FAIL"; reason?: string; error?: string; total?: number; planDeUltimaFactura?: boolean };
 type RunResult = {
@@ -53,7 +53,7 @@ export function GenerarFacturasModal({
     if (!open) return;
     setPreview(null);
     setConfirming(false);
-    void authFetch("/subscribers/branches").then((r) => r.json()).then(setBranches).catch(() => {});
+    void authFetch("/subscribers/branches").then(listaJson).then(setBranches).catch(() => {});
   }, [open, authFetch]);
 
   // Cambiar los parámetros invalida la simulación: si no, se podría emitir un

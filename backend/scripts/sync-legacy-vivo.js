@@ -398,6 +398,71 @@ async function syncAnulaciones(my, st, sum) {
   st.anulaciones = maxId; await saveState(st);
 }
 
+/**
+ * Facturas BORRADAS en el legacy.
+ *
+ * El resto de pasos detecta altas y cambios, pero nada miraba las BAJAS: si el
+ * legacy borra una factura, en Postgres se queda viva para siempre. Medido el
+ * 2026-08-06: 2.865 facturas fantasma, 198.259.196 COP sobre 2.860 clientes, y
+ * creciendo (2.861 de ellas de este mismo año).
+ *
+ * De dónde salen: el legacy emite una factura, la borra y la reemite con `tid`
+ * nuevo. Nexus se queda con las dos, así que 2.285 de esos clientes figuran
+ * facturados dos veces por el mismo mes.
+ *
+ * Por qué urge: hoy no duele porque manda el legacy y el paso a Cartera está en
+ * solo-informe. El día del corte ese cron se vuelve real y mandaría a Cartera
+ * —con corte de servicio— a clientes que están al día.
+ *
+ * NO se borra la fila: se marca CANCELED y se anota el motivo. Anular es
+ * reversible y conserva el rastro; borrar arrastraría renglones y recibos
+ * enlazados, y dejaría un agujero imposible de auditar después.
+ *
+ * EL TOPE DE SEGURIDAD ES LO IMPORTANTE DE ESTA FUNCIÓN. Este paso deduce las
+ * bajas por AUSENCIA: lo que no está en la lista del legacy, se anula. Si esa
+ * consulta devolviera de más a menos —una conexión que se corta a media lectura,
+ * un `WHERE` que alguien toque— la ausencia sería falsa y anularíamos facturas
+ * buenas en masa, en silencio y sobre dinero real. Por eso se aborta el paso si
+ * los candidatos superan el tope: ante una anomalía, no hacer nada y avisar.
+ */
+const MAX_BORRADOS_PCT = 5; // % del total; por encima huele a lectura incompleta
+
+async function syncBorradas(my, sum) {
+  const [filas] = await my.query('SELECT id FROM invoices');
+  const enLegacy = new Set(filas.map((r) => r.id));
+
+  // Cordura previa: si el legacy devuelve muchas menos filas de las que tenemos,
+  // la lectura vino incompleta y la comparación no vale.
+  const totalPg = await prisma.subInvoice.count({ where: { legacyId: { not: null } } });
+  if (enLegacy.size < totalPg * 0.9) {
+    sum.borradas = { abortado: `el legacy devolvió ${enLegacy.size} facturas para ${totalPg} en PG: lectura sospechosa` };
+    return;
+  }
+
+  const vivas = await prisma.subInvoice.findMany({
+    where: { legacyId: { not: null }, status: { not: 'CANCELED' } },
+    select: { id: true, legacyId: true },
+  });
+  const aAnular = vivas.filter((r) => !enLegacy.has(r.legacyId));
+
+  const tope = Math.ceil((enLegacy.size * MAX_BORRADOS_PCT) / 100);
+  if (aAnular.length > tope) {
+    sum.borradas = { abortado: `${aAnular.length} candidatas superan el tope de ${tope} (${MAX_BORRADOS_PCT}%)`, candidatas: aAnular.length };
+    return;
+  }
+
+  sum.borradas = { anuladas: aAnular.length };
+  if (DRY || !aAnular.length) return;
+
+  const sello = new Date().toISOString().slice(0, 10);
+  await inChunks(aAnular.map((r) => r.id), 500, async (ids) => {
+    await prisma.subInvoice.updateMany({
+      where: { id: { in: ids } },
+      data: { status: 'CANCELED', notes: `Anulada por sincronización: borrada en el legacy (${sello}).` },
+    });
+  });
+}
+
 async function syncAddSvc(my, st, sum) {
   const [rows] = await my.query('SELECT * FROM servicios_adicionales WHERE id > ? ORDER BY id', [st.addsvc]);
   let maxId = st.addsvc;
@@ -469,6 +534,7 @@ async function main() {
   await syncTransactions(my, st, sum, subMap);
   await syncRecibos(my, st, sum);
   await syncAnulaciones(my, st, sum);
+  await syncBorradas(my, sum);
   await syncAddSvc(my, st, sum);
   await syncEInvoice(my, st, sum, subMap);
 

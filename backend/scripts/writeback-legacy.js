@@ -171,7 +171,10 @@ async function pushInvoices(my, sum) {
 /** Ítems del stack nuevo sobre facturas de origen legacy (p.ej. notas crédito). */
 async function pushItems(my, sum) {
   const rows = await prisma.subInvoiceItem.findMany({
-    where: { legacyId: null, invoice: { legacyId: { not: null } } },
+    // Las facturas EDITADAS aquí van por `pushEditedInvoices`: allá hay que borrar y
+    // reinsertar el juego completo de renglones. Insertar sólo los nuevos dejaría la
+    // factura del legacy con los viejos MÁS los nuevos y el detalle no daría el total.
+    where: { legacyId: null, invoice: { legacyId: { not: null }, editedAt: null } },
     include: { invoice: { select: { tid: true } } },
   });
   sum.items = { insertados: rows.length };
@@ -180,6 +183,49 @@ async function pushItems(my, sum) {
     const id = await insertRow(my, 'invoice_items', invItem(it, it.invoice.tid));
     await prisma.subInvoiceItem.update({ where: { id: it.id }, data: { legacyId: id } });
   }
+}
+
+/**
+ * Facturas EDITADAS en el stack nuevo → se reescriben en el legacy tal como lo hace
+ * su propio "Editar factura" (`Invoices::editaction`): borra los renglones de la
+ * factura y reinserta los que hay ahora, y actualiza los totales del encabezado.
+ *
+ * Sólo corre en modo B (el nuevo activo): mientras el legacy sea el sistema vivo,
+ * la edición se queda de este lado y la ida la respeta por `editedAt`.
+ * `st.wb.editsPushed` guarda qué número de edición se empujó por factura, para no
+ * reescribir en cada pasada lo que ya está igual allá.
+ */
+async function pushEditedInvoices(my, st, sum) {
+  const rows = await prisma.subInvoice.findMany({
+    where: { editedAt: { not: null }, legacyId: { not: null } },
+    include: { subscriber: { select: { legacyId: true } }, items: true },
+  });
+  const pushed = st.wb?.editsPushed ?? {};
+  const pend = rows.filter((f) => pushed[f.legacyId] !== f.editCount);
+  sum.invoicesEdit = { pendientes: pend.length, aplicados: 0 };
+  if (!UPDATES_LIVE) {
+    if (pend.length) log(`invoices-edit: ${pend.length} ediciones ${DRY ? 'en plan (seco)' : 'RETENIDAS (modo legacy-activo)'}`);
+    return;
+  }
+  const nuevo = { ...pushed };
+  for (const f of pend) {
+    await my.execute('DELETE FROM invoice_items WHERE tid = ?', [f.tid]);
+    for (const it of f.items) {
+      const id = await insertRow(my, 'invoice_items', invItem(it, f.tid));
+      await prisma.subInvoiceItem.update({ where: { id: it.id }, data: { legacyId: id } });
+    }
+    // Sólo las columnas que mueve la edición: el cobro (status/pamnt) lo lleva
+    // `pushInvoiceUpdates`, que compara la huella completa.
+    const full = invInvoice(f, f.subscriber?.legacyId ?? null);
+    const cols = ['subtotal', 'tax', 'total', 'items', 'invoicedate', 'invoiceduedate', 'notes', 'tipo_factura'];
+    const setObj = {};
+    for (const c of cols) setObj[c] = full[c];
+    await updateRow(my, 'invoices', 'id', f.legacyId, setObj);
+    nuevo[f.legacyId] = f.editCount;
+  }
+  sum.invoicesEdit.aplicados = pend.length;
+  await saveState({ editsPushed: nuevo });
+  if (pend.length) log(`invoices-edit: ${pend.length} facturas reescritas en el legacy`);
 }
 
 async function pushInvoiceUpdates(my, sum) {
@@ -317,6 +363,7 @@ async function main() {
   await pushCustomerUpdates(my, sum);
   await pushInvoices(my, sum);
   await pushItems(my, sum);
+  await pushEditedInvoices(my, st, sum);
   await pushInvoiceUpdates(my, sum);
   await pushTransactions(my, sum);
   await pushReceipts(my, sum);

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Logger } from '../../core/logger';
 import type { Toolset, ToolContext, ToolDef } from '@s4gk/wa-agent';
 import { SubscribersService } from '../../subscribers/subscribers.service';
 import { CobranzasService } from '../../treasury/cobranzas.service';
@@ -55,7 +55,6 @@ const MAX_MESES_SUSPENSION = 3;
  * o se valida con tres datos + código al titular (ver ChatAccessService). Una cédula
  * dictada por WhatsApp no prueba nada: está impresa en la factura que cualquiera ve.
  */
-@Injectable()
 export class TramitesToolset implements Toolset {
   private readonly logger = new Logger('TramitesToolset');
 

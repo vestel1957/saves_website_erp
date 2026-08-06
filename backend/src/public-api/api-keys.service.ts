@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '../core/http/errores';
 import { PrismaService } from '../prisma/prisma.service';
 import { generateApiKey } from './api-key.util';
 
@@ -17,7 +17,6 @@ export interface CreateApiKeyDto {
   ignoreLimits?: boolean;
 }
 
-@Injectable()
 export class ApiKeysService {
   constructor(private readonly prisma: PrismaService) {}
 

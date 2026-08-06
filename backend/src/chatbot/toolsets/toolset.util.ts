@@ -1,4 +1,5 @@
-import { Logger } from '@nestjs/common';
+import { HttpException } from '../../core/http/errores';
+import { Logger } from '../../core/logger';
 import type { ToolContext, Toolset } from '@s4gk/wa-agent';
 import { APP_PERMISSIONS as P, SUPERADMIN_PERMISSION } from '../../auth/permissions.catalog';
 

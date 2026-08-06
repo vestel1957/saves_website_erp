@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Logger } from '../core/logger';
 import { PrismaService } from '../prisma/prisma.service';
 import { WhatsappService } from '../common/whatsapp/whatsapp.service';
 import { normalizePhone } from '../common/phone.util';
@@ -24,7 +24,6 @@ function nombreDe(s: { fullName?: string | null; firstName?: string | null; last
  * Un número PENDIENTE no da acceso a nada. La solicitud le llega al titular por
  * WhatsApp, y mientras no la apruebe, quien pidió sigue siendo un desconocido.
  */
-@Injectable()
 export class SubscriberContactsService {
   private readonly logger = new Logger('ContactosAbonado');
 

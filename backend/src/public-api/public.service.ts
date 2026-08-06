@@ -1,11 +1,10 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { NotFoundException } from '../core/http/errores';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 const money = (d: Prisma.Decimal | number | null | undefined) => (d == null ? 0 : Number(d));
 
 /** Lógica de solo lectura expuesta a terceros vía la API pública. */
-@Injectable()
 export class PublicService {
   constructor(private readonly prisma: PrismaService) {}
 

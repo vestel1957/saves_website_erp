@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Logger } from '../../core/logger';
 import { SubscriberStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { normalizePhone } from '../phone.util';
@@ -75,7 +75,6 @@ type Candidato = {
  * Con ~2.500 morosos y el tope por defecto, la rotación cubre a todos en ~17 días:
  * se atiende primero a quien lleva más tiempo sin recibir aviso.
  */
-@Injectable()
 export class WhatsappRemindersService {
   private readonly logger = new Logger('WhatsappReminders');
 

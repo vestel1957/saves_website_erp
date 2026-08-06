@@ -1,4 +1,4 @@
-import { Logger } from '@nestjs/common';
+import { Logger } from '../core/logger';
 
 /**
  * Validación del entorno AL ARRANCAR.

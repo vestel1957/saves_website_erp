@@ -1,4 +1,3 @@
-import { Injectable } from '@nestjs/common';
 import type { Toolset, ToolContext, ToolDef } from '@s4gk/wa-agent';
 import { APP_PERMISSIONS as P } from '../../auth/permissions.catalog';
 import { PlansService } from '../../plans/plans.service';
@@ -26,7 +25,6 @@ const PROMOS = [P.SYSTEM_ADMIN];
  * el técnico?"— que son justo las que uno necesita fuera de la oficina y hoy se
  * resuelven llamando a alguien que sí esté frente al computador.
  */
-@Injectable()
 export class InternoOperacionToolset implements Toolset {
   constructor(
     private readonly plans: PlansService,

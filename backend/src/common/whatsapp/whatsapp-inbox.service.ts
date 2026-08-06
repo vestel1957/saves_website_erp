@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '../../core/http/errores';
+import { Logger } from '../../core/logger';
 import { Prisma, WhatsappConvStatus } from '@prisma/client';
 import { extname } from 'node:path';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -38,7 +39,6 @@ const digitsOf = (phone: string) => (phone || '').replace(/\D/g, '');
  * — inyectarlo aquí cerraría el ciclo. Es la misma vía que ya usa
  * `WhatsappRemindersService` para respetar los escalados.
  */
-@Injectable()
 export class WhatsappInboxService {
   private readonly logger = new Logger('WhatsappInbox');
 

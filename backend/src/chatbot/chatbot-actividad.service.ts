@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Logger } from '../core/logger';
 import { PrismaService } from '../prisma/prisma.service';
 import { BOT_ACTOR } from './chatbot.identity';
 
@@ -27,7 +27,6 @@ function inicioDiaColombia(diasAtras = 0): Date {
  * Todo sale de tablas que ya se llenaban solas; no hay contadores nuevos que mantener
  * (y por tanto no hay un contador que pueda quedar desincronizado de la realidad).
  */
-@Injectable()
 export class ChatbotActividadService {
   private readonly logger = new Logger('ChatbotActividad');
 

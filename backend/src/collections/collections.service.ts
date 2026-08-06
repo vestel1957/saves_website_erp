@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '../core/http/errores';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
@@ -29,7 +29,6 @@ export interface AgreementFilter {
   pageSize?: number;
 }
 
-@Injectable()
 export class CollectionsService {
   constructor(private readonly prisma: PrismaService) {}
 

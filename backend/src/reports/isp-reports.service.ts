@@ -1,4 +1,3 @@
-import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -28,7 +27,6 @@ function rango(from?: string, to?: string) {
 const pct = (parte: number, total: number): number | null =>
   total > 0 ? Math.round((1000 * parte) / total) / 10 : null;
 
-@Injectable()
 export class IspReportsService {
   constructor(private readonly prisma: PrismaService) {}
 

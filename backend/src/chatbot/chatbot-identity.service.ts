@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Logger } from '../core/logger';
 import type { AgentUser } from '@s4gk/wa-agent';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthService } from '../auth/auth.service';
@@ -22,7 +22,6 @@ const DEAD_STATUS = new Set(['DEPURADO', 'RETIRADO']);
  * Nunca devuelve null: devolverlo silenciaría el mensaje, y el diseño acordado es
  * que un desconocido sí reciba respuesta pública.
  */
-@Injectable()
 export class ChatbotIdentityService {
   private readonly logger = new Logger('ChatbotIdentity');
 

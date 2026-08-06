@@ -1,4 +1,3 @@
-import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { num, round2 } from '../common/money';
@@ -43,7 +42,6 @@ const SEDE_NOTA =
   'La sede sale del ABONADO, que es quien la tiene: ni el movimiento ni el documento llevan sede propia. ' +
   'Lo que no está ligado a un abonado no tiene sede y no aparece cuando se filtra.';
 
-@Injectable()
 export class ReportsService {
   constructor(private readonly prisma: PrismaService) {}
 

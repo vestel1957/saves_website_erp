@@ -56,6 +56,36 @@ export class CreateInvoiceDto {
   items!: InvoiceItemDto[];
 }
 
+/**
+ * Editar una factura ya emitida (paridad legacy `Invoices::editaction`, que borra
+ * los renglones de la factura y reinserta los que llegan del formulario).
+ *
+ * `items` es el juego COMPLETO de conceptos: lo que no venga se elimina. Es la
+ * misma semántica del legacy y evita tener que mandar altas/bajas por separado.
+ * El cliente NO se puede cambiar: mover una factura de abonado descuadra la
+ * cartera de los dos; para eso está anular y volver a facturar.
+ */
+export class UpdateInvoiceDto {
+  @IsOptional() @IsDateString()
+  invoiceDate?: string;
+
+  @IsOptional() @IsDateString()
+  dueDate?: string;
+
+  @IsOptional() @IsIn(['FIJA', 'RECURRENTE'])
+  kind?: 'FIJA' | 'RECURRENTE';
+
+  @IsOptional() @IsString()
+  notes?: string;
+
+  /** Motivo del cambio: queda en la auditoría (el legacy no lo pedía). */
+  @IsString() @MinLength(3)
+  reason!: string;
+
+  @IsArray() @ValidateNested({ each: true }) @Type(() => InvoiceItemDto)
+  items!: InvoiceItemDto[];
+}
+
 /** Generar facturas recurrentes en lote (una mensualidad por abonado, desde su plan). */
 export class GenerateInvoicesDto {
   @IsOptional() @IsString()

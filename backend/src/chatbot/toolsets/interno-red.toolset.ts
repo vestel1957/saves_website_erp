@@ -1,4 +1,3 @@
-import { Injectable } from '@nestjs/common';
 import type { Toolset, ToolContext, ToolDef } from '@s4gk/wa-agent';
 import { PERMISSION_DENIED } from '@s4gk/wa-agent';
 import { APP_PERMISSIONS as P } from '../../auth/permissions.catalog';
@@ -20,7 +19,6 @@ const RED = [P.AREA_TECNICOS, P.AREA_ADMINISTRACION];
  * REPORTA con claridad, para que un técnico nunca crea que cortó algo que en
  * realidad no se tocó.
  */
-@Injectable()
 export class InternoRedToolset implements Toolset {
   constructor(
     private readonly mikrotik: MikrotikService,

@@ -1,4 +1,3 @@
-import { Injectable } from '@nestjs/common';
 import type { Toolset, ToolContext, ToolDef } from '@s4gk/wa-agent';
 import { APP_PERMISSIONS as P } from '../../auth/permissions.catalog';
 import { BillingService } from '../../billing/billing.service';
@@ -28,7 +27,6 @@ const EFACTURA = [P.AREA_CONTABILIDAD];
  * `list` recibe el AuthUser real porque el acotado por sede vive ahí: un usuario de
  * una sede no puede ver la facturación de otra, ni por la web ni por WhatsApp.
  */
-@Injectable()
 export class InternoFacturacionToolset implements Toolset {
   constructor(
     private readonly billing: BillingService,

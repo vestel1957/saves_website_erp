@@ -1,4 +1,3 @@
-import { Injectable } from '@nestjs/common';
 import { InventoryAlertType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -10,7 +9,6 @@ import { PrismaService } from '../prisma/prisma.service';
  * `dedupeKey`: el frontend dispara `run` una vez por sesión, así que sin la
  * clave se acumularían filas duplicadas en cada login.
  */
-@Injectable()
 export class InventoryAlertsService {
   constructor(private readonly prisma: PrismaService) {}
 

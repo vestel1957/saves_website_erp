@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '../core/http/errores';
+import { Logger } from '../core/logger';
 import { ordenSql } from '../common/pagination-params';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -71,7 +72,6 @@ export function pickSrvProfileByModel(
   return srvList.find((p) => norm(p.name) === target) ?? null;
 }
 
-@Injectable()
 export class OltService {
   private readonly logger = new Logger(OltService.name);
   private live = process.env.OLT_LIVE === 'true';

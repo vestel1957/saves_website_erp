@@ -128,8 +128,14 @@ export class UpdateSubscriberDto {
   @IsOptional() @IsObject()
   nomenclature?: Record<string, unknown>;
 
-  @IsOptional() @IsInt()
-  clausula?: number;
+  /**
+   * Cláusula de permanencia mínima (número legacy; `null` = sin permanencia).
+   * Acepta null a propósito: quitarle la permanencia a un abonado es una decisión
+   * que se toma, y sin esto la única forma de expresarla sería omitir el campo,
+   * que significa "no lo cambies".
+   */
+  @IsOptional() @ValidateIf((_o, v) => v !== null) @IsInt()
+  clausula?: number | null;
 
   @IsOptional() @IsString() @MaxLength(60)
   gpsLat?: string;

@@ -1,5 +1,6 @@
-import { BadRequestException, Injectable, Logger, NotFoundException, OnApplicationBootstrap } from '@nestjs/common';
-import { OnEvent } from '@nestjs/event-emitter';
+import type { OnApplicationBootstrap } from '../../core/ciclo-vida';
+import { BadRequestException, NotFoundException } from '../../core/http/errores';
+import { Logger } from '../../core/logger';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { normalizePhone } from '../phone.util';
@@ -54,7 +55,6 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * persiste el estado de cada envío (QUEUED→SENT→DELIVERED→READ / FAILED) que el
  * webhook va actualizando.
  */
-@Injectable()
 export class WhatsappCampaignService implements OnApplicationBootstrap {
   private readonly logger = new Logger('WhatsappCampaign');
   /** Pausa entre envíos (ms) para respetar el rate-limit de la Cloud API. */
@@ -362,7 +362,6 @@ export class WhatsappCampaignService implements OnApplicationBootstrap {
   }
 
   /** Webhook: actualiza el estado de entrega de un envío por su waMessageId. */
-  @OnEvent(WHATSAPP_STATUS_EVENT)
   async onStatus(evt: WhatsappStatusUpdate) {
     try {
       const send = await this.prisma.whatsappSend.findUnique({ where: { waMessageId: evt.messageId } });

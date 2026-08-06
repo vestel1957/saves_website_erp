@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Logger } from '../../core/logger';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { orden } from '../pagination-params';
@@ -17,7 +17,6 @@ export interface AuditRecord {
  * Writes immutable audit rows. Append-only — entries are never updated/deleted.
  * Shared across modules (inventory, SST, …) via the global AuditModule.
  */
-@Injectable()
 export class AuditService {
   private readonly logger = new Logger(AuditService.name);
 

@@ -1,6 +1,7 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '../core/http/errores';
+import { Logger } from '../core/logger';
 import { Prisma } from '@prisma/client';
-import { EventEmitter2 } from '@nestjs/event-emitter';
+import type { EmisorDeEventos } from '../core/eventos';
 import { PrismaService } from '../prisma/prisma.service';
 import { PAGO_APLICADO_EVENT, type PagoAplicadoEvent } from './treasury.events';
 import { AuthUser } from '../auth/current-user.decorator';
@@ -93,7 +94,6 @@ type Tx = Prisma.TransactionClient;
  * Operaciones de escritura del módulo Cobranzas (migrado de saves-vestel):
  * recaudo con multipago en cascada, anulación con reversa, egresos y cierre de caja.
  */
-@Injectable()
 export class CobranzasService {
   private readonly logger = new Logger('CobranzasService');
 
@@ -101,7 +101,7 @@ export class CobranzasService {
     private readonly prisma: PrismaService,
     private readonly posting: PostingService,
     private readonly reconexion: ReconexionService,
-    private readonly events: EventEmitter2,
+    private readonly events: EmisorDeEventos,
   ) {}
 
   /**

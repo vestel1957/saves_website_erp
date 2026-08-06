@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Logger } from '../core/logger';
 import type { ToolContext } from '@s4gk/wa-agent';
 import { SubscribersService } from '../subscribers/subscribers.service';
 import { BillingService } from '../billing/billing.service';
@@ -13,7 +13,9 @@ import { MetricsService, METRICAS, ETIQUETA, NO_RECONSTRUIBLES, NO_SUMABLES } fr
 import { DashboardService } from '../dashboard/dashboard.service';
 import { invoicePdfBuffer } from '../billing/billing-pdf';
 import { pazYSalvoPdf, statementPdf } from '../subscribers/subscriber-pdf';
-import { cashClosePdf, contractPdf, purchaseOrderPdf, serviceOrderPdf } from '../common/pdf/pdf-docs';
+import { cashClosePdf, purchaseOrderPdf, serviceOrderPdf } from '../common/pdf/pdf-docs';
+import { ContractsService } from '../contracts/contracts.service';
+import { renderContratoLegacy } from '../contracts/contrato-legacy.render';
 import {
   actividadReporte, anulacionesReporte, arpuReporte, capacidadRedReporte, cortesReporte, deudoresReporte, facturacionReporte,
   indiceRecaudoReporte, ingresosEgresosReporte, ivaReporte, movimientosReporte, ordenesReporte,
@@ -119,10 +121,10 @@ export async function enviarDoc(ctx: ToolContext, doc: ChatDoc, exito?: string):
  * método recibe (los servicios lo exigen, no es decoración). Aquí no se consulta la BD
  * directamente ni se dibuja nada nuevo.
  */
-@Injectable()
 export class ChatbotDocsService {
   constructor(
     private readonly subscribers: SubscribersService,
+    private readonly contracts: ContractsService,
     private readonly billing: BillingService,
     private readonly support: SupportService,
     private readonly treasury: TreasuryService,
@@ -280,12 +282,13 @@ export class ChatbotDocsService {
 
   /** Contrato de prestación de servicios. */
   async contrato(subscriberId: string, user?: AuthUser): Promise<ChatDoc> {
-    const d: any = await this.subscribers.contractData(subscriberId, user);
-    const data = await pdfToBuffer((res) => contractPdf(res, d));
+    const d = await this.contracts.datosContratoLegacy(subscriberId, user);
+    const data = await renderContratoLegacy('contrato', d);
+    const nombre = [d.details.name, d.details.unoapellido].filter(Boolean).join(' ').trim();
     return {
       data,
       fileName: `contrato-${d.abonado}.pdf`,
-      caption: `Contrato de servicios · ${d.name} (abonado ${d.abonado})`,
+      caption: `Contrato de servicios · ${nombre} (abonado ${d.abonado})`,
     };
   }
 

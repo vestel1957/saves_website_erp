@@ -69,7 +69,10 @@ const log = (...a) => console.error(new Date().toISOString().slice(11, 19), ...a
 
 // Mapeo y comparación compartidos con writeback-legacy.js (una sola fuente de reglas)
 const {
-  norm, bool, dOnly, dTime, subStatus, ron, invStatus, svcStatus, eiType, payMethod,
+  // `money` lo usa syncAddSvc y faltaba en esta lista: el paso reventaba
+  // ("money is not defined") en cuanto el legacy creaba un servicio adicional, y con
+  // él se caía la pasada entera (los pasos siguientes ni corrían).
+  norm, bool, dOnly, dTime, money, subStatus, ron, invStatus, svcStatus, eiType, payMethod,
   mapCustomer, mapInvoice, mapItem, mapTx, num, diffKeys,
 } = require('./lib/vestel-map');
 
@@ -213,12 +216,26 @@ async function syncInvoices(my, st, sum, subMap) {
   // 2) modificadas por huella (los pagos NO tocan fecha_actualizacion)
   const [fpMy] = await my.query('SELECT id,status,pamnt,total,ron,estado_tv,estado_combo,rec,promo,promo2 FROM invoices WHERE id <= ?', [st.invoices]);
   const fpPg = await prisma.subInvoice.findMany({ where: { legacyId: { not: null } },
-    select: { legacyId: true, status: true, paidAmount: true, total: true, ron: true, estadoTv: true, estadoCombo: true, rec: true, promo: true, promo2: true } });
+    select: { legacyId: true, status: true, paidAmount: true, total: true, ron: true, estadoTv: true, estadoCombo: true, rec: true, promo: true, promo2: true, editedAt: true } });
   const pgFp = new Map(fpPg.map((r) => [r.legacyId, r]));
-  const cambiadas = [];
+  const cambiadas = [], editadas = [];
   for (const r of fpMy) {
     const pg = pgFp.get(r.id);
     if (!pg) continue; // huérfana histórica (sin cliente en el ETL): se ignora
+    // Factura EDITADA en este sistema: sus valores mandan. Si entrara por la vía
+    // normal, la huella (el total nunca vuelve a coincidir) la marcaría cambiada en
+    // cada pasada y le restauraría los montos y los renglones viejos del legacy.
+    // Del legacy sólo se sigue aceptando lo del cobro —lo que la cajera registra
+    // allá— y el estado se recalcula contra el total de acá. Ver `updateInvoice`.
+    if (pg.editedAt) {
+      if (num(r.pamnt) !== num(pg.paidAmount) || ron(r.ron) !== pg.ron
+        || svcStatus(r.estado_tv) !== pg.estadoTv || svcStatus(r.estado_combo) !== pg.estadoCombo
+        || (norm(r.rec) || null) !== pg.rec || (r.promo ?? null) !== (pg.promo ?? null) || (r.promo2 ?? null) !== (pg.promo2 ?? null)
+        || (invStatus(r.status) === 'CANCELED' && pg.status !== 'CANCELED')) {
+        editadas.push({ r, pg });
+      }
+      continue;
+    }
     if (invStatus(r.status) !== pg.status || num(r.pamnt) !== num(pg.paidAmount) || num(r.total) !== num(pg.total)
       || ron(r.ron) !== pg.ron || svcStatus(r.estado_tv) !== pg.estadoTv || svcStatus(r.estado_combo) !== pg.estadoCombo
       || (norm(r.rec) || null) !== pg.rec || (r.promo ?? null) !== (pg.promo ?? null) || (r.promo2 ?? null) !== (pg.promo2 ?? null)) {
@@ -242,7 +259,7 @@ async function syncInvoices(my, st, sum, subMap) {
     if (tidTomado.has(r.tid) && tidTomado.get(r.tid) !== r.id) { conflictos.push(r.tid); continue; }
     inserts.push(mapInvoice(r, sid));
   }
-  sum.invoices = { nuevas: inserts.length, actualizadas: cambiadasRows.length, huerfanas, conflictosTid: conflictos };
+  sum.invoices = { nuevas: inserts.length, actualizadas: cambiadasRows.length, editadasAqui: editadas.length, huerfanas, conflictosTid: conflictos };
   if (conflictos.length) log(`⚠️ invoices: ${conflictos.length} tid en conflicto con facturas propias del stack nuevo: ${conflictos.slice(0, 10).join(',')}`);
   if (DRY) return;
   await createMany('subInvoice', inserts);
@@ -252,9 +269,28 @@ async function syncInvoices(my, st, sum, subMap) {
     const { legacyId, ...data } = mapInvoice(r, sid);
     await prisma.subInvoice.update({ where: { legacyId: r.id }, data }).catch((e) => log(`⚠️ invoice ${r.id}: ${e.message}`));
   });
+
+  // Facturas editadas aquí: actualización PARCIAL (sólo el cobro y el estado de
+  // servicio que se movieron en el legacy). Los montos y los renglones son los de
+  // este sistema y no se tocan.
+  await pooled(editadas, 5, async ({ r, pg }) => {
+    const paid = num(r.pamnt);
+    const total = num(pg.total);
+    const data = {
+      paidAmount: paid, ron: ron(r.ron),
+      estadoTv: svcStatus(r.estado_tv), estadoCombo: svcStatus(r.estado_combo),
+      rec: norm(r.rec) || null, reconnectFlag: norm(r.rec) === '1',
+      promo: r.promo, promo2: r.promo2,
+      status: invStatus(r.status) === 'CANCELED' ? 'CANCELED'
+        : paid >= total ? 'PAID' : paid > 0 ? 'PARTIAL' : 'DUE',
+    };
+    await prisma.subInvoice.update({ where: { legacyId: r.id }, data }).catch((e) => log(`⚠️ invoice editada ${r.id}: ${e.message}`));
+  });
+  if (editadas.length) log(`invoices: ${editadas.length} editadas aquí → sólo se refrescó el cobro (montos y renglones se respetan)`);
   st.invoices = maxId; await saveState(st);
 
-  // ítems de las facturas nuevas y modificadas
+  // ítems de las facturas nuevas y modificadas (las editadas aquí quedan fuera:
+  // el upsert por legacyId les devolvería los renglones que la edición quitó)
   const tids = [...new Set([...inserts.map((i) => i.tid), ...cambiadasRows.map((r) => r.tid)])];
   if (tids.length) {
     const items = await mysqlIn(my, 'SELECT * FROM invoice_items WHERE tid IN (??IDS??)', tids);

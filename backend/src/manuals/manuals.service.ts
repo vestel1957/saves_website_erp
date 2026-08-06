@@ -1,4 +1,5 @@
-import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '../core/http/errores';
+import { Logger } from '../core/logger';
 import { existsSync, statSync } from 'fs';
 import { join, resolve } from 'path';
 import { APP_PERMISSIONS as P } from '../auth/permissions.catalog';
@@ -141,7 +142,6 @@ const MANUALES: ManualDef[] = [
  * empleado que abre esta pantalla no tiene que elegir entre once documentos para
  * dar con el que le sirve.
  */
-@Injectable()
 export class ManualsService {
   private readonly logger = new Logger('Manuales');
 

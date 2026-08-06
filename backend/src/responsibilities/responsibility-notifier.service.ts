@@ -1,5 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { EventEmitter2 } from '@nestjs/event-emitter';
+import { Logger } from '../core/logger';
+import type { EmisorDeEventos } from '../core/eventos';
 import { NotificationsService } from '../common/notifications/notifications.service';
 import { INTERNAL_ALERT_EVENT, type InternalAlert } from '../common/whatsapp/whatsapp.types';
 import { ResponsibilitiesService } from './responsibilities.service';
@@ -26,7 +26,6 @@ const BASE_URL = (process.env.APP_PUBLIC_URL ?? 'http://89.117.146.226:3060').re
  */
 const SILENCIO_MS = 15 * 60 * 1000;
 
-@Injectable()
 export class ResponsibilityNotifierService {
   private readonly logger = new Logger('AvisoPorCargo');
   /** Último WhatsApp por asunto. En memoria a propósito: se reinicia con el proceso. */
@@ -35,7 +34,7 @@ export class ResponsibilityNotifierService {
   constructor(
     private readonly responsibilities: ResponsibilitiesService,
     private readonly notifications: NotificationsService,
-    private readonly events: EventEmitter2,
+    private readonly events: EmisorDeEventos,
   ) {}
 
   /**

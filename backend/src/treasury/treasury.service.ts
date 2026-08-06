@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { NotFoundException } from '../core/http/errores';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { scopeDate } from '../common/date-scope';
@@ -26,7 +26,6 @@ function subName(s: {
 const SUB_SELECT = { firstName: true, secondName: true, lastName1: true, lastName2: true, companyName: true, fullName: true, id: true, abonado: true } as const;
 
 
-@Injectable()
 export class TreasuryService {
   constructor(private readonly prisma: PrismaService) {}
 

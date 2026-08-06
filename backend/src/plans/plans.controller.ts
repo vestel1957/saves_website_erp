@@ -1,35 +1,30 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ServiceKind } from '@prisma/client';
 import { PlansService } from './plans.service';
 import { CreatePlanDto, UpdatePlanDto } from './dto/plan.dto';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { AreaGuard } from '../auth/area.guard';
-import { RequireArea } from '../auth/require-area.decorator';
 
 /** Catálogo de planes de servicio (internet/TV). */
-@Controller('plans')
-@UseGuards(JwtAuthGuard, AreaGuard)
-@RequireArea('administracion', 'contabilidad', 'tecnicos', 'sistemas', 'caja')
 export class PlansController {
   constructor(private readonly plans: PlansService) {}
 
-  @Get()
-  list(@Query('activeOnly') activeOnly?: string, @Query('kind') kind?: ServiceKind) {
+  list(activeOnly?: string, kind?: ServiceKind) {
     return this.plans.list({ activeOnly: activeOnly === 'true', kind });
   }
 
-  @Post()
-  create(@Body() dto: CreatePlanDto) {
+  // El catálogo lo LEE todo el mundo (los selectores de plan están por todo el ERP),
+  // pero escribirlo es tocar el PRECIO con el que se le factura a 21k abonados. Se
+  // cierra a quien tiene la pantalla que lo edita —`/configuracion/planes`, de
+  // sistemas— más administración (2026-08-03). Antes lo heredaba el @RequireArea de
+  // la clase y podía cambiar una tarifa cualquiera del área caja o técnicos.
+
+  create(dto: CreatePlanDto) {
     return this.plans.create(dto);
   }
 
-  @Patch(':id')
-  update(@Param('id') id: string, @Body() dto: UpdatePlanDto) {
+  update(id: string, dto: UpdatePlanDto) {
     return this.plans.update(id, dto);
   }
 
-  @Delete(':id')
-  remove(@Param('id') id: string) {
+  remove(id: string) {
     return this.plans.remove(id);
   }
 }

@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '../core/http/errores';
 import { PrismaService } from '../prisma/prisma.service';
 import { isValidPhone, normalizePhone } from '../common/phone.util';
 
@@ -12,7 +12,6 @@ import { isValidPhone, normalizePhone } from '../common/phone.util';
  * usuario ("300 123 4567"), el lookup nunca casaría y el funcionario sería atendido
  * como un desconocido.
  */
-@Injectable()
 export class ChatbotLinkService {
   constructor(private readonly prisma: PrismaService) {}
 

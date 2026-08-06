@@ -159,6 +159,10 @@ export const APP_PERMISSIONS = {
   NETWORK_OLT_MANAGE: 'network.olt.manage', // autorizar/reiniciar/ELIMINAR ONUs por SSH
   CRON_RUN: 'system.cron.run', // disparar cronjobs a mano (facturación masiva, cartera)
   PURCHASES_APPROVE: 'purchases.approve', // aprobar órdenes de compra (1ª y 2ª firma)
+  // Editar el catálogo de cláusulas de permanencia. Va aparte del área porque esos
+  // valores son lo que se le cobra a un cliente que se retira antes de tiempo: los
+  // consulta cualquiera que dé de alta un abonado, los cambia gerencia.
+  CONTRACTS_MANAGE: 'contracts.manage',
 } as const;
 
 export type AppPermission = (typeof APP_PERMISSIONS)[keyof typeof APP_PERMISSIONS];
@@ -190,6 +194,7 @@ export const ALL_APP_PERMISSIONS: { key: string; label: string; group: string }[
   { key: A.NETWORK_OLT_MANAGE, label: 'Administrar ONUs de la OLT (autorizar/reiniciar/eliminar)', group: 'Operaciones críticas' },
   { key: A.CRON_RUN, label: 'Ejecutar procesos programados a mano (facturación masiva)', group: 'Operaciones críticas' },
   { key: A.PURCHASES_APPROVE, label: 'Aprobar órdenes de compra', group: 'Operaciones críticas' },
+  { key: A.CONTRACTS_MANAGE, label: 'Editar cláusulas de permanencia del contrato', group: 'Operaciones críticas' },
 ];
 
 /** Permiso que otorga acceso total — verificado por el PermissionsGuard. */
@@ -425,10 +430,12 @@ export const SCREENS: ScreenDef[] = [
   { href: '/contabilidad/plan-de-cuentas', label: 'Plan de cuentas', module: 'Contabilidad', areas: ['contabilidad'] },
   { href: '/contabilidad/libros', label: 'Libro diario y mayor', module: 'Contabilidad', areas: ['contabilidad'] },
   { href: '/contabilidad/informes', label: 'Balance y estados financieros', module: 'Contabilidad', areas: ['contabilidad'] },
+  // Cierre de mes: el arrastre de saldos al mes siguiente. Cerrar bloquea los asientos
+  // de esas fechas, así que es de contabilidad y administración, no de caja.
+  { href: '/contabilidad/cierres', label: 'Cierre de mes (arrastre de saldos)', module: 'Contabilidad', areas: ['contabilidad', 'administracion'] },
   { href: '/contabilidad/mapeo-cuentas', label: 'Mapeo de cuentas', module: 'Contabilidad', areas: ['contabilidad'] },
 
   { href: '/clientes', label: 'Clientes', module: 'Clientes', areas: ['administracion', 'caja'] },
-  { href: '/cobranza', label: 'Cobranza / Acuerdos de pago', module: 'Clientes', areas: ['administracion', 'caja'] },
   { href: '/playhub', label: 'PlayHub / IPTV', module: 'Clientes', areas: ['administracion'] },
 
   { href: '/soporte', label: 'Tickets / Órdenes de trabajo', module: 'Soporte', areas: ['tecnicos', 'caja'] },
@@ -497,7 +504,14 @@ export const SCREENS: ScreenDef[] = [
   { href: '/proveedores', label: 'Proveedores', module: 'Inventario / Compras', areas: ['administracion'] },
   { href: '/devoluciones', label: 'Devoluciones', module: 'Inventario / Compras', areas: ['administracion'] },
 
-  { href: '/empleados', label: 'Empleados', module: 'Personas y Proyectos', areas: ['administracion'] },
+  // Empleados se mudó a CONFIGURACIÓN y Documentos bajó aquí (2026-08-05): las dos
+  // pantallas se movieron de ruta junto con su sección, así que sus llaves cambiaron
+  // (`screen.empleados` → `screen.configuracion.empleados`, `screen.configuracion.documentos`
+  // → `screen.documentos`). El rename en base lo hace
+  // `prisma/migrate-empleados-documentos-2026-08.ts`, que conserva las concesiones.
+  // Cada una conserva su área original además de ganar la de su nueva sección:
+  // cambiar de sitio una pantalla no es quitársela a quien la usa.
+  { href: '/documentos', label: 'Documentos', module: 'Personas y Proyectos', areas: ['administracion', 'sistemas'] },
   { href: '/proyectos', label: 'Proyectos', module: 'Personas y Proyectos', areas: ['administracion'] },
   { href: '/agenda', label: 'Agenda / Tareas', module: 'Personas y Proyectos', areas: ['administracion', 'caja'] },
   { href: '/tareas', label: 'Tareas / Pendientes', module: 'Personas y Proyectos', areas: ['administracion', 'gerencia', 'tecnicos', 'caja'] },
@@ -511,14 +525,17 @@ export const SCREENS: ScreenDef[] = [
   { href: '/configuracion/planes', label: 'Planes de servicio', module: 'Sistemas', areas: ['sistemas'] },
   { href: '/configuracion/api', label: 'API pública', module: 'Sistemas', areas: ['sistemas'] },
   { href: '/configuracion/usuarios', label: 'Usuarios y roles', module: 'Sistemas', areas: ['sistemas'] },
+  { href: '/configuracion/empleados', label: 'Empleados', module: 'Sistemas', areas: ['sistemas', 'administracion'] },
   { href: '/configuracion/responsables', label: 'Encargados por cargo', module: 'Sistemas', areas: ['sistemas'] },
+  // Cuánto vale cada tipo de orden. Vive con los catálogos pero la decide GERENCIA:
+  // es política de personal (con qué se mide al técnico), no un ajuste técnico.
+  { href: '/configuracion/puntajes', label: 'Puntaje de órdenes', module: 'Sistemas', areas: ['sistemas', 'gerencia'] },
   { href: '/configuracion/whatsapp', label: 'Mensajería / WhatsApp', module: 'Sistemas', areas: ['sistemas'] },
   { href: '/configuracion/chatbot', label: 'Agente de WhatsApp (bot)', module: 'Sistemas', areas: ['sistemas'] },
   { href: '/configuracion/automatizaciones', label: 'Automatizaciones', module: 'Sistemas', areas: ['sistemas'] },
   { href: '/configuracion/actividad', label: 'Bitácora / Auditoría', module: 'Sistemas', areas: ['sistemas'] },
   { href: '/configuracion/datos', label: 'Importar / Exportar', module: 'Sistemas', areas: ['sistemas'] },
   { href: '/configuracion/mensajes', label: 'Mensajería', module: 'Sistemas', areas: ['sistemas'] },
-  { href: '/configuracion/documentos', label: 'Documentos', module: 'Sistemas', areas: ['sistemas'] },
 ];
 
 /** Todas las pantallas como permisos, para sembrar (`Permission`) y agrupar en la UI. */

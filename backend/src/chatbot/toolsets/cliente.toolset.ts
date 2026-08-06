@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Logger } from '../../core/logger';
 import type { Toolset, ToolContext, ToolDef } from '@s4gk/wa-agent';
 import { PERMISSION_DENIED } from '@s4gk/wa-agent';
 import { SubscribersService } from '../../subscribers/subscribers.service';
@@ -34,7 +34,6 @@ const EXIGEN_ACCESO_PLENO = new Set([
  * del modelo o del mensaje. Es la garantía de que un cliente no puede leer la
  * cuenta de otro pidiéndolo por chat, aunque el modelo se deje convencer.
  */
-@Injectable()
 export class ClienteToolset implements Toolset {
   private readonly logger = new Logger('ClienteToolset');
 

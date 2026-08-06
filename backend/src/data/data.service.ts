@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException } from '../core/http/errores';
 import * as ExcelJS from 'exceljs';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -6,7 +6,6 @@ type EntityKey = 'subscribers' | 'equipment' | 'materials' | 'invoices';
 
 const ENTITIES: EntityKey[] = ['subscribers', 'equipment', 'materials', 'invoices'];
 
-@Injectable()
 export class DataService {
   constructor(private prisma: PrismaService) {}
 

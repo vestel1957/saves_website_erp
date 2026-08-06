@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Logger } from '../core/logger';
 import { SubscriberStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
@@ -88,7 +88,6 @@ const SELECT_RECONEXION = {
   _count: { select: { oltOnus: true } },
 } as const;
 
-@Injectable()
 export class ReconexionService {
   private readonly logger = new Logger(ReconexionService.name);
 

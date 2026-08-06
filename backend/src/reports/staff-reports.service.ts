@@ -1,4 +1,3 @@
-import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { moduloDe, normalizarRuta } from './audit-normalize';
@@ -24,7 +23,6 @@ function rango(from?: string, to?: string): RangoResuelto {
 
 const num = (v: unknown) => Number(v ?? 0);
 
-@Injectable()
 export class StaffReportsService {
   constructor(private readonly prisma: PrismaService) {}
 

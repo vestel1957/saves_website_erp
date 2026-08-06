@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { NotFoundException } from '../core/http/errores';
 import { orden } from '../common/pagination-params';
 import { Prisma, TodoStatus, TodoPriority } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -15,7 +15,6 @@ import { CreateTaskDto, UpdateTaskDto, TaskFilter } from './dto/tasks.dto';
  * `employeeId`/`assigneeId` son ids legacy (`aauth_users.id`), no ids del stack
  * nuevo: se resuelven contra `Staff.legacyId` para mostrar nombres.
  */
-@Injectable()
 export class TasksService {
   constructor(private readonly prisma: PrismaService) {}
 

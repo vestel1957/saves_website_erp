@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { NotFoundException } from '../core/http/errores';
 import { orden } from '../common/pagination-params';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -12,7 +12,6 @@ function subName(s: { firstName: string | null; lastName1: string | null; compan
 }
 const SUB = { firstName: true, lastName1: true, companyName: true, fullName: true, id: true, abonado: true } as const;
 
-@Injectable()
 export class EinvoiceService {
   constructor(private readonly prisma: PrismaService) {}
 

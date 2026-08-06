@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Logger } from '../core/logger';
 import OpenAI from 'openai';
 import { SubscribersService } from '../subscribers/subscribers.service';
 import { BillingService } from '../billing/billing.service';
@@ -52,7 +52,6 @@ const MODULES = {
 
 type ModuleKey = keyof typeof MODULES;
 
-@Injectable()
 export class SearchService {
   private readonly logger = new Logger('AiSearch');
   private readonly client: OpenAI | null;

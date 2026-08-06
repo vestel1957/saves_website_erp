@@ -1,5 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { OnEvent } from '@nestjs/event-emitter';
+import { Logger } from '../../core/logger';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { guardarNotaDeVoz } from './whatsapp-audio.store';
@@ -15,7 +14,6 @@ import { WhatsappService } from './whatsapp.service';
  * que emite el transporte) y salientes. Resuelve el cliente por teléfono para
  * dejar la conversación ligada al abonado.
  */
-@Injectable()
 export class WhatsappLogService {
   private readonly logger = new Logger('WhatsappLog');
 
@@ -24,7 +22,6 @@ export class WhatsappLogService {
     private inbox: WhatsappInboxService,
   ) {}
 
-  @OnEvent(WHATSAPP_INBOUND_EVENT)
   async onInbound(msg: InboundWhatsappMessage) {
     // El binario se guarda ANTES de crear la fila: si el disco falla no queda una
     // fila apuntando a un archivo que no existe (que en la bandeja se vería como un
@@ -37,7 +34,6 @@ export class WhatsappLogService {
     });
   }
 
-  @OnEvent(WHATSAPP_OUTBOUND_EVENT)
   async onOutbound(evt: { to: string; text: string; messageId?: string; sentById?: string }) {
     await this.persist('OUT', evt.to, evt.text, false, evt.messageId, { sentById: evt.sentById });
   }
@@ -51,7 +47,6 @@ export class WhatsappLogService {
    * confirmar ni desmentir. Se anota solo para los códigos (van con el cuerpo
    * oculto) para no llenar el log con cada mensaje del bot.
    */
-  @OnEvent(WHATSAPP_STATUS_EVENT)
   async onStatus(evt: WhatsappStatusUpdate) {
     if (evt.status !== 'delivered' && evt.status !== 'failed') return;
     const msg = await this.prisma.whatsappMessage

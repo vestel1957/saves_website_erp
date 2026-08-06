@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Logger } from '../core/logger';
 
 export type PlayhubResp<T = any> = { httpCode: number; data: T | null; error?: string | null };
 
@@ -80,7 +80,6 @@ export function playhubErrorMessage(resp: PlayhubResp): string {
  * cacheado ~25 min; reintenta una vez ante 401/403. Config por variables de
  * entorno: PLAYHUB_BASE_URL, PLAYHUB_API_KEY, PLAYHUB_API_SECRET.
  */
-@Injectable()
 export class PlayhubClient {
   private readonly logger = new Logger('PlayhubClient');
   private token: string | null = null;

@@ -1,5 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { EventEmitter2 } from '@nestjs/event-emitter';
+import { Logger } from '../../core/logger';
+import type { EmisorDeEventos } from '../../core/eventos';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { extensionDeAudio, mimeBase } from '../uploads';
 import {
@@ -64,7 +64,6 @@ const ADJUNTO_DESCRITO: Record<string, string> = {
  */
 const PLANTILLA_REAPERTURA = { name: 'aviso_general', language: 'es' };
 
-@Injectable()
 export class WhatsappService {
   /**
    * Lo que queda escrito en el hilo de un mensaje `secreto`. Se guarda algo (y no
@@ -84,7 +83,7 @@ export class WhatsappService {
     return (process.env.KAPSO_BASE_URL ?? 'https://api.kapso.ai/meta/whatsapp').replace(/\/+$/, '');
   }
 
-  constructor(private readonly events: EventEmitter2) {}
+  constructor(private readonly events: EmisorDeEventos) {}
 
   private get apiKey() {
     return process.env.KAPSO_API_KEY ?? '';
@@ -216,6 +215,7 @@ export class WhatsappService {
    */
   processWebhook(body: any, depth = 0): void {
     try {
+      if (this.esDeOtroNumero(body)) return;
       // Modo 0: LOTE. El webhook de Kapso viene con `buffer_enabled` (ventana de 5 s),
       // así que los mensajes recibidos NO llegan sueltos: llegan agrupados dentro de
       // un sobre `{type, batch, data:[…], batch_info}`. Hasta el 2026-07-28 ese sobre
@@ -283,6 +283,36 @@ export class WhatsappService {
     } catch (e) {
       this.logger.warn(`Error procesando webhook Kapso: ${(e as Error).message}`);
     }
+  }
+
+  /**
+   * ¿Este evento es de OTRO número de WhatsApp?
+   *
+   * El 2026-08-06 un mensaje dirigido al número de otro sistema (nexus) llegó
+   * también a este webhook —el panel de Kapso tenía esta URL registrada en los
+   * dos números— y el bot le contestó al cliente por el número de Vestel: dos
+   * asistentes distintos respondiendo a la misma persona, uno de ellos sin
+   * contexto ninguno. Lo delató que la respuesta saliera como plantilla, porque
+   * la ventana de 24 h de ESTE número nunca se había abierto.
+   *
+   * Cada backend atiende exactamente un número. Lo que venga de otro se
+   * registra y se descarta: la configuración del panel puede equivocarse, el
+   * código no tiene por qué seguirle la corriente.
+   */
+  private esDeOtroNumero(body: any): boolean {
+    const propio = this.phoneNumberId;
+    if (!propio) return false; // sin número configurado no hay nada que comparar
+    const entrante =
+      body?.phone_number_id ??
+      body?.conversation?.phone_number_id ??
+      body?.data?.phone_number_id ??
+      body?.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id;
+    if (!entrante || String(entrante) === propio) return false;
+
+    this.logger.warn(
+      `Webhook del número ${entrante} descartado: este sistema atiende el ${propio}.`,
+    );
+    return true;
   }
 
   /** Normaliza un mensaje entrante (texto o nota de voz) y emite el evento. */

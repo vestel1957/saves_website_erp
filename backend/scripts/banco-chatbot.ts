@@ -29,13 +29,10 @@
 import 'dotenv/config';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { NestFactory } from '@nestjs/core';
 import { BaseTransport, type Toolset, type ToolContext } from '@s4gk/wa-agent';
 import { AgentEngine } from '@s4gk/wa-agent';
-import { AppModule } from '../src/app.module';
 import { aFormatoWhatsapp, trocear } from '../src/chatbot/chat-chunks';
-import { ChatbotService } from '../src/chatbot/chatbot.service';
-import { PrismaService } from '../src/prisma/prisma.service';
+import { chatbotService, prismaService } from '../src/core/contenedor';
 
 // ── Guion ────────────────────────────────────────────────────────────────────
 
@@ -127,6 +124,23 @@ const GUION: Escenario[] = [
     seBusca: 'Da el WhatsApp de cancelaciones y NO abre ninguna orden.',
   },
   {
+    // El agujero que se destapó el 2026-08-03: lo COMERCIAL solo lo tenía el agente
+    // público, así que a un abonado que preguntaba por planes u oficinas el bot le
+    // respondía de memoria o se rendía. Es la conversación que más plata deja —el que
+    // ya es cliente y quiere pagar más— y no había ni un escenario que la cubriera.
+    clave: 'subir-plan',
+    titulo: 'Cliente quiere más megas y pregunta por la oficina',
+    quien: 'cliente',
+    turnos: [
+      'me quedó chiquito el plan, ¿qué opciones hay para más megas?',
+      '¿y ese trae las apps incluidas?',
+      '¿dónde queda la oficina para ir a preguntar?',
+    ],
+    seBusca:
+      'Usa planes_disponibles (precios del catálogo 2026, NO inventados), apps_incluidas para lo que trae, ' +
+      'y sedes para la dirección. Ofrece el cambio de plan sin costo. No debe decir que no tiene esa información.',
+  },
+  {
     clave: 'inventar',
     titulo: 'Le piden algo que no existe',
     quien: 'cliente',
@@ -204,9 +218,12 @@ const arg = (nombre: string): string | undefined => {
 };
 
 async function main() {
-  const app = await NestFactory.createApplicationContext(AppModule, { logger: ['error'] });
-  const chatbot = app.get(ChatbotService);
-  const prisma = app.get(PrismaService);
+  // Antes esto levantaba un contexto de aplicación de Nest sólo para pedirle dos
+  // servicios. Con el contenedor explícito se importan y ya: el banco de pruebas no
+  // necesita ni servidor HTTP ni framework.
+  const chatbot = chatbotService;
+  const prisma = prismaService;
+  await chatbot.onModuleInit();
 
   const pausaMs = Number(arg('pausa') ?? 6000);
   const modelos = (arg('modelos') ?? process.env.WHATSAPP_BOT_MODEL ?? 'gpt-4o').split(',').map((m) => m.trim());
@@ -299,7 +316,7 @@ async function main() {
   const destino = join(process.cwd(), 'banco-chatbot.md');
   writeFileSync(destino, lineas.join('\n'), 'utf8');
   console.log(`\nTranscripción completa en: ${destino}`);
-  await app.close();
+  await prisma.$disconnect();
 }
 
 /** Espera a que se cumpla una condición, sin bloquear el bucle de eventos. */

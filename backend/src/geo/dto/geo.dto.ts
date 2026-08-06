@@ -7,6 +7,10 @@ export const GEO_REASONS = [
   'ticket.attach',
   'subscriber.capture',
   'manual',
+  // El técnico no hizo nada: la app, abierta en su teléfono, reporta dónde está
+  // cada pocos minutos. Es el único motivo que NO corresponde a una acción suya,
+  // y por eso conviene poder distinguirlo al auditar un recorrido.
+  'heartbeat',
 ] as const;
 
 /** Registrar la posición del funcionario en el momento de una acción. */

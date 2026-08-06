@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '../core/http/errores';
 import { Prisma, ServiceKind } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreatePlanDto, UpdatePlanDto } from './dto/plan.dto';
@@ -6,7 +6,6 @@ import { num } from '../common/money';
 
 
 /** Catálogo de planes de servicio (fuente de precio de la mensualidad recurrente). */
-@Injectable()
 export class PlansService {
   constructor(private readonly prisma: PrismaService) {}
 

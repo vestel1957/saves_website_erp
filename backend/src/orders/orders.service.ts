@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '../core/http/errores';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { orden } from '../common/pagination-params';
@@ -24,7 +24,6 @@ const TERMINAL = new Set(['cancelado', 'anulado', 'finalizado']);
 const copFmt = (n: number) =>
   new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(n || 0);
 
-@Injectable()
 export class OrdersService {
   constructor(
     private readonly prisma: PrismaService,

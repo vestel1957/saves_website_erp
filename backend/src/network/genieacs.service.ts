@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '../core/http/errores';
+import { Logger } from '../core/logger';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
@@ -87,7 +88,6 @@ export interface CpeRow {
   runState?: string | null;
 }
 
-@Injectable()
 export class GenieacsService {
   private readonly logger = new Logger(GenieacsService.name);
   private live = process.env.GENIEACS_LIVE === 'true';

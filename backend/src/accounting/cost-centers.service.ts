@@ -1,7 +1,6 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '../core/http/errores';
 import { PrismaService } from '../prisma/prisma.service';
 
-@Injectable()
 export class CostCentersService {
   constructor(private readonly prisma: PrismaService) {}
 

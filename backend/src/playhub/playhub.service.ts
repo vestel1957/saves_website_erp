@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '../core/http/errores';
+import { Logger } from '../core/logger';
 import { PrismaService } from '../prisma/prisma.service';
 import { PlayhubClient, PLAYHUB_CATALOG, playhubProductName, playhubErrorMessage } from './playhub.client';
 
@@ -28,7 +29,6 @@ function fullName(s: SubRow): string {
  * resultado en la tabla local `PlayhubSubscription` para el reporte "Clientes
  * PlayHub" (la API no expone un listado masivo).
  */
-@Injectable()
 export class PlayhubService {
   private readonly logger = new Logger('PlayhubService');
   /** Guard opcional de megas (0 = desactivado, como en la operación actual). */

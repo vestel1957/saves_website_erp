@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '../core/http/errores';
 import { Type } from 'class-transformer';
 import { IsArray, IsBoolean, IsDateString, IsInt, IsOptional, IsString, Matches, MinLength } from 'class-validator';
 import { randomBytes } from 'crypto';
@@ -96,7 +96,6 @@ function genTempPassword(): string {
   return `Vst-${b.slice(0, 8)}`;
 }
 
-@Injectable()
 export class StaffService {
   constructor(
     private readonly prisma: PrismaService,

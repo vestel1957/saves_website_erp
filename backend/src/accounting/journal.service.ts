@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '../core/http/errores';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PeriodsService } from './periods.service';
@@ -27,7 +27,6 @@ export interface PostEntryInput {
   createdBy?: string | null;
 }
 
-@Injectable()
 export class JournalService {
   constructor(
     private readonly prisma: PrismaService,

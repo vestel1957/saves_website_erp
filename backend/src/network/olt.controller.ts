@@ -1,30 +1,23 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { Allow, IsOptional, IsString } from 'class-validator';
 import { OltService } from './olt.service';
 import { OltPlanProfileService } from './olt-plan-profile.service';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { AreaGuard } from '../auth/area.guard';
-import { PermissionsGuard } from '../auth/permissions.guard';
-import { RequireArea } from '../auth/require-area.decorator';
-import { RequirePermissions } from '../auth/require-permissions.decorator';
 import { APP_PERMISSIONS } from '../auth/permissions.catalog';
-import { CurrentUser, AuthUser } from '../auth/current-user.decorator';
-import { ModuloRedGuard } from './modulo-red.guard';
+import { AuthUser } from '../auth/current-user.decorator';
 
 // Campos numéricos que llegan como número o string desde el front → @Allow()
 // para que el ValidationPipe (whitelist) no los descarte; el service los castea.
-class OnusQueryDto {
+export class OnusQueryDto {
   @Allow() frame?: number | string;
   @Allow() slot!: number | string;
   @Allow() port!: number | string;
 }
-class SlotDto {
+export class SlotDto {
   @Allow() frame?: number | string;
   @Allow() slot!: number | string;
   /** Salta la caché del resumen de slot (recorre los 16 puertos de verdad). */
   @Allow() refresh?: boolean;
 }
-class ProvisionDto {
+export class ProvisionDto {
   @Allow() frame?: number | string;
   @Allow() slot!: number | string;
   @Allow() port!: number | string;
@@ -40,7 +33,7 @@ class ProvisionDto {
   @Allow() traffic_in?: number | string;
   @Allow() traffic_out?: number | string;
 }
-class OnuActionDto {
+export class OnuActionDto {
   @Allow() frame?: number | string;
   @Allow() slot!: number | string;
   @Allow() port!: number | string;
@@ -49,10 +42,10 @@ class OnuActionDto {
   /** Al eliminar: quita antes los service-ports que bloquean el borrado. */
   @Allow() force?: boolean;
 }
-class LinkDto {
+export class LinkDto {
   @IsOptional() @IsString() subscriberId?: string | null;
 }
-class OnuDescDto {
+export class OnuDescDto {
   @Allow() frame?: number | string;
   @Allow() slot!: number | string;
   @Allow() port!: number | string;
@@ -60,16 +53,16 @@ class OnuDescDto {
   @IsOptional() @IsString() sn?: string;
   @IsOptional() @IsString() desc?: string;
 }
-class CatvStateDto {
+export class CatvStateDto {
   @IsString() sn!: string;
 }
-class CatvSetDto {
+export class CatvSetDto {
   @IsString() sn!: string;
   @Allow() catvPort?: number | string;
   @Allow() enable!: boolean;
 }
 /** Velocidad (y overrides) que le corresponde a un plan en una OLT. */
-class PlanOltProfileDto {
+export class PlanOltProfileDto {
   @IsString() planId!: string;
   /** null/vacío = default para TODAS las OLTs; concreto = override de esa OLT. */
   @IsOptional() @IsString() oltId?: string | null;
@@ -82,11 +75,11 @@ class PlanOltProfileDto {
   @Allow() userVlan?: number | string | null;
 }
 /** Varias velocidades de golpe: lo que se confirma tras deducir de la planta. */
-class PlanOltProfileLoteDto {
+export class PlanOltProfileLoteDto {
   @IsOptional() @IsString() oltId?: string | null;
   @Allow() filas!: { planId: string; trafficIn?: number | null; trafficOut?: number | null }[];
 }
-class OltUpsertDto {
+export class OltUpsertDto {
   @IsOptional() @IsString() name?: string;
   @IsOptional() @IsString() brand?: string;
   @IsOptional() @IsString() ip?: string;
@@ -104,9 +97,6 @@ class OltUpsertDto {
 }
 
 /** Gestión OLT — clon SmartOLT (control total de ONUs por SSH). */
-@Controller('network/olt')
-@UseGuards(JwtAuthGuard, AreaGuard, PermissionsGuard, ModuloRedGuard)
-@RequireArea('tecnicos', 'administracion')
 export class OltController {
   constructor(
     private readonly olt: OltService,
@@ -117,126 +107,114 @@ export class OltController {
   // Va ANTES de las rutas `:id/...` por claridad: es configuración del catálogo,
   // no una operación contra un equipo concreto.
   /** Tablero de mapeo plan → traffic-tables, con candidatas sugeridas por las megas del nombre. */
-  @Get('plan-profiles') planProfilesList(@Query('oltId') oltId?: string) {
+  planProfilesList(oltId?: string) {
     return this.planProfiles.tablero(oltId || null);
   }
-  @RequirePermissions(APP_PERMISSIONS.NETWORK_OLT_MANAGE)
-  @Post('plan-profiles') planProfileSave(@Body() dto: PlanOltProfileDto) {
+  planProfileSave(dto: PlanOltProfileDto) {
     return this.planProfiles.guardar(dto as any);
   }
-  @RequirePermissions(APP_PERMISSIONS.NETWORK_OLT_MANAGE)
-  @Delete('plan-profiles/:planId') planProfileDelete(@Param('planId') planId: string, @Query('oltId') oltId?: string) {
+  planProfileDelete(planId: string, oltId?: string) {
     return this.planProfiles.borrar(planId, oltId || null);
   }
   /**
    * Deduce el mapeo mirando con qué velocidad están funcionando ya los abonados
    * de cada plan. Es una lectura larga (un comando por puerto PON con abonados).
    */
-  @Get('plan-profiles/deducir') planProfilesDeducir(@Query('oltId') oltId: string) {
+  planProfilesDeducir(oltId: string) {
     return this.planProfiles.deducirDePlanta(oltId);
   }
   /** Guarda de una vez las propuestas que el operador confirmó. */
-  @RequirePermissions(APP_PERMISSIONS.NETWORK_OLT_MANAGE)
-  @Post('plan-profiles/lote') planProfilesLote(@Body() dto: PlanOltProfileLoteDto) {
+  planProfilesLote(dto: PlanOltProfileLoteDto) {
     return this.planProfiles.guardarLote(dto.oltId || null, dto.filas ?? []);
   }
 
   // --- Modo / inventario / dashboard (lectura BD) ---
-  @Get('mode') mode() { return this.olt.mode(); }
-  @Get('dashboard') dashboard() { return this.olt.dashboard(); }
-  @Get('inventory')
+  mode() { return this.olt.mode(); }
+  dashboard() { return this.olt.dashboard(); }
   inventory(
-    @Query('search') search?: string, @Query('oltId') oltId?: string,
-    @Query('estado') estado?: string, @Query('senal') senal?: string, @Query('cliente') cliente?: string,
-    @Query('page') page?: string, @Query('pageSize') pageSize?: string,
-    @Query('sortBy') sortBy?: string, @Query('sortDir') sortDir?: string,
+    search?: string, oltId?: string,
+    estado?: string, senal?: string, cliente?: string,
+    page?: string, pageSize?: string,
+    sortBy?: string, sortDir?: string,
   ) {
     return this.olt.inventory({ search, oltId, estado, senal, cliente, page: Number(page), pageSize: Number(pageSize), sortBy, sortDir });
   }
   /** Historial de acciones (autenticaciones, borrados…): solo administración y superadmin. */
-  @RequirePermissions(APP_PERMISSIONS.AREA_ADMINISTRACION)
-  @Get('history') history(@Query('oltId') oltId?: string, @Query('limit') limit?: string) {
+  history(oltId?: string, limit?: string) {
     return this.olt.history(oltId, Number(limit) || 100);
   }
-  @Get('subscribers') subscribers(@Query('q') q: string) { return this.olt.searchSubscribers(q); }
-  @Post('onus/:onuId/link') link(@Param('onuId') onuId: string, @Body() dto: LinkDto, @CurrentUser() user: AuthUser) {
+  subscribers(q: string) { return this.olt.searchSubscribers(q); }
+  link(onuId: string, dto: LinkDto, user: AuthUser) {
     return this.olt.linkCustomer(onuId, dto.subscriberId ?? null, user);
   }
 
   // --- CRUD de OLTs ---
-  @Get('olts') olts() { return this.olt.listOlts(); }
-  @Post('olts') create(@Body() dto: OltUpsertDto, @CurrentUser() user: AuthUser) { return this.olt.createOlt(dto, user); }
-  @RequirePermissions(APP_PERMISSIONS.NETWORK_OLT_MANAGE)
-  @Patch('olts/:id') update(@Param('id') id: string, @Body() dto: OltUpsertDto, @CurrentUser() user: AuthUser) { return this.olt.updateOlt(id, dto, user); }
-  @Delete('olts/:id') remove(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.olt.deleteOlt(id, user); }
-  @Post('olts/:id/default') setDefault(@Param('id') id: string) { return this.olt.setDefault(id); }
+  olts() { return this.olt.listOlts(); }
+  create(dto: OltUpsertDto, user: AuthUser) { return this.olt.createOlt(dto, user); }
+  update(id: string, dto: OltUpsertDto, user: AuthUser) { return this.olt.updateOlt(id, dto, user); }
+  remove(id: string, user: AuthUser) { return this.olt.deleteOlt(id, user); }
+  setDefault(id: string) { return this.olt.setDefault(id); }
 
   // --- Lecturas en vivo (SSH) ---
   // `refresh=1` salta la caché (10 min) de las lecturas que casi no cambian.
-  @Post(':id/test') test(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.olt.testConnection(id, user); }
-  @Get(':id/system') system(@Param('id') id: string, @Query('refresh') refresh?: string) { return this.olt.systemInfo(id, refresh === '1'); }
-  @Get(':id/boards') boards(@Param('id') id: string, @Query('frame') frame?: string, @Query('refresh') refresh?: string) { return this.olt.boards(id, Number(frame) || 0, refresh === '1'); }
-  @Get(':id/autofind') autofind(@Param('id') id: string) { return this.olt.autofind(id); }
-  @Get(':id/profiles') profiles(@Param('id') id: string, @Query('refresh') refresh?: string) { return this.olt.profiles(id, refresh === '1'); }
-  @Get(':id/traffic-tables') trafficTables(@Param('id') id: string, @Query('refresh') refresh?: string) { return this.olt.trafficTables(id, refresh === '1'); }
-  @Get(':id/sugerencia') sugerencia(
-    @Param('id') id: string,
-    @Query('frame') frame?: string,
-    @Query('slot') slot?: string,
-    @Query('port') port?: string,
-    @Query('model') model?: string,
+  test(id: string, user: AuthUser) { return this.olt.testConnection(id, user); }
+  system(id: string, refresh?: string) { return this.olt.systemInfo(id, refresh === '1'); }
+  boards(id: string, frame?: string, refresh?: string) { return this.olt.boards(id, Number(frame) || 0, refresh === '1'); }
+  autofind(id: string) { return this.olt.autofind(id); }
+  profiles(id: string, refresh?: string) { return this.olt.profiles(id, refresh === '1'); }
+  trafficTables(id: string, refresh?: string) { return this.olt.trafficTables(id, refresh === '1'); }
+  sugerencia(
+    id: string,
+    frame?: string,
+    slot?: string,
+    port?: string,
+    model?: string,
   ) {
     return this.olt.sugerencia(id, Number(frame) || 0, Number(slot), Number(port), model);
   }
-  @Post(':id/onus') onus(@Param('id') id: string, @Body() dto: OnusQueryDto) {
+  onus(id: string, dto: OnusQueryDto) {
     return this.olt.onus(id, Number(dto.frame) || 0, Number(dto.slot), Number(dto.port));
   }
-  @Post(':id/slot-summary') slotSummary(@Param('id') id: string, @Body() dto: SlotDto) {
+  slotSummary(id: string, dto: SlotDto) {
     return this.olt.slotSummary(id, Number(dto.frame) || 0, Number(dto.slot), dto.refresh === true);
   }
-  @Post(':id/onu/detail') detail(@Param('id') id: string, @Body() dto: OnuActionDto) {
+  detail(id: string, dto: OnuActionDto) {
     return this.olt.ontDetail(id, Number(dto.frame) || 0, Number(dto.slot), Number(dto.port), Number(dto.ont_id));
   }
   /** Señal óptica en vivo; el front la pide en segundo plano tras el detalle. */
-  @Post(':id/onu/optical') optical(@Param('id') id: string, @Body() dto: OnuActionDto) {
+  optical(id: string, dto: OnuActionDto) {
     return this.olt.ontOptical(id, Number(dto.frame) || 0, Number(dto.slot), Number(dto.port), Number(dto.ont_id));
   }
-  @Post(':id/onu/find') find(@Param('id') id: string, @Body('sn') sn: string) { return this.olt.findBySn(id, sn); }
+  find(id: string, sn: string) { return this.olt.findBySn(id, sn); }
   /** Estado del puerto CATV (RF) de una ONT por SN — palanca de TV de las ONTs sin TR-069. */
-  @Post(':id/onu/catv-state') catvState(@Param('id') id: string, @Body() dto: CatvStateDto) {
+  catvState(id: string, dto: CatvStateDto) {
     return this.olt.catvState(id, dto.sn);
   }
 
   // --- Escrituras (GATE dry-run) ---
-  @RequirePermissions(APP_PERMISSIONS.NETWORK_OLT_MANAGE)
-  @Post(':id/onu/provision') provision(@Param('id') id: string, @Body() dto: ProvisionDto, @CurrentUser() user: AuthUser) {
+  provision(id: string, dto: ProvisionDto, user: AuthUser) {
     return this.olt.provision(id, dto, user);
   }
-  @RequirePermissions(APP_PERMISSIONS.NETWORK_OLT_MANAGE)
-  @Post(':id/onu/desc') setDesc(@Param('id') id: string, @Body() dto: OnuDescDto, @CurrentUser() user: AuthUser) {
+  setDesc(id: string, dto: OnuDescDto, user: AuthUser) {
     return this.olt.setDescription(id, dto, user);
   }
   /** Corta/activa la salida CATV de una ONT por OMCI (ONTs combo sin TR-069). */
-  @RequirePermissions(APP_PERMISSIONS.NETWORK_OLT_MANAGE)
-  @Post(':id/onu/catv') setCatv(@Param('id') id: string, @Body() dto: CatvSetDto, @CurrentUser() user: AuthUser) {
+  setCatv(id: string, dto: CatvSetDto, user: AuthUser) {
     return this.olt.setCatv(id, { sn: dto.sn, catvPort: dto.catvPort, enable: dto.enable === true }, user);
   }
   /** Auto-vincula ONUs↔abonados por la descripción sincronizada de la OLT. */
-  @RequirePermissions(APP_PERMISSIONS.NETWORK_OLT_MANAGE)
-  @Post('auto-link') autoLink(@Body('oltId') oltId: string | undefined, @CurrentUser() user: AuthUser) {
+  autoLink(oltId: string | undefined, user: AuthUser) {
     return this.olt.autoLinkOnus(oltId || undefined, user);
   }
-  @RequirePermissions(APP_PERMISSIONS.NETWORK_OLT_MANAGE)
-  @Post(':id/onu/reboot') reboot(@Param('id') id: string, @Body() dto: OnuActionDto, @CurrentUser() user: AuthUser) {
+  reboot(id: string, dto: OnuActionDto, user: AuthUser) {
     return this.olt.reboot(id, dto, user);
   }
-  @RequirePermissions(APP_PERMISSIONS.NETWORK_OLT_MANAGE)
-  @Post(':id/onu/delete') deleteOnu(@Param('id') id: string, @Body() dto: OnuActionDto, @CurrentUser() user: AuthUser) {
+  deleteOnu(id: string, dto: OnuActionDto, user: AuthUser) {
     return this.olt.remove(id, dto, user);
   }
 
   // --- Inventario: sincronizar un slot ---
-  @Post(':id/sync') sync(@Param('id') id: string, @Body() dto: SlotDto, @CurrentUser() user: AuthUser) {
+  sync(id: string, dto: SlotDto, user: AuthUser) {
     return this.olt.syncSlot(id, Number(dto.frame) || 0, Number(dto.slot), user);
   }
 }

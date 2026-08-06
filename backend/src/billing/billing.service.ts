@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '../core/http/errores';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { scopeDate, currentYear } from '../common/date-scope';
@@ -49,7 +49,6 @@ function periodoFacturado(kind: string | null, invoiceDate: Date | null): string
   return invoiceDate.toLocaleDateString('es-CO', { month: 'long', year: 'numeric', timeZone: 'UTC' });
 }
 
-@Injectable()
 export class BillingService {
   constructor(
     private readonly prisma: PrismaService,
@@ -251,6 +250,12 @@ export class BillingService {
       period: periodoFacturado(i.kind, i.invoiceDate),
       service: { combo: i.serviceCombo, tv: i.serviceTv, puntos: i.puntos, estadoCombo: i.estadoCombo, estadoTv: i.estadoTv },
       eInvoiceFlag: i.eInvoiceFlag,
+      // Para la edición: si la factura vino del legacy, el cambio queda sólo en este
+      // sistema (allá se sigue viendo el valor viejo mientras el legacy esté activo),
+      // y una vez timbrada ante la DIAN ya no se puede tocar.
+      fromLegacy: i.legacyId != null,
+      stamped: i.electronicInvoices.some((e) => e.type === 'FACTURADA' && !!e.dianNumber),
+      editedAt: i.editedAt, editedBy: i.editedBy, editCount: i.editCount,
       subscriber: i.subscriber ? {
         id: i.subscriber.id, name: subName(i.subscriber), abonado: i.subscriber.abonado,
         docType: i.subscriber.docType, docNumber: i.subscriber.docNumber,
@@ -258,6 +263,12 @@ export class BillingService {
       } : null,
       items: i.items.map((it) => ({
         id: it.id, product: it.productName, description: it.description, qty: it.qty,
+        // `productId` (pid del legacy) lo necesita el editor para reenviar la línea
+        // sin perder el enlace al producto del catálogo.
+        productId: it.productId ?? 0,
+        // Una nota crédito/débito es un renglón más de la factura, pero no un
+        // concepto editable: se muestra aparte y la edición no la toca.
+        nota: it.productName === 'Nota Credito' || it.productName === 'Nota Debito',
         price: num(it.price), taxRate: num(it.taxRate), subtotal: num(it.subtotal), taxTotal: num(it.taxTotal),
       })),
       payments: i.transactions.map((t) => ({

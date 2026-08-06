@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '../core/http/errores';
+import { Logger } from '../core/logger';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { SiigoClient } from './siigo-client';
@@ -14,7 +15,6 @@ import { SiigoClient } from './siigo-client';
  * emitir de verdad hay que arrancar el backend con EINVOICE_LIVE=true y tener
  * la cuenta Siigo configurada (documentId, sellerId, ivaTaxId, medio de pago).
  */
-@Injectable()
 export class EinvoiceEmitService {
   private readonly logger = new Logger('EinvoiceEmit');
   private readonly live = process.env.EINVOICE_LIVE === 'true';

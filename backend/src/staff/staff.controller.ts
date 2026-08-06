@@ -1,5 +1,4 @@
-import { BadRequestException, Body, Controller, Delete, Get, NotFoundException, Param, Patch, Post, Query, Res, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { BadRequestException, NotFoundException } from '../core/http/errores';
 import { diskStorage } from 'multer';
 import type { Response } from 'express';
 import { existsSync, mkdirSync, unlinkSync } from 'node:fs';
@@ -9,22 +8,14 @@ import { MIMES_DOCUMENTO, enviarAdjuntoSeguro, mimeAceptado, nombreEnDisco } fro
 import { StaffDocumentsService, type ArchivoSubido } from './staff-documents.service';
 import { StaffService, CreateStaffDto, UpdateStaffDto, SetStaffPermissionsDto, SetStaffRolesDto, CreateStaffAccountDto, SetStaffAccountActiveDto, SetStaffBannedDto, ResetStaffPasswordDto } from './staff.service';
 import { PerformanceService } from '../reports/performance.service';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { AreaGuard } from '../auth/area.guard';
-import { RequireArea } from '../auth/require-area.decorator';
-import { PermissionsGuard } from '../auth/permissions.guard';
-import { RequirePermissions } from '../auth/require-permissions.decorator';
 import { APP_PERMISSIONS } from '../auth/permissions.catalog';
-import { CurrentUser, AuthUser } from '../auth/current-user.decorator';
+import { AuthUser } from '../auth/current-user.decorator';
 
-const DOCS_ROOT = join(process.cwd(), 'uploads', 'staff');
+export const DOCS_ROOT = join(process.cwd(), 'uploads', 'staff');
 /** 20 MB: una hoja de vida escaneada cabe de sobra y frena las subidas absurdas. */
-const MAX_DOC_BYTES = 20 * 1024 * 1024;
+export const MAX_DOC_BYTES = 20 * 1024 * 1024;
 
 /** Empleados / RRHH (migrado de saves-vestel). */
-@Controller('staff')
-@UseGuards(JwtAuthGuard, AreaGuard)
-@RequireArea('administracion', 'gerencia')
 export class StaffController {
   constructor(
     private readonly staff: StaffService,
@@ -32,10 +23,10 @@ export class StaffController {
     private readonly performance: PerformanceService,
   ) {}
 
-  @Get('stats') stats() { return this.staff.stats(); }
-  @Get('areas') areas() { return this.staff.areas(); }
+  stats() { return this.staff.stats(); }
+  areas() { return this.staff.areas(); }
   /** Catálogo de roles disponibles para el selector de la ficha. */
-  @Get('role-catalog') roleCatalog() { return this.staff.roleCatalog(); }
+  roleCatalog() { return this.staff.roleCatalog(); }
   /**
    * Lista de empleados: solo los activos.
    *
@@ -45,84 +36,59 @@ export class StaffController {
    * ignora el parámetro en vez de responderle un error: el filtro no existe en
    * su pantalla, así que solo llegaría escribiéndolo a mano.
    */
-  @Get()
-  list(@CurrentUser() actor: AuthUser, @Query('search') search?: string, @Query('role') role?: string, @Query('areaId') areaId?: string, @Query('inhabilitados') inhabilitados?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string, @Query('sortBy') sortBy?: string, @Query('sortDir') sortDir?: string) {
+  list(actor: AuthUser, search?: string, role?: string, areaId?: string, inhabilitados?: string, page?: string, pageSize?: string, sortBy?: string, sortDir?: string) {
     const esSuper = (actor?.permissions ?? []).includes(APP_PERMISSIONS.SYSTEM_ADMIN);
     return this.staff.list({ search, role, areaId, verInhabilitados: inhabilitados === '1' && esSuper, page: Number(page), pageSize: Number(pageSize), sortBy, sortDir });
   }
-  @Get(':id') detail(@Param('id') id: string) { return this.staff.detail(id); }
-  @Post() create(@Body() dto: CreateStaffDto) { return this.staff.create(dto); }
-  @Patch(':id') update(@Param('id') id: string, @Body() dto: UpdateStaffDto, @CurrentUser() actor: AuthUser) { return this.staff.update(id, dto, actor); }
+  detail(id: string) { return this.staff.detail(id); }
+  create(dto: CreateStaffDto) { return this.staff.create(dto); }
+  update(id: string, dto: UpdateStaffDto, actor: AuthUser) { return this.staff.update(id, dto, actor); }
 
   /** Permisos del empleado (vista): cualquiera con acceso al área los consulta. */
-  @Get(':id/permissions') permissions(@Param('id') id: string) { return this.staff.permissions(id); }
+  permissions(id: string) { return this.staff.permissions(id); }
 
   /** Editar los permisos del empleado: EXCLUSIVO del superusuario (system.admin). */
-  @Patch(':id/permissions')
-  @UseGuards(PermissionsGuard)
-  @RequirePermissions(APP_PERMISSIONS.SYSTEM_ADMIN)
-  setPermissions(@Param('id') id: string, @Body() dto: SetStaffPermissionsDto, @CurrentUser() actor: AuthUser) {
+  setPermissions(id: string, dto: SetStaffPermissionsDto, actor: AuthUser) {
     return this.staff.setPermissions(id, dto.granted, actor);
   }
 
   /** Cambiar los roles del empleado: EXCLUSIVO del superusuario (system.admin). */
-  @Patch(':id/roles')
-  @UseGuards(PermissionsGuard)
-  @RequirePermissions(APP_PERMISSIONS.SYSTEM_ADMIN)
-  setRoles(@Param('id') id: string, @Body() dto: SetStaffRolesDto, @CurrentUser() actor: AuthUser) {
+  setRoles(id: string, dto: SetStaffRolesDto, actor: AuthUser) {
     return this.staff.setRoles(id, dto.roleKeys, actor);
   }
 
   /** Crear la cuenta de acceso del empleado: EXCLUSIVO del superusuario. */
-  @Post(':id/account')
-  @UseGuards(PermissionsGuard)
-  @RequirePermissions(APP_PERMISSIONS.SYSTEM_ADMIN)
-  createAccount(@Param('id') id: string, @Body() dto: CreateStaffAccountDto, @CurrentUser() actor: AuthUser) {
+  createAccount(id: string, dto: CreateStaffAccountDto, actor: AuthUser) {
     return this.staff.createAccount(id, dto, actor);
   }
 
   /** Habilitar/inhabilitar el acceso: EXCLUSIVO del superusuario. */
-  @Patch(':id/account/active')
-  @UseGuards(PermissionsGuard)
-  @RequirePermissions(APP_PERMISSIONS.SYSTEM_ADMIN)
-  setAccountActive(@Param('id') id: string, @Body() dto: SetStaffAccountActiveDto, @CurrentUser() actor: AuthUser) {
+  setAccountActive(id: string, dto: SetStaffAccountActiveDto, actor: AuthUser) {
     return this.staff.setAccountActive(id, dto.isActive, actor);
   }
 
   /** Inhabilitar/habilitar al funcionario entero: EXCLUSIVO del superusuario. */
-  @Patch(':id/banned')
-  @UseGuards(PermissionsGuard)
-  @RequirePermissions(APP_PERMISSIONS.SYSTEM_ADMIN)
-  setBanned(@Param('id') id: string, @Body() dto: SetStaffBannedDto, @CurrentUser() actor: AuthUser) {
+  setBanned(id: string, dto: SetStaffBannedDto, actor: AuthUser) {
     return this.staff.setBanned(id, dto.banned, actor);
   }
 
   /** ¿Restablecerle la contraseña pide código, y a qué WhatsApp saldría? */
-  @Get(':id/account/password/policy')
-  @UseGuards(PermissionsGuard)
-  @RequirePermissions(APP_PERMISSIONS.SYSTEM_ADMIN)
-  passwordPolicy(@Param('id') id: string) {
+  passwordPolicy(id: string) {
     return this.staff.accountPasswordPolicy(id);
   }
 
   /** Manda al WhatsApp DEL EMPLEADO el código para restablecerle la contraseña. */
-  @Post(':id/account/password/code')
-  @UseGuards(PermissionsGuard)
-  @RequirePermissions(APP_PERMISSIONS.SYSTEM_ADMIN)
-  requestPasswordCode(@Param('id') id: string, @CurrentUser() actor: AuthUser) {
+  requestPasswordCode(id: string, actor: AuthUser) {
     return this.staff.requestAccountPasswordCode(id, actor);
   }
 
   /** Restablecer la contraseña del empleado: EXCLUSIVO del superusuario. */
-  @Post(':id/account/password')
-  @UseGuards(PermissionsGuard)
-  @RequirePermissions(APP_PERMISSIONS.SYSTEM_ADMIN)
-  resetPassword(@Param('id') id: string, @Body() dto: ResetStaffPasswordDto, @CurrentUser() actor: AuthUser) {
+  resetPassword(id: string, dto: ResetStaffPasswordDto, actor: AuthUser) {
     return this.staff.resetAccountPassword(id, dto, actor);
   }
 
   /** Bitácora de cambios de acceso del empleado (consulta por el área). */
-  @Get(':id/audit') audit(@Param('id') id: string) { return this.staff.accessAudit(id); }
+  audit(id: string) { return this.staff.accessAudit(id); }
 
   /**
    * Rendimiento del funcionario: las mismas métricas del tablero de /reportes,
@@ -141,8 +107,7 @@ export class StaffController {
    *
    * Sin `from`/`to` el servicio toma los últimos 90 días.
    */
-  @Get(':id/rendimiento')
-  rendimiento(@Param('id') id: string, @Query('from') from?: string, @Query('to') to?: string) {
+  rendimiento(id: string, from?: string, to?: string) {
     return this.performance.tecnico(id, from, to);
   }
 
@@ -151,41 +116,16 @@ export class StaffController {
   // RRHH de lectura y subir/borrar el de escritura: el área sola no basta, aquí
   // hay cédulas y contratos.
 
-  @Get(':id/documents')
-  @UseGuards(PermissionsGuard)
-  @RequirePermissions(APP_PERMISSIONS.HR_EMPLOYEES_READ)
-  listDocuments(@Param('id') id: string) {
+  listDocuments(id: string) {
     return this.docs.listar(id);
   }
 
-  @Post(':id/documents')
-  @UseGuards(PermissionsGuard)
-  @RequirePermissions(APP_PERMISSIONS.HR_EMPLOYEES_WRITE)
-  @UseInterceptors(
-    FileInterceptor('file', {
-      storage: diskStorage({
-        destination: (req, _file, cb) => {
-          const dir = join(DOCS_ROOT, (req.params as { id: string }).id);
-          mkdirSync(dir, { recursive: true });
-          cb(null, dir);
-        },
-        // La extensión sale del MIME ya validado por `fileFilter`, NUNCA del
-        // `originalname`: por ahí es por donde entraba un .html disfrazado.
-        filename: (_req, file, cb) => cb(null, nombreEnDisco(randomUUID(), file.mimetype)),
-      }),
-      limits: { fileSize: MAX_DOC_BYTES },
-      fileFilter: (_req, file, cb) => {
-        const ok = mimeAceptado(file.mimetype, MIMES_DOCUMENTO);
-        cb(ok ? null : new BadRequestException('Solo se aceptan PDF, imágenes o Word'), ok);
-      },
-    }),
-  )
   async uploadDocument(
-    @Param('id') id: string,
-    @UploadedFile() file: ArchivoSubido,
-    @Body('kind') kind: string | undefined,
-    @Body('description') description: string | undefined,
-    @CurrentUser() user: AuthUser,
+    id: string,
+    file: ArchivoSubido,
+    kind: string | undefined,
+    description: string | undefined,
+    user: AuthUser,
   ) {
     if (!file) throw new BadRequestException('No se recibió ningún archivo');
     try {
@@ -199,20 +139,14 @@ export class StaffController {
     }
   }
 
-  @Get(':id/documents/:docId/download')
-  @UseGuards(PermissionsGuard)
-  @RequirePermissions(APP_PERMISSIONS.HR_EMPLOYEES_READ)
-  async downloadDocument(@Param('id') id: string, @Param('docId') docId: string, @Res() res: Response) {
+  async downloadDocument(id: string, docId: string, res: Response) {
     const doc = await this.docs.meta(id, docId);
     const abs = join(DOCS_ROOT, id, doc.storedName);
     if (!existsSync(abs)) throw new NotFoundException('El archivo ya no está en el servidor');
     return enviarAdjuntoSeguro(res, abs, doc.fileName);
   }
 
-  @Delete(':id/documents/:docId')
-  @UseGuards(PermissionsGuard)
-  @RequirePermissions(APP_PERMISSIONS.HR_EMPLOYEES_WRITE)
-  async deleteDocument(@Param('id') id: string, @Param('docId') docId: string) {
+  async deleteDocument(id: string, docId: string) {
     const storedName = await this.docs.eliminar(id, docId);
     try { unlinkSync(join(DOCS_ROOT, id, storedName)); } catch { /* ya no existía */ }
     return { ok: true };

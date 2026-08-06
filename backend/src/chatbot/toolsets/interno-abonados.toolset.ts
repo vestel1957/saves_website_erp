@@ -1,4 +1,3 @@
-import { Injectable } from '@nestjs/common';
 import type { Toolset, ToolContext, ToolDef } from '@s4gk/wa-agent';
 import { PERMISSION_DENIED } from '@s4gk/wa-agent';
 import { APP_PERMISSIONS as P } from '../../auth/permissions.catalog';
@@ -18,7 +17,6 @@ const VER_ABONADOS = [P.AREA_ADMINISTRACION, P.AREA_CONTABILIDAD, P.AREA_TECNICO
  * facturas. Todo es lectura y reutiliza los mismos servicios que la web, así que
  * un funcionario ve por WhatsApp exactamente lo que vería en pantalla.
  */
-@Injectable()
 export class InternoAbonadosToolset implements Toolset {
   constructor(
     private readonly subscribers: SubscribersService,

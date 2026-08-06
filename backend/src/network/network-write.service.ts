@@ -1,4 +1,5 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '../core/http/errores';
+import { Logger } from '../core/logger';
 import { orden } from '../common/pagination-params';
 import { Type } from 'class-transformer';
 import { IsArray, IsInt, IsOptional, IsString, Max, Min, MinLength } from 'class-validator';
@@ -103,7 +104,6 @@ function subName(s: { firstName: string | null; lastName1: string | null; compan
   return (s.fullName?.trim()) || [s.firstName, s.lastName1].filter(Boolean).join(' ').trim() || s.companyName || null;
 }
 
-@Injectable()
 export class NetworkWriteService {
   private readonly logger = new Logger('NetworkWrite');
 

@@ -1,4 +1,3 @@
-import { Injectable } from '@nestjs/common';
 import type { Toolset, ToolContext, ToolDef } from '@s4gk/wa-agent';
 import { APP_PERMISSIONS as P } from '../../auth/permissions.catalog';
 import { OrdersService } from '../../orders/orders.service';
@@ -40,7 +39,6 @@ function estadoDe(raw: unknown): (typeof ESTADOS)[number] | null {
  * justamente lo que hace que una firma signifique algo. El bot dice qué hay
  * pendiente y con qué detalle; firmar se hace en /ordenes.
  */
-@Injectable()
 export class InternoComprasToolset implements Toolset {
   constructor(
     private readonly orders: OrdersService,

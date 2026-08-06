@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Logger } from '../core/logger';
 import { createHash, randomInt } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { WhatsappService } from '../common/whatsapp/whatsapp.service';
@@ -40,7 +40,6 @@ const sha = (v: string) => createHash('sha256').update(v).digest('hex');
  * dirección, los pagos, los cambios— exige además el código que se manda al WhatsApp
  * del titular, que sí prueba tener ese teléfono en la mano.
  */
-@Injectable()
 export class ChatAccessService {
   private readonly logger = new Logger('ChatAccess');
 

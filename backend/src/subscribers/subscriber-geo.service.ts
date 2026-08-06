@@ -1,11 +1,9 @@
-import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 /**
  * Catálogos de dirección (selects en cascada del wizard de alta de cliente).
  * Extraído de SubscribersService: es lectura pura sin acoplamiento.
  */
-@Injectable()
 export class SubscriberGeoService {
   constructor(private readonly prisma: PrismaService) {}
 

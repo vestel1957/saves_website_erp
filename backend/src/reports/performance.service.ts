@@ -1,4 +1,3 @@
-import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { tiposDeCampo, tiposDeRevisita } from '../support/field-work.policy';
@@ -62,6 +61,9 @@ type FilaCruda = {
   geo_fuera: number;
   vencidas: number;
   antiguedad_dias: number | null;
+  puntos: number;
+  puntaje_prom: number | null;
+  sin_puntaje: number;
 };
 
 export type TecnicoRendimiento = {
@@ -87,6 +89,12 @@ export type TecnicoRendimiento = {
   vencidas: number;
   /** Antigüedad promedio, en días, de lo que este técnico tiene sin cerrar. */
   antiguedadDias: number | null;
+  /** Suma de los puntos de sus órdenes cerradas en el periodo. */
+  puntos: number;
+  /** Puntaje medio por orden cerrada (1 a 5). Dice qué tan pesado es su trabajo. */
+  puntajePromedio: number | null;
+  /** Cerradas que no traen puntaje (se cerraron antes de que existiera). */
+  sinPuntaje: number;
   /** false = tiene tan pocas órdenes que sus porcentajes no son interpretables. */
   muestraSuficiente: boolean;
 };
@@ -112,7 +120,6 @@ export function mediana(valores: (number | null)[]): number | null {
   return Math.round(med * 10) / 10;
 }
 
-@Injectable()
 export class PerformanceService {
   constructor(private readonly prisma: PrismaService) {}
 
@@ -182,7 +189,7 @@ export class PerformanceService {
       WITH campo AS (
         SELECT t.id, t.code, t."assignedStaffId", t."subscriberId", t.status,
                t.created, t."assignedAt", t."resolvedAt",
-               t."signatureName", t."closeGeoOk"
+               t."signatureName", t."closeGeoOk", t.score
           FROM "Ticket" t
          WHERE t.type = ANY(${tipos})
            AND t."assignedStaffId" IS NOT NULL
@@ -241,7 +248,15 @@ export class PerformanceService {
              COUNT(c.id) FILTER (WHERE c.status IN ('PENDIENTE','REALIZANDO')
                                    AND c.created < CURRENT_DATE - ${VENCIMIENTO_SQL})::int AS vencidas,
              ROUND(AVG(CURRENT_DATE - c.created)
-                   FILTER (WHERE c.status IN ('PENDIENTE','REALIZANDO'))::numeric, 1)::float8 AS antiguedad_dias
+                   FILTER (WHERE c.status IN ('PENDIENTE','REALIZANDO'))::numeric, 1)::float8 AS antiguedad_dias,
+             -- Puntaje: la suma de lo que valieron las órdenes que cerró. Solo
+             -- suma lo cerrado; una orden abierta no tiene puntos que sumar.
+             COALESCE(SUM(c.score) FILTER (WHERE c.status = 'RESUELTO'), 0)::int AS puntos,
+             ROUND(AVG(c.score) FILTER (WHERE c.status = 'RESUELTO')::numeric, 2)::float8 AS puntaje_prom,
+             -- Cerradas sin puntos. Son las de antes de que existiera el puntaje:
+             -- se cuentan para poder decir "faltan N" en vez de dar por bueno un
+             -- total que en realidad está incompleto.
+             COUNT(c.id) FILTER (WHERE c.status = 'RESUELTO' AND c.score IS NULL)::int AS sin_puntaje
         FROM campo c
         -- Solo funcionarios activos: a un ex-empleado no se le mide el rendimiento
         -- ni se le compara con el equipo de hoy. Lo que trabajó queda en sus órdenes.
@@ -281,6 +296,9 @@ export class PerformanceService {
       geoFuera: f.geo_fuera,
       vencidas: f.vencidas,
       antiguedadDias: f.antiguedad_dias,
+      puntos: f.puntos,
+      puntajePromedio: f.puntaje_prom,
+      sinPuntaje: f.sin_puntaje,
       muestraSuficiente: f.cerradas >= MUESTRA_MINIMA,
     }));
 
@@ -301,6 +319,11 @@ export class PerformanceService {
       medianaEvidencia: mediana(base.map((t) => t.evidenciaPct)),
       abiertas: tecnicos.reduce((s, t) => s + t.abiertas, 0),
       vencidas: tecnicos.reduce((s, t) => s + t.vencidas, 0),
+      puntos: tecnicos.reduce((s, t) => s + t.puntos, 0),
+      medianaPuntos: mediana(base.map((t) => t.puntos)),
+      // Cuántas cerradas del periodo todavía no tienen puntaje. Mientras esto no
+      // sea 0, la columna de puntos se lee "de lo que sí se pudo puntuar".
+      sinPuntaje: tecnicos.reduce((s, t) => s + t.sinPuntaje, 0),
       ventanaRevisitaDias: VENTANA_REVISITA_DIAS,
       muestraMinima: MUESTRA_MINIMA,
       diasVencimiento: DIAS_VENCIMIENTO,
@@ -329,10 +352,11 @@ export class PerformanceService {
     // algo accionable: casi siempre el problema no es el técnico entero, es UN
     // tipo de trabajo suyo (p. ej. bien en revisiones, mal en instalaciones).
     const porTipo = await this.prisma.$queryRaw<
-      { tipo: string; cerradas: number; revisitas: number }[]
+      { tipo: string; cerradas: number; revisitas: number; puntos: number }[]
     >`
       SELECT c.type AS tipo,
              COUNT(*)::int AS cerradas,
+             COALESCE(SUM(c.score), 0)::int AS puntos,
              COUNT(*) FILTER (WHERE EXISTS (
                SELECT 1 FROM "Ticket" n
                 WHERE n.type = ANY(${revisita})
@@ -392,6 +416,7 @@ export class PerformanceService {
         cerradas: r.cerradas,
         revisitas: r.revisitas,
         revisitaPct: pct(r.revisitas, r.cerradas),
+        puntos: r.puntos,
       })),
       casos: casos.map((c) => ({
         id: c.id,

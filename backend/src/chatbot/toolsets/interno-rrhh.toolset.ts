@@ -1,4 +1,3 @@
-import { Injectable } from '@nestjs/common';
 import type { Toolset, ToolContext, ToolDef } from '@s4gk/wa-agent';
 import { APP_PERMISSIONS as P } from '../../auth/permissions.catalog';
 import { StaffService } from '../../staff/staff.service';
@@ -33,7 +32,6 @@ const RRHH = [P.AREA_ADMINISTRACION, P.AREA_GERENCIA];
  * dirección de la casa): por chat se resuelve "quién es, de qué área y cómo lo
  * contacto", que es la pregunta real de quien está fuera de la oficina.
  */
-@Injectable()
 export class InternoRrhhToolset implements Toolset {
   constructor(private readonly staff: StaffService) {}
 

@@ -1,72 +1,83 @@
-import { ValidationPipe } from '@nestjs/common';
-import { NestFactory } from '@nestjs/core';
-import { NestExpressApplication } from '@nestjs/platform-express';
-import compression from 'compression';
-import helmet from 'helmet';
-import { AppModule } from './app.module';
-import { AllExceptionsFilter } from './common/errors/all-exceptions.filter';
+/**
+ * Arranque de la API de SAVES.
+ *
+ * Sustituye al `main.ts` de NestJS. La diferencia de fondo no está en Express: está
+ * en que aquí el arranque se lee de arriba abajo y en el orden en que ocurre —validar
+ * entorno, cablear, suscribir, programar, escuchar—. Con Nest, buena parte de esto lo
+ * hacía el framework por reflexión y no aparecía en ningún fichero.
+ */
+import 'reflect-metadata';
 import { comprobarEntornoOAbortar } from './common/env.validation';
+import { crearApp } from './core/app';
+import { crearAuditoria } from './core/auditoria';
+import { crearLimitador } from './core/http/limitador';
+import { apagar, iniciar } from './core/ciclo-vida';
+import { auditService, todosLosServicios } from './core/contenedor';
+import { Logger } from './core/logger';
+import { RUTAS } from './core/rutas';
+import { registrarSuscripciones } from './core/suscripciones';
+import { programarTareas } from './core/tareas';
+import { detenerTodas } from './core/cron';
 
-async function bootstrap() {
+const log = new Logger('Arranque');
+
+async function arrancar() {
   // Antes de levantar nada: si falta configuración crítica, fallar aquí y ruidoso.
   // Un proceso que arranca a medias es peor que uno que no arranca.
   comprobarEntornoOAbortar();
 
-  // rawBody: true expone req.rawBody (Buffer) para verificar la firma del
-  // webhook de WhatsApp Cloud API (X-Hub-Signature-256).
-  const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });
+  // Ganchos de arranque de los servicios (entre ellos el `$connect` de Prisma). Si
+  // alguno falla, el error sube y el proceso muere: que pm2 lo reintente es mejor
+  // que servir peticiones contra una base a la que no se ha conectado.
+  await iniciar(todosLosServicios);
 
-  // Confiar en UN proxy (Plesk/Apache en 127.0.0.1 → aquí). Sin esto, Express ve el
-  // socket de loopback y `req.ip` es SIEMPRE 127.0.0.1 para todo internet, con lo que
-  // el rate-limiting por IP (login y ThrottlerGuard) trata a todos los clientes como
-  // uno solo: 10 logins fallidos bloqueaban el login de TODA la empresa. Con esto,
-  // `req.ip` toma el X-Forwarded-For que fija el proxy y el límite es por cliente real.
-  // `1` = un único salto de confianza; NO usar `true`, que confiaría en XFF falsificado.
-  app.set('trust proxy', 1);
+  registrarSuscripciones();
 
-  // Comprime las respuestas (gzip). Los listados JSON viajan ~5-8x más livianos.
-  app.use(compression());
+  // Las programadas sólo se montan si están habilitadas. Cada tarea vuelve a
+  // comprobarlo por dentro, pero no registrarlas siquiera evita que un despliegue de
+  // pruebas tenga temporizadores vivos apuntando a la base de producción.
+  if (process.env.CRONS_ENABLED === 'true') {
+    programarTareas();
+  } else {
+    log.warn('Tareas programadas DESACTIVADAS (CRONS_ENABLED != true)');
+  }
 
-  // Cabeceras de seguridad. Dos ajustes conscientes sobre los valores por defecto:
-  //  - `crossOriginResourcePolicy` en 'cross-origin': el frontend corre en otro
-  //    puerto (3060) que la API (3061), o sea otro origen. Con el 'same-origin' que
-  //    trae helmet por defecto, el navegador bloquearía los adjuntos y PDFs.
-  //  - CSP desactivada: esta app sólo sirve JSON y ficheros de descarga, nunca HTML
-  //    propio, así que una CSP aquí no protege nada y sí puede romper clientes.
-  app.use(
-    helmet({
-      crossOriginResourcePolicy: { policy: 'cross-origin' },
-      contentSecurityPolicy: false,
-    }),
-  );
-
-  app.setGlobalPrefix('api');
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      transform: true,
-      transformOptions: { enableImplicitConversion: true },
-    }),
-  );
-  // Traduce los errores de Prisma al HTTP que les toca (P2002 -> 409, P2025 -> 404…)
-  // en vez de devolver 500 con el stack. Va después del pipe para no alterar la forma
-  // de los errores de validación, que el frontend ya sabe leer.
-  app.useGlobalFilters(new AllExceptionsFilter());
-
-  app.enableCors({
-    origin: process.env.CORS_ORIGIN?.split(',') ?? 'http://localhost:3000',
-    credentials: true,
+  const app = crearApp({
+    rutas: RUTAS,
+    auditoria: crearAuditoria(auditService),
+    // Límite generoso a propósito: una oficina entera sale por la misma IP pública.
+    limitador: crearLimitador({ limite: 600, ventanaMs: 60_000 }),
   });
 
-  const port = process.env.PORT ? Number(process.env.PORT) : 4000;
+  const puerto = process.env.PORT ? Number(process.env.PORT) : 4000;
   // Se escucha SÓLO en localhost: el único camino desde internet es el proxy TLS
   // (Plesk/Apache en 443 → 127.0.0.1), que ya termina el certificado. Exponer el
   // puerto además al 0.0.0.0 dejaba la API accesible por HTTP plano en
   // http://<ip>:3061, esquivando el TLS y mandando el token en claro.
   // `HOST=0.0.0.0` permite volver atrás sin tocar código si hiciera falta.
   const host = process.env.HOST ?? '127.0.0.1';
-  await app.listen(port, host);
-  console.log(`🚀 API de SAVES escuchando en http://${host}:${port}/api`);
+
+  const servidor = app.listen(puerto, host, () => {
+    log.log(`🚀 API de SAVES escuchando en http://${host}:${puerto}/api`);
+  });
+
+  // Apagado ordenado. pm2 manda SIGINT al reiniciar: sin esto, las peticiones en
+  // vuelo se cortan a mitad y las conexiones de Prisma quedan colgando en Postgres,
+  // que está compartido con otras aplicaciones y tiene el cupo justo.
+  const apagarOrdenado = (senal: string) => {
+    log.log(`${senal} recibido: cerrando…`);
+    detenerTodas();
+    servidor.close(() => {
+      void apagar(todosLosServicios).then(() => process.exit(0));
+    });
+    // Red de seguridad: si algo se queda colgado, no bloquear el reinicio.
+    setTimeout(() => process.exit(0), 10_000).unref();
+  };
+  process.on('SIGINT', () => apagarOrdenado('SIGINT'));
+  process.on('SIGTERM', () => apagarOrdenado('SIGTERM'));
 }
 
-bootstrap();
+void arrancar().catch((e) => {
+  log.error(`No se pudo arrancar: ${(e as Error)?.message}`, (e as Error)?.stack);
+  process.exit(1);
+});

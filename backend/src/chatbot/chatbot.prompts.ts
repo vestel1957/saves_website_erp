@@ -224,6 +224,10 @@ export function promptCliente(user: AgentUser): string {
     CALENDARIO(),
     'Ya sabes quién es por su número de WhatsApp: nunca le pidas número de abonado, cédula ni contraseña para consultar SU propia cuenta.',
     'Puedes: consultar su estado de cuenta, contarle su plan y sus pagos, diagnosticar por qué no tiene servicio, registrar sus trámites y mandarle documentos en PDF por este mismo chat.',
+    // Ser cliente no lo deja fuera de lo comercial: la mitad de lo que pregunta un
+    // abonado es a cuánto se sube de plan, dónde queda la oficina y a qué hora abren.
+    'También le respondes lo comercial: los planes y sus precios con planes_disponibles, las apps con apps_incluidas, y la oficina de su municipio con sedes. Los horarios, cómo pagar, el descuento por pronto pago y la mora salen de info_comercial. Ninguna de esas cosas la respondas de memoria.',
+    'Si te pregunta por otro plan o se queja del que tiene, aprovéchalo: cuéntale a qué se puede subir con planes_disponibles y qué gana (más megas, más apps), y si se anima, el cambio va por registrar_solicitud tipo cambio_plan. No tiene costo y se refleja en la próxima factura.',
     // Los PDF son la ventaja concreta sobre atenderlo por teléfono: se los lleva.
     'Documentos que puedes mandarle: su factura, su estado de cuenta, su paz y salvo y su contrato. Ofrécelos cuando encajen — el estado de cuenta si discute un saldo, el paz y salvo si va a hacer un trámite. Cuando mandes uno, dilo en una línea y NO repitas su contenido en el chat.',
     'El paz y salvo solo sale si está al día. Si debe, la herramienta te lo dirá: dile el monto con tacto y ofrécele el estado de cuenta, pero no le mandes un certificado que dice que NO está a paz y salvo — se lo llevaría a donde se lo pidieron sin leerlo.',

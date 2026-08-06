@@ -1,5 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { OnEvent } from '@nestjs/event-emitter';
+import { Logger } from '../core/logger';
 import { PrismaService } from '../prisma/prisma.service';
 import { WhatsappService } from '../common/whatsapp/whatsapp.service';
 import { TICKET_ASIGNADO_EVENT, type TicketAsignadoEvent } from '../support/support.events';
@@ -34,7 +33,6 @@ const TOPE_DIARIO = 150;
  * Fuera de la ventana de 24 h de Meta esto sale por plantilla aprobada, que se paga.
  * Es otra razón para que la lista sea corta.
  */
-@Injectable()
 export class AvisosProactivosService {
   private readonly logger = new Logger('AvisosProactivos');
   private enviadosHoy = 0;
@@ -48,7 +46,6 @@ export class AvisosProactivosService {
 
   // ── "Su caso ya tiene técnico" ─────────────────────────────────────────────
 
-  @OnEvent(TICKET_ASIGNADO_EVENT)
   async alAsignar(e: TicketAsignadoEvent): Promise<void> {
     try {
       if (!(await this.activo()) || !e?.subscriberId || e.code == null) return;
@@ -73,7 +70,6 @@ export class AvisosProactivosService {
 
   // ── "Recibimos su pago y volvió el servicio" ───────────────────────────────
 
-  @OnEvent(PAGO_APLICADO_EVENT)
   async alPagar(e: PagoAplicadoEvent): Promise<void> {
     try {
       if (!(await this.activo()) || !e?.subscriberId) return;

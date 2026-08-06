@@ -1,4 +1,3 @@
-import { Injectable } from '@nestjs/common';
 import type { Toolset, ToolContext, ToolDef } from '@s4gk/wa-agent';
 import { PERMISSION_DENIED } from '@s4gk/wa-agent';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -27,7 +26,6 @@ const CLAVES = Object.keys(REPORTES_PDF);
  * Las dos salen del mismo servicio: el PDF nunca puede decir algo distinto a lo que
  * el bot acaba de escribir en el chat.
  */
-@Injectable()
 export class InternoReportesToolset implements Toolset {
   constructor(
     private readonly reports: ReportsService,

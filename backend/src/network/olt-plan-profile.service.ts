@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '../core/http/errores';
+import { Logger } from '../core/logger';
 import { PrismaService } from '../prisma/prisma.service';
 import { OltService } from './olt.service';
 
@@ -19,7 +20,6 @@ import { OltService } from './olt.service';
  * Herencia: una fila con `oltId` concreto SOBREESCRIBE la fila `oltId = null`
  * (default para todas las OLTs). Los TID varían de equipo a equipo.
  */
-@Injectable()
 export class OltPlanProfileService {
   private readonly logger = new Logger(OltPlanProfileService.name);
 

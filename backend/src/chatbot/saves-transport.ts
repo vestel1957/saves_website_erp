@@ -1,5 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { OnEvent } from '@nestjs/event-emitter';
+import { Logger } from '../core/logger';
 import { BaseTransport } from '@s4gk/wa-agent';
 import { WhatsappService } from '../common/whatsapp/whatsapp.service';
 import { WHATSAPP_INBOUND_EVENT, type InboundWhatsappMessage } from '../common/whatsapp/whatsapp.types';
@@ -29,7 +28,6 @@ const TROCEAR = process.env.WA_BOT_TROCEAR !== 'false';
  * El acople es por evento, no por import: el WhatsappModule no conoce al chatbot, lo
  * que evita un ciclo de módulos (BillingModule → WhatsappModule → …).
  */
-@Injectable()
 export class SavesTransport extends BaseTransport {
   readonly name = SAVES_TRANSPORT_NAME;
   private readonly logger = new Logger('SavesTransport');
@@ -60,7 +58,6 @@ export class SavesTransport extends BaseTransport {
    * como estaba antes de que existiera: el mensaje queda guardado y lo atiende una
    * persona.
    */
-  @OnEvent(WHATSAPP_INBOUND_EVENT)
   async onWhatsappInbound(msg: InboundWhatsappMessage): Promise<void> {
     const { ok, reason, aviso } = await this.gate.shouldHandle(msg.from);
     if (!ok) {

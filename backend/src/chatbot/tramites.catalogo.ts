@@ -162,6 +162,26 @@ export const REGLA_DOS_MESES =
   APPS_SUELTAS.map((a) => `${a.plan} $${a.precio.toLocaleString('es-CO')}`).join(' · ') +
   ' al mes (depende de la app; si no sabes cuál le corresponde, dilo y ofrécele confirmarlo con un asesor).';
 
+/**
+ * Las oficinas de atención al público, con su dirección.
+ *
+ * Salen del documento de SAM (`PROMPT_SAM_DEFINITIVO.md`, «OFICINAS FÍSICAS») y están
+ * aquí por lo mismo que los planes: la tabla `Branch` del ERP tiene el NOMBRE de la
+ * sede pero su columna `dir` viene del sistema viejo y no siempre está puesta, y una
+ * dirección a medias es justo lo que no se le puede dar a alguien que va a coger un
+ * bus. La herramienta `sedes` usa la de la BD cuando existe y cae aquí cuando no.
+ *
+ * La clave es el municipio en minúsculas y sin tildes, que es como se casa contra el
+ * nombre de la sede en la BD ("CABECERA YOPAL", "Yopal", "Almacen Yopal" → yopal).
+ */
+export const OFICINAS: Record<string, string> = {
+  yopal: 'Carrera 20 #26-76',
+  villanueva: 'Carrera 7 #11-47',
+  aguazul: 'Carrera 14 #11-75',
+  tauramena: 'Carrera 11 #7-06',
+  monterrey: 'Calle 20a #13-36',
+};
+
 /** Temas de información comercial que el bot puede consultar y explicar. */
 export const INFO_COMERCIAL: Record<string, { titulo: string; texto: string }> = {
   afiliacion: {
@@ -440,7 +460,15 @@ export const TRAMITES: Record<string, TramiteDef> = {
     ticketType: 'Instalacion',
     requiereAbonado: false,
     prioridad: 'Media',
-    costo: '$70.000 (pago único)',
+    // El costo se arma desde AFILIACION y NO se escribe a mano. Estuvo escrito
+    // "$70.000 (pago único)" —la cifra del prompt viejo de SAM— mientras
+    // INFO_COMERCIAL.afiliacion, que sale de la hoja de tarifas 2026, decía que
+    // depende de la permanencia y del tipo de plan. Eran dos herramientas del MISMO
+    // bot contestando distinto a la misma pregunta: al que preguntaba "¿cuánto cuesta
+    // instalar?" le salía $70.000, y al que además preguntaba por streaming, $85.000.
+    costo:
+      AFILIACION.map((a) => `${a.tipo} $${a.doceMeses.toLocaleString('es-CO')} con 12 meses de permanencia` +
+        (a.seisMeses ? ` o $${a.seisMeses.toLocaleString('es-CO')} con 6 meses` : '')).join(' · '),
     campos: [
       { nombre: 'nombre', pregunta: '¿Cuál es su nombre completo?', obligatorio: true },
       { nombre: 'telefono', pregunta: '¿A qué número lo podemos contactar?', obligatorio: true },
@@ -449,9 +477,12 @@ export const TRAMITES: Record<string, TramiteDef> = {
       { nombre: 'plan_interes', pregunta: '¿Qué plan le interesa?', obligatorio: true },
     ],
     guion:
-      'La afiliación cuesta $70.000 (pago único) y pide cédula en físico y un recibo público de la vivienda. ' +
-      'Cuéntale eso, muéstrale los planes si aún no eligió, y registra la solicitud: un asesor lo contacta para ' +
-      'coordinar la instalación. NO le prometas fecha de instalación.',
+      'La afiliación se cobra una sola vez y su valor depende del tipo de plan y de la permanencia que acepte ' +
+      '(el detalle está en el costo de arriba, y también en info_comercial tema afiliacion). Pide cédula en ' +
+      'físico y un recibo de servicio público de la vivienda. Cuéntale eso, muéstrale los planes con ' +
+      'planes_disponibles si aún no eligió, y registra la solicitud: un asesor lo contacta para coordinar la ' +
+      'instalación. NO le prometas fecha de instalación, y si pregunta por cláusulas o penalidades de ' +
+      'permanencia NO improvises: eso lo explica un asesor.',
     cargo: 'ventas',
   },
   cobertura: {

@@ -1,6 +1,4 @@
-import { Body, Controller, Delete, Get, Post, Put, UseGuards } from '@nestjs/common';
-import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
-import { AuthUser, CurrentUser } from '../../auth/current-user.decorator';
+import { AuthUser } from '../../auth/current-user.decorator';
 import { SignatureOtpService } from './signature-otp.service';
 import { SetSignaturePhoneDto, SignatureCodeDto } from './dto/signature.dto';
 
@@ -15,34 +13,27 @@ import { SetSignaturePhoneDto, SignatureCodeDto } from './dto/signature.dto';
  * id de usuario, el sujeto es siempre `@CurrentUser()`. Nadie puede pedir ni
  * verificar el código de otro.
  */
-@Controller('profile/signature')
-@UseGuards(JwtAuthGuard)
 export class SignatureController {
   constructor(private readonly firma: SignatureOtpService) {}
 
-  @Get()
-  estado(@CurrentUser() user: AuthUser) {
+  estado(user: AuthUser) {
     return this.firma.estado(user.id);
   }
 
-  @Get('history')
-  historial(@CurrentUser() user: AuthUser) {
+  historial(user: AuthUser) {
     return this.firma.historial(user.id);
   }
 
-  @Put('phone')
-  setPhone(@CurrentUser() user: AuthUser, @Body() dto: SetSignaturePhoneDto) {
+  setPhone(user: AuthUser, dto: SetSignaturePhoneDto) {
     return this.firma.setTelefono(user.id, dto.phone);
   }
 
-  @Delete('phone')
-  borrarPhone(@CurrentUser() user: AuthUser) {
+  borrarPhone(user: AuthUser) {
     return this.firma.borrarTelefono(user.id);
   }
 
   /** Manda un código de prueba: comprueba que el número recibe de verdad. */
-  @Post('test')
-  probar(@CurrentUser() user: AuthUser) {
+  probar(user: AuthUser) {
     return this.firma.pedir({
       userId: user.id,
       purpose: 'profile.verify',
@@ -51,8 +42,7 @@ export class SignatureController {
   }
 
   /** Acierta el código de prueba ⇒ el número queda verificado. */
-  @Post('verify')
-  async verificar(@CurrentUser() user: AuthUser, @Body() dto: SignatureCodeDto) {
+  async verificar(user: AuthUser, dto: SignatureCodeDto) {
     await this.firma.firmar({ userId: user.id, purpose: 'profile.verify', code: dto.code });
     return this.firma.estado(user.id);
   }

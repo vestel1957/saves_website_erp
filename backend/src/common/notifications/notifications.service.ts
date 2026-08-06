@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Logger } from '../../core/logger';
 import { PrismaService } from '../../prisma/prisma.service';
 
 /** Lo que se le pide al servicio para avisar de algo. */
@@ -25,7 +25,6 @@ const TOPE = 30;
  * Es genérico a propósito (`kind` y `link` son texto): nació con la bandeja de
  * WhatsApp, pero cualquier módulo puede avisar sin tocar el modelo.
  */
-@Injectable()
 export class NotificationsService {
   private readonly logger = new Logger('Notifications');
 

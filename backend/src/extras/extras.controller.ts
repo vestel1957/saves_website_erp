@@ -1,70 +1,41 @@
-import {
-  BadRequestException, Body, Controller, Get, Param, Post, Query, Res,
-  UploadedFile, UseGuards, UseInterceptors,
-} from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { BadRequestException } from '../core/http/errores';
 import { diskStorage } from 'multer';
 import { existsSync, mkdirSync } from 'node:fs';
 import { extname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Response } from 'express';
 import { ExtrasService } from './extras.service';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { AreaGuard } from '../auth/area.guard';
-import { RequireArea } from '../auth/require-area.decorator';
 
-const DOC_ROOT = join(process.cwd(), 'uploads', 'documents');
+export const DOC_ROOT = join(process.cwd(), 'uploads', 'documents');
 /** Extensiones que admite el repositorio documental. */
-const EXT_DOCUMENTO = new Set([
+export const EXT_DOCUMENTO = new Set([
   '.pdf', '.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic',
   '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.csv', '.txt', '.zip',
 ]);
 
 /** Módulos nicho: PlayHub/IPTV, mensajería interna, gestor documental. */
-@Controller('extras')
-@UseGuards(JwtAuthGuard, AreaGuard)
-@RequireArea('sistemas', 'administracion')
 export class ExtrasController {
   constructor(private readonly extras: ExtrasService) {}
 
   // --- PlayHub ---
-  @Get('playhub')
-  playhub(@Query('search') search?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string, @Query('sortBy') sortBy?: string, @Query('sortDir') sortDir?: string) {
+  playhub(search?: string, page?: string, pageSize?: string, sortBy?: string, sortDir?: string) {
     return this.extras.playhub({ search, page: Number(page), pageSize: Number(pageSize), sortBy, sortDir });
   }
 
   // --- Mensajería ---
-  @Get('messages')
-  messages(@Query('search') search?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string) {
+  messages(search?: string, page?: string, pageSize?: string) {
     return this.extras.messages({ search, page: Number(page), pageSize: Number(pageSize) });
   }
 
   // --- Documental ---
-  @Get('documents') documents() { return this.extras.documents(); }
+  documents() { return this.extras.documents(); }
 
-  @Post('documents/folder') createFolder(@Body() body: { name: string }) {
+  createFolder(body: { name: string }) {
     if (!body?.name?.trim()) throw new BadRequestException('Nombre de carpeta requerido.');
     return this.extras.createFolder(body.name.trim());
   }
 
-  @Post('documents')
-  @UseInterceptors(
-    FileInterceptor('file', {
-      storage: diskStorage({
-        destination: (_req, _file, cb) => { if (!existsSync(DOC_ROOT)) mkdirSync(DOC_ROOT, { recursive: true }); cb(null, DOC_ROOT); },
-        filename: (_req, file, cb) => cb(null, `${randomUUID()}${extname(file.originalname).toLowerCase()}`),
-      }),
-      limits: { fileSize: 25 * 1024 * 1024 },
-      // No tenía NINGÚN filtro: aceptaba cualquier extensión. Se sirve siempre como
-      // descarga (`res.download`), así que no era ejecutable en el navegador, pero
-      // no hay razón para dejar que el repositorio documental acepte binarios.
-      fileFilter: (_req, file, cb) => {
-        const ok = EXT_DOCUMENTO.has(extname(file.originalname).toLowerCase());
-        cb(ok ? null : new BadRequestException('Tipo de archivo no permitido'), ok);
-      },
-    }),
-  )
-  async uploadDocument(@UploadedFile() file: any, @Body() body: { title?: string; folderId?: string }) {
+  async uploadDocument(file: any, body: { title?: string; folderId?: string }) {
     if (!file) throw new BadRequestException('Sube un archivo en el campo "file".');
     return this.extras.createDocument({
       title: body.title?.trim() || file.originalname,
@@ -74,8 +45,7 @@ export class ExtrasController {
     });
   }
 
-  @Get('documents/:id/download')
-  async download(@Param('id') id: string, @Res() res: Response) {
+  async download(id: string, res: Response) {
     const d = await this.extras.getDocument(id);
     if (!d.storedName) throw new BadRequestException('Este documento no tiene archivo descargable (solo metadata migrada).');
     res.setHeader('X-Content-Type-Options', 'nosniff');

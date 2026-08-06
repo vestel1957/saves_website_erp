@@ -1,5 +1,5 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { EventEmitter2 } from '@nestjs/event-emitter';
+import { BadRequestException, ForbiddenException, NotFoundException } from '../core/http/errores';
+import type { EmisorDeEventos } from '../core/eventos';
 import { Type } from 'class-transformer';
 import { IsArray, IsDateString, IsIn, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
 import { Prisma, TicketStatus } from '@prisma/client';
@@ -16,9 +16,11 @@ import {
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CARGO_TECNICO } from '../staff/cargos-legacy';
-import { esTecnicoDeCampo } from '../common/tecnico-scope';
+import { esTecnicoDeCampo, fichaDelUsuario } from '../common/tecnico-scope';
+import { puedeAbrirOrden } from './turno';
 import { AgendaService } from './agenda.service';
 import { ETIQUETA_CLASE, esClaseOrden, resolverClase } from './order-types';
+import { OrderScoreService } from './order-score.service';
 
 /** Carpeta de firmas PNG dibujadas de las órdenes. */
 const SIGNATURE_ROOT = join(process.cwd(), 'uploads', 'signatures');
@@ -105,15 +107,15 @@ export class ConsumeMaterialsDto {
 
 const dateOnly = (s?: string) => { const d = s ? new Date(s) : new Date(); return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())); };
 
-@Injectable()
 export class SupportWriteService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly mikrotik: MikrotikService,
     private readonly geofence: GeofenceService,
     private readonly porCargo: ResponsibilityNotifierService,
-    private readonly events: EventEmitter2,
+    private readonly events: EmisorDeEventos,
     private readonly agenda: AgendaService,
+    private readonly puntajes: OrderScoreService,
   ) {}
 
   /**
@@ -277,6 +279,17 @@ export class SupportWriteService {
   async updateStatus(id: string, dto: UpdateStatusDto, user?: AuthUser, ip?: string | null) {
     const t = await this.prisma.ticket.findUnique({ where: { id } });
     if (!t) throw new NotFoundException('Orden no encontrada');
+
+    // Turno obligatorio: el técnico no cierra una orden que no le toca. La puerta de
+    // `ticketDetail` bloquea abrirla, pero cambiar el estado es un endpoint aparte y
+    // sin esto quedaba el atajo de llamarlo directamente con el id.
+    if (esTecnicoDeCampo(user)) {
+      const ficha = await fichaDelUsuario(this.prisma, user!);
+      if (ficha) {
+        const v = await puedeAbrirOrden(this.prisma, ficha.id, { id, status: t.status });
+        if (!v.permitido) throw new ForbiddenException(v.motivo);
+      }
+    }
     // Bloqueo de cierre sin firma (porta Tickets.php). Desactivable con
     // TICKET_REQUIRE_SIGNATURE=false. Solo aplica al pasar a RESUELTO.
     if (dto.status === 'RESUELTO' && process.env.TICKET_REQUIRE_SIGNATURE !== 'false' && !t.signatureName) {
@@ -303,6 +316,17 @@ export class SupportWriteService {
       // usuario y por eso no sirve para medir. Este sello es del sistema.
       data.resolvedAt = new Date();
       if (cerca) Object.assign(data, cerca.datos);
+      // Puntaje del trabajo: se copia el valor que tiene el tipo AHORA, para que
+      // un ajuste posterior de la tabla no reescriba lo ya abonado. Ver
+      // `Ticket.score` y order-score.policy.ts.
+      data.score = await this.puntajes.puntajeDe(t.type);
+      data.scoredAt = new Date();
+    } else if (t.score != null) {
+      // Reabrir o anular una orden le quita los puntos: se abonan por trabajo
+      // terminado. Si se vuelve a cerrar, se vuelven a sellar con el valor de
+      // ese momento — que es lo correcto, porque es otro cierre.
+      data.score = null;
+      data.scoredAt = null;
     }
     await this.prisma.ticket.update({ where: { id }, data });
 

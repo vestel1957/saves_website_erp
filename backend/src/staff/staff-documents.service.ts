@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '../core/http/errores';
 import { StaffDocumentKind } from '@prisma/client';
 import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 import { PrismaService } from '../prisma/prisma.service';
@@ -39,7 +39,6 @@ export const ETIQUETA_TIPO: Record<StaffDocumentKind, string> = {
  * estático, y el nombre en disco no se deriva jamás del nombre que manda el
  * cliente (ver common/uploads.ts).
  */
-@Injectable()
 export class StaffDocumentsService {
   constructor(private readonly prisma: PrismaService) {}
 

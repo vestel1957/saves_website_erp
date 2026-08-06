@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Logger } from '../core/logger';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CATALOGO, type Entidad } from './data-catalog';
@@ -53,7 +53,6 @@ export type ResultadoConsulta = {
 const TOPE_FILAS = 50;
 const MAX_GRUPOS = 2;
 
-@Injectable()
 export class DataQueryService {
   private readonly logger = new Logger('DataQuery');
 

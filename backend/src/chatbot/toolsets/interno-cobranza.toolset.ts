@@ -1,4 +1,3 @@
-import { Injectable } from '@nestjs/common';
 import type { Toolset, ToolContext, ToolDef } from '@s4gk/wa-agent';
 import { APP_PERMISSIONS as P } from '../../auth/permissions.catalog';
 import { CollectionsService } from '../../collections/collections.service';
@@ -16,7 +15,6 @@ const COBRANZA = [P.AREA_ADMINISTRACION, P.AREA_CAJA, P.AREA_CONTABILIDAD];
  * facturas, mueve caja y puede disparar la reconexión— y por chat no hay forma de
  * revisar sobre qué facturas va a caer antes de aceptar. Se cobra en /cobranza.
  */
-@Injectable()
 export class InternoCobranzaToolset implements Toolset {
   constructor(
     private readonly collections: CollectionsService,

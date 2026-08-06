@@ -1,4 +1,5 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { NotFoundException } from '../core/http/errores';
+import { Logger } from '../core/logger';
 import { Prisma } from '@prisma/client';
 import { JournalService } from './journal.service';
 import { MappingsService } from './mappings.service';
@@ -7,6 +8,11 @@ import { round2 } from '../common/money';
 
 type SalesInvoiceArgs = {
   sourceId: string; date: Date; number: string | number; subtotal: number; tax?: number;
+  costCenterId?: string | null; createdBy?: string | null;
+};
+type SalesInvoiceAdjustmentArgs = {
+  sourceId: string; date: Date; number: string | number; edit: number;
+  deltaSubtotal: number; deltaTax?: number;
   costCenterId?: string | null; createdBy?: string | null;
 };
 type CustomerPaymentArgs = {
@@ -39,7 +45,6 @@ type TreasuryIncomeArgs = {
  * originales, así que se puede listar qué quedó sin contabilizar y reintentarlo.
  * Antes sólo había un `log.warn` y no había forma de saber cuáles eran.
  */
-@Injectable()
 export class PostingService {
   private readonly log = new Logger(PostingService.name);
 
@@ -137,6 +142,7 @@ export class PostingService {
   private despachador(sourceType: string): ((a: never) => Promise<unknown>) | null {
     const mapa: Record<string, (a: never) => Promise<unknown>> = {
       SALES_INVOICE: (a) => this.postSalesInvoice(a),
+      SALES_INVOICE_ADJ: (a) => this.postSalesInvoiceAdjustment(a),
       CUSTOMER_PAYMENT: (a) => this.postCustomerPayment(a),
       PURCHASE_BILL: (a) => this.postPurchaseBill(a),
       SUPPLIER_PAYMENT: (a) => this.postSupplierPayment(a),
@@ -169,6 +175,56 @@ export class PostingService {
       return this.journal.post({
         date: p.date, description: `Factura de venta ${p.number}`, reference: String(p.number),
         type: 'AUTOMATIC', sourceType: 'SALES_INVOICE', sourceId: p.sourceId, createdBy: p.createdBy ?? null, lines,
+      });
+    });
+  }
+
+  /**
+   * Ajuste por EDICIÓN de una factura de venta: contabiliza sólo el DELTA contra el
+   * asiento original, en vez de reversarlo y volverlo a emitir.
+   *
+   * Por qué el delta y no un reverso: el asiento original es idempotente por
+   * (sourceType, sourceId), así que un re-post después del reverso devolvería el
+   * asiento reversado en lugar de crear el nuevo, y la factura quedaría sin
+   * contabilizar. El delta además deja el rastro de qué cambió y cuándo, que es lo
+   * que pide una factura que ya salió.
+   *
+   * `edit` (el número de edición) entra en el sourceId para que la segunda edición
+   * no choque con la primera y siga siendo idempotente por edición.
+   */
+  async postSalesInvoiceAdjustment(p: SalesInvoiceAdjustmentArgs) {
+    const sourceId = `${p.sourceId}#${p.edit}`;
+    return this.safePost('SALES_INVOICE_ADJ', sourceId, p, async () => {
+      const dSubtotal = round2(p.deltaSubtotal);
+      const dTax = round2(p.deltaTax ?? 0);
+      const dTotal = round2(dSubtotal + dTax);
+      if (dSubtotal === 0 && dTax === 0) return null;
+      // Sin asiento original no hay nada que ajustar: las facturas traídas del legacy
+      // no se contabilizaron aquí, y colgarles sólo el delta dejaría el mayor con un
+      // ajuste que no corresponde a ningún ingreso registrado.
+      const original = await this.prisma.journalEntry.findUnique({
+        where: { sourceType_sourceId: { sourceType: 'SALES_INVOICE', sourceId: p.sourceId } },
+        select: { id: true },
+      });
+      if (!original) return null;
+      const m = await this.mappings.resolveMany(
+        dTax !== 0 ? ['SALES_AR', 'SALES_REVENUE', 'SALES_TAX'] : ['SALES_AR', 'SALES_REVENUE'],
+      );
+      // Un delta puede ser negativo (la factura bajó de valor) y el subtotal y el IVA
+      // pueden moverse en sentidos distintos (cambió el concepto por otro con otro
+      // IVA), así que cada línea elige lado por su propio signo. Cuadra siempre
+      // porque dTotal = dSubtotal + dTax.
+      const lado = (v: number) => ({ debit: Math.max(v, 0), credit: Math.max(-v, 0) });
+      const lines = [
+        { accountId: m['SALES_AR'], ...lado(dTotal), costCenterId: p.costCenterId ?? null },
+        { accountId: m['SALES_REVENUE'], ...lado(-dSubtotal), costCenterId: p.costCenterId ?? null },
+      ];
+      if (dTax !== 0) lines.push({ accountId: m['SALES_TAX'], ...lado(-dTax), costCenterId: p.costCenterId ?? null });
+      return this.journal.post({
+        date: p.date, description: `Ajuste por edición de la factura ${p.number}`, reference: String(p.number),
+        type: 'AUTOMATIC', sourceType: 'SALES_INVOICE_ADJ', sourceId,
+        createdBy: p.createdBy ?? null,
+        lines: lines.filter((l) => l.debit > 0 || l.credit > 0),
       });
     });
   }

@@ -1,5 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { OnEvent } from '@nestjs/event-emitter';
+import { Logger } from '../core/logger';
 import { PrismaService } from '../prisma/prisma.service';
 import { WhatsappService } from '../common/whatsapp/whatsapp.service';
 import { ChatbotGateService } from './chatbot-gate.service';
@@ -38,7 +37,6 @@ const ESPERA_MAX_MS = 48 * 60 * 60 * 1000;
  *  2. **Solo si hay conversación abierta con ese cliente** y la lleva el bot. Si un
  *     compañero está atendiendo el chat a mano, el sistema no se mete en medio.
  */
-@Injectable()
 export class TicketConfirmacionService {
   private readonly logger = new Logger('ConfirmacionSolucion');
 
@@ -60,7 +58,6 @@ export class TicketConfirmacionService {
 
   // ── Se cerró la orden: se le pregunta al cliente ───────────────────────────
 
-  @OnEvent(TICKET_RESUELTO_EVENT)
   async alResolver(e: TicketResueltoEvent): Promise<void> {
     try {
       if (!(await this.activo()) || !e?.subscriberId || e.code == null) return;

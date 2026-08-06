@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { NotFoundException } from '../core/http/errores';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { orden } from '../common/pagination-params';
@@ -8,7 +8,6 @@ function subName(s: { firstName: string | null; lastName1: string | null; compan
   return (s.fullName?.trim()) || [s.firstName, s.lastName1].filter(Boolean).join(' ').trim() || s.companyName || null;
 }
 
-@Injectable()
 export class ExtrasService {
   constructor(private prisma: PrismaService) {}
 

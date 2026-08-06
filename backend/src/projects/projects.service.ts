@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { NotFoundException } from '../core/http/errores';
 import { Type } from 'class-transformer';
 import { IsIn, IsInt, IsNumber, IsOptional, IsString, Min, MinLength } from 'class-validator';
 import { Prisma } from '@prisma/client';
@@ -35,7 +35,6 @@ export class MilestoneDto {
 
 const dOnly = (s?: string) => (s ? new Date(s) : null);
 
-@Injectable()
 export class ProjectsService {
   constructor(private readonly prisma: PrismaService) {}
 

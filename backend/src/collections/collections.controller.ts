@@ -1,11 +1,7 @@
-import { Body, Controller, Delete, Get, Param, Post, Query, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { CollectionsService, AgreementFilter } from './collections.service';
 import { CreateCallDto } from './dto/collections.dto';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { AreaGuard } from '../auth/area.guard';
-import { RequireArea } from '../auth/require-area.decorator';
-import { CurrentUser, AuthUser } from '../auth/current-user.decorator';
+import { AuthUser } from '../auth/current-user.decorator';
 
 const csvCell = (v: unknown) => {
   const s = v == null ? '' : String(v);
@@ -13,9 +9,6 @@ const csvCell = (v: unknown) => {
 };
 
 /** Cobranza: bitácora de llamadas + acuerdos de pago (migrado de saves-vestel `Llamadas`). */
-@Controller('collections')
-@UseGuards(JwtAuthGuard, AreaGuard)
-@RequireArea('administracion', 'caja')
 export class CollectionsController {
   constructor(private readonly collections: CollectionsService) {}
 
@@ -28,15 +21,13 @@ export class CollectionsController {
     };
   }
 
-  @Get('response-types') responseTypes() { return this.collections.responseTypes(); }
+  responseTypes() { return this.collections.responseTypes(); }
 
-  @Get('agreements')
-  agreements(@Query() q: Record<string, string | undefined>, @CurrentUser() user: AuthUser) {
+  agreements(q: Record<string, string | undefined>, user: AuthUser) {
     return this.collections.agreements(this.filter(q, user));
   }
 
-  @Get('agreements/export.csv')
-  async exportAgreements(@Query() q: Record<string, string | undefined>, @CurrentUser() user: AuthUser, @Res() res: Response) {
+  async exportAgreements(q: Record<string, string | undefined>, user: AuthUser, res: Response) {
     const rows = await this.collections.agreementRows(this.filter(q, user));
     const headers = ['Cliente', 'Documento', 'Abonado', 'Teléfono', 'Estado cliente', 'Responsable', 'Fecha llamada', 'Hora', 'Compromiso', 'Vencido', 'Notas'];
     const lines = [headers.join(';')];
@@ -49,10 +40,10 @@ export class CollectionsController {
     res.send(csv);
   }
 
-  @Get('subscriber/:subscriberId') bySubscriber(@Param('subscriberId') subscriberId: string) {
+  bySubscriber(subscriberId: string) {
     return this.collections.listBySubscriber(subscriberId);
   }
 
-  @Post() create(@Body() dto: CreateCallDto, @CurrentUser() user: AuthUser) { return this.collections.create(dto, user); }
-  @Delete(':id') remove(@Param('id') id: string) { return this.collections.remove(id); }
+  create(dto: CreateCallDto, user: AuthUser) { return this.collections.create(dto, user); }
+  remove(id: string) { return this.collections.remove(id); }
 }

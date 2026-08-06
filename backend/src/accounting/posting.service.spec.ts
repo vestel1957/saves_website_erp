@@ -16,15 +16,16 @@ const pendientes = () => ({
   findMany: jest.fn().mockResolvedValue([]),
 });
 
-const armar = (postImpl: () => Promise<unknown>) => {
+const armar = (postImpl: () => Promise<unknown>, asientoOriginal: unknown = { id: 'asiento-original' }) => {
   const pendingPosting = pendientes();
   // El parámetro se declara aunque no se use: sin él, `mock.calls` queda tipado como
   // tupla vacía y no se puede inspeccionar el argumento del asiento.
   const journal = { post: jest.fn((_args: { date: Date }) => postImpl()) };
-  const mappings = { resolveMany: jest.fn().mockResolvedValue({ SALES_AR: 'a', SALES_REVENUE: 'b' }) };
-  const prisma = { pendingPosting };
+  const mappings = { resolveMany: jest.fn().mockResolvedValue({ SALES_AR: 'a', SALES_REVENUE: 'b', SALES_TAX: 'c' }) };
+  const journalEntry = { findUnique: jest.fn().mockResolvedValue(asientoOriginal) };
+  const prisma = { pendingPosting, journalEntry };
   const svc = new PostingService(journal as never, mappings as never, prisma as never);
-  return { svc, journal, pendingPosting };
+  return { svc, journal, pendingPosting, journalEntry };
 };
 
 const factura = {
@@ -79,6 +80,59 @@ describe('PostingService.safePost', () => {
     expect(res).toBeNull();
     expect(journal.post).not.toHaveBeenCalled();
     expect(pendingPosting.upsert).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Ajuste por edición de factura: lo que importa es que el asiento CUADRE cuando el
+ * valor sube y cuando baja, y que no se cuelgue de una factura que nunca se
+ * contabilizó aquí (las traídas del legacy).
+ */
+describe('PostingService.postSalesInvoiceAdjustment', () => {
+  const edicion = { sourceId: 'inv-1', date: new Date('2026-08-01'), number: 42, edit: 1 };
+
+  it('sube el valor: cartera al debe, ingreso e IVA al haber', async () => {
+    const { svc, journal } = armar(() => Promise.resolve({ id: 'ajuste-1' }));
+
+    await svc.postSalesInvoiceAdjustment({ ...edicion, deltaSubtotal: 100, deltaTax: 19 });
+
+    const { lines, sourceType, sourceId } = journal.post.mock.calls[0][0] as never as
+      { lines: { accountId: string; debit: number; credit: number }[]; sourceType: string; sourceId: string };
+    expect(sourceType).toBe('SALES_INVOICE_ADJ');
+    expect(sourceId).toBe('inv-1#1'); // por edición: la segunda no choca con la primera
+    expect(lines.find((l) => l.accountId === 'a')).toMatchObject({ debit: 119, credit: 0 });
+    expect(lines.find((l) => l.accountId === 'b')).toMatchObject({ debit: 0, credit: 100 });
+    expect(lines.find((l) => l.accountId === 'c')).toMatchObject({ debit: 0, credit: 19 });
+  });
+
+  it('baja el valor: el asiento se da vuelta y sigue cuadrando', async () => {
+    const { svc, journal } = armar(() => Promise.resolve({ id: 'ajuste-2' }));
+
+    await svc.postSalesInvoiceAdjustment({ ...edicion, edit: 2, deltaSubtotal: -50, deltaTax: -9.5 });
+
+    const { lines } = journal.post.mock.calls[0][0] as never as { lines: { debit: number; credit: number }[] };
+    const debe = lines.reduce((s, l) => s + l.debit, 0);
+    const haber = lines.reduce((s, l) => s + l.credit, 0);
+    expect(debe).toBeCloseTo(haber);
+    expect(debe).toBeCloseTo(59.5);
+  });
+
+  it('si la factura nunca se contabilizó aquí (viene del legacy), no se ajusta nada', async () => {
+    const { svc, journal } = armar(() => Promise.resolve({ id: 'x' }), null);
+
+    const res = await svc.postSalesInvoiceAdjustment({ ...edicion, deltaSubtotal: 100, deltaTax: 19 });
+
+    expect(res).toBeNull();
+    expect(journal.post).not.toHaveBeenCalled();
+  });
+
+  it('sin diferencia de valor no hay asiento', async () => {
+    const { svc, journal } = armar(() => Promise.resolve({ id: 'x' }));
+
+    const res = await svc.postSalesInvoiceAdjustment({ ...edicion, deltaSubtotal: 0, deltaTax: 0 });
+
+    expect(res).toBeNull();
+    expect(journal.post).not.toHaveBeenCalled();
   });
 });
 

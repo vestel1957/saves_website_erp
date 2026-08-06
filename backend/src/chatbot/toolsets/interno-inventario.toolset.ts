@@ -1,4 +1,3 @@
-import { Injectable } from '@nestjs/common';
 import type { Toolset, ToolContext, ToolDef } from '@s4gk/wa-agent';
 import { PERMISSION_DENIED } from '@s4gk/wa-agent';
 import { APP_PERMISSIONS as P } from '../../auth/permissions.catalog';
@@ -27,7 +26,6 @@ const INVENTARIO_ESCRIBE = [P.AREA_TECNICOS];
  * orden se gastó. `InventoryService` no expone un descuento directo, y está bien:
  * material que sale sin ticket es material que se pierde.
  */
-@Injectable()
 export class InternoInventarioToolset implements Toolset {
   constructor(
     private readonly inventory: InventoryService,

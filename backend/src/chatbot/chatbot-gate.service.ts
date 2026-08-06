@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Logger } from '../core/logger';
 import { PrismaService } from '../prisma/prisma.service';
 import { normalizePhone } from '../common/phone.util';
 import { ChatbotSessionStore } from './chatbot-session.store';
@@ -77,7 +77,6 @@ const AVISO_TOPE =
  * números que tú digas y el resto sigue como hoy (silencio del bot, lo atiende una
  * persona) — el mensaje entrante igual queda en el log de conversaciones.
  */
-@Injectable()
 export class ChatbotGateService {
   private readonly logger = new Logger('ChatbotGate');
   private cache: { at: number; enabled: boolean; allow: string[]; fromSetting: boolean } | null = null;

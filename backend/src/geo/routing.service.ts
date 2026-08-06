@@ -1,4 +1,5 @@
-import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
+import { ServiceUnavailableException } from '../core/http/errores';
+import { Logger } from '../core/logger';
 import { assertPoint, distMeters } from './geo.util';
 
 export type Ruta = {
@@ -30,7 +31,6 @@ export type Ruta = {
 const OSRM = 'https://router.project-osrm.org';
 const TIMEOUT_MS = 6000;
 
-@Injectable()
 export class RoutingService {
   private readonly log = new Logger(RoutingService.name);
 

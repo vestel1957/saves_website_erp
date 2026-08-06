@@ -1,30 +1,43 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { OmniService, CreateQuoteDto, EventDto, QuoteStatusDto, UpdateEventDto } from './omni.service';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { AreaGuard } from '../auth/area.guard';
-import { RequireArea } from '../auth/require-area.decorator';
-import { CurrentUser, AuthUser } from '../auth/current-user.decorator';
+import { AuthUser } from '../auth/current-user.decorator';
 
 /** Omnicanalidad: agenda (eventos), cotizaciones. */
-@Controller('omni')
-@UseGuards(JwtAuthGuard, AreaGuard)
-@RequireArea('contabilidad', 'administracion', 'caja')
 export class OmniController {
   constructor(private readonly omni: OmniService) {}
 
-  @Get('events') events(@Query('from') from?: string, @Query('to') to?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string, @Query('sortBy') sortBy?: string, @Query('sortDir') sortDir?: string) {
-    return this.omni.events({ from, to, page: Number(page), pageSize: Number(pageSize), sortBy, sortDir });
+  // Los filtros van sueltos y no en un DTO porque el listado se comparte con las
+  // cifras de arriba (`events/stats`), que reciben exactamente los mismos.
+  events(
+    search?: string,
+    from?: string, to?: string,
+    priority?: string, assignedBy?: string,
+    page?: string, pageSize?: string,
+    sortBy?: string, sortDir?: string,
+  ) {
+    return this.omni.events({ search, from, to, priority, assignedBy, page, pageSize, sortBy, sortDir });
   }
-  @Get('events/stats') eventsStats() { return this.omni.eventsStats(); }
-  @Post('events') createEvent(@Body() dto: EventDto, @CurrentUser() user: AuthUser) { return this.omni.createEvent(dto, user); }
-  @Patch('events/:id') updateEvent(@Param('id') id: string, @Body() dto: UpdateEventDto) { return this.omni.updateEvent(id, dto); }
-  @Delete('events/:id') deleteEvent(@Param('id') id: string) { return this.omni.deleteEvent(id); }
+  eventsStats(
+    search?: string,
+    from?: string, to?: string,
+    priority?: string, assignedBy?: string,
+  ) {
+    return this.omni.eventsStats({ search, from, to, priority, assignedBy });
+  }
+  /** Opciones de los desplegables del filtro (gente que aparece, prioridades). */
+  eventFilters() { return this.omni.eventFilters(); }
+  createEvent(dto: EventDto, user: AuthUser) { return this.omni.createEvent(dto, user); }
+  updateEvent(id: string, dto: UpdateEventDto) { return this.omni.updateEvent(id, dto); }
+  deleteEvent(id: string) { return this.omni.deleteEvent(id); }
 
-  @Get('quotes') quotes(@Query('search') search?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string, @Query('sortBy') sortBy?: string, @Query('sortDir') sortDir?: string) {
+  // Los EVENTOS son la agenda (`/agenda`, que sí es de la cajera) y quedan como están.
+  // Las COTIZACIONES no: una cotización se convierte en FACTURA, y facturar es de
+  // contabilidad desde el 2026-07-29. Sin este cierre quedaba la puerta de atrás —
+  // cotizar y convertir— a un módulo cuya pantalla (`/cotizaciones`) la cajera ni ve.
+  quotes(search?: string, page?: string, pageSize?: string, sortBy?: string, sortDir?: string) {
     return this.omni.quotes({ search, page: Number(page), pageSize: Number(pageSize), sortBy, sortDir });
   }
-  @Post('quotes') createQuote(@Body() dto: CreateQuoteDto, @CurrentUser() user: AuthUser) { return this.omni.createQuote(dto, user); }
-  @Get('quotes/:id') quoteDetail(@Param('id') id: string) { return this.omni.quoteDetail(id); }
-  @Patch('quotes/:id/status') quoteStatus(@Param('id') id: string, @Body() dto: QuoteStatusDto) { return this.omni.updateQuoteStatus(id, dto.status); }
-  @Post('quotes/:id/convert') convertQuote(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.omni.convertQuoteToInvoice(id, user); }
+  createQuote(dto: CreateQuoteDto, user: AuthUser) { return this.omni.createQuote(dto, user); }
+  quoteDetail(id: string) { return this.omni.quoteDetail(id); }
+  quoteStatus(id: string, dto: QuoteStatusDto) { return this.omni.updateQuoteStatus(id, dto.status); }
+  convertQuote(id: string, user: AuthUser) { return this.omni.convertQuoteToInvoice(id, user); }
 }

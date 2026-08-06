@@ -1,4 +1,5 @@
-import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import type { OnModuleInit } from '../core/ciclo-vida';
+import { Logger } from '../core/logger';
 import { AgentEngine, type AgentResolver, type AgentUser, type AuditEntry, type Transport } from '@s4gk/wa-agent';
 import { OpenAiProvider } from '@s4gk/wa-agent/openai';
 import { WhisperTranscriber } from '@s4gk/wa-agent/whisper';
@@ -22,6 +23,7 @@ import { InternoCajaToolset } from './toolsets/interno-caja.toolset';
 import { InternoReportesToolset } from './toolsets/interno-reportes.toolset';
 import { ClienteToolset } from './toolsets/cliente.toolset';
 import { PublicoToolset } from './toolsets/publico.toolset';
+import { ComercialToolset } from './toolsets/comercial.toolset';
 import { TramitesToolset } from './toolsets/tramites.toolset';
 import { InternoRrhhToolset } from './toolsets/interno-rrhh.toolset';
 import { InternoComprasToolset } from './toolsets/interno-compras.toolset';
@@ -44,7 +46,6 @@ import { InternoDatosToolset } from './toolsets/interno-datos.toolset';
  * nada y el WhatsappService sigue enviando alertas y campañas como siempre: el
  * chatbot es aditivo, no cambia el comportamiento existente.
  */
-@Injectable()
 export class ChatbotService implements OnModuleInit {
   private readonly logger = new Logger('Chatbot');
   private engine: AgentEngine | null = null;
@@ -66,6 +67,7 @@ export class ChatbotService implements OnModuleInit {
     private readonly reportes: InternoReportesToolset,
     private readonly cliente: ClienteToolset,
     private readonly publico: PublicoToolset,
+    private readonly comercial: ComercialToolset,
     private readonly tramites: TramitesToolset,
     private readonly rrhh: InternoRrhhToolset,
     private readonly compras: InternoComprasToolset,
@@ -178,7 +180,7 @@ export class ChatbotService implements OnModuleInit {
       // Mismo par que el agente público de abajo: su prompt habla de registrar_solicitud,
       // y si el agente por defecto no la tuviera, un error de enrutado dejaría al bot
       // prometiendo un registro que no puede hacer.
-      toolsets: [combineToolsets(this.publico, this.tramites)],
+      toolsets: [combineToolsets(this.publico, this.comercial, this.tramites)],
 
       agents: [
         { name: AGENT_INTERNO, systemPrompt: promptInterno, toolset: internoToolset },
@@ -186,8 +188,23 @@ export class ChatbotService implements OnModuleInit {
         // toolset el que decide qué ofrecerle a cada uno según su identidad: un
         // abonado ve los doce, un número desconocido solo los tres que no necesitan
         // cuenta (afiliación, cobertura, PQR). Ver TramitesToolset.definitions.
-        { name: AGENT_CLIENTE, systemPrompt: promptCliente, toolset: combineToolsets(this.cliente, this.tramites) },
-        { name: AGENT_PUBLICO, systemPrompt: promptPublico, toolset: combineToolsets(this.publico, this.tramites) },
+        //
+        // Lo COMERCIAL (planes, sedes, datos de la empresa) va también a los dos, y
+        // no solo al público como estaba: el abonado es precisamente quien pregunta
+        // cuánto cuesta subirse de plan y a qué hora abre la oficina de su municipio.
+        // Mientras solo lo tuvo el público, el prompt del cliente le mandaba usar
+        // planes_disponibles —igual que el guion del cambio de plan— y esa herramienta
+        // no existía para él: el modelo la pedía, no estaba, e improvisaba.
+        {
+          name: AGENT_CLIENTE,
+          systemPrompt: promptCliente,
+          toolset: combineToolsets(this.cliente, this.comercial, this.tramites),
+        },
+        {
+          name: AGENT_PUBLICO,
+          systemPrompt: promptPublico,
+          toolset: combineToolsets(this.publico, this.comercial, this.tramites),
+        },
       ],
       agentResolver: this.agentResolver(),
 

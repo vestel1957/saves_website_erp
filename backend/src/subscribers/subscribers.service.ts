@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '../core/http/errores';
 import { InvoiceKind, InvoiceRon, Prisma, SubscriberStatus, SubInvoiceStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ChangeStatusDto, CreateSubscriberDto, UpdateInvoiceDto, UpdateSubscriberDto } from './dto/update-subscriber.dto';
@@ -7,7 +7,7 @@ import { MikrotikAdminService } from '../network/mikrotik-admin.service';
 import { GenieacsService } from '../network/genieacs.service';
 import type { AuthUser } from '../auth/current-user.decorator';
 import { num } from '../common/money';
-import { sedesDe, whereSedeSuscriptor, exigirSedeSuscriptor } from '../common/sede-scope';
+import { sedesDe, whereSedeSuscriptor, exigirSedeSuscriptor, exigirSedeDestino } from '../common/sede-scope';
 import { nextTid, TID_SEQ } from '../common/tid';
 import { orden, paginacion } from '../common/pagination-params';
 
@@ -99,7 +99,6 @@ function buildProfileData(dto: Record<string, any>): any {
   return data;
 }
 
-@Injectable()
 export class SubscribersService {
   constructor(
     private readonly prisma: PrismaService,
@@ -369,30 +368,6 @@ export class SubscribersService {
   }
 
   /** Ficha completa de un suscriptor. */
-  /** Datos para el contrato de servicio (PDF). */
-  async contractData(id: string, user?: AuthUser) {
-    await exigirSedeSuscriptor(this.prisma, user, id);
-    const s = await this.prisma.subscriber.findUnique({
-      where: { id },
-      select: {
-        firstName: true, lastName1: true, companyName: true, fullName: true,
-        docType: true, docNumber: true, abonado: true, addressLine: true,
-        phone1: true, email: true, pppProfile: true, pppService: true,
-        contractDate: true, branch: { select: { name: true } },
-      } as any,
-    });
-    if (!s) throw new NotFoundException('Cliente no encontrado');
-    const a = s as any;
-    const name = (a.fullName || [a.firstName, a.lastName1].filter(Boolean).join(' ') || a.companyName || '—').trim();
-    return {
-      name, docType: a.docType, docNumber: a.docNumber, abonado: a.abonado,
-      addressLine: a.addressLine, branch: a.branch?.name ?? null,
-      phone: a.phone1, email: a.email, plan: a.pppProfile ?? null,
-      profile: a.pppProfile ?? null, service: a.pppService ?? null,
-      contractDate: a.contractDate,
-    };
-  }
-
   async detail(id: string, user?: AuthUser) {
     await exigirSedeSuscriptor(this.prisma, user, id);
     const s = await this.prisma.subscriber.findUnique({
@@ -495,9 +470,21 @@ export class SubscribersService {
     };
   }
 
-  /** Catálogo de sedes para filtros. */
-  branches() {
-    return this.prisma.branch.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true } });
+  /**
+   * Catálogo de sedes para filtros y formularios, acotado a las del usuario.
+   *
+   * Va con el usuario porque este catálogo es lo que rellena TODO selector de sede
+   * de la aplicación (filtro de clientes, filtro de facturas, alta de cliente): si
+   * devolviera las 8 sedes, la cajera acotada seguiría viendo las demás en la lista
+   * aunque el dato de atrás ya venga filtrado.
+   */
+  async branches(user?: AuthUser) {
+    const sedes = await sedesDe(this.prisma, user);
+    return this.prisma.branch.findMany({
+      where: sedes ? { legacyId: { in: sedes } } : undefined,
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true },
+    });
   }
 
   /** WHERE compartido por la lista y por las operaciones masivas por filtro. */
@@ -666,10 +653,19 @@ export class SubscribersService {
   }
 
   /** Sedes con conteo de abonados por estado (para el flujo sede-primero de cortes masivos). */
-  async branchesStats() {
+  async branchesStats(user?: AuthUser) {
+    const sedes = await sedesDe(this.prisma, user);
     const [branches, grouped] = await Promise.all([
-      this.prisma.branch.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true } }),
-      this.prisma.subscriber.groupBy({ by: ['branchId', 'status'], _count: { _all: true } }),
+      this.prisma.branch.findMany({
+        where: sedes ? { legacyId: { in: sedes } } : undefined,
+        orderBy: { name: 'asc' },
+        select: { id: true, name: true },
+      }),
+      this.prisma.subscriber.groupBy({
+        by: ['branchId', 'status'],
+        where: sedes ? { branch: { legacyId: { in: sedes } } } : undefined,
+        _count: { _all: true },
+      }),
     ]);
     const byBranch = new Map<string, Record<string, number>>();
     for (const g of grouped) {
@@ -715,6 +711,8 @@ export class SubscribersService {
   /** Editar el perfil del cliente (pasos 1 y 2). Devuelve la ficha fresca. */
   async update(id: string, dto: UpdateSubscriberDto, user?: AuthUser) {
     await exigirSedeSuscriptor(this.prisma, user, id);
+    // Y que no se lo lleve a una sede a la que no llega (ni lo deje sin sede).
+    await exigirSedeDestino(this.prisma, user, dto.branchId);
     const s = await this.prisma.subscriber.findUnique({
       where: { id },
       select: { id: true, firstName: true, secondName: true, lastName1: true, lastName2: true, pppUsername: true },
@@ -973,7 +971,9 @@ export class SubscribersService {
   }
 
   /** Crear un cliente nuevo (abonado autogenerado max+1, estado INSTALAR). */
-  async create(dto: CreateSubscriberDto) {
+  async create(dto: CreateSubscriberDto, user?: AuthUser) {
+    // Un usuario acotado sólo da de alta en SUS sedes (y tiene que indicar una).
+    await exigirSedeDestino(this.prisma, user, dto.branchId ?? null);
     // Guard de colisión de secret PPP. El legacy NO tenía validación de servidor en el alta
     // (`Customers::addcustomer` insertaba directo); la única comprobación vivía en el JS de
     // la vista y se saltaba con un POST directo. Documento y dirección siguen SIN bloquear

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { NotFoundException } from '../core/http/errores';
 import { PrismaService } from '../prisma/prisma.service';
 import type { AuthUser } from '../auth/current-user.decorator';
 import { exigirSedeSuscriptor } from '../common/sede-scope';
@@ -15,7 +15,6 @@ type UploadedFileMeta = {
  * Adjuntos de un cliente (metadata en BD; el binario lo guarda multer en disco).
  * Extraído de SubscribersService: bloque autónomo sobre `subscriberFile`.
  */
-@Injectable()
 export class SubscriberFilesService {
   constructor(private readonly prisma: PrismaService) {}
 

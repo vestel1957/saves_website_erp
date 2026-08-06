@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, NotFoundException, UnauthorizedException } from '../core/http/errores';
 import { Prisma } from '@prisma/client';
 import { existsSync, unlinkSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -25,7 +25,6 @@ export const FOTOS_ROOT = join(process.cwd(), 'uploads', 'staff', 'photos');
  * empleado). Hoy casan 115 de 127 cuentas; las que no (usuarios demo y de
  * servicio) ven su perfil sin la parte de datos personales, no un error.
  */
-@Injectable()
 export class ProfileService {
   constructor(
     private readonly prisma: PrismaService,

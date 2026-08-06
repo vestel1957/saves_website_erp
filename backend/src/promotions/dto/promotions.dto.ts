@@ -22,9 +22,42 @@ export const SUBSCRIBER_STATUSES = [
   'EXONERADO', 'INSTALAR', 'POR_RETIRAR', 'REPORTADO', 'RETIRADO',
   'SUSPENDIDO', 'INACTIVO',
 ] as const;
+export type SubscriberStatusName = (typeof SUBSCRIBER_STATUSES)[number];
+
+/**
+ * Público de una promoción: A QUÉ CLIENTES alcanza. Las dimensiones se combinan
+ * con Y (estado Activo + sede Yopal = activos DE Yopal) y dentro de cada una con O
+ * (Activo o Cartera). Una dimensión vacía no filtra. `allSubscribers` manda sobre
+ * todas: alcanza a todos los clientes.
+ */
+export class PromotionAudienceDto {
+  /** Alcanza a TODOS los clientes (ignora los demás criterios). */
+  @IsOptional() @IsBoolean()
+  allSubscribers?: boolean;
+
+  /** Estados de cliente alcanzados. */
+  @IsOptional() @IsArray() @IsIn(SUBSCRIBER_STATUSES, { each: true })
+  subscriberStatuses?: SubscriberStatusName[];
+
+  /** Clientes puntuales alcanzados (Subscriber.id). */
+  @IsOptional() @IsArray() @IsString({ each: true })
+  subscriberIds?: string[];
+
+  /** Planes contratados alcanzados (Plan.id). */
+  @IsOptional() @IsArray() @IsString({ each: true })
+  planIds?: string[];
+
+  /** Sedes alcanzadas (Branch.id). */
+  @IsOptional() @IsArray() @IsString({ each: true })
+  branchIds?: string[];
+
+  /** Barrios alcanzados (id legacy del barrio = `Subscriber.neighborhood`). */
+  @IsOptional() @IsArray() @IsString({ each: true })
+  neighborhoodRefs?: string[];
+}
 
 /** Crear una promoción (solo superusuario). */
-export class CreatePromotionDto {
+export class CreatePromotionDto extends PromotionAudienceDto {
   @IsString() @MinLength(2)
   name!: string;
 
@@ -52,21 +85,17 @@ export class CreatePromotionDto {
   @IsOptional() @IsBoolean()
   active?: boolean;
 
-  /** Disponible para todos los funcionarios (ignora `assigneeIds`). */
+  /**
+   * Guardar además la FORMA de esta campaña como plantilla reutilizable (nombre,
+   * descuento y fechas). No incluye el público a propósito: la misma campaña se
+   * dirige cada vez a gente distinta.
+   */
   @IsOptional() @IsBoolean()
-  global?: boolean;
-
-  /** IDs (Staff.id) de los funcionarios autorizados a aplicarla. */
-  @IsOptional() @IsArray() @IsString({ each: true })
-  assigneeIds?: string[];
-
-  /** Si viene, es una promo POR ESTADO DE CLIENTE (no por funcionario). */
-  @IsOptional() @IsIn(SUBSCRIBER_STATUSES)
-  subscriberStatus?: (typeof SUBSCRIBER_STATUSES)[number];
+  saveAsTemplate?: boolean;
 }
 
 /** Editar una promoción (todos los campos opcionales). */
-export class UpdatePromotionDto {
+export class UpdatePromotionDto extends PromotionAudienceDto {
   @IsOptional() @IsString() @MinLength(2)
   name?: string;
 
@@ -90,16 +119,6 @@ export class UpdatePromotionDto {
 
   @IsOptional() @IsBoolean()
   active?: boolean;
-
-  @IsOptional() @IsBoolean()
-  global?: boolean;
-
-  @IsOptional() @IsArray() @IsString({ each: true })
-  assigneeIds?: string[];
-
-  /** null explícito = quitar el estado (volver a promo por funcionario). */
-  @IsOptional() @IsIn([...SUBSCRIBER_STATUSES, null])
-  subscriberStatus?: (typeof SUBSCRIBER_STATUSES)[number] | null;
 }
 
 /** Aplicar una promoción a una factura. */

@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '../core/http/errores';
 import { Type } from 'class-transformer';
 import { IsArray, IsInt, IsNumber, IsOptional, IsString, Min, MinLength, ValidateNested } from 'class-validator';
 import { Prisma } from '@prisma/client';
@@ -33,7 +33,6 @@ export class PayReturnDto {
   @IsOptional() @IsString() note?: string;
 }
 
-@Injectable()
 export class ReturnsService {
   constructor(private readonly prisma: PrismaService) {}
 

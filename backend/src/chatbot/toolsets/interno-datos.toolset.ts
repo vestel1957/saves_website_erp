@@ -1,4 +1,3 @@
-import { Injectable } from '@nestjs/common';
 import type { Toolset, ToolContext, ToolDef } from '@s4gk/wa-agent';
 import { DataQueryService, type Consulta } from '../../search/data-query.service';
 import { esSonda, safe } from './toolset.util';
@@ -20,7 +19,6 @@ import { esSonda, safe } from './toolset.util';
  * hacen (llevan reglas de negocio, avisos y acciones). Este cubre la cola larga —
  * todo lo que nadie previó que se iba a preguntar.
  */
-@Injectable()
 export class InternoDatosToolset implements Toolset {
   constructor(private readonly datos: DataQueryService) {}
 

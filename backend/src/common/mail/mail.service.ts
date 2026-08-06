@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '../../core/http/errores';
+import { Logger } from '../../core/logger';
 import { createTransport, type Transporter } from 'nodemailer';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SettingsService } from '../../settings/settings.service';
@@ -41,7 +42,6 @@ const DEFAULT_TEMPLATES: { kind: string; name: string; subject: string; bodyHtml
  * devuelve `sent:false` (no rompe crons ni el arranque). Gestiona además las
  * plantillas de correo editables (factura disponible, recordatorio, vencida…).
  */
-@Injectable()
 export class MailService {
   private readonly logger = new Logger('MailService');
   private transporter: Transporter | null = null;

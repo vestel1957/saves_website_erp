@@ -525,15 +525,6 @@ export function receiptPdf(res: Response, d: ReceiptData) {
 }
 
 // ---------------------------------------------------------------------------
-export type ContractData = {
-  name: string; docType: string | null; docNumber: string | null;
-  abonado: number; addressLine: string | null; branch: string | null;
-  phone: string | null; email: string | null;
-  plan: string | null; profile: string | null; service: string | null;
-  contractDate: Date | string | null;
-};
-
-// ---------------------------------------------------------------------------
 export type ServiceOrderData = {
   code: string;
   type: string;
@@ -756,42 +747,9 @@ export function purchaseOrderPdf(res: Response, d: PurchaseOrderPdfData) {
 // dejó el último `text()` (p. ej. una celda alineada a la derecha) y salía partido.
 const sectionTitle = (doc: PDFKit.PDFDocument, title: string) => B.section(doc, title);
 
-/** Contrato de prestación de servicios (plantilla estándar Vestel). */
-export function contractPdf(res: Response, d: ContractData) {
-  const doc = B.newDoc(PDFDocument);
-  doc.pipe(res);
-  brandHeader(doc, 'Contrato de prestación de servicios');
-
-  kv(doc, 'Suscriptor:', d.name);
-  kv(doc, 'Identificación:', `${d.docType ?? ''} ${d.docNumber ?? '—'}`.trim());
-  kv(doc, 'Abonado N°:', String(d.abonado));
-  if (d.addressLine) kv(doc, 'Dirección:', d.addressLine);
-  if (d.branch) kv(doc, 'Sede:', d.branch);
-  if (d.phone) kv(doc, 'Teléfono:', d.phone);
-  if (d.email) kv(doc, 'Correo:', d.email);
-  kv(doc, 'Plan / servicio:', [d.plan, d.profile].filter(Boolean).join(' · ') || d.service || '—');
-  kv(doc, 'Fecha de contrato:', fmt(d.contractDate));
-  doc.moveDown(1);
-
-  doc.fontSize(9.5).fillColor('#333').font('Helvetica');
-  const cláusulas = [
-    'PRIMERA — OBJETO: VESGA TELEVISION S.A.S (VESTEL) prestará al suscriptor el servicio de acceso a Internet y/o televisión conforme al plan contratado.',
-    'SEGUNDA — VALOR Y PAGO: el suscriptor pagará mensualmente el valor del plan dentro de las fechas establecidas en la factura. La mora autoriza la suspensión del servicio.',
-    'TERCERA — EQUIPOS: los equipos entregados en comodato son propiedad de VESTEL y deben devolverse al terminar el contrato en buen estado.',
-    'CUARTA — SUSPENSIÓN Y RECONEXIÓN: el incumplimiento en el pago faculta a VESTEL para suspender el servicio; la reconexión podrá generar un cargo.',
-    'QUINTA — VIGENCIA: el presente contrato rige a partir de la fecha de instalación y se renueva automáticamente por periodos mensuales.',
-  ];
-  for (const c of cláusulas) {
-    doc.text(c, { align: 'justify' });
-    doc.moveDown(0.5);
-  }
-
-  B.signatures(doc, [
-    { rotulo: 'El suscriptor', nombre: d.name, nota: d.docNumber ? `${d.docType ?? 'CC'} ${d.docNumber}` : undefined },
-    { rotulo: 'Por VESTEL', nota: 'VESGA TELEVISION S.A.S' },
-  ]);
-  B.finish(doc);
-}
+// El contrato salió de aquí: era una plantilla de cinco cláusulas escritas a mano
+// que no era el contrato de Vestel. El de verdad —el que firman los abonados, con
+// su anexo CRC, la cláusula de permanencia y la firma— vive en `src/contracts/`.
 
 // ---------------------------------------------------------------------------
 

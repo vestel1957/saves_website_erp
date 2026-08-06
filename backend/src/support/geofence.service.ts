@@ -1,4 +1,5 @@
-import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { HttpException, HttpStatus } from '../core/http/errores';
+import { Logger } from '../core/logger';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { parsePoint } from '../geo/geo.util';
@@ -67,7 +68,6 @@ export type ResultadoCerca = {
  * datos en `/soporte/geocerca` se decide el radio de verdad y se pasa a
  * `exigir`. Es el mismo camino que MIKROTIK_LIVE u OLT_LIVE.
  */
-@Injectable()
 export class GeofenceService {
   private readonly log = new Logger(GeofenceService.name);
 

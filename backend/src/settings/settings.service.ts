@@ -1,4 +1,3 @@
-import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 /** Campos numéricos de la meta anual (paridad legacy `goals`). */
@@ -52,7 +51,6 @@ const DEF_BY_KEY = new Map(SETTING_DEFS.map((d) => [d.key, d]));
 
 const MASK = '••••••••';
 
-@Injectable()
 export class SettingsService {
   constructor(private readonly prisma: PrismaService) {}
 

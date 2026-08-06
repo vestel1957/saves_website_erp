@@ -1,80 +1,67 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ArrayNotEmpty, Allow, IsArray, IsOptional, IsString } from 'class-validator';
 import { GenieacsService } from './genieacs.service';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { AreaGuard } from '../auth/area.guard';
-import { PermissionsGuard } from '../auth/permissions.guard';
-import { RequireArea } from '../auth/require-area.decorator';
-import { RequirePermissions } from '../auth/require-permissions.decorator';
 import { APP_PERMISSIONS } from '../auth/permissions.catalog';
-import { CurrentUser, AuthUser } from '../auth/current-user.decorator';
-import { ModuloRedGuard } from './modulo-red.guard';
+import { AuthUser } from '../auth/current-user.decorator';
 
-class ServerUpsertDto {
+export class ServerUpsertDto {
   @IsOptional() @IsString() name?: string;
   @IsOptional() @IsString() nbiUrl?: string;
   @IsOptional() @IsString() username?: string;
   @IsOptional() @IsString() password?: string;
   @Allow() sedeLegacy?: number | string;
 }
-class BatchDto {
+export class BatchDto {
   @IsArray() @ArrayNotEmpty() @IsString({ each: true }) ids!: string[];
   @IsOptional() @IsString() serverId?: string;
 }
-class RefreshDto {
+export class RefreshDto {
   @IsString() deviceId!: string;
   @IsOptional() @IsString() objectName?: string;
   @IsOptional() @IsString() serverId?: string;
 }
 
 /** Integración GenieACS / TR-069 — cortes masivos de TV vía NBI (tag + provision). */
-@Controller('network/genieacs')
-@UseGuards(JwtAuthGuard, AreaGuard, PermissionsGuard, ModuloRedGuard)
-@RequireArea('tecnicos', 'administracion')
 export class GenieacsController {
   constructor(private readonly acs: GenieacsService) {}
 
   // --- Modo / lecturas ---
-  @Get('mode') mode() { return this.acs.mode(); }
-  @Get('dashboard') dashboard(@Query('serverId') serverId?: string) { return this.acs.dashboard(serverId); }
-  @Get('inventory')
+  mode() { return this.acs.mode(); }
+  dashboard(serverId?: string) { return this.acs.dashboard(serverId); }
   inventory(
-    @Query('serverId') serverId?: string, @Query('search') search?: string,
-    @Query('model') model?: string, @Query('manufacturer') manufacturer?: string,
-    @Query('estado') estado?: string,
-    @Query('sortBy') sortBy?: string, @Query('sortDir') sortDir?: string,
-    @Query('page') page?: string, @Query('pageSize') pageSize?: string,
+    serverId?: string, search?: string,
+    model?: string, manufacturer?: string,
+    estado?: string,
+    sortBy?: string, sortDir?: string,
+    page?: string, pageSize?: string,
   ) {
     return this.acs.inventory({
       serverId, search, model, manufacturer, estado, sortBy, sortDir,
       page: Number(page), pageSize: Number(pageSize),
     });
   }
-  @Get('history') history(@Query('serverId') serverId?: string, @Query('limit') limit?: string) {
+  history(serverId?: string, limit?: string) {
     return this.acs.history(serverId, Number(limit) || 100);
   }
 
   // --- CRUD de servidores ---
-  @Get('servers') servers() { return this.acs.listServers(); }
-  @Post('servers') create(@Body() dto: ServerUpsertDto, @CurrentUser() user: AuthUser) { return this.acs.createServer(dto, user); }
-  @Patch('servers/:id') update(@Param('id') id: string, @Body() dto: ServerUpsertDto, @CurrentUser() user: AuthUser) { return this.acs.updateServer(id, dto, user); }
-  @Delete('servers/:id') remove(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.acs.deleteServer(id, user); }
-  @Post('servers/:id/default') setDefault(@Param('id') id: string) { return this.acs.setDefault(id); }
-  @Post('servers/:id/test') test(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.acs.testConnection(id, user); }
+  servers() { return this.acs.listServers(); }
+  create(dto: ServerUpsertDto, user: AuthUser) { return this.acs.createServer(dto, user); }
+  update(id: string, dto: ServerUpsertDto, user: AuthUser) { return this.acs.updateServer(id, dto, user); }
+  remove(id: string, user: AuthUser) { return this.acs.deleteServer(id, user); }
+  setDefault(id: string) { return this.acs.setDefault(id); }
+  test(id: string, user: AuthUser) { return this.acs.testConnection(id, user); }
 
   // --- Escrituras (GATE dry-run) ---
-  @Post('cut-tv') cutTv(@Body() dto: BatchDto, @CurrentUser() user: AuthUser) { return this.acs.cutTv(dto.ids, user, dto.serverId); }
-  @Post('restore-tv') restoreTv(@Body() dto: BatchDto, @CurrentUser() user: AuthUser) { return this.acs.restoreTv(dto.ids, user, dto.serverId); }
-  @Post('refresh') refresh(@Body() dto: RefreshDto, @CurrentUser() user: AuthUser) { return this.acs.refresh(dto.deviceId, dto.objectName ?? '', dto.serverId, user); }
-  @Post('install-provision') install(@Body('serverId') serverId?: string, @CurrentUser() user?: AuthUser) { return this.acs.installProvision(serverId, user); }
+  cutTv(dto: BatchDto, user: AuthUser) { return this.acs.cutTv(dto.ids, user, dto.serverId); }
+  restoreTv(dto: BatchDto, user: AuthUser) { return this.acs.restoreTv(dto.ids, user, dto.serverId); }
+  refresh(dto: RefreshDto, user: AuthUser) { return this.acs.refresh(dto.deviceId, dto.objectName ?? '', dto.serverId, user); }
+  install(serverId?: string, user?: AuthUser) { return this.acs.installProvision(serverId, user); }
 
   // --- Corte de TV masivo POR ABONADO (resuelve TR-069 u OLT por cada uno) ---
-  @RequirePermissions(APP_PERMISSIONS.NETWORK_CUT)
-  @Post('tv-cut-subscribers') tvCutSubs(@Body() dto: BatchDto, @CurrentUser() user: AuthUser) {
+  tvCutSubs(dto: BatchDto, user: AuthUser) {
     return this.acs.tvBatchBySubscribers(dto.ids, false, user);
   }
-  @RequirePermissions(APP_PERMISSIONS.NETWORK_RECONNECT)
-  @Post('tv-restore-subscribers') tvRestoreSubs(@Body() dto: BatchDto, @CurrentUser() user: AuthUser) {
+  tvRestoreSubs(dto: BatchDto, user: AuthUser) {
     return this.acs.tvBatchBySubscribers(dto.ids, true, user);
   }
 }

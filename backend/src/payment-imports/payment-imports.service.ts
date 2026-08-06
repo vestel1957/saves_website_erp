@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '../core/http/errores';
 import * as ExcelJS from 'exceljs';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -32,7 +32,6 @@ const cellText = (v: unknown): string => {
   return String(v).trim();
 };
 
-@Injectable()
 export class PaymentImportsService {
   constructor(
     private readonly prisma: PrismaService,

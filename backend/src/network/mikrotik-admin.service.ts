@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '../core/http/errores';
+import { Logger } from '../core/logger';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
@@ -33,7 +34,6 @@ type SecretRow = {
   remoteAddress: string; localAddress: string; disabled: boolean; comment: string;
 };
 
-@Injectable()
 export class MikrotikAdminService {
   private readonly logger = new Logger(MikrotikAdminService.name);
   private live = process.env.MIKROTIK_LIVE === 'true';

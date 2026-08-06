@@ -1,4 +1,5 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '../core/http/errores';
+import { Logger } from '../core/logger';
 import { Prisma } from '@prisma/client';
 import { Workbook } from 'exceljs';
 import { PrismaService } from '../prisma/prisma.service';
@@ -48,7 +49,6 @@ function sedesOverlap(a: number[], b: number[]): boolean {
   return a.some((x) => b.includes(x));
 }
 
-@Injectable()
 export class InventoryService {
   private readonly logger = new Logger('Inventory');
 

@@ -1,5 +1,5 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { BadRequestException, ConflictException, NotFoundException } from '../core/http/errores';
+import { InvoiceRon, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { orden } from '../common/pagination-params';
 import { AuthUser } from '../auth/current-user.decorator';
@@ -7,7 +7,7 @@ import { PostingService } from '../accounting/posting.service';
 import { CobranzasService } from '../treasury/cobranzas.service';
 import {
   CreateInvoiceDto, CreateNoteDto, GenerateInvoicesDto, InvoiceItemDto,
-  RETENTION_LABEL_TO_ENUM, VoidInvoiceDto,
+  RETENTION_LABEL_TO_ENUM, UpdateInvoiceDto, VoidInvoiceDto,
 } from './dto/facturas.dto';
 import { num, round2 } from '../common/money';
 import { nextTid, TID_SEQ } from '../common/tid';
@@ -66,7 +66,6 @@ export type GeneratePlanRow = {
 type ServicioDerivado = { kind: string; planName: string; price: number; taxRate: number };
 
 /** Escritura de facturación (Cobranza): crear factura, generar en lote y notas C/D. */
-@Injectable()
 export class FacturasService {
   /**
    * Cerrojo de una sola corrida de facturación que ESCRIBE a la vez. Evita que el
@@ -187,7 +186,7 @@ export class FacturasService {
   /** Crear una factura para un cliente. */
   async createInvoice(dto: CreateInvoiceDto, user: AuthUser) {
     if (!dto.items?.length) throw new BadRequestException('La factura no tiene ítems');
-    const subscriber = await this.prisma.subscriber.findUnique({ where: { id: dto.subscriberId }, select: { id: true, branchId: true, eInvoice: true } });
+    const subscriber = await this.prisma.subscriber.findUnique({ where: { id: dto.subscriberId }, select: { id: true, branchId: true, eInvoice: true, status: true } });
     if (!subscriber) throw new NotFoundException('Cliente no encontrado');
 
     const { rows, subtotal, tax, total } = this.computeTotals(dto.items);
@@ -205,6 +204,11 @@ export class FacturasService {
           // mensualidad del servicio, que es la que lleva periodo y la que el recibo
           // de caja rotula por mes. Ver `periodoFacturado` y `conceptoFactura`.
           status: 'DUE', kind: dto.kind ?? 'FIJA',
+          // Estado del cliente estampado en la factura (paridad legacy `invoices.ron`):
+          // el perfil del legacy y el detalle pintan el estado desde la ÚLTIMA factura,
+          // así que sin esto el cliente queda "sin estado" allá. INACTIVO no existe en
+          // InvoiceRon → va null.
+          ron: subscriber.status === 'INACTIVO' ? null : (subscriber.status as unknown as InvoiceRon),
           eInvoiceFlag: subscriber.eInvoice ? 'Crear Factura Electronica' : null,
           itemsCount: rows.length, notes: dto.notes ?? null,
           items: {
@@ -227,6 +231,142 @@ export class FacturasService {
       subtotal: result.subtotal, tax: result.tax, createdBy: user?.name ?? user?.email ?? null,
     });
     return result;
+  }
+
+  /**
+   * Editar una factura ya emitida: reemplaza sus conceptos y recalcula los totales.
+   *
+   * Paridad legacy (`Invoices::editaction`): allá el formulario de edición borra los
+   * renglones de la factura y reinserta los que llegan, y reescribe el encabezado con
+   * los totales recalculados. Aquí se hace lo mismo, con lo que el legacy no tenía:
+   *
+   *   · Se bloquea si ya fue timbrada ante la DIAN (ese documento no se toca: va por
+   *     nota crédito) o si está anulada.
+   *   · No se puede dejar la factura por debajo de lo ya pagado — el legacy sí dejaba,
+   *     y la factura quedaba con saldo a favor invisible.
+   *   · Las notas crédito/débito de la factura NO se tocan: son documentos aparte
+   *     (una promoción aplicada, una retención) y borrarlas al editar el concepto
+   *     sería deshacer un descuento sin dejar rastro. Siguen sumando al total.
+   *   · Queda auditoría (antes/después + motivo) y ajuste contable por el delta.
+   *
+   * La factura queda marcada como editada aquí (`editedAt`): el sync de ida compara
+   * la huella contra el MySQL vivo y, sin esa marca, restauraría los valores del
+   * legacy y devolvería los renglones viejos en la siguiente pasada.
+   */
+  async updateInvoice(id: string, dto: UpdateInvoiceDto, user: AuthUser) {
+    if (!dto.items?.length) throw new BadRequestException('La factura no puede quedar sin conceptos');
+
+    const inv = await this.prisma.subInvoice.findUnique({
+      where: { id },
+      include: {
+        items: { orderBy: { id: 'asc' } },
+        electronicInvoices: { select: { type: true, dianNumber: true } },
+      },
+    });
+    if (!inv) throw new NotFoundException('Factura no encontrada');
+    await exigirSedeSuscriptor(this.prisma, user, inv.subscriberId);
+
+    if (inv.status === 'CANCELED') throw new BadRequestException('La factura está anulada: no se puede editar');
+    if (inv.electronicInvoices.some((e) => e.type === 'FACTURADA' && e.dianNumber)) {
+      throw new BadRequestException(
+        'La factura ya fue emitida ante la DIAN y no se puede modificar. Emita una nota crédito para ajustarla.',
+      );
+    }
+
+    // Notas crédito/débito de la factura: se conservan tal cual y siguen contando.
+    const esNota = (nombre: string | null) => nombre === 'Nota Credito' || nombre === 'Nota Debito';
+    const notas = inv.items.filter((it) => esNota(it.productName));
+    const notasSubtotal = round2(notas.reduce((s, it) => s + num(it.subtotal), 0));
+
+    const { rows, subtotal: itemsSubtotal, tax } = this.computeTotals(dto.items);
+    const subtotal = Math.max(0, round2(itemsSubtotal + notasSubtotal));
+    const total = Math.max(0, round2(subtotal + tax));
+    const paid = num(inv.paidAmount);
+    if (total < paid) {
+      throw new BadRequestException(
+        `La factura ya tiene ${paid.toLocaleString('es-CO')} pagados y no puede quedar por debajo de esa cifra. ` +
+        'Anule el pago o emita una nota crédito.',
+      );
+    }
+
+    const invoiceDate = dto.invoiceDate ? dateOnly(dto.invoiceDate) : inv.invoiceDate;
+    const dueDate = dto.dueDate ? dateOnly(dto.dueDate) : inv.dueDate;
+    const status = total <= paid ? 'PAID' : paid > 0 ? 'PARTIAL' : 'DUE';
+    const edit = (inv.editCount ?? 0) + 1;
+
+    const before = {
+      subtotal: num(inv.subtotal), tax: num(inv.tax), total: num(inv.total), status: inv.status,
+      kind: inv.kind, invoiceDate: inv.invoiceDate, dueDate: inv.dueDate, notes: inv.notes,
+      items: inv.items.map((it) => ({
+        product: it.productName, description: it.description, qty: it.qty,
+        price: num(it.price), taxRate: num(it.taxRate), subtotal: num(it.subtotal),
+      })),
+    };
+
+    await this.prisma.$transaction(async (tx) => {
+      // Fuera los conceptos viejos (las notas se quedan) y entran los nuevos, igual
+      // que hace el legacy al editar. Los que venían del legacy se van con su
+      // `legacyId`: por eso el sync tiene que saltarse esta factura.
+      await tx.subInvoiceItem.deleteMany({
+        where: { invoiceId: id, id: { notIn: notas.map((n) => n.id) } },
+      });
+      await tx.subInvoiceItem.createMany({
+        data: rows.map((r) => ({
+          invoiceId: id,
+          productId: r.productId ?? 0,
+          productName: r.productName ?? r.description ?? null,
+          description: r.description,
+          qty: r.qty, price: r.price, taxRate: r.taxRate,
+          subtotal: r.subtotal, taxTotal: r.taxTotal, discountTotal: 0,
+        })),
+      });
+      await tx.subInvoice.update({
+        where: { id },
+        data: {
+          invoiceDate, dueDate, subtotal, tax, total, status,
+          ...(dto.kind ? { kind: dto.kind } : {}),
+          ...(dto.notes !== undefined ? { notes: dto.notes || null } : {}),
+          itemsCount: rows.length + notas.length,
+          editedAt: new Date(), editedBy: user?.name ?? user?.email ?? null,
+          editCount: edit,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          action: 'UPDATE', entity: 'SubInvoice', entityId: id,
+          before,
+          after: {
+            subtotal, tax, total, status,
+            kind: dto.kind ?? inv.kind, invoiceDate, dueDate,
+            notes: dto.notes !== undefined ? dto.notes || null : inv.notes,
+            reason: dto.reason,
+            by: user?.name ?? user?.email ?? null,
+            items: rows.map((r) => ({
+              product: r.productName ?? r.description, description: r.description,
+              qty: r.qty, price: r.price, taxRate: r.taxRate, subtotal: r.subtotal,
+            })),
+          },
+        },
+      });
+    });
+
+    // Ajuste contable por la diferencia. Sólo mueve el mayor si la factura tenía
+    // asiento (las traídas del legacy no lo tienen) y si algo cambió de valor.
+    await this.posting.postSalesInvoiceAdjustment({
+      sourceId: id, date: invoiceDate, number: inv.tid, edit,
+      deltaSubtotal: round2(subtotal - num(inv.subtotal)),
+      deltaTax: round2(tax - num(inv.tax)),
+      createdBy: user?.name ?? user?.email ?? null,
+    });
+
+    return {
+      id, tid: inv.tid, subtotal, tax, total, status,
+      balance: round2(total - paid),
+      itemsCount: rows.length + notas.length,
+      notesKept: notas.length,
+      previousTotal: num(inv.total),
+      editCount: edit,
+    };
   }
 
   /**
@@ -363,6 +503,7 @@ export class FacturasService {
       select: {
         id: true,
         eInvoice: true,
+        status: true,           // se estampa en la factura como `ron` (estado del cliente)
         previousStatus: true,   // ultimo_estado (guard de reactivación)
         statusChangedAt: true,  // fecha_cambio
         services: {
@@ -481,6 +622,10 @@ export class FacturasService {
             data: {
               tid, subscriberId: s.id, invoiceDate, dueDate,
               subtotal, tax, total, paidAmount: 0, status: 'DUE', kind: 'RECURRENTE',
+              // Estado del cliente al facturar (paridad legacy `invoices.ron`): el
+              // legacy pinta el estado del perfil desde la última factura. La corrida
+              // solo alcanza ACTIVO/COMPROMISO, así que el mapeo es directo.
+              ron: s.status === 'COMPROMISO' ? 'COMPROMISO' : 'ACTIVO',
               itemsCount: rows.length,
               serviceCombo, serviceTv,
               // Alimenta la cola de timbrado DIAN si el abonado factura electrónicamente.
@@ -639,6 +784,14 @@ export class FacturasService {
         data: {
           subtotal, total, status, itemsCount: { increment: 1 },
           ...(retention ? { retentionType: retention } : {}),
+          // Una nota cambia el total, así que la factura queda MODIFICADA aquí y hay
+          // que blindarla del sync igual que una edición. Sin esto, el descuento se
+          // aplicaba, el sync veía el total distinto al del legacy y en la siguiente
+          // pasada (≤15 min) le devolvía el total viejo: la nota quedaba colgada en el
+          // detalle y el cliente seguía debiendo lo mismo. Pasó de verdad con la
+          // factura 470096. `editCount` NO se toca: eso cuenta ediciones, no notas.
+          editedAt: new Date(),
+          editedBy: user?.name ?? user?.email ?? null,
         },
       });
 

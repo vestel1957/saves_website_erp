@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '../core/http/errores';
+import { Logger } from '../core/logger';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { exigirSedeSuscriptor } from '../common/sede-scope';
@@ -79,7 +80,6 @@ function nombreDe(s: any): string {
   return p || (s.companyName || '').trim();
 }
 
-@Injectable()
 export class OnuProvisionService {
   private readonly logger = new Logger(OnuProvisionService.name);
 

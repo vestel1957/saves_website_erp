@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException } from '../../core/http/errores';
 import { SignatureOtpService } from './signature-otp.service';
 
 /** Quién es el dueño de la cuenta cuya contraseña se va a cambiar. */
@@ -45,7 +45,6 @@ export type PasswordOtpPolicy = {
  * mismo TTL, mismo rastro en `SignatureOtp`): aquí solo vive la política propia
  * de las contraseñas —a quién se le manda, con qué texto y cuándo se exige—.
  */
-@Injectable()
 export class PasswordOtpService {
   constructor(private readonly firma: SignatureOtpService) {}
 

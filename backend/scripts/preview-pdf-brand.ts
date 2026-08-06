@@ -9,7 +9,7 @@
  */
 import { createWriteStream, mkdirSync } from 'fs';
 import { join } from 'path';
-import { cashClosePdf, receiptPdf, serviceOrderPdf, purchaseOrderPdf, contractPdf } from '../src/common/pdf/pdf-docs';
+import { cashClosePdf, receiptPdf, serviceOrderPdf, purchaseOrderPdf } from '../src/common/pdf/pdf-docs';
 import { invoicePdf } from '../src/billing/billing-pdf';
 import { statementPdf, pazYSalvoPdf } from '../src/subscribers/subscriber-pdf';
 
@@ -92,13 +92,8 @@ purchaseOrderPdf(salida('4-orden-compra.pdf'), {
   createdByName: 'Jhon Vesga', firstBy: 'Carolina Vesga', secondBy: 'Gerencia',
 });
 
-contractPdf(salida('5-contrato.pdf'), {
-  name: 'Ana Lucia Perez Rojas', docType: 'CC', docNumber: '1.098.554.221',
-  abonado: 10482, addressLine: 'Calle 12 # 8-45, Centro', branch: 'Yopal',
-  phone: '320 555 1234', email: 'cliente@ejemplo.com',
-  plan: 'Internet 300 Megas', profile: 'Residencial', service: 'Internet + Television',
-  contractDate: new Date(),
-});
+// El contrato y su anexo se pintan con la vista del legacy (mPDF), no con este
+// kit: para verlos, `php contrato-php/render.php contrato datos.json salida.pdf`.
 
 const cero = B(0, 0);
 cashClosePdf(salida('6-cierre-caja.pdf'), {

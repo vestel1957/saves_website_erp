@@ -276,10 +276,11 @@ model Account {
   isActive   Boolean     @default(true)
   currency   String      @default("USD")
 
-  lines        JournalLine[]
-  taxCodes     TaxCode[]
-  mappings     AccountMapping[]
-  bankAccounts BankAccount[]
+  lines           JournalLine[]
+  taxCodes        TaxCode[]
+  mappings        AccountMapping[]
+  bankAccounts    BankAccount[]
+  periodBalances  FiscalPeriodBalance[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -314,11 +315,46 @@ model FiscalPeriod {
   endDate   DateTime
   status    PeriodStatus   @default(OPEN)
   closedAt  DateTime?
+  closedBy  String?
   entries   JournalEntry[]
+  balances  FiscalPeriodBalance[]
   createdAt DateTime       @default(now())
 
   @@unique([year, month])
   @@index([status])
+}
+
+/// Arrastre de saldos de un periodo cerrado: con cuánto empezó cada cuenta, qué se
+/// movió y con cuánto termina — que es con lo que ARRANCA el mes siguiente.
+///
+/// Es el equivalente mensual del arrastre diario de caja (`cierre-legacy.ts`): allá el
+/// saldo que pasa al día siguiente queda escrito como un movimiento del libro, y aquí
+/// el que pasa al mes siguiente queda escrito como una fila por cuenta. En los dos
+/// casos el arrastre es un HECHO GUARDADO al cerrar y no una cuenta que se rehace cada
+/// vez que alguien abre un informe: si mañana se anula un asiento viejo, el mes cerrado
+/// tiene que seguir diciendo lo que dijo el día que se cerró.
+///
+/// Convención de signo: `opening`/`closing` son débito − crédito (deudor positivo,
+/// acreedor negativo). Una sola convención evita el error clásico de guardar el saldo
+/// "en positivo" y perder de qué lado estaba.
+model FiscalPeriodBalance {
+  id       String @id @default(cuid())
+  periodId String
+  period   FiscalPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  accountId String
+  account   Account @relation(fields: [accountId], references: [id])
+
+  /// Saldo con el que la cuenta ENTRÓ al periodo (el arrastre del periodo anterior).
+  opening Decimal @default(0) @db.Decimal(18, 2)
+  debit   Decimal @default(0) @db.Decimal(18, 2)
+  credit  Decimal @default(0) @db.Decimal(18, 2)
+  /// Saldo con el que SALE, ya con el asiento de cierre aplicado: el arrastre al mes siguiente.
+  closing Decimal @default(0) @db.Decimal(18, 2)
+
+  createdAt DateTime @default(now())
+
+  @@unique([periodId, accountId])
+  @@index([accountId])
 }
 
 /// Journal entry (asiento) — manual, automatic, recurring or closing
@@ -690,14 +726,14 @@ model InventoryMovement {
 // ============================================================================
 
 model User {
-  id                    String              @id @default(cuid())
-  email                 String              @unique
-  name                  String
-  passwordHash          String
-  isActive              Boolean             @default(true)
+  id                        String                 @id @default(cuid())
+  email                     String                 @unique
+  name                      String
+  passwordHash              String
+  isActive                  Boolean                @default(true)
   // Teléfono de WhatsApp en E.164 sin '+' (ej. 573001112233). Vincula el número
   // entrante del chatbot con este usuario para heredar sus permisos RBAC.
-  whatsappPhone         String?             @unique
+  whatsappPhone             String?                @unique
   /// Caja asignada a esta cajera. Port del legacy `asignaciones` (detalle='caja',
   /// colaborador=usuario) -> `tipo`, que es lo que usa `acc_list()` para que cada cajera
   /// sólo vea la suya.
@@ -708,39 +744,39 @@ model User {
   ///
   /// null en una cajera = sin caja asignada -> sólo ve los bancos, igual que el legacy
   /// (allá `$asignacion` sale null y el `where('id', null)` no casa con nada).
-  cajaLegacyId          Int?
+  cajaLegacyId              Int?
   /// Sedes a las que accede. Port de `aauth_users.sede_accede` ('-2-,-3-,-4-').
   /// **VACÍO = TODAS**, que es el '0' del legacy (así lo tienen gerencia y admin).
   /// Guarda `Branch.legacyId`, que es el mismo espacio de ids que `accounts.sede`
   /// (verificado: 2=Yopal, 3=Villanueva, 4=Monterrey, 5=Mocoa, 6=Aguazul, 7=Tauramena).
-  sedesAccede           Int[]
-  roles                 UserRole[]
-  permissionOverrides   UserPermission[] // ajustes por empleado (ALLOW/DENY sobre el rol)
-  movements             InventoryMovement[]
-  auditLogs             AuditLog[]
-  employee              Employee? // perfil de empleado SST/RRHH (1-1 opcional)
-  workOrdersAssigned    WorkOrder[]         @relation("WorkOrderAssignee") // órdenes de trabajo asignadas (técnico)
-  workOrdersCreated     WorkOrder[]         @relation("WorkOrderCreatedBy") // órdenes de trabajo creadas (jefe)
-  warehousesResponsible Warehouse[]         @relation("WarehouseResponsible") // bodegas de las que es responsable
-  materialWarehousesManaged MaterialWarehouse[] @relation("MaterialWarehouseManager") // bodegas de material que tiene a cargo
+  sedesAccede               Int[]
+  roles                     UserRole[]
+  permissionOverrides       UserPermission[] // ajustes por empleado (ALLOW/DENY sobre el rol)
+  movements                 InventoryMovement[]
+  auditLogs                 AuditLog[]
+  employee                  Employee? // perfil de empleado SST/RRHH (1-1 opcional)
+  workOrdersAssigned        WorkOrder[]            @relation("WorkOrderAssignee") // órdenes de trabajo asignadas (técnico)
+  workOrdersCreated         WorkOrder[]            @relation("WorkOrderCreatedBy") // órdenes de trabajo creadas (jefe)
+  warehousesResponsible     Warehouse[]            @relation("WarehouseResponsible") // bodegas de las que es responsable
+  materialWarehousesManaged MaterialWarehouse[]    @relation("MaterialWarehouseManager") // bodegas de material que tiene a cargo
   // Bandeja de WhatsApp: conversaciones que tiene asignadas, las que cerró y los
   // mensajes que escribió de su puño (los del bot no llevan autor).
-  waConvsAssigned       WhatsappConversation[] @relation("WhatsappConvAssignee")
-  waConvsResolved       WhatsappConversation[] @relation("WhatsappConvResolver")
-  waMessagesSent        WhatsappMessage[]      @relation("WhatsappMessageSender")
-  notifications         Notification[]
+  waConvsAssigned           WhatsappConversation[] @relation("WhatsappConvAssignee")
+  waConvsResolved           WhatsappConversation[] @relation("WhatsappConvResolver")
+  waMessagesSent            WhatsappMessage[]      @relation("WhatsappMessageSender")
+  notifications             Notification[]
   // Cargos de los que es encargado (call center, bodega…): a dónde van los avisos.
-  responsibilities      Responsibility[]
+  responsibilities          Responsibility[]
   /// Teléfono al que le llegan los CÓDIGOS DE FIRMA (E.164 sin '+'). Campo propio y
   /// no `whatsappPhone` a propósito: ése es la identidad del chatbot (hereda los
   /// permisos RBAC de la cuenta y lo vincula sistemas), y el dueño del perfil no
   /// puede tocarlo. Este lo pone y lo cambia el usuario desde /perfil.
-  signaturePhone        String?
+  signaturePhone            String?
   /// Cuándo se comprobó que ese número recibe de verdad (código de prueba acertado).
   /// Sin verificar se puede firmar igual — el freno es tener el teléfono, no el sello.
-  signaturePhoneVerifiedAt DateTime?
-  signatureOtps         SignatureOtp[]
-  createdAt             DateTime            @default(now())
+  signaturePhoneVerifiedAt  DateTime?
+  signatureOtps             SignatureOtp[]
+  createdAt                 DateTime               @default(now())
 }
 
 /// Código de un solo uso (OTP) que confirma una FIRMA (hoy: aprobar una orden de
@@ -1668,8 +1704,6 @@ model Employee {
   email     String?
   bloodType String? // RH
   status    EmployeeStatus  @default(ACTIVE)
-
-  movilMemberships MovilMember[]
 
   // ---- datos laborales / RRHH ----
   address               String? // dirección de residencia
@@ -2829,6 +2863,8 @@ model Branch {
   naps        Nap[]
   vlans       Vlan[]
   genieacs    GenieacsConnection[]
+  /// Promociones cuyo público se definió por esta sede.
+  promotions  Promotion[]          @relation("PromotionBranches")
   createdAt   DateTime             @default(now())
 }
 
@@ -2861,7 +2897,11 @@ model Subscriber {
   contractDate DateTime? @db.Date // f_contrato
   entryDate    DateTime? @db.Date // f_ingreso
   estrato      String?
-  clausula     Int? // FK lógica a clausulas
+  /// Cláusula de permanencia mínima. Guarda el NÚMERO del legacy (`customers.clausula`),
+  /// no un cuid: es la columna que el sync trae y el writeback devuelve, así que
+  /// tenerla como FK de Prisma habría abierto dos verdades. Se resuelve contra
+  /// `Clausula.legacyId` (ver ContractsService.clausulaDe).
+  clausula     Int?
 
   // --- Dirección (denormalizada: guardan IDs legacy) ---
   departmentRef String? // departamento (id legacy)
@@ -2909,6 +2949,18 @@ model Subscriber {
   digitalSignature  Boolean            @default(false) // firma_digital
   eInvoicePayMethod EInvoicePayMethod? // metodo_pago_f_e
 
+  // --- Firma y huella del contrato ---
+  // El legacy solo guardaba el flag `firma_digital` y adivinaba el archivo por
+  // convención de nombre (assets/firmas_digitales/<id>.png). Aquí el nombre en
+  // disco queda escrito: los 7.258 PNG importados no comparten convención con los
+  // que se capturen desde el navegador, y sin esta columna habría que salir a
+  // probar rutas para saber si un contrato está firmado.
+  signaturePath   String? // nombre del archivo bajo uploads/subscribers/<id>/
+  signatureAt     DateTime?
+  signatureBy     String? // quién lo capturó ("Importado del legacy" para los viejos)
+  fingerprintPath String?
+  fingerprintAt   DateTime?
+
   picture String? // picture
 
   // --- Enlace contable (cuentas por cobrar) ---
@@ -2940,6 +2992,8 @@ model Subscriber {
   contactos           SubscriberContact[]
   verificaciones      ChatAccessVerification[]
   waSends             WhatsappSend[]
+  /// Promociones que lo alcanzan por lista cerrada de clientes.
+  promotions          Promotion[]               @relation("PromotionSubscribers")
   lastEmailReminderAt DateTime? // último recordatorio de cartera por correo (dedupe)
   lastWaReminderAt    DateTime? // último recordatorio de cartera por WhatsApp (dedupe + rotación)
   paymentOrders       PaymentOrder[]
@@ -3120,12 +3174,12 @@ model Notification {
 /// *responde* por ello, y avisarle a los 23 equivale a no avisarle a nadie: un aviso
 /// sin dueño lo ignoran todos de buena fe. Aquí se le pone nombre al dueño.
 model Responsibility {
-  id     String @id @default(cuid())
+  id             String  @id @default(cuid())
   /// Slug del cargo, validado contra el catálogo de `responsibilities.catalog.ts`.
   /// Texto y no enum a propósito: sumar un cargo nuevo no debe costar una migración.
-  post   String
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  post           String
+  userId         String
+  user           User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   /// El titular del cargo. Los suplentes reciben el mismo aviso —para que nada se
   /// caiga en vacaciones o en un turno—, pero de quien se espera respuesta es de él.
   isPrimary      Boolean @default(false)
@@ -3162,30 +3216,30 @@ enum WhatsappConvStatus {
 /// motor del bot (`kapso:<telefono>`, tal cual la arma el engine, sin normalizar):
 /// se guarda para poder silenciar al bot en ESA conversación sin adivinar el formato.
 model WhatsappConversation {
-  id            String             @id @default(cuid())
-  phone         String             @unique
-  convKey       String?
-  subscriberId  String?
-  subscriber    Subscriber?        @relation(fields: [subscriberId], references: [id], onDelete: SetNull)
-  status        WhatsappConvStatus @default(BOT)
+  id               String             @id @default(cuid())
+  phone            String             @unique
+  convKey          String?
+  subscriberId     String?
+  subscriber       Subscriber?        @relation(fields: [subscriberId], references: [id], onDelete: SetNull)
+  status           WhatsappConvStatus @default(BOT)
   /// Por qué llegó a una persona (lo que pidió el cliente, o "respondió un funcionario").
-  handoffReason String?
-  assignedToId  String?
-  assignedTo    User?              @relation("WhatsappConvAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
-  assignedAt    DateTime?
-  resolvedAt    DateTime?
-  resolvedById  String?
-  resolvedBy    User?              @relation("WhatsappConvResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
+  handoffReason    String?
+  assignedToId     String?
+  assignedTo       User?              @relation("WhatsappConvAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  assignedAt       DateTime?
+  resolvedAt       DateTime?
+  resolvedById     String?
+  resolvedBy       User?              @relation("WhatsappConvResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
   /// Último entrante: de aquí sale la ventana de 24 h de Meta. Fuera de ella no se
   /// puede mandar texto libre, solo plantilla aprobada.
-  lastInboundAt DateTime?
-  lastMessageAt DateTime?
+  lastInboundAt    DateTime?
+  lastMessageAt    DateTime?
   /// IN | OUT del último mensaje, para pintar la lista sin ir a buscarlo.
-  lastDirection String?
+  lastDirection    String?
   /// Recorte del último mensaje (vista previa de la lista).
-  preview       String?            @db.Text
+  preview          String?            @db.Text
   /// Entrantes sin abrir desde la bandeja.
-  unread        Int                @default(0)
+  unread           Int                @default(0)
   /// Orden cuya solución le estamos pidiendo confirmar al cliente (ver
   /// TicketConfirmacionService). Mientras esté puesta, el siguiente mensaje del
   /// cliente se interpreta de forma DETERMINISTA como "sí quedó" / "no quedó" en vez
@@ -3195,8 +3249,8 @@ model WhatsappConversation {
   /// Desde cuándo se espera. La espera caduca: si el cliente no contesta, el bot
   /// vuelve a atenderlo con normalidad en vez de quedarse mudo para siempre.
   awaitingSince    DateTime?
-  createdAt     DateTime           @default(now())
-  updatedAt     DateTime           @updatedAt
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
 
   @@index([status, lastMessageAt])
   @@index([assignedToId, status])
@@ -3288,34 +3342,6 @@ model WhatsappSend {
   @@index([campaignId])
   @@index([status])
   @@index([subscriberId])
-}
-
-/// Móvil / cuadrilla: agrupa técnicos para asignar órdenes y eventos (tabla `moviles`).
-model Movil {
-  id            String        @id @default(cuid())
-  legacyId      Int?          @unique // id_movil
-  name          String?
-  status        String        @default("Activa") // Activa | Inactiva
-  createdByName String?
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
-  members       MovilMember[]
-
-  @@index([status])
-}
-
-/// Técnico asignado a una móvil (tabla `empleados_moviles`).
-model MovilMember {
-  id         String   @id @default(cuid())
-  legacyId   Int?     @unique // id_empleados_moviles
-  movilId    String
-  movil      Movil    @relation(fields: [movilId], references: [id], onDelete: Cascade)
-  employeeId String
-  employee   Employee @relation(fields: [employeeId], references: [id])
-  role       String? // rol
-
-  @@unique([movilId, employeeId])
-  @@index([employeeId])
 }
 
 /// Mensajería interna / bitácora de mensajes (tabla `mensajes`).
@@ -3411,6 +3437,8 @@ model Plan {
   services          SubscriberService[]
   oltProfiles       PlanOltProfile[]
   provisionRequests OltProvisionRequest[]
+  /// Promociones cuyo público se definió por este plan.
+  promotions        Promotion[]           @relation("PromotionPlans")
 
   @@index([kind])
   @@index([active])
@@ -3520,6 +3548,15 @@ model SubInvoice {
   eInvoicePayMethod EInvoicePayMethod? // metodo_pago_f_e
 
   notes String? // notes
+
+  // Edición de la factura en ESTE sistema (el legacy también deja editarla:
+  // `Invoices::editaction` borra los renglones y los reinserta). Marcar la edición
+  // no es cosmético: el sync de ida compara la huella total/pamnt/status contra el
+  // MySQL vivo y, sin esta marca, restauraría los valores del legacy y devolvería
+  // los renglones viejos a los 15 minutos. Ver `scripts/sync-legacy-vivo.js`.
+  editedAt  DateTime?
+  editedBy  String? // nombre del funcionario que editó (último)
+  editCount Int       @default(0)
 
   // Relaciones
   items              SubInvoiceItem[]
@@ -3998,15 +4035,14 @@ model Staff {
   updatedAt  DateTime   @updatedAt
 
   /// Órdenes de servicio asignadas a este funcionario (base del tablero de rendimiento).
-  tickets                 Ticket[]                 @relation("StaffTickets")
+  tickets Ticket[] @relation("StaffTickets")
 
   /// Hoja de vida, cédula, contrato y certificados de este funcionario.
-  documents               StaffDocument[]
+  documents StaffDocument[]
 
-  // Promociones que este funcionario tiene autorizadas para aplicar (m2m).
-  promotions              Promotion[]              @relation("PromotionAssignees")
-  promotionApplications   PromotionApplication[]
-  promotionAssignmentLogs PromotionAssignmentLog[] @relation("StaffPromotionAssignmentLogs")
+  // Promociones que este funcionario ha aplicado a facturas (la promo ya NO se
+  // asigna a funcionarios: su destinatario es el cliente).
+  promotionApplications PromotionApplication[]
 
   @@index([role])
   @@index([areaId])
@@ -4056,33 +4092,49 @@ model StaffDocument {
 
 // ===== Promociones de facturación (legacy tabla `promos` de settings/promociones) =====
 
-/// Campaña de descuento. El superusuario la crea y la asigna a funcionarios;
-/// esos funcionarios pueden aplicar el % a las facturas de los clientes mientras
-/// esté vigente. Reemplaza la tabla legacy `promos` (columna `colaborador` JSON).
+/// Campaña de descuento. El superusuario la crea y define A QUÉ CLIENTES alcanza
+/// (decisión 2026-08-03): el destinatario es el cliente, NO el funcionario. Antes
+/// la promo se asignaba a colaboradores y quien la tuviera podía aplicarla a
+/// cualquier factura; eso permitía descontarle a un cliente que no debía. Ahora la
+/// promo define su público (estados, clientes puntuales, planes, sedes, barrios o
+/// todos) y solo aparece en las facturas de los clientes que están dentro.
+///
+/// Los criterios se combinan con Y (AND) entre dimensiones y con O (OR) dentro de
+/// cada una: "estado Activo + sede Yopal" = activos DE Yopal. Una dimensión vacía
+/// no filtra. Con `allSubscribers` la promo alcanza a todos y se ignoran los demás.
 model Promotion {
-  id               String            @id @default(cuid())
-  name             String // pro_nombre
-  description      String?
-  percentage       Int               @default(0) // porcentaje (0..100); usado cuando discountFormat es '%' o 'b_p'
+  id             String   @id @default(cuid())
+  name           String // pro_nombre
+  description    String?
+  percentage     Int      @default(0) // porcentaje (0..100); usado cuando discountFormat es '%' o 'b_p'
   /// Formato de descuento (fiel al legacy `format_discount`):
   /// '%' = % después de imp. | 'flat' = monto fijo después de imp. |
   /// 'b_p' = % antes de imp. | 'bflat' = monto fijo antes de imp.
-  discountFormat   String            @default("%")
+  discountFormat String   @default("%")
   /// Monto fijo del descuento (cuando discountFormat es 'flat' o 'bflat').
-  flatAmount       Decimal?          @db.Decimal(18, 2)
-  startDate        DateTime          @db.Date // f_inicio
-  endDate          DateTime          @db.Date // f_final
-  active           Boolean           @default(true)
-  /// Global = disponible para todos los funcionarios (legacy `colaborador = null`).
-  global           Boolean           @default(false)
-  /// Promo POR ESTADO DE CLIENTE (legacy `id_estado_clientes`): si está set, la
-  /// promo aplica a las facturas de los clientes en ese estado (no por funcionario).
-  subscriberStatus SubscriberStatus?
+  flatAmount     Decimal? @db.Decimal(18, 2)
+  startDate      DateTime @db.Date // f_inicio
+  endDate        DateTime @db.Date // f_final
+  active         Boolean  @default(true)
 
-  /// Funcionarios autorizados a aplicar la promo (legacy `colaborador` JSON de IDs).
-  assignees      Staff[]                  @relation("PromotionAssignees")
-  applications   PromotionApplication[]
-  assignmentLogs PromotionAssignmentLog[]
+  // ── ¿A qué clientes alcanza? ────────────────────────────────────────────────
+  /// Alcanza a TODOS los clientes (ignora los demás criterios). Es explícito a
+  /// propósito: sin criterios y sin esta bandera, la promo no alcanza a nadie.
+  allSubscribers     Boolean            @default(false)
+  /// Estados de cliente alcanzados (legacy `id_estado_clientes`, ahora múltiple).
+  subscriberStatuses SubscriberStatus[]
+  /// Barrios alcanzados: guarda el id legacy del barrio (= `Subscriber.neighborhood`).
+  neighborhoodRefs   String[]
+
+  /// Clientes puntuales alcanzados (lista cerrada).
+  subscribers Subscriber[] @relation("PromotionSubscribers")
+  /// Planes alcanzados: el cliente entra si tiene ese plan contratado.
+  plans       Plan[]       @relation("PromotionPlans")
+  /// Sedes alcanzadas.
+  branches    Branch[]     @relation("PromotionBranches")
+
+  applications PromotionApplication[]
+  targetLogs   PromotionTargetLog[]
 
   createdBy String? // nombre/email del superusuario que la creó
   createdAt DateTime @default(now())
@@ -4090,33 +4142,63 @@ model Promotion {
 
   @@index([active])
   @@index([startDate, endDate])
-  @@index([subscriberStatus])
 }
 
-/// Historial de asignaciones de una promoción a funcionarios: qué promo, a quién,
-/// quién la asignó y cuándo. Registra tanto altas (ASSIGNED) como bajas
-/// (UNASSIGNED). Guarda snapshots de nombre para que el historial sobreviva a
-/// renombres/borrados. Se escribe en cada create/update de la promoción.
-model PromotionAssignmentLog {
-  id             String                @id @default(cuid())
-  promotionId    String
-  promotion      Promotion             @relation(fields: [promotionId], references: [id], onDelete: Cascade)
-  promotionName  String // snapshot del nombre de la promo
-  staffId        String? // funcionario (null = entrada "global/todos")
-  staff          Staff?                @relation("StaffPromotionAssignmentLogs", fields: [staffId], references: [id])
-  staffName      String // snapshot del nombre del funcionario (o "Todos (global)")
-  action         PromotionAssignAction
-  assignedByName String? // superusuario que hizo el cambio
-  createdAt      DateTime              @default(now())
+/// Plantilla de promoción: la FORMA de una campaña que se repite (nombre, descuento
+/// y fechas), para no volver a teclearla cada vez. Deliberadamente NO guarda el
+/// público: la misma campaña —"Pronto pago"— se dirige cada mes a gente distinta,
+/// y arrastrar el público de la vez anterior es justo el error que hay que evitar.
+///
+/// El nombre es único: volver a guardar con el mismo nombre actualiza la plantilla
+/// en vez de acumular copias.
+model PromotionTemplate {
+  id             String   @id @default(cuid())
+  name           String   @unique
+  description    String?
+  /// Mismo juego de valores que `Promotion.discountFormat`.
+  discountFormat String   @default("%")
+  percentage     Int      @default(0)
+  flatAmount     Decimal? @db.Decimal(18, 2)
+  startDate      DateTime @db.Date
+  endDate        DateTime @db.Date
+
+  createdBy String? // nombre/email del superusuario que la guardó
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// Bitácora del PÚBLICO de una promoción: qué destinatario se agregó o quitó, quién
+/// lo hizo y cuándo. Es la traza que responde "¿por qué a este cliente se le
+/// descontó?". Guarda snapshots de texto para sobrevivir a renombres y borrados.
+model PromotionTargetLog {
+  id            String                @id @default(cuid())
+  promotionId   String
+  promotion     Promotion             @relation(fields: [promotionId], references: [id], onDelete: Cascade)
+  promotionName String // snapshot del nombre de la promo
+  kind          PromotionTargetKind
+  /// Texto del destinatario: "Estado: Activo", "Cliente: Juan Pérez #1234", "Sede: Yopal"…
+  targetLabel   String
+  action        PromotionTargetAction
+  changedByName String? // superusuario que hizo el cambio
+  createdAt     DateTime              @default(now())
 
   @@index([promotionId])
-  @@index([staffId])
   @@index([createdAt])
 }
 
-enum PromotionAssignAction {
-  ASSIGNED
-  UNASSIGNED
+/// Dimensión del destinatario de una promoción.
+enum PromotionTargetKind {
+  ALL // todos los clientes
+  STATUS // estado del cliente
+  SUBSCRIBER // cliente puntual
+  PLAN // plan contratado
+  BRANCH // sede
+  NEIGHBORHOOD // barrio
+}
+
+enum PromotionTargetAction {
+  ADDED
+  REMOVED
 }
 
 /// Registro de una promoción aplicada a una factura (nota crédito). Evita
@@ -4886,16 +4968,16 @@ model GenieacsConnection {
 
 /// Almacén/bodega de equipos (legacy `almacen_equipos`).
 model EquipmentWarehouse {
-  id          String      @id @default(cuid())
-  legacyId    Int         @unique
-  name        String // almacen
-  description String? // descripcion
+  id           String      @id @default(cuid())
+  legacyId     Int         @unique
+  name         String // almacen
+  description  String? // descripcion
   /// Sede a la que pertenece la bodega (`Branch.legacyId`), para acotar por sede igual
   /// que las cajas (`CashAccount.branchLegacy`). El legacy no la tenía: se deduce del
   /// nombre (ver `prisma/migrate-bodegas-equipos-sede-2026-07.ts`).
   /// `null` = bodega sin sede (p. ej. "Depurados"): solo la mueve el jefe de bodega.
   branchLegacy Int?
-  equipment   Equipment[]
+  equipment    Equipment[]
 
   @@index([branchLegacy])
 }
@@ -4938,30 +5020,30 @@ model Equipment {
 
 /// Transferencia de equipos entre almacenes (legacy `transfer_equipos`).
 model EquipmentTransfer {
-  id                String                  @id @default(cuid())
-  legacyId          Int?                    @unique // teid (null = creada en el stack nuevo)
-  date              DateTime // fecha
-  fromWarehouse     String // almacen_origen
-  toWarehouse       String // almacen_destino
-  fromWarehouseName String? // nombre bodega origen (nuevo)
-  toWarehouseName   String? // nombre bodega destino (nuevo)
-  observations      String? // observaciones
-  userId            Int // id_usuario_que_transfiere (legacy)
-  status            String                  @default("Emitida") // Pendiente | En tránsito | Recibida | Rechazada (legacy: Emitida/Completada)
+  id                 String                  @id @default(cuid())
+  legacyId           Int?                    @unique // teid (null = creada en el stack nuevo)
+  date               DateTime // fecha
+  fromWarehouse      String // almacen_origen
+  toWarehouse        String // almacen_destino
+  fromWarehouseName  String? // nombre bodega origen (nuevo)
+  toWarehouseName    String? // nombre bodega destino (nuevo)
+  observations       String? // observaciones
+  userId             Int // id_usuario_que_transfiere (legacy)
+  status             String                  @default("Emitida") // Pendiente | En tránsito | Recibida | Rechazada (legacy: Emitida/Completada)
   // Bodegas por id del stack nuevo (para mover el equipo).
-  fromWarehouseId   String?
-  toWarehouseId     String?
+  fromWarehouseId    String?
+  toWarehouseId      String?
   // Flujo de aprobación (denormalizado, mismo patrón que *WarehouseName).
-  requestedById     String? // solicita (técnico)
-  requestedByName   String?
-  requestedAt       DateTime?
-  approvedById      String? // aprueba/despacha (Jefe de bodega / inventario)
-  approvedByName    String?
-  approvedAt        DateTime?
-  receivedById      String? // recibe en la sede destino (caja) = firma de ENTRADA
-  receivedByName    String?
-  receivedAt        DateTime?
-  rejectReason      String?
+  requestedById      String? // solicita (técnico)
+  requestedByName    String?
+  requestedAt        DateTime?
+  approvedById       String? // aprueba/despacha (Jefe de bodega / inventario)
+  approvedByName     String?
+  approvedAt         DateTime?
+  receivedById       String? // recibe en la sede destino (caja) = firma de ENTRADA
+  receivedByName     String?
+  receivedAt         DateTime?
+  rejectReason       String?
   // --- Firma de SALIDA (solo transferencias ENTRE SEDES) -------------------
   // Entre sedes la arma el jefe de bodega, pero el equipo no sale hasta que la
   // cajera encargada de la sede ORIGEN firma la salida con un código OTP que le
@@ -4973,12 +5055,12 @@ model EquipmentTransfer {
   // resuelve hash, intentos, vencimiento, envío y rastro. Aquí solo queda quién
   // firmó, cuándo y con qué (`*Signature` = a qué WhatsApp salió el código, o si
   // fue en modo simulación).
-  signedOutById     String? // firma la salida (cajera de la sede origen)
-  signedOutByName   String?
-  signedOutAt       DateTime?
+  signedOutById      String? // firma la salida (cajera de la sede origen)
+  signedOutByName    String?
+  signedOutAt        DateTime?
   signedOutSignature String? // rastro de la firma de salida
-  receivedSignature String? // rastro de la firma de entrada
-  items             EquipmentTransferItem[]
+  receivedSignature  String? // rastro de la firma de entrada
+  items              EquipmentTransferItem[]
 
   @@index([status])
 }
@@ -5024,20 +5106,20 @@ enum TodoPriority {
 /// Orden de trabajo / ticket (legacy `tickets`). `detalle` = tipo de orden
 /// (Instalacion, Corte, Reconexion, Traslado, etc.). Motor de estados del cliente.
 model Ticket {
-  id                String           @id @default(cuid())
-  legacyId          Int?             @unique // idt (null = creada en el stack nuevo)
+  id                String       @id @default(cuid())
+  legacyId          Int?         @unique // idt (null = creada en el stack nuevo)
   code              Int? // codigo (nº de orden; una orden puede tener varios tickets)
   subject           String
   type              String // detalle (tipo de orden)
-  created           DateTime         @db.Date
+  created           DateTime     @db.Date
   subscriberId      String?
-  subscriber        Subscriber?      @relation(fields: [subscriberId], references: [id]) // cid
+  subscriber        Subscriber?  @relation(fields: [subscriberId], references: [id]) // cid
   col               String? // estado/columna
-  status            TicketStatus     @default(PENDIENTE)
-  priority          String           @default("Media") // Baja / Media / Alta / Urgente
+  status            TicketStatus @default(PENDIENTE)
+  priority          String       @default("Media") // Baja / Media / Alta / Urgente
   problem           String? // problema
   section           String? // section (detalle largo)
-  finalDate         DateTime?        @db.Date // fecha_final
+  finalDate         DateTime?    @db.Date // fecha_final
   invoiceLegacy     Int? // id_invoice
   invoiceBillLegacy Int? // id_factura
   assigned          String? // asignado (técnico) — texto libre heredado del legacy
@@ -5065,7 +5147,7 @@ model Ticket {
   /// Día para el que está agendada. `null` = sin agendar (sigue siendo trabajo suyo,
   /// pero nadie ha dicho cuándo). Es `date` y no `timestamp` a propósito: se agenda
   /// el día, no la hora — ver la decisión de 2026-07-31.
-  scheduledFor    DateTime? @db.Date
+  scheduledFor    DateTime?        @db.Date
   /// Posición dentro del día PARA SU TÉCNICO: 1 es la primera visita. Se renumera
   /// entera la columna en cada movimiento, así que no hay huecos ni empates.
   scheduledSeq    Int?
@@ -5074,12 +5156,24 @@ model Ticket {
   scheduledById   String?
   scheduledByName String?
   scheduledAt     DateTime?
-  signatureName     String? // nombre_firma
-  signatureCc       String? // cc_firma
-  signatureRel      String? // parentesco_firma
-  signatureImage    String? // ruta del PNG de la firma dibujada (uploads/signatures)
-  materials         TicketMaterial[] // material consumido en la orden (descuenta stock)
-  createdAt         DateTime         @default(now())
+  /// El técnico llegó y NO pudo hacerla (cliente ausente, dirección errada, falta
+  /// material). No es un estado del ticket: la orden sigue PENDIENTE y sigue siendo
+  /// suya; lo que se acabó es su turno de hoy. Al marcarla se desagenda para que la
+  /// cajera la vea en la bandeja de "sin agendar" y decida cuándo repetirla.
+  ///
+  /// Existe para que el turno obligatorio no deje al técnico trancado: sin salida,
+  /// un cliente que no abre la puerta le bloquea el día entero — o le empuja a cerrar
+  /// en falso una visita que no hizo, que es peor porque ensucia el dato de campo.
+  skippedAt       DateTime?
+  skippedReason   String?
+  skippedById     String?
+  skippedByName   String?
+  signatureName   String? // nombre_firma
+  signatureCc     String? // cc_firma
+  signatureRel    String? // parentesco_firma
+  signatureImage  String? // ruta del PNG de la firma dibujada (uploads/signatures)
+  materials       TicketMaterial[] // material consumido en la orden (descuenta stock)
+  createdAt       DateTime         @default(now())
 
   // --- Geo-cerca del cierre (ver GeofenceService) ---
   /// Dónde estaba el funcionario al pasar la orden a RESUELTO.
@@ -5098,6 +5192,21 @@ model Ticket {
   /// Señales de que la ubicación del cierre podría ser simulada (ver spoof.policy).
   /// Vacío = nada raro. No prueban nada por sí solas: son para mirar, no para acusar.
   closeFlags     String[] @default([])
+
+  // --- Puntaje del trabajo (ver TicketTypeScore y order-score.service.ts) ---
+  /// Puntos que valió esta orden, de 1 a 5, según su tipo. Se sella al pasar a
+  /// RESUELTO y se borra si la orden se reabre o se anula: los puntos son de
+  /// trabajo terminado, no de trabajo empezado.
+  ///
+  /// Es una COPIA del puntaje que tenía el tipo en ese momento, no una lectura en
+  /// vivo de `TicketTypeScore`. Si mañana gerencia decide que una instalación vale
+  /// 5 en vez de 4, el histórico no se reescribe solo: lo que ya se le abonó a un
+  /// técnico se queda como se le abonó. Sin esta copia, cualquier ajuste de la
+  /// tabla de puntos cambiaría retroactivamente el rendimiento de todo el equipo.
+  score          Int?
+  /// Cuándo se sellaron los puntos. Distingue "cerrada antes de que existiera el
+  /// puntaje" (null) de "cerrada y valió 0 puntos", que no es lo mismo.
+  scoredAt       DateTime?
 
   @@index([subscriberId])
   @@index([code])
@@ -5152,6 +5261,34 @@ model TicketThread {
 
   @@index([ticketCode])
   @@index([subscriberId])
+}
+
+/// Cuánto vale, en puntos de 1 a 5, cada tipo de orden.
+///
+/// El puntaje es AUTOMÁTICO: nadie califica al técnico al cerrar. Lo que se
+/// decide una sola vez —y se decide arriba— es cuánto pesa cada trabajo: una
+/// instalación desde cero no es lo mismo que una revisión de veinte minutos. Al
+/// cerrar la orden, el sistema copia ese peso en `Ticket.score` y ya.
+///
+/// Es tabla y no un AppSetting con JSON adentro porque son ~45 tipos que además
+/// crecen (el chatbot abre órdenes con tipos propios), y porque un cambio de
+/// puntaje mueve el rendimiento de todo el equipo: tiene que quedar quién lo
+/// cambió y cuándo. Un blob de texto en `AppSetting` no da ninguna de las dos cosas.
+///
+/// Los tipos que no tengan fila valen el puntaje por defecto (`tickets.scoreDefault`).
+/// Así el sistema funciona el primer día, con la tabla vacía, y un tipo nuevo que
+/// aparezca mañana no rompe nada ni deja al técnico sin puntos.
+model TicketTypeScore {
+  id        String   @id @default(cuid())
+  /// `Ticket.type` exacto, tal como se guarda en las órdenes.
+  type      String   @unique
+  /// 1 a 5. Se valida en el servicio, no en la base: Postgres no tiene un tipo
+  /// "entero del 1 al 5" y un CHECK suelto no explica por qué está ahí.
+  points    Int
+  /// Quién dejó este puntaje. Es una decisión de gestión, no un dato técnico.
+  updatedBy String?
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
 }
 
 /// Acta de transferencia de productos entre almacenes (legacy `acta_transferencias`).
@@ -5218,6 +5355,33 @@ model SubscriberFile {
   createdAt      DateTime   @default(now())
 
   @@index([subscriberId])
+}
+
+/// Cláusula de permanencia mínima del contrato (legacy `clausula`).
+///
+/// No es un "plan": es el pacto por el que la empresa le descuenta o difiere al
+/// cliente el cargo por conexión a cambio de que se quede N meses. Lo que la hace
+/// un modelo y no un par de campos es `valores`: la ley obliga a imprimir en el
+/// contrato CUÁNTO paga el cliente si se retira en cada mes, y esa cifra baja mes
+/// a mes hasta cero. Sin esa tabla el contrato no se puede emitir.
+///
+/// `legacyId` es el número que viaja en `Subscriber.clausula` (idcla). Las que se
+/// creen aquí toman uno del rango 900+ para no chocar con el legacy si algún día
+/// alguien agrega una allá.
+model Clausula {
+  id        String   @id @default(cuid())
+  legacyId  Int?     @unique // clausula.idcla
+  nombre    String // "Familiar 12 meses"
+  meses     Int // duración de la permanencia
+  vTotal    Int // v_total: valor total del cargo por conexión (COP)
+  /// mes1..mesN: lo que paga el cliente si termina el contrato en ese mes.
+  /// Se guarda como arreglo y no como 12 columnas porque el legacy rellenaba de
+  /// ceros los meses sobrantes de las cláusulas de 6, y esos ceros se leían igual
+  /// que "no debe nada" en el mes 7 de una de 12.
+  valores   Int[]
+  activa    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 /// Nota/observación libre sobre un suscriptor (bitácora con autor y fecha).
@@ -5386,7 +5550,8 @@ model GeoPing {
   /// afirmar que el técnico estaba en el domicilio.
   accuracy  Float?
   /// Qué acción lo generó: `ticket.open`, `ticket.close`, `ticket.attach`,
-  /// `subscriber.capture`, `manual`.
+  /// `subscriber.capture`, `manual`. `heartbeat` es el caso aparte: no lo generó
+  /// una acción del técnico sino su app abierta reportando posición cada minuto.
   reason    String
   /// Entidad tocada (nº de orden, id de abonado…), para poder saltar a ella.
   refType   String?

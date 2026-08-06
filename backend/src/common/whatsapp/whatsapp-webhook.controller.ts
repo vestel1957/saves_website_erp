@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query, Req, Res, Logger } from '@nestjs/common';
+import { Logger } from '../../core/logger';
 import type { Request, Response } from 'express';
 import { WhatsappService } from './whatsapp.service';
 
@@ -11,19 +11,17 @@ import { WhatsappService } from './whatsapp.service';
  *   https://<host>/api/whatsapp/webhook
  * y el mismo Verify Token que WHATSAPP_WEBHOOK_VERIFY_TOKEN (handshake GET).
  */
-@Controller('whatsapp/webhook')
 export class WhatsappWebhookController {
   private readonly logger = new Logger('WhatsappWebhookController');
 
   constructor(private readonly whatsapp: WhatsappService) {}
 
   /** Verificación del webhook (handshake inicial estilo Meta). */
-  @Get()
   verify(
-    @Query('hub.mode') mode: string,
-    @Query('hub.verify_token') token: string,
-    @Query('hub.challenge') challenge: string,
-    @Res() res: Response,
+    mode: string,
+    token: string,
+    challenge: string,
+    res: Response,
   ) {
     if (mode === 'subscribe' && token && token === this.whatsapp.verifyToken) {
       return res.status(200).send(challenge);
@@ -32,8 +30,7 @@ export class WhatsappWebhookController {
   }
 
   /** Recepción de eventos (mensajes). Valida la firma antes de procesar. */
-  @Post()
-  receive(@Req() req: Request, @Body() body: any, @Res() res: Response) {
+  receive(req: Request, body: any, res: Response) {
     const sig = {
       kapso: req.header('x-webhook-signature'), // webhook estructurado de Kapso
       hub: req.header('x-hub-signature-256'), // reenvío formato Meta

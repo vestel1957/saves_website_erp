@@ -1,19 +1,13 @@
-import {
-  BadRequestException,
-  ForbiddenException,
-  Injectable,
-  Logger,
-  NotFoundException,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException, UnauthorizedException } from '../core/http/errores';
+import { Logger } from '../core/logger';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from './current-user.decorator';
 import { hashPassword, isLegacyHash, signToken, verifyPassword } from './crypto.util';
 import { ROLE_AREA_BY_KEY, SUPERADMIN_PERMISSION, SCREENS, screenKey, ALL_PERMISSIONS } from './permissions.catalog';
 import { PasswordOtpService } from '../common/signature/password-otp.service';
+import { resolverSedes } from '../common/sede-scope';
 
-@Injectable()
 export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
@@ -65,12 +59,22 @@ export class AuthService {
       if (ov.effect === 'DENY') permissions.delete(ov.permission.key);
       else permissions.add(ov.permission.key);
     }
+    // Alcance por sede resuelto una sola vez por petición y colgado de la sesión:
+    // así lo tienen a mano tanto los filtros del backend (`sede-scope.ts` lo lee de
+    // aquí en vez de volver a la BD) como la pantalla, que con esto sabe que NO debe
+    // pintarle al usuario un selector de sedes que no puede usar.
+    // El superusuario nunca queda acotado.
+    const sedes = permissions.has(SUPERADMIN_PERMISSION)
+      ? []
+      : await resolverSedes(this.prisma, user, [...permissions]);
+
     return {
       id: user.id,
       email: user.email,
       name: user.name,
       roles,
       permissions: [...permissions],
+      sedes,
     };
   }
 

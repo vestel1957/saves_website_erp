@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '../core/http/errores';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { orden } from '../common/pagination-params';
@@ -24,7 +24,6 @@ const SUB_SELECT = {
 } as const;
 
 /** "Reciclaje de ventas": plantillas de factura recurrente (legacy rec_invoices). */
-@Injectable()
 export class RecurringService {
   constructor(
     private readonly prisma: PrismaService,

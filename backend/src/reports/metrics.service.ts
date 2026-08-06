@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Logger } from '../core/logger';
 import { PrismaService } from '../prisma/prisma.service';
 
 /**
@@ -94,7 +94,6 @@ const dia = (s: string) => new Date(`${s}T00:00:00.000Z`);
 
 export type Punto = { fecha: string; valor: number };
 
-@Injectable()
 export class MetricsService {
   private readonly logger = new Logger('Metrics');
 

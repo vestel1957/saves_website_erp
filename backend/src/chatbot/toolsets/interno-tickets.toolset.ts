@@ -1,4 +1,3 @@
-import { Injectable } from '@nestjs/common';
 import type { Toolset, ToolContext, ToolDef } from '@s4gk/wa-agent';
 import { PERMISSION_DENIED } from '@s4gk/wa-agent';
 import { APP_PERMISSIONS as P } from '../../auth/permissions.catalog';
@@ -58,7 +57,6 @@ function estadoDe(raw: unknown): (typeof ESTADOS)[number] | null {
  * Las escrituras pasan por `preparePending`, así que el motor pide un SÍ/NO
  * determinista antes de tocar la BD: el modelo nunca decide solo.
  */
-@Injectable()
 export class InternoTicketsToolset implements Toolset {
   constructor(
     private readonly support: SupportService,

@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '../core/http/errores';
 import { IsInt, IsNumber, IsOptional, IsString, Matches, Max, Min, MinLength } from 'class-validator';
 import { Type } from 'class-transformer';
 import { PrismaService } from '../prisma/prisma.service';
@@ -47,7 +47,6 @@ export class EjecutarPagoFijoDto {
  * transacción (`/treasury/transactions/:id/attach`, el mismo camino que ya usa
  * el modal de egresos).
  */
-@Injectable()
 export class PagosFijosService {
   constructor(
     private readonly prisma: PrismaService,

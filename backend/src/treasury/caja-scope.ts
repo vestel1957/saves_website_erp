@@ -1,6 +1,7 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '../core/http/errores';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
+import { esCajeraPura } from '../common/sede-scope';
 
 /**
  * Quién puede ver qué caja — port de `Transactions_model::acc_list()` del legacy.
@@ -23,11 +24,6 @@ import { AuthUser } from '../auth/current-user.decorator';
  *    además es el lado seguro: ante la duda, no enseñar el efectivo de otra sede.
  */
 
-const P_SUPERADMIN = 'system.admin';
-const P_CAJA = 'area.caja';
-/** Áreas que mandan sobre la restricción de cajera: si tienes una de estas, ves todo. */
-const P_MANDO = ['area.contabilidad', 'area.administracion', 'area.gerencia'];
-
 /** `accounts.sede = 0` = no es una sede, es un banco. Todo el mundo los ve. */
 export const SEDE_BANCO = 0;
 
@@ -40,12 +36,15 @@ export type AlcanceCajas = {
   sedes: number[];
 };
 
-/** ¿Este usuario es una cajera "pura" (y por tanto va acotada a su caja)? */
+/**
+ * ¿Este usuario es una cajera "pura" (y por tanto va acotada a su caja)?
+ *
+ * La definición vive en `common/sede-scope.ts` porque la comparten los dos
+ * acotados —el de cajas y el de sedes— y tenerla por duplicado era pedir que se
+ * separaran con el tiempo.
+ */
 export function esCajera(user: AuthUser): boolean {
-  const p = user?.permissions ?? [];
-  if (p.includes(P_SUPERADMIN)) return false;
-  if (P_MANDO.some((m) => p.includes(m))) return false;
-  return p.includes(P_CAJA);
+  return esCajeraPura(user?.permissions ?? []);
 }
 
 /** Sin límite: lo que se le concede a un proceso interno, que no tiene sede. */

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { NotFoundException } from '../core/http/errores';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpsertMappingDto } from './dto/accounting.dto';
 
@@ -11,7 +11,6 @@ export const MAPPING_KEYS = [
 ] as const;
 export type MappingKey = (typeof MAPPING_KEYS)[number];
 
-@Injectable()
 export class MappingsService {
   constructor(private readonly prisma: PrismaService) {}
 

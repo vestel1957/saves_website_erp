@@ -1,4 +1,4 @@
-import { ForbiddenException } from '@nestjs/common';
+import { ForbiddenException } from '../core/http/errores';
 import {
   alcanceDe, esCajera, exigirCajaDeEscritura, puedeVer, SEDE_BANCO, AlcanceCajas,
 } from './caja-scope';

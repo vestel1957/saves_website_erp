@@ -1,5 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { OnEvent } from '@nestjs/event-emitter';
+import { Logger } from '../../core/logger';
 import { WhatsappService } from './whatsapp.service';
 import { INTERNAL_ALERT_EVENT, type InternalAlert } from './whatsapp.types';
 
@@ -11,13 +10,11 @@ import { INTERNAL_ALERT_EVENT, type InternalAlert } from './whatsapp.types';
  * quien decide a quién avisar es `ResponsibilitiesModule`, y la bandeja de WhatsApp
  * es uno de sus clientes. Con el evento, las flechas apuntan en un solo sentido.
  */
-@Injectable()
 export class WhatsappInternalAlertListener {
   private readonly logger = new Logger('AvisoInternoWA');
 
   constructor(private readonly whatsapp: WhatsappService) {}
 
-  @OnEvent(INTERNAL_ALERT_EVENT)
   async handle(alerta: InternalAlert): Promise<void> {
     const phones = [...new Set((alerta?.phones ?? []).map((p) => p.replace(/\D/g, '')).filter(Boolean))];
     if (!phones.length || !alerta?.text) return;

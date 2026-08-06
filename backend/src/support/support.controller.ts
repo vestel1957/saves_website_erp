@@ -1,9 +1,6 @@
-import {
-  BadRequestException, Body, Controller, Get, Param, Post, Query, Req, Res, UploadedFile, UseGuards, UseInterceptors,
-} from '@nestjs/common';
-import { IsInt, IsOptional, IsString, Min, MinLength } from 'class-validator';
+import { BadRequestException } from '../core/http/errores';
+import { IsArray, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
-import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { existsSync, mkdirSync } from 'node:fs';
 import { extname, join } from 'node:path';
@@ -11,7 +8,7 @@ import { randomUUID } from 'node:crypto';
 import type { Response } from 'express';
 import * as ExcelJS from 'exceljs';
 import { SupportService } from './support.service';
-import { AgendaService } from './agenda.service';
+import { AgendaService, type FiltrosAgenda } from './agenda.service';
 import { catalogoDeOrdenes } from './order-types';
 import { GeofenceService } from './geofence.service';
 import {
@@ -19,19 +16,16 @@ import {
   AssignEquipmentDto, ConsumeMaterialsDto,
 } from './support-write.service';
 import { OnuProvisionService } from './onu-provision.service';
+import { OrderScoreService } from './order-score.service';
+import { PUNTAJE_MAX, PUNTAJE_MIN } from './order-score.policy';
 import { PerformanceService } from '../reports/performance.service';
 import { serviceOrderPdf } from '../common/pdf/pdf-docs';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { AreaGuard } from '../auth/area.guard';
-import { PermissionsGuard } from '../auth/permissions.guard';
-import { RequireArea } from '../auth/require-area.decorator';
-import { RequirePermissions } from '../auth/require-permissions.decorator';
 import { APP_PERMISSIONS } from '../auth/permissions.catalog';
-import { CurrentUser, AuthUser } from '../auth/current-user.decorator';
+import { AuthUser } from '../auth/current-user.decorator';
 import { enviarAdjuntoSeguro, mimeAceptado, nombreEnDisco, MIMES_IMAGEN } from '../common/uploads';
 
 /** ONU que el técnico eligió del autofind para autenticar en esta orden. */
-class AutenticarOnuDto {
+export class AutenticarOnuDto {
   @IsString() @MinLength(4) sn!: string;
   /**
    * Equipo del inventario al que corresponde esta ONU. Solo hace falta cuando el
@@ -46,21 +40,42 @@ class AutenticarOnuDto {
  * puesto), así que el mismo cuerpo sirve para los cuatro arrastres posibles.
  * `staffId`/`fecha` en null = sacarla del día y devolverla a "sin agendar".
  */
-class MoverAgendaDto {
+export class MoverAgendaDto {
   @IsString() ticketId!: string;
   @IsOptional() @IsString() staffId?: string | null;
   @IsOptional() @IsString() fecha?: string | null;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) posicion?: number;
 }
 
+/**
+ * "No se pudo atender": la salida del técnico cuando llega y la visita no se puede
+ * hacer. El motivo es obligatorio a propósito — un salto sin explicación devuelve al
+ * técnico la decisión de qué orden hacer, que es justo lo que el turno le quita.
+ */
+export class NoAtendidaDto {
+  @IsString() ticketId!: string;
+  @IsString() @MaxLength(300) motivo!: string;
+}
+
+/**
+ * Un renglón de la tabla de puntajes. `puntos: null` significa "quítale el valor
+ * fijado y que vuelva al sugerido del sistema", que no es lo mismo que ponerle 1.
+ */
+export class PuntajeTipoDto {
+  @IsString() @MinLength(1) tipo!: string;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(PUNTAJE_MIN) @Max(PUNTAJE_MAX) puntos!: number | null;
+}
+
+/** Guarda de una sola vez todo lo que la pantalla cambió. */
+export class SaveOrderScoresDto {
+  @IsArray() @ValidateNested({ each: true }) @Type(() => PuntajeTipoDto) puntajes!: PuntajeTipoDto[];
+}
+
 /** Carpeta de evidencias fotográficas de las órdenes de soporte. */
-const SUPPORT_ROOT = join(process.cwd(), 'uploads', 'support');
+export const SUPPORT_ROOT = join(process.cwd(), 'uploads', 'support');
 type MulterFile = { originalname: string; filename: string; mimetype: string; size: number };
 
 /** Soporte: órdenes/tickets, llamadas, encuestas (migrado de saves-vestel). */
-@Controller('support')
-@UseGuards(JwtAuthGuard, AreaGuard)
-@RequireArea('tecnicos', 'administracion', 'caja')
 export class SupportController {
   constructor(
     private readonly support: SupportService,
@@ -69,6 +84,7 @@ export class SupportController {
     private readonly onuProvision: OnuProvisionService,
     private readonly performance: PerformanceService,
     private readonly agenda: AgendaService,
+    private readonly puntajes: OrderScoreService,
   ) {}
 
   // ── Agendamiento (2026-07-31) ─────────────────────────────────────────────
@@ -76,23 +92,42 @@ export class SupportController {
   // y decide el orden de las visitas. Va con `@RequireArea` propio porque el técnico
   // NO entra aquí — él sigue la agenda, no la arma —, y `AgendaService.mover` lo
   // vuelve a comprobar por si alguien reenvía la petición a mano.
-  /** Tablero del día: bandeja de "sin agendar" + una columna por técnico. */
-  @Get('agenda') @RequireArea('caja', 'administracion')
-  agendaTablero(@CurrentUser() user: AuthUser, @Query('fecha') fecha?: string) {
-    return this.agenda.tablero(user, fecha);
+  /**
+   * Tablero del día: bandeja de "sin agendar" + una columna por técnico.
+   *
+   * Los filtros (`q`, `clase`, `prioridad`, `estado`, `noAtendidas`) se resuelven en
+   * el servicio y filtran ÓRDENES: las columnas siguen estando todas.
+   */
+  
+  agendaTablero(user: AuthUser, q: Record<string, string>) {
+    return this.agenda.tablero(user, q.fecha, SupportController.filtrosAgenda(q));
   }
   /** Mover una orden: a la columna de un técnico en una posición, o a "sin agendar". */
-  @Post('agenda/mover') @RequireArea('caja', 'administracion')
-  agendaMover(@Body() dto: MoverAgendaDto, @CurrentUser() user: AuthUser) {
+  
+  agendaMover(dto: MoverAgendaDto, user: AuthUser) {
     return this.agenda.mover(user, dto);
   }
+  /** Lee los filtros del tablero de la query, tal como los manda la pantalla. */
+  private static filtrosAgenda(q: Record<string, string>): FiltrosAgenda {
+    return {
+      q: q.q,
+      clase: q.clase,
+      tipo: q.tipo,
+      prioridad: q.prioridad,
+      estado: q.estado,
+      noAtendidas: q.noAtendidas === '1' || q.noAtendidas === 'true',
+    };
+  }
   /**
-   * Export a Excel del tablero completo del día: las visitas de cada técnico en su
-   * orden y, al final, la bandeja de sin agendar. Mismo alcance que el tablero.
+   * Export a Excel del tablero del día: las visitas de cada técnico en su orden y,
+   * al final, la bandeja de sin agendar. Mismo alcance que el tablero — y los mismos
+   * filtros: el Excel tiene que traer lo que la cajera está viendo, o el papel que
+   * lleva a la reunión no cuadra con la pantalla desde la que lo pidió.
    */
-  @Get('agenda/export.xlsx') @RequireArea('caja', 'administracion')
-  async agendaXlsx(@Res() res: Response, @CurrentUser() user: AuthUser, @Query('fecha') fecha?: string) {
-    const d = await this.agenda.tablero(user, fecha);
+  
+  async agendaXlsx(res: Response, user: AuthUser, q: Record<string, string>) {
+    const fecha = q.fecha;
+    const d = await this.agenda.tablero(user, fecha, SupportController.filtrosAgenda(q));
     const wb = new ExcelJS.Workbook();
     wb.creator = 'Vestel';
     const ws = wb.addWorksheet(`Agenda ${d.fecha}`);
@@ -130,8 +165,30 @@ export class SupportController {
    * "Mi agenda": las órdenes que la cajera le puso al técnico logueado para un día,
    * en su orden. Sin parámetros de alcance — quién es lo dice la sesión.
    */
-  @Get('mi-agenda') miAgenda(@CurrentUser() user: AuthUser, @Query('fecha') fecha?: string) {
+  miAgenda(user: AuthUser, fecha?: string) {
     return this.agenda.miAgenda(user, fecha);
+  }
+
+  /**
+   * "Mi turno": UNA visita, la que le toca ahora, más cuántas lleva y cuántas
+   * quedan. Es lo que alimenta la pantalla de entrada del técnico desde que el
+   * trabajo va en orden obligatorio (2026-08-04).
+   */
+  miTurno(user: AuthUser, fecha?: string) {
+    return this.agenda.miTurno(user, fecha);
+  }
+
+  /**
+   * "Llegué y no se pudo": aparta la visita en turno con un motivo y destapa la
+   * siguiente. No cierra la orden — vuelve a la bandeja de la cajera para que la
+   * reagende. Sin `@RequireArea` extra: es una acción sobre su propio trabajo, y
+   * el servicio ya comprueba que la orden sea suya y esté en turno.
+   */
+  noAtendida(
+    dto: NoAtendidaDto,
+    user: AuthUser,
+  ) {
+    return this.agenda.noSePudoAtender(user, dto.ticketId, dto.motivo);
   }
 
   /**
@@ -139,98 +196,103 @@ export class SupportController {
    * es un informe sobre el desempeño de personas concretas.
    */
   /** IPs desde las que se ha escrito, para poder marcar cuáles son de oficina. */
-  @Get('known-ips')
-  @RequireArea('gerencia', 'administracion', 'sistemas')
-  knownIps(@Query('dias') dias?: string) {
+  knownIps(dias?: string) {
     const d = Number(dias);
     return this.geofence.ipsVistas(Number.isFinite(d) && d > 0 && d <= 365 ? d : undefined);
   }
 
   /** Marca qué IPs son de oficina (lista completa, reemplaza la anterior). */
-  @Post('office-ips')
-  @RequireArea('gerencia', 'administracion', 'sistemas')
-  setOfficeIps(@Body() dto: { ips?: string[] }, @CurrentUser() user: AuthUser) {
+  setOfficeIps(dto: { ips?: string[] }, user: AuthUser) {
     return this.geofence.guardarOficinas(Array.isArray(dto?.ips) ? dto.ips : [], user);
   }
 
-  @Get('geofence-report')
-  @RequireArea('gerencia', 'administracion', 'sistemas')
-  geofenceReport(@Query('dias') dias?: string) {
+  geofenceReport(dias?: string) {
     const d = Number(dias);
     return this.geofence.informe(Number.isFinite(d) && d > 0 && d <= 365 ? d : undefined);
   }
 
-  @Get('stats') stats(@CurrentUser() user?: AuthUser) { return this.support.stats(user); }
-  @Get('filter-options') filterOptions() { return this.support.filterOptions(); }
+  stats(user?: AuthUser) { return this.support.stats(user); }
+  filterOptions(user: AuthUser) { return this.support.filterOptions(user); }
   /**
    * Las tres clases de orden del legacy con sus detalles, para el formulario de
    * "nueva orden". Vive en el backend y no en el frontend a propósito: es la misma
    * lista con la que se validan y se enderezan las órdenes que entran por el
    * chatbot (ver `order-types.ts`), y una copia en la web se desincronizaría.
    */
-  @Get('order-catalog') orderCatalog() { return catalogoDeOrdenes(); }
+  orderCatalog() { return catalogoDeOrdenes(); }
+
+  // ── Puntaje de las órdenes (2026-08-04) ───────────────────────────────────
+  /**
+   * Cuánto vale cada tipo de orden, de 1 a 5.
+   *
+   * La lista de áreas es MÁS ANCHA que la de la clase, no más estrecha, y por los
+   * dos extremos: el técnico entra porque si se le mide con estos puntos tiene
+   * derecho a saber cuánto vale cada trabajo antes de hacerlo, no después; y
+   * gerencia y sistemas entran porque son quienes lo configuran —sin esto, la
+   * pantalla de configuración recibía 403 justo de quien la abre—.
+   */
+  orderScores() { return this.puntajes.catalogo(); }
+  /**
+   * Fijar los puntajes. Esto sí es decisión de gestión, no de quien ejecuta: las
+   * mismas dos áreas que ven la pantalla (ver SCREENS['/configuracion/puntajes']).
+   */
+  
+  saveOrderScores(dto: SaveOrderScoresDto, user: AuthUser) {
+    return this.puntajes.guardar(dto.puntajes, user?.name ?? user?.email);
+  }
 
   // --- Escritura ---
-  @Get('technicians') technicians() { return this.write.technicians(); }
-  @Post('tickets') createTicket(@Body() dto: CreateTicketDto, @CurrentUser() user: AuthUser) { return this.write.createTicket(dto, user); }
+  technicians() { return this.write.technicians(); }
+  createTicket(dto: CreateTicketDto, user: AuthUser) { return this.write.createTicket(dto, user); }
   /** La IP se pasa al servicio para poder cotejarla con la ubicación declarada
    *  (un técnico en el wifi de la oficina no puede estar a 3 km). */
-  @Post('tickets/:id/status')
   updateStatus(
-    @Param('id') id: string,
-    @Body() dto: UpdateStatusDto,
-    @CurrentUser() user: AuthUser,
-    @Req() req: { ip?: string; socket?: { remoteAddress?: string } },
+    id: string,
+    dto: UpdateStatusDto,
+    user: AuthUser,
+    req: { ip?: string; socket?: { remoteAddress?: string } },
   ) {
     return this.write.updateStatus(id, dto, user, req?.ip ?? req?.socket?.remoteAddress ?? null);
   }
-  @Post('tickets/:id/assign') assign(@Param('id') id: string, @Body() dto: AssignDto) { return this.write.assign(id, dto); }
-  @Post('tickets/:id/priority') setPriority(@Param('id') id: string, @Body() dto: PriorityDto) { return this.write.setPriority(id, dto); }
-  @Post('tickets/:id/signature') sign(@Param('id') id: string, @Body() dto: SignatureDto) { return this.write.saveSignature(id, dto); }
+  assign(id: string, dto: AssignDto) { return this.write.assign(id, dto); }
+  setPriority(id: string, dto: PriorityDto) { return this.write.setPriority(id, dto); }
+  sign(id: string, dto: SignatureDto) { return this.write.saveSignature(id, dto); }
   /** Sirve el PNG de la firma dibujada de una orden. */
-  @Get('tickets/:id/signature.png')
-  async signaturePng(@Param('id') id: string, @Res() res: Response) {
+  async signaturePng(id: string, res: Response) {
     const file = join(process.cwd(), 'uploads', 'signatures', `${id}.png`);
     if (!existsSync(file)) return res.status(404).send('sin firma');
     return enviarAdjuntoSeguro(res, file, `firma-${id}.png`);
   }
-  @Post('tickets/:id/thread') thread(@Param('id') id: string, @Body() dto: ThreadDto, @CurrentUser() user: AuthUser) { return this.write.addThread(id, dto, user); }
+  thread(id: string, dto: ThreadDto, user: AuthUser) { return this.write.addThread(id, dto, user); }
 
   // --- Equipo y material de la orden ---
-  @Get('equipment/available') availableEquipment(@Query('search') search?: string) { return this.write.availableEquipment(search); }
-  @Get('materials/search') searchMaterials(@Query('search') search?: string) { return this.write.searchMaterials(search); }
-  @Post('tickets/:id/equipment') assignEquipment(@Param('id') id: string, @Body() dto: AssignEquipmentDto, @CurrentUser() user: AuthUser) { return this.write.assignEquipment(id, dto, user); }
-  @Post('tickets/:id/materials') consumeMaterials(@Param('id') id: string, @Body() dto: ConsumeMaterialsDto, @CurrentUser() user: AuthUser) { return this.write.consumeMaterials(id, dto, user); }
+  availableEquipment(search?: string) { return this.write.availableEquipment(search); }
+  searchMaterials(search?: string) { return this.write.searchMaterials(search); }
+  assignEquipment(id: string, dto: AssignEquipmentDto, user: AuthUser) { return this.write.assignEquipment(id, dto, user); }
+  consumeMaterials(id: string, dto: ConsumeMaterialsDto, user: AuthUser) { return this.write.consumeMaterials(id, dto, user); }
 
   // --- ONU de la orden (autenticar contra la OLT desde la instalación) ---
   /**
    * Estado del bloque de ONU: OLT de la sede, plan del abonado, velocidad que se
    * aplicará y ONUs esperando autenticación. Lectura en vivo contra la OLT.
    */
-  @Get('tickets/:id/onu') onuEstado(@Param('id') id: string, @CurrentUser() user?: AuthUser) {
+  onuEstado(id: string, user?: AuthUser) {
     return this.onuProvision.estado(id, user);
   }
   /**
    * Autenticar la ONU elegida. Escribe en la OLT, así que exige el mismo permiso
    * que hacerlo desde Red › OLT: que la puerta sea otra no la hace más ancha.
    */
-  @UseGuards(PermissionsGuard)
-  @RequirePermissions(APP_PERMISSIONS.NETWORK_OLT_MANAGE)
-  @Post('tickets/:id/onu/autenticar')
-  autenticarOnu(@Param('id') id: string, @Body() dto: AutenticarOnuDto, @CurrentUser() user: AuthUser) {
+  autenticarOnu(id: string, dto: AutenticarOnuDto, user: AuthUser) {
     return this.onuProvision.autenticar(id, dto, user);
   }
   /** Aplicar al service-port la velocidad del plan vigente (órdenes de subir/bajar megas). */
-  @UseGuards(PermissionsGuard)
-  @RequirePermissions(APP_PERMISSIONS.NETWORK_OLT_MANAGE)
-  @Post('tickets/:id/onu/velocidad')
-  aplicarVelocidadOnu(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+  aplicarVelocidadOnu(id: string, user: AuthUser) {
     return this.onuProvision.aplicarVelocidad(id, user);
   }
 
   /** PDF de la orden de servicio (acta técnica). */
-  @Get('tickets/:id/pdf')
-  async ticketPdf(@Param('id') id: string, @Res() res: Response, @CurrentUser() user?: AuthUser) {
+  async ticketPdf(id: string, res: Response, user?: AuthUser) {
     const data = await this.support.serviceOrderPdfData(id, user);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="Orden_${data.code}.pdf"`);
@@ -238,38 +300,23 @@ export class SupportController {
   }
 
   /** Adjuntar una foto de evidencia al hilo (con geo-etiquetado opcional). Solo imágenes. */
-  @Post('tickets/:id/attach')
-  @UseInterceptors(
-    FileInterceptor('file', {
-      storage: diskStorage({
-        destination: (_req, _file, cb) => { if (!existsSync(SUPPORT_ROOT)) mkdirSync(SUPPORT_ROOT, { recursive: true }); cb(null, SUPPORT_ROOT); },
-        filename: (_req, file, cb) => cb(null, nombreEnDisco(randomUUID(), file.mimetype)),
-      }),
-      limits: { fileSize: 15 * 1024 * 1024 },
-      // Lista blanca de MIME concretos, no `startsWith('image/')`: aquél aceptaba
-      // cualquier `image/loquesea` y la extensión salía del nombre del cliente.
-      fileFilter: (_req, file, cb) => cb(null, mimeAceptado(file.mimetype, MIMES_IMAGEN)),
-    }),
-  )
   attach(
-    @Param('id') id: string,
-    @UploadedFile() file: MulterFile,
-    @Body() dto: AttachDto,
-    @CurrentUser() user: AuthUser,
+    id: string,
+    file: MulterFile,
+    dto: AttachDto,
+    user: AuthUser,
   ) {
     if (!file) throw new BadRequestException('Sube una imagen en el campo "file".');
     return this.write.addAttachment(id, file, dto, user);
   }
 
   /** Sirve la imagen adjunta de una entrada del hilo (inline, para preview autenticado vía blob). */
-  @Get('threads/:threadId/attachment')
-  async attachment(@Param('threadId') threadId: string, @Res() res: Response) {
+  async attachment(threadId: string, res: Response) {
     const a = await this.support.getThreadAttachment(threadId);
     return enviarAdjuntoSeguro(res, join(SUPPORT_ROOT, a.storedName), a.storedName);
   }
 
-  @Get('tickets')
-  tickets(@Query('search') search?: string, @Query('status') status?: string, @Query('type') type?: string, @Query('tec') tec?: string, @Query('priority') priority?: string, @Query('sede') sede?: string, @Query('from') from?: string, @Query('to') to?: string, @Query('all') all?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string, @Query('sortBy') sortBy?: string, @Query('sortDir') sortDir?: string, @CurrentUser() user?: AuthUser) {
+  tickets(search?: string, status?: string, type?: string, tec?: string, priority?: string, sede?: string, from?: string, to?: string, all?: string, page?: string, pageSize?: string, sortBy?: string, sortDir?: string, user?: AuthUser) {
     return this.support.tickets({ search, status, type, tec, priority, sede, from, to, all, page: Number(page), pageSize: Number(pageSize), sortBy, sortDir }, user);
   }
 
@@ -277,13 +324,12 @@ export class SupportController {
    * Export a Excel del listado, con los MISMOS filtros. Declarado antes de
    * `tickets/:id` para que 'export.xlsx' no caiga en el parámetro.
    */
-  @Get('tickets/export.xlsx')
   async ticketsXlsx(
-    @Res() res: Response,
-    @Query('search') search?: string, @Query('status') status?: string, @Query('type') type?: string,
-    @Query('tec') tec?: string, @Query('priority') priority?: string, @Query('sede') sede?: string,
-    @Query('from') from?: string, @Query('to') to?: string, @Query('all') all?: string,
-    @CurrentUser() user?: AuthUser,
+    res: Response,
+    search?: string, status?: string, type?: string,
+    tec?: string, priority?: string, sede?: string,
+    from?: string, to?: string, all?: string,
+    user?: AuthUser,
   ) {
     const rows = await this.support.exportRows({ search, status, type, tec, priority, sede, from, to, all }, user);
     const wb = new ExcelJS.Workbook();
@@ -324,7 +370,7 @@ export class SupportController {
    * No lleva parámetros a propósito: el alcance lo fija la sesión, no la query. Así
    * no hay forma de pedir la jornada de otro cambiando un id en la URL.
    */
-  @Get('mi-jornada') miJornada(@CurrentUser() user: AuthUser) { return this.support.miJornada(user); }
+  miJornada(user: AuthUser) { return this.support.miJornada(user); }
 
   /**
    * "Mi rendimiento": las MISMAS métricas del tablero de gerencia
@@ -335,8 +381,7 @@ export class SupportController {
    * Lo único que viaja del equipo son las MEDIANAS (`equipo`), sin nombres: el técnico
    * necesita saber si su 12% es bueno o malo, y para eso hace falta la referencia.
    */
-  @Get('mi-rendimiento')
-  async miRendimiento(@CurrentUser() user: AuthUser, @Query('from') from?: string, @Query('to') to?: string) {
+  async miRendimiento(user: AuthUser, from?: string, to?: string) {
     const staff = await this.support.staffDelUsuario(user);
     if (!staff) return { resolved: false, resumen: null, equipo: null, porTipo: [], casos: [] };
     const d = await this.performance.tecnico(staff.id, from, to);
@@ -344,6 +389,6 @@ export class SupportController {
     return { resolved: true, tech: { id: staff.id, name: staff.name }, ...d };
   }
 
-  @Get('tickets/:id') ticketDetail(@Param('id') id: string, @CurrentUser() user?: AuthUser) { return this.support.ticketDetail(id, user); }
+  ticketDetail(id: string, user?: AuthUser) { return this.support.ticketDetail(id, user); }
 
 }

@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '../core/http/errores';
 import { Prisma, SubscriberStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
@@ -12,6 +12,14 @@ const MAX_PUNTOS = 5000;
 
 /** Un punto no se considera "dónde está el técnico ahora" pasadas estas horas. */
 const VIGENCIA_TECNICO_H = 12;
+
+/**
+ * Dos latidos del mismo técnico más juntos que esto se descartan. Va por debajo
+ * del intervalo del frontend (1 min) a propósito: el margen absorbe el desfase
+ * de relojes y el latido que se dispara al volver a primer plano, sin llegar a
+ * tragarse el latido siguiente de verdad.
+ */
+const LATIDO_MINIMO_MS = 40_000;
 
 const NOMBRE = {
   firstName: true, secondName: true, lastName1: true, lastName2: true,
@@ -35,7 +43,6 @@ function nombreDe(s: ConNombre): string {
 const SI = (v: string | undefined, pordefecto: boolean) =>
   v === undefined ? pordefecto : v === '1' || v === 'true';
 
-@Injectable()
 export class GeoService {
   constructor(
     private readonly prisma: PrismaService,
@@ -242,9 +249,31 @@ export class GeoService {
     };
   }
 
-  /** Graba un punto del usuario actual. Lo llama el frontend tras una acción suya. */
+  /**
+   * Graba un punto del usuario actual: o tras una acción suya, o por el latido
+   * que manda su teléfono mientras tiene la app abierta (`reason: 'heartbeat'`).
+   */
   async ping(user: AuthUser, dto: PingDto) {
     const p = this.validar(dto.lat, dto.lng);
+
+    // El latido llega solo, sin que nadie lo pida, así que puede llegar de más:
+    // dos pestañas abiertas laten cada una por su cuenta, y volver a la app tras
+    // tenerla en segundo plano dispara uno inmediato. A un latido por minuto y
+    // con ~30 técnicos en la calle son ya ~15.000 filas al día; dejar entrar
+    // encima los duplicados engorda sin motivo una tabla que casi siempre se
+    // consulta por el ÚLTIMO punto de cada uno. Los puntos de acciones reales
+    // nunca se descartan: cada uno es evidencia de algo que pasó.
+    if (dto.reason === 'heartbeat') {
+      const ultimo = await this.prisma.geoPing.findFirst({
+        where: { userId: user.id },
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true },
+      });
+      if (ultimo && Date.now() - ultimo.createdAt.getTime() < LATIDO_MINIMO_MS) {
+        return { ok: true, omitido: true };
+      }
+    }
+
     const staff = await this.staffDe(user);
     await this.prisma.geoPing.create({
       data: {

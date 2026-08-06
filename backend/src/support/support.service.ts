@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '../core/http/errores';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { scopeDate } from '../common/date-scope';
@@ -6,10 +6,13 @@ import { AuthUser } from '../auth/current-user.decorator';
 import { sedesDe, whereSedePorSuscriptor, exigirSedeSuscriptor } from '../common/sede-scope';
 import { clavesDe, esTecnicoDeCampo, fichaDelUsuario } from '../common/tecnico-scope';
 import { hoyEnColombia } from '../common/fecha-colombia';
+import { textoPlano } from '../common/texto-legacy';
 import { orden, paginacion } from '../common/pagination-params';
 import { traductorDeTecnicos } from '../staff/nombre-tecnico';
 import { formasDeSerial } from './onu-provision.service';
 import { esTrabajoDeCampo } from './field-work.policy';
+import { puedeAbrirOrden } from './turno';
+import { OrderScoreService } from './order-score.service';
 
 /**
  * Días tras los cuales una orden abierta se marca como vencida en el panel del
@@ -52,6 +55,23 @@ export function rangoPrioridad(p: string | null | undefined): number {
   return i < 0 ? PRIORIDADES.length : i; // lo que no reconozco va al final, no al principio
 }
 
+/**
+ * El texto buscado leído como número, o `null` si no sirve para comparar contra una
+ * columna numérica.
+ *
+ * El tope no es un capricho: `code` y `abonado` son `int` de 32 bits y Postgres
+ * RECHAZA la consulta —500, no "sin resultados"— cuando se le manda un valor mayor.
+ * Con eso basta un celular tecleado en el buscador (3145267065) para tumbar la
+ * pantalla, que es exactamente como apareció. Se acepta '#5552' porque es como el
+ * número de orden se lee en la tarjeta.
+ */
+export function enteroBuscable(texto: string): number | null {
+  const limpio = texto.trim().replace(/^#/, '').trim();
+  if (!/^\d+$/.test(limpio)) return null;
+  const n = Number(limpio);
+  return Number.isSafeInteger(n) && n <= 2147483647 ? n : null;
+}
+
 function subName(s: {
   firstName: string | null; secondName: string | null; lastName1: string | null;
   lastName2: string | null; companyName: string | null; fullName: string | null;
@@ -63,9 +83,11 @@ function subName(s: {
 }
 const SUB = { firstName: true, secondName: true, lastName1: true, lastName2: true, companyName: true, fullName: true, id: true, abonado: true } as const;
 
-@Injectable()
 export class SupportService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly puntajes: OrderScoreService,
+  ) {}
 
   /**
    * Filtro "sólo mis órdenes" para un técnico de campo, o `null` si no hay que
@@ -123,10 +145,21 @@ export class SupportService {
     };
   }
 
-  /** Opciones para los selectores de filtro: sedes y tipos de orden (detalle). */
-  async filterOptions() {
+  /**
+   * Opciones para los selectores de filtro: sedes y tipos de orden (detalle).
+   *
+   * Las sedes van acotadas a las del usuario: a quien sólo llega a una sede no se le
+   * ofrecen las demás en el desplegable (el listado ya viene filtrado por
+   * `whereSedePorSuscriptor`, esto es que la pantalla no le mienta).
+   */
+  async filterOptions(user?: AuthUser) {
+    const mias = await sedesDe(this.prisma, user);
     const [sedes, byType] = await Promise.all([
-      this.prisma.branch.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true } }),
+      this.prisma.branch.findMany({
+        where: mias ? { legacyId: { in: mias } } : undefined,
+        orderBy: { name: 'asc' },
+        select: { id: true, name: true },
+      }),
       this.prisma.ticket.groupBy({ by: ['type'], orderBy: { type: 'asc' } }),
     ]);
     return { sedes, types: byType.map((t) => t.type).filter((t) => t && t.trim()) };
@@ -204,7 +237,7 @@ export class SupportService {
     if (period) where.created = period;
     if (params.search?.trim()) {
       const s = params.search.trim();
-      const n = Number(s);
+      const n = enteroBuscable(s);
       const claves = tr.clavesPorTexto(s);
       where.OR = [
         { subject: { contains: s, mode: 'insensitive' } },
@@ -212,8 +245,8 @@ export class SupportService {
         // Buscar por el apellido del técnico tiene que encontrar sus órdenes viejas,
         // donde lo que está escrito es el username y no el nombre.
         ...(claves.length ? [{ assigned: { in: claves } }] : []),
-        ...(Number.isFinite(n) ? [{ code: n }, { legacyId: n }] : []),
-        { subscriber: { is: { OR: [{ firstName: { contains: s, mode: 'insensitive' as const } }, { lastName1: { contains: s, mode: 'insensitive' as const } }, ...(Number.isFinite(n) ? [{ abonado: n }] : [])] } } },
+        ...(n != null ? [{ code: n }, { legacyId: n }] : []),
+        { subscriber: { is: { OR: [{ firstName: { contains: s, mode: 'insensitive' as const } }, { lastName1: { contains: s, mode: 'insensitive' as const } }, ...(n != null ? [{ abonado: n }] : [])] } } },
       ];
     }
     const include = { subscriber: { select: { ...SUB, neighborhood: true, branch: { select: { name: true } } } } };
@@ -314,6 +347,22 @@ export class SupportService {
     return nb?.name ?? null;
   }
 
+  /**
+   * Niega abrir una orden pendiente que no sea la que el técnico tiene en turno.
+   *
+   * La regla entera vive en `turno.ts`, compartida con la pantalla del técnico, para
+   * que las dos no puedan discrepar. Un técnico sin ficha de empleado no llega hasta
+   * aquí: `soloMisOrdenes` ya lo dejó sin ninguna orden que abrir.
+   */
+  private async exigirTurno(user: AuthUser, ticketId: string) {
+    const ficha = await fichaDelUsuario(this.prisma, user);
+    if (!ficha) return;
+    const t = await this.prisma.ticket.findUnique({ where: { id: ticketId }, select: { id: true, status: true } });
+    if (!t) return; // El 404 lo da el llamador con su propio mensaje.
+    const v = await puedeAbrirOrden(this.prisma, ficha.id, t);
+    if (!v.permitido) throw new ForbiddenException(v.motivo);
+  }
+
   async ticketDetail(id: string, user?: AuthUser) {
     const dueno = await this.prisma.ticket.findUnique({ where: { id }, select: { subscriberId: true } });
     // La lista ya va acotada, pero la ficha se abre por URL: sin esta puerta bastaba
@@ -325,6 +374,11 @@ export class SupportService {
       }
       // Ser suya basta: no se le pide además que el cliente sea de su sede (mismo
       // criterio que la lista, o no podría abrir las 38 que le salen ahí).
+
+      // Segunda puerta, la del turno: ser suya ya no alcanza para abrirla si tiene
+      // otra visita en turno. Sin esto el turno obligatorio sería de fachada — le
+      // bastaría con ir a su lista y abrir la que prefiriera.
+      await this.exigirTurno(user!, id);
     } else if (dueno?.subscriberId) {
       await exigirSedeSuscriptor(this.prisma, user, dueno.subscriberId);
     }
@@ -359,6 +413,15 @@ export class SupportService {
     const debtRows = sub ? await this.prisma.subInvoice.findMany({ where: { subscriberId: sub.id, status: { in: ['DUE', 'PARTIAL'] } }, select: { total: true, paidAmount: true } }) : [];
     const materials = await this.prisma.ticketMaterial.findMany({ where: { ticketId: t.id }, orderBy: { createdAt: 'asc' } });
     const barrio = await this.resolveBarrio(sub?.neighborhood);
+    // Quién escribió cada renglón del hilo. `TicketThread.employeeId` es el id de
+    // `aauth_users` del legacy, que es el mismo `Staff.legacyId`: sin este cruce la
+    // ficha enseñaba "empleado #68", que no le dice nada a nadie.
+    const autores = new Map<number, string>();
+    const eids = [...new Set(threads.map((h) => h.employeeId).filter((n) => n != null))];
+    if (eids.length) {
+      const fichas = await this.prisma.staff.findMany({ where: { legacyId: { in: eids } }, select: { legacyId: true, name: true } });
+      for (const f of fichas) if (f.legacyId != null) autores.set(f.legacyId, f.name.trim());
+    }
 
     const debt = debtRows.reduce((s, i) => s + Math.max(0, Number(i.total) - Number(i.paidAmount)), 0);
     const nomen = (sub?.nomenclature ?? null) as Record<string, unknown> | null;
@@ -366,10 +429,20 @@ export class SupportService {
 
     return {
       id: t.id, code: t.code, subject: t.subject, type: t.type, created: t.created, finalDate: t.finalDate,
-      status: t.status, priority: t.priority, problem: t.problem, section: t.section,
+      // `problem` y `section` vienen del WYSIWYG del legacy: salen ya en texto plano.
+      status: t.status, priority: t.priority, problem: textoPlano(t.problem), section: textoPlano(t.section),
       // Nombre completo, no el username con el que el legacy escribió la orden.
       assigned: (await traductorDeTecnicos(this.prisma)).nombre(t.assigned),
       signature: t.signatureName ? { name: t.signatureName, cc: t.signatureCc, rel: t.signatureRel, hasImage: !!t.signatureImage } : null,
+      /**
+       * Puntaje del trabajo. Van los dos números a propósito:
+       * `score` es lo que YA se selló al cerrar (null si sigue abierta o si se
+       * cerró antes de que existiera el puntaje), y `puntajeVigente` lo que vale
+       * hoy su tipo — que es lo que el técnico necesita ver ANTES de hacerla.
+       */
+      score: t.score,
+      scoredAt: t.scoredAt,
+      puntajeVigente: await this.puntajes.puntajeDe(t.type),
       subscriber: sub
         ? {
             id: sub.id, name: subName(sub), abonado: sub.abonado, doc: sub.docNumber,
@@ -399,7 +472,11 @@ export class SupportService {
         };
       }),
       materials: materials.map((m) => ({ id: m.id, name: m.materialName, qty: m.qty, price: Number(m.price), total: Number(m.price) * m.qty, warehouse: m.warehouseName, employee: m.employeeName, date: m.createdAt })),
-      threads: threads.map((h) => ({ id: h.id, message: h.message, date: h.date, employeeId: h.employeeId, attach: h.attach, attachName: h.attachName, geoLat: h.geoLat, geoLng: h.geoLng })),
+      threads: threads.map((h) => ({
+        id: h.id, message: textoPlano(h.message), date: h.date, employeeId: h.employeeId,
+        author: autores.get(h.employeeId) ?? null,
+        attach: h.attach, attachName: h.attachName, geoLat: h.geoLat, geoLng: h.geoLng,
+      })),
     };
   }
 

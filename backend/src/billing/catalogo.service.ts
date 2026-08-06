@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Logger } from '../core/logger';
 import { PrismaService } from '../prisma/prisma.service';
 import { num } from '../common/money';
 
@@ -56,7 +56,6 @@ const plano = (s: string) =>
  * `SubInvoiceItem` entero (~770k filas, ~1,4 s): a cada tecleo del buscador sería
  * inviable, una vez cada 10 minutos no se nota.
  */
-@Injectable()
 export class CatalogoService {
   private readonly log = new Logger(CatalogoService.name);
   private foto: { at: number; items: CatalogoItem[] } | null = null;

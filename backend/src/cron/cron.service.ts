@@ -1,5 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Logger } from '../core/logger';
 import { SubscriberStatus } from '@prisma/client';
 import { execFile } from 'child_process';
 import { existsSync } from 'fs';
@@ -32,6 +31,9 @@ const MAX_FACTURAS_PENDIENTES = 2;
  *  centrales de riesgo; devolverlo a Cartera perdería esa información). */
 const ESTADOS_QUE_CAEN_EN_CARTERA: SubscriberStatus[] = ['ACTIVO', 'COMPROMISO', 'CORTADO'];
 
+/** Días que se guardan los latidos de ubicación. Ver `runGeoPurge`. */
+const RETENCION_LATIDOS_D = 90;
+
 /**
  * Automatizaciones programadas — porta `Cronjob.php` del legacy saves-vestel:
  *   · RECURRING_BILLING → genera las facturas recurrentes del mes (desde el plan).
@@ -43,7 +45,6 @@ const ESTADOS_QUE_CAEN_EN_CARTERA: SubscriberStatus[] = ['ACTIVO', 'COMPROMISO',
  * endpoint siempre ejecuta (acción explícita de un usuario). Todo queda auditado
  * en `CronRun`.
  */
-@Injectable()
 export class CronService {
   private readonly logger = new Logger('CronService');
   private readonly enabled = process.env.CRONS_ENABLED === 'true';
@@ -77,7 +78,6 @@ export class CronService {
   // Programadas
   // ------------------------------------------------------------------
   /** Día 1 de cada mes, 02:00 — factura recurrente del mes. */
-  @Cron('0 2 1 * *', { name: 'recurring-billing', timeZone: TZ })
   async scheduledRecurringBilling() {
     if (!this.enabled) return this.logger.log('[recurring-billing] omitido (CRONS_ENABLED != true)');
     await this.runRecurringBilling({ manual: false });
@@ -96,7 +96,6 @@ export class CronService {
    * riesgo y en cambio abre un hueco en el histórico que NO se puede rellenar después
    * — la foto de un día perdido no se recupera.
    */
-  @Cron('20 0 * * *', { name: 'metrics-snapshot', timeZone: TZ })
   async scheduledMetrics() {
     await this.runMetrics({ manual: false });
   }
@@ -127,21 +126,38 @@ export class CronService {
   }
 
   /** Todos los días 03:00 — quien deba más de N facturas → Cartera. */
-  @Cron('0 3 * * *', { name: 'cartera', timeZone: TZ })
   async scheduledCartera() {
     if (!this.enabled) return this.logger.log('[cartera] omitido (CRONS_ENABLED != true)');
     await this.runCartera({ manual: false });
   }
 
+  /**
+   * Diario 03:40 — poda de latidos de ubicación viejos.
+   *
+   * Desde que la app del técnico reporta su posición cada minuto, `GeoPing` pasó
+   * de crecer por acciones (unas pocas al día) a crecer por reloj: del orden de
+   * 500 registros por técnico y jornada, ~15.000 al día con la cuadrilla
+   * completa. Sin poda, en un Postgres compartido por seis aplicaciones eso son
+   * millones de filas para responder siempre lo mismo: cuál fue el ÚLTIMO punto
+   * de cada uno.
+   *
+   * Solo se borran los `heartbeat`. Los puntos de acciones reales —cerrar una
+   * orden, subir evidencia, capturar el GPS de un cliente— son la prueba de que
+   * alguien estuvo en un sitio y no se tocan nunca: son justo lo que se va a
+   * consultar el día que se discuta si una visita se hizo.
+   */
+  async scheduledGeoPurge() {
+    if (!this.enabled) return this.logger.log('[geo-purge] omitido (CRONS_ENABLED != true)');
+    await this.runGeoPurge({ manual: false });
+  }
+
   /** Diario 04:00 — tasa de cambio (stub). */
-  @Cron(CronExpression.EVERY_DAY_AT_4AM, { name: 'exchange-rate', timeZone: TZ })
   async scheduledExchangeRate() {
     if (!this.enabled) return;
     await this.runExchangeRate({ manual: false });
   }
 
   /** Diario 06:00 — recordatorios de cartera por correo. */
-  @Cron('0 6 * * *', { name: 'reminders', timeZone: TZ })
   async scheduledReminders() {
     if (!this.enabled) return this.logger.log('[reminders] omitido (CRONS_ENABLED != true)');
     await this.runReminders({ manual: false });
@@ -157,7 +173,6 @@ export class CronService {
    * así que encenderlo tiene que ser una decisión explícita y no un efecto
    * colateral de activar las automatizaciones de facturación.
    */
-  @Cron('0 9 * * *', { name: 'wa-reminders', timeZone: TZ })
   async scheduledWaReminders() {
     if (!this.enabled) return this.logger.log('[wa-reminders] omitido (CRONS_ENABLED != true)');
     const cfg = await this.waReminders.config();
@@ -172,7 +187,6 @@ export class CronService {
    * Gate propio (LEGACY_SYNC_ENABLED), independiente de CRONS_ENABLED: la
    * sincronización debe poder correr aun con la facturación programada apagada.
    */
-  @Cron('*/15 * * * *', { name: 'legacy-sync', timeZone: TZ })
   async scheduledLegacySync() {
     if (process.env.LEGACY_SYNC_ENABLED !== 'true')
       return this.logger.log('[legacy-sync] omitido (LEGACY_SYNC_ENABLED != true)');
@@ -189,7 +203,6 @@ export class CronService {
    * después del primer cobro del día. Comparte el cerrojo `legacySyncRunning` con la
    * completa: nunca corren las dos a la vez.
    */
-  @Cron('5,10,20,25,35,40,50,55 * * * *', { name: 'legacy-sync-caja', timeZone: TZ })
   async scheduledLegacyCajaSync() {
     if (process.env.LEGACY_SYNC_ENABLED !== 'true') return;
     await this.runLegacyCajaSync();
@@ -200,7 +213,6 @@ export class CronService {
    * lo capturado en este stack se refleja en el MySQL vivo, para poder conmutar
    * al legacy sin perder datos si este sistema falla.
    */
-  @Cron('7,22,37,52 * * * *', { name: 'legacy-writeback', timeZone: TZ })
   async scheduledLegacyWriteback() {
     if (process.env.LEGACY_WRITEBACK_LIVE !== 'true')
       return this.logger.log('[legacy-writeback] omitido (LEGACY_WRITEBACK_LIVE != true)');
@@ -336,6 +348,35 @@ export class CronService {
       this.logger.error(`[cartera] ${msg}`);
       return { ok: false, error: msg };
     }
+  }
+
+  /**
+   * Borra los latidos de ubicación anteriores a `RETENCION_LATIDOS_D`.
+   *
+   * 90 días es bastante más de lo que se usa (el mapa mira 12 horas y el
+   * recorrido de un día se audita cuando el reclamo está fresco), y a la vez
+   * deja margen para revisar un mes cerrado que se discute tarde. Al ritmo
+   * actual la tabla se estabiliza en torno a 1,3 millones de latidos; si algún
+   * día estorba, lo que hay que bajar es esta retención, no el latido.
+   */
+  async runGeoPurge(opts: { manual: boolean; user?: AuthUser }) {
+    const corte = new Date(Date.now() - RETENCION_LATIDOS_D * 86400_000);
+    const { count } = await this.prisma.geoPing.deleteMany({
+      where: { reason: 'heartbeat', createdAt: { lt: corte } },
+    });
+    await this.prisma.cronRun.create({
+      data: {
+        job: 'GEO_PURGE',
+        ok: true,
+        manual: opts.manual,
+        count,
+        detail: `${count} latidos anteriores a ${corte.toISOString().slice(0, 10)}`,
+        userName: opts.user?.name ?? 'Cron',
+        finishedAt: new Date(),
+      },
+    });
+    this.logger.log(`[geo-purge] ${count} latidos borrados`);
+    return { ok: true, count };
   }
 
   async runExchangeRate(opts: { manual: boolean; user?: AuthUser }) {
@@ -635,7 +676,7 @@ export class CronService {
   // Estado / historial
   // ------------------------------------------------------------------
   async status() {
-    const jobs = ['RECURRING_BILLING', 'CARTERA', 'EXCHANGE_RATE', 'REMINDERS', 'WA_REMINDERS', 'LEGACY_SYNC', 'LEGACY_SYNC_CAJA', 'LEGACY_WRITEBACK'];
+    const jobs = ['RECURRING_BILLING', 'CARTERA', 'GEO_PURGE', 'EXCHANGE_RATE', 'REMINDERS', 'WA_REMINDERS', 'LEGACY_SYNC', 'LEGACY_SYNC_CAJA', 'LEGACY_WRITEBACK'];
     const last: Record<string, any> = {};
     for (const j of jobs) {
       last[j] = await this.prisma.cronRun.findFirst({ where: { job: j }, orderBy: { startedAt: 'desc' } });
@@ -646,6 +687,7 @@ export class CronService {
       schedules: {
         RECURRING_BILLING: 'día 1 de cada mes, 02:00',
         CARTERA: `diario 03:00 — a Cartera con más de ${await this.maxFacturasPendientes()} facturas pendientes`,
+        GEO_PURGE: `diario 03:40 — borra latidos de ubicación de más de ${RETENCION_LATIDOS_D} días (los puntos de acciones no se tocan)`,
         EXCHANGE_RATE: 'diario 04:00',
         REMINDERS: 'diario 06:00',
         WA_REMINDERS: 'diario 09:00',

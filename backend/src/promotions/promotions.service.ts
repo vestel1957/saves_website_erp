@@ -1,20 +1,16 @@
-import {
-  BadRequestException,
-  ForbiddenException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { BadRequestException, ForbiddenException, NotFoundException } from '../core/http/errores';
+import { Prisma, PromotionTargetKind } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { FacturasService } from '../billing/facturas.service';
 import {
   ApplyPromotionDto,
   CreatePromotionDto,
+  PromotionAudienceDto,
+  SubscriberStatusName,
   UpdatePromotionDto,
 } from './dto/promotions.dto';
 import { num, round2 } from '../common/money';
-
 
 /** Fecha de hoy sin hora (UTC), para comparar contra los campos @db.Date. */
 function today(): Date {
@@ -26,18 +22,41 @@ function dateOnly(s: string): Date {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
 }
 
-/** Etiqueta en español de cada estado de cliente (para el historial). */
+/** Etiqueta en español de cada estado de cliente. */
 const STATUS_LABEL: Record<string, string> = {
   ACTIVO: 'Activo', CARTERA: 'Cartera', COMPROMISO: 'Compromiso', CORTADO: 'Cortado',
   DEPURADO: 'Depurado', EVENTO: 'Evento', EXONERADO: 'Exonerado', INSTALAR: 'Instalar',
   POR_RETIRAR: 'Por retirar', REPORTADO: 'Reportado', RETIRADO: 'Retirado',
   SUSPENDIDO: 'Suspendido', INACTIVO: 'Inactivo',
 };
-const statusLabel = (s: string) => `Estado: ${STATUS_LABEL[s] ?? s}`;
 
 const isFlatFmt = (f: string) => f === 'flat' || f === 'bflat';
 const isBeforeTaxFmt = (f: string) => f === 'b_p' || f === 'bflat';
 const copFmt = (n: number) => `$${Math.round(n).toLocaleString('es-CO')}`;
+const uniq = (xs: string[]) => Array.from(new Set(xs.filter(Boolean)));
+
+/** Público de una promoción, ya normalizado (sin undefined). */
+type Audience = {
+  allSubscribers: boolean;
+  subscriberStatuses: SubscriberStatusName[];
+  subscriberIds: string[];
+  planIds: string[];
+  branchIds: string[];
+  neighborhoodRefs: string[];
+};
+
+/** Un destinatario concreto del público, para la bitácora y las etiquetas. */
+type TargetRef = { kind: PromotionTargetKind; key: string; label: string };
+
+/** Lo que hace falta saber de un cliente para decidir si una promo lo alcanza. */
+type SubscriberFacts = {
+  id: string;
+  status: string | null;
+  branchId: string | null;
+  neighborhood: string | null;
+  /** Planes que se le están cobrando (servicios contratados o, si no tiene, su última factura). */
+  planIds: string[];
+};
 
 /** Valida y normaliza los campos de descuento según el formato elegido. */
 function resolveDiscount(format: string, percentage?: number | null, flatAmount?: number | null) {
@@ -58,21 +77,25 @@ function discountLabel(format: string, percentage: number, flatAmount: number | 
 }
 
 /**
- * Promociones de facturación (legacy `settings/promociones`). El superusuario
- * crea campañas y las asigna a funcionarios; esos funcionarios aplican el % a
- * las facturas de los clientes como nota crédito, mientras estén vigentes.
+ * Promociones de facturación (legacy `settings/promociones`).
+ *
+ * El destinatario de una promoción es el CLIENTE, no el funcionario (decisión
+ * 2026-08-03). El superusuario crea la campaña y define su público —todos, ciertos
+ * estados, clientes puntuales, planes, sedes o barrios— y la promo solo aparece
+ * (y solo puede aplicarse) en las facturas de los clientes que están dentro. Así
+ * nadie puede descontarle a un cliente que no correspondía.
  */
-@Injectable()
 export class PromotionsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly facturas: FacturasService,
   ) {}
 
-  private assigneeSelect = {
-    id: true,
-    name: true,
-    email: true,
+  /** Relaciones del público que se devuelven junto a la promo. */
+  private readonly targetInclude = {
+    subscribers: { select: { id: true, fullName: true, abonado: true, status: true } },
+    plans: { select: { id: true, name: true } },
+    branches: { select: { id: true, name: true } },
   } as const;
 
   /** Mapea el usuario logueado a su ficha de funcionario (Staff) por email. */
@@ -84,36 +107,293 @@ export class PromotionsService {
     });
   }
 
+  // ------------------------------------------------------------- Público ----
+
+  /** Normaliza el público que llega del DTO (sin undefined, sin duplicados). */
+  private audienceOf(dto: PromotionAudienceDto): Audience {
+    const all = dto.allSubscribers ?? false;
+    return {
+      allSubscribers: all,
+      // "Todos los clientes" manda: los demás criterios se descartan para que no
+      // quede un público a medias guardado que confunda al editar.
+      subscriberStatuses: all ? [] : (uniq(dto.subscriberStatuses ?? []) as SubscriberStatusName[]),
+      subscriberIds: all ? [] : uniq(dto.subscriberIds ?? []),
+      planIds: all ? [] : uniq(dto.planIds ?? []),
+      branchIds: all ? [] : uniq(dto.branchIds ?? []),
+      neighborhoodRefs: all ? [] : uniq(dto.neighborhoodRefs ?? []),
+    };
+  }
+
+  /** Público guardado de una promo ya cargada (con sus relaciones). */
+  private audienceOfPromo(p: {
+    allSubscribers: boolean;
+    subscriberStatuses: string[];
+    neighborhoodRefs: string[];
+    subscribers: { id: string }[];
+    plans: { id: string }[];
+    branches: { id: string }[];
+  }): Audience {
+    return {
+      allSubscribers: p.allSubscribers,
+      subscriberStatuses: p.subscriberStatuses as SubscriberStatusName[],
+      subscriberIds: p.subscribers.map((s) => s.id),
+      planIds: p.plans.map((x) => x.id),
+      branchIds: p.branches.map((b) => b.id),
+      neighborhoodRefs: p.neighborhoodRefs,
+    };
+  }
+
+  private hasCriteria(a: Audience) {
+    return (
+      a.allSubscribers ||
+      a.subscriberStatuses.length > 0 ||
+      a.subscriberIds.length > 0 ||
+      a.planIds.length > 0 ||
+      a.branchIds.length > 0 ||
+      a.neighborhoodRefs.length > 0
+    );
+  }
+
+  /**
+   * Clientes SIN servicios contratados cuyo plan —el de su última factura— está
+   * entre los buscados. Es el respaldo del hueco de la migración: 2.000 clientes
+   * vivos no tienen `SubscriberService` y su plan solo se ve en lo que se les
+   * cobra (mismo criterio que la corrida mensual). Los demás criterios se inyectan
+   * en el SQL para no barrer los 17.000 sin servicios en cada consulta.
+   */
+  private async planFallbackIds(a: Audience, onlySubscriberId?: string): Promise<string[]> {
+    if (!a.planIds.length) return [];
+    const conds: Prisma.Sql[] = [
+      Prisma.sql`NOT EXISTS (SELECT 1 FROM "SubscriberService" x WHERE x."subscriberId" = s.id)`,
+    ];
+    if (onlySubscriberId) conds.push(Prisma.sql`s.id = ${onlySubscriberId}`);
+    if (a.subscriberStatuses.length)
+      conds.push(Prisma.sql`s.status::text IN (${Prisma.join(a.subscriberStatuses)})`);
+    if (a.branchIds.length) conds.push(Prisma.sql`s."branchId" IN (${Prisma.join(a.branchIds)})`);
+    if (a.neighborhoodRefs.length)
+      conds.push(Prisma.sql`s.neighborhood IN (${Prisma.join(a.neighborhoodRefs)})`);
+    if (a.subscriberIds.length) conds.push(Prisma.sql`s.id IN (${Prisma.join(a.subscriberIds)})`);
+
+    const rows = await this.prisma.$queryRaw<{ id: string }[]>`
+      WITH ult AS MATERIALIZED (
+        SELECT s.id,
+               (SELECT i.id FROM "SubInvoice" i
+                 WHERE i."subscriberId" = s.id
+                 ORDER BY i."invoiceDate" DESC, i.tid DESC LIMIT 1) AS "invoiceId"
+          FROM "Subscriber" s
+         WHERE ${Prisma.join(conds, ' AND ')}
+      )
+      SELECT DISTINCT u.id FROM ult u
+        JOIN "SubInvoiceItem" it ON it."invoiceId" = u."invoiceId" AND it.price > 0
+        JOIN "Plan" pl ON pl.id IN (${Prisma.join(a.planIds)})
+         AND lower(btrim(pl.name)) = lower(btrim(COALESCE(it."productName", it.description)))`;
+    return rows.map((r) => r.id);
+  }
+
+  /**
+   * Filtro Prisma de los clientes que alcanza el público. `null` = no alcanza a
+   * nadie (promo sin criterios): es deliberado, una promo sin público no descuenta.
+   */
+  private async audienceWhere(a: Audience): Promise<Prisma.SubscriberWhereInput | null> {
+    if (a.allSubscribers) return {};
+    if (!this.hasCriteria(a)) return null;
+
+    const and: Prisma.SubscriberWhereInput[] = [];
+    if (a.subscriberStatuses.length) and.push({ status: { in: a.subscriberStatuses as any } });
+    if (a.branchIds.length) and.push({ branchId: { in: a.branchIds } });
+    if (a.neighborhoodRefs.length) and.push({ neighborhood: { in: a.neighborhoodRefs } });
+    if (a.subscriberIds.length) and.push({ id: { in: a.subscriberIds } });
+    if (a.planIds.length) {
+      const fallback = await this.planFallbackIds(a);
+      and.push({
+        OR: [
+          { services: { some: { planId: { in: a.planIds } } } },
+          ...(fallback.length ? [{ id: { in: fallback } }] : []),
+        ],
+      });
+    }
+    return { AND: and };
+  }
+
+  /** Cuántos clientes alcanza el público, con una muestra para verlo en pantalla. */
+  async audience(dto: PromotionAudienceDto, sampleSize = 25) {
+    const a = this.audienceOf(dto);
+    const where = await this.audienceWhere(a);
+    if (!where) return { count: 0, sample: [], sinCriterios: true };
+    const [count, sample] = await Promise.all([
+      this.prisma.subscriber.count({ where }),
+      this.prisma.subscriber.findMany({
+        where,
+        take: sampleSize,
+        orderBy: { abonado: 'asc' },
+        select: { id: true, abonado: true, fullName: true, status: true },
+      }),
+    ]);
+    return { count, sample, sinCriterios: false };
+  }
+
+  /** Datos del cliente que deciden si una promo lo alcanza. */
+  private async subscriberFacts(subscriberId: string): Promise<SubscriberFacts | null> {
+    const s = await this.prisma.subscriber.findUnique({
+      where: { id: subscriberId },
+      select: {
+        id: true, status: true, branchId: true, neighborhood: true,
+        services: { select: { planId: true } },
+      },
+    });
+    if (!s) return null;
+    let planIds = uniq(s.services.map((x) => x.planId ?? ''));
+    // Sin servicios contratados → el plan sale de su última factura (mismo
+    // respaldo que usa la corrida mensual).
+    if (!s.services.length) {
+      const rows = await this.prisma.$queryRaw<{ id: string }[]>`
+        SELECT DISTINCT pl.id
+          FROM "SubInvoiceItem" it
+          JOIN "Plan" pl ON lower(btrim(pl.name)) = lower(btrim(COALESCE(it."productName", it.description)))
+         WHERE it.price > 0
+           AND it."invoiceId" = (SELECT i2.id FROM "SubInvoice" i2 WHERE i2."subscriberId" = ${subscriberId}
+                                  ORDER BY i2."invoiceDate" DESC, i2.tid DESC LIMIT 1)`;
+      planIds = rows.map((r) => r.id);
+    }
+    return { id: s.id, status: s.status, branchId: s.branchId, neighborhood: s.neighborhood, planIds };
+  }
+
+  /** ¿El público de la promo alcanza a este cliente? (Y entre dimensiones, O dentro.) */
+  private reaches(a: Audience, f: SubscriberFacts): boolean {
+    if (a.allSubscribers) return true;
+    if (!this.hasCriteria(a)) return false;
+    if (a.subscriberStatuses.length && !(f.status && a.subscriberStatuses.includes(f.status as SubscriberStatusName)))
+      return false;
+    if (a.branchIds.length && !(f.branchId && a.branchIds.includes(f.branchId))) return false;
+    if (a.neighborhoodRefs.length && !(f.neighborhood && a.neighborhoodRefs.includes(f.neighborhood)))
+      return false;
+    if (a.subscriberIds.length && !a.subscriberIds.includes(f.id)) return false;
+    if (a.planIds.length && !f.planIds.some((p) => a.planIds.includes(p))) return false;
+    return true;
+  }
+
+  // ------------------------------------------------------------ Bitácora ----
+
+  /** Destinatarios del público, con su etiqueta legible (para la bitácora). */
+  private async targetRefs(a: Audience): Promise<TargetRef[]> {
+    if (a.allSubscribers)
+      return [{ kind: 'ALL', key: 'ALL', label: 'Todos los clientes' }];
+
+    const refs: TargetRef[] = a.subscriberStatuses.map((s) => ({
+      kind: 'STATUS' as const, key: s, label: `Estado: ${STATUS_LABEL[s] ?? s}`,
+    }));
+
+    if (a.subscriberIds.length) {
+      const subs = await this.prisma.subscriber.findMany({
+        where: { id: { in: a.subscriberIds } },
+        select: { id: true, fullName: true, abonado: true },
+      });
+      const byId = new Map(subs.map((s) => [s.id, s]));
+      for (const id of a.subscriberIds) {
+        const s = byId.get(id);
+        refs.push({
+          kind: 'SUBSCRIBER', key: id,
+          label: `Cliente: ${s?.fullName?.trim() || 'sin nombre'} #${s?.abonado ?? '—'}`,
+        });
+      }
+    }
+    if (a.planIds.length) {
+      const plans = await this.prisma.plan.findMany({
+        where: { id: { in: a.planIds } }, select: { id: true, name: true },
+      });
+      const byId = new Map(plans.map((p) => [p.id, p.name]));
+      for (const id of a.planIds) refs.push({ kind: 'PLAN', key: id, label: `Plan: ${byId.get(id) ?? id}` });
+    }
+    if (a.branchIds.length) {
+      const branches = await this.prisma.branch.findMany({
+        where: { id: { in: a.branchIds } }, select: { id: true, name: true },
+      });
+      const byId = new Map(branches.map((b) => [b.id, b.name]));
+      for (const id of a.branchIds) refs.push({ kind: 'BRANCH', key: id, label: `Sede: ${byId.get(id) ?? id}` });
+    }
+    if (a.neighborhoodRefs.length) {
+      const names = await this.neighborhoodNames(a.neighborhoodRefs);
+      for (const ref of a.neighborhoodRefs)
+        refs.push({ kind: 'NEIGHBORHOOD', key: ref, label: `Barrio: ${names.get(ref) ?? ref}` });
+    }
+    return refs;
+  }
+
+  /** Nombre de cada barrio por su id legacy (el que guarda `Subscriber.neighborhood`). */
+  private async neighborhoodNames(refs: string[]): Promise<Map<string, string>> {
+    const ids = uniq(refs).map((r) => Number(r)).filter((n) => Number.isFinite(n));
+    if (!ids.length) return new Map();
+    const rows = await this.prisma.neighborhood.findMany({
+      where: { legacyId: { in: ids } },
+      select: { legacyId: true, name: true },
+    });
+    return new Map(rows.map((r) => [String(r.legacyId), r.name]));
+  }
+
+  /** Escribe en la bitácora las altas y bajas de destinatarios entre dos públicos. */
+  private async logTargetDiff(
+    tx: Prisma.TransactionClient,
+    promotionId: string,
+    promotionName: string,
+    before: TargetRef[],
+    after: TargetRef[],
+    changedByName?: string | null,
+  ) {
+    const k = (r: TargetRef) => `${r.kind}|${r.key}`;
+    const beforeKeys = new Set(before.map(k));
+    const afterKeys = new Set(after.map(k));
+    const rows: Prisma.PromotionTargetLogCreateManyInput[] = [
+      ...after.filter((r) => !beforeKeys.has(k(r))).map((r) => ({
+        promotionId, promotionName, kind: r.kind, targetLabel: r.label,
+        action: 'ADDED' as const, changedByName: changedByName ?? null,
+      })),
+      ...before.filter((r) => !afterKeys.has(k(r))).map((r) => ({
+        promotionId, promotionName, kind: r.kind, targetLabel: r.label,
+        action: 'REMOVED' as const, changedByName: changedByName ?? null,
+      })),
+    ];
+    if (rows.length) await tx.promotionTargetLog.createMany({ data: rows });
+  }
+
   // ---------------------------------------------------------------- Admin ----
 
-  /** Todas las promociones con sus funcionarios asignados (superusuario). */
+  /** Todas las promociones con su público (superusuario). */
   async list() {
     const rows = await this.prisma.promotion.findMany({
       orderBy: { createdAt: 'desc' },
-      include: {
-        assignees: { select: this.assigneeSelect },
-        _count: { select: { applications: true } },
-      },
+      include: { ...this.targetInclude, _count: { select: { applications: true } } },
     });
     const t = today();
+    const names = await this.neighborhoodNames(rows.flatMap((r) => r.neighborhoodRefs));
     return rows.map((p) => ({
       ...p,
+      neighborhoods: p.neighborhoodRefs.map((ref) => ({ ref, name: names.get(ref) ?? ref })),
       vigente: p.active && p.startDate <= t && p.endDate >= t,
       timesApplied: p._count.applications,
     }));
   }
 
-  /** Nombre de cada Staff por id (para los snapshots del historial). */
-  private async staffNames(ids: string[]): Promise<Map<string, string>> {
-    if (ids.length === 0) return new Map();
-    const rows = await this.prisma.staff.findMany({
-      where: { id: { in: ids } },
-      select: { id: true, name: true },
-    });
-    return new Map(rows.map((r) => [r.id, r.name]));
+  /** Catálogos para armar el público en pantalla (planes, sedes, barrios). */
+  async catalogs() {
+    const [plans, branches, neighborhoods] = await Promise.all([
+      this.prisma.plan.findMany({
+        where: { active: true },
+        orderBy: [{ kind: 'asc' }, { name: 'asc' }],
+        select: { id: true, name: true, kind: true },
+      }),
+      this.prisma.branch.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true } }),
+      this.prisma.neighborhood.findMany({
+        where: { legacyId: { not: null } },
+        orderBy: { name: 'asc' },
+        select: { legacyId: true, name: true },
+      }),
+    ]);
+    return {
+      plans,
+      branches,
+      neighborhoods: neighborhoods.map((n) => ({ ref: String(n.legacyId), name: n.name })),
+    };
   }
-
-  private readonly GLOBAL_LABEL = 'Todos los funcionarios (global)';
 
   async create(dto: CreatePromotionDto, createdBy?: string) {
     const start = dateOnly(dto.startDate);
@@ -121,15 +401,14 @@ export class PromotionsService {
     if (end < start)
       throw new BadRequestException('La fecha final no puede ser anterior a la inicial');
 
-    // Modo POR ESTADO: si viene subscriberStatus, la promo es por estado de
-    // cliente (excluye funcionarios/global, legacy id_estado_clientes).
-    const status = dto.subscriberStatus ?? null;
-    const isState = status != null;
-    const isGlobal = isState ? false : dto.global ?? false;
-    const ids = isState || isGlobal ? [] : dto.assigneeIds ?? [];
-    const names = await this.staffNames(ids);
+    const a = this.audienceOf(dto);
+    if (!this.hasCriteria(a))
+      throw new BadRequestException(
+        'Define a qué clientes alcanza la promoción (o marca "Todos los clientes")',
+      );
     const name = dto.name.trim();
     const disc = resolveDiscount(dto.discountFormat ?? '%', dto.percentage, dto.flatAmount);
+    const refs = await this.targetRefs(a);
 
     return this.prisma.$transaction(async (tx) => {
       const promo = await tx.promotion.create({
@@ -142,40 +421,64 @@ export class PromotionsService {
           startDate: start,
           endDate: end,
           active: dto.active ?? true,
-          global: isGlobal,
-          subscriberStatus: status,
+          allSubscribers: a.allSubscribers,
+          subscriberStatuses: a.subscriberStatuses as any,
+          neighborhoodRefs: a.neighborhoodRefs,
+          subscribers: a.subscriberIds.length ? { connect: a.subscriberIds.map((id) => ({ id })) } : undefined,
+          plans: a.planIds.length ? { connect: a.planIds.map((id) => ({ id })) } : undefined,
+          branches: a.branchIds.length ? { connect: a.branchIds.map((id) => ({ id })) } : undefined,
           createdBy: createdBy ?? null,
-          assignees: ids.length ? { connect: ids.map((id) => ({ id })) } : undefined,
         },
-        include: { assignees: { select: this.assigneeSelect } },
+        include: this.targetInclude,
       });
+      await this.logTargetDiff(tx, promo.id, name, [], refs, createdBy);
 
-      // Historial de la alta: por estado, por global, o por funcionario.
-      const logs = isState
-        ? [{ staffId: null, staffName: statusLabel(status!) }]
-        : isGlobal
-          ? [{ staffId: null, staffName: this.GLOBAL_LABEL }]
-          : ids.map((sid) => ({ staffId: sid, staffName: names.get(sid) ?? sid }));
-      if (logs.length) {
-        await tx.promotionAssignmentLog.createMany({
-          data: logs.map((l) => ({
-            promotionId: promo.id,
-            promotionName: name,
-            staffId: l.staffId,
-            staffName: l.staffName,
-            action: 'ASSIGNED' as const,
-            assignedByName: createdBy ?? null,
-          })),
+      // La plantilla va en la MISMA transacción: si la promoción no llega a crearse,
+      // no queda una plantilla huérfana de una campaña que nunca existió.
+      if (dto.saveAsTemplate) {
+        const plantilla = {
+          description: dto.description?.trim() || null,
+          discountFormat: disc.discountFormat,
+          percentage: disc.percentage,
+          flatAmount: disc.flatAmount,
+          startDate: start,
+          endDate: end,
+          createdBy: createdBy ?? null,
+        };
+        // Mismo nombre = misma plantilla: se actualiza en vez de acumular copias.
+        await tx.promotionTemplate.upsert({
+          where: { name },
+          create: { name, ...plantilla },
+          update: plantilla,
         });
       }
+
       return promo;
     });
+  }
+
+  /** Plantillas guardadas, la más usada primero por nombre. */
+  listTemplates() {
+    return this.prisma.promotionTemplate.findMany({
+      orderBy: { updatedAt: 'desc' },
+      select: {
+        id: true, name: true, description: true, discountFormat: true,
+        percentage: true, flatAmount: true, startDate: true, endDate: true,
+      },
+    });
+  }
+
+  async removeTemplate(id: string) {
+    const t = await this.prisma.promotionTemplate.findUnique({ where: { id } });
+    if (!t) throw new NotFoundException('Plantilla no encontrada');
+    await this.prisma.promotionTemplate.delete({ where: { id } });
+    return { ok: true };
   }
 
   async update(id: string, dto: UpdatePromotionDto, updatedBy?: string) {
     const existing = await this.prisma.promotion.findUnique({
       where: { id },
-      include: { assignees: { select: { id: true, name: true } } },
+      include: this.targetInclude,
     });
     if (!existing) throw new NotFoundException('Promoción no encontrada');
 
@@ -184,13 +487,13 @@ export class PromotionsService {
     if (end < start)
       throw new BadRequestException('La fecha final no puede ser anterior a la inicial');
 
-    // Estado de cliente: undefined = no tocar; null = quitar; valor = fijar.
-    const oldStatus = existing.subscriberStatus;
-    const newStatus =
-      dto.subscriberStatus === undefined ? oldStatus : dto.subscriberStatus;
-    const isState = newStatus != null;
-    // El modo estado excluye funcionarios/global.
-    const isGlobal = isState ? false : dto.global ?? existing.global;
+    const before = this.audienceOfPromo(existing);
+    // El público se reemplaza entero: la pantalla siempre manda el estado completo.
+    const after = this.audienceOf(dto);
+    if (!this.hasCriteria(after))
+      throw new BadRequestException(
+        'Define a qué clientes alcanza la promoción (o marca "Todos los clientes")',
+      );
     const name = dto.name?.trim() ?? existing.name;
 
     const data: Prisma.PromotionUpdateInput = {
@@ -200,8 +503,12 @@ export class PromotionsService {
       startDate: start,
       endDate: end,
       active: dto.active ?? undefined,
-      global: isGlobal,
-      subscriberStatus: newStatus,
+      allSubscribers: after.allSubscribers,
+      subscriberStatuses: after.subscriberStatuses as any,
+      neighborhoodRefs: after.neighborhoodRefs,
+      subscribers: { set: after.subscriberIds.map((sid) => ({ id: sid })) },
+      plans: { set: after.planIds.map((pid) => ({ id: pid })) },
+      branches: { set: after.branchIds.map((bid) => ({ id: bid })) },
     };
 
     // Descuento: solo se recalcula si el usuario tocó algún campo de descuento.
@@ -215,90 +522,24 @@ export class PromotionsService {
       data.flatAmount = disc.flatAmount;
     }
 
-    // Conjunto de funcionarios ANTES y DESPUÉS (para diff del historial).
-    const oldWasGlobal = existing.global;
-    const oldIds = existing.assignees.map((a) => a.id);
-    const oldNames = new Map(existing.assignees.map((a) => [a.id, a.name]));
-    // `newIds`: vacío si es estado o global; si vienen ids, se reemplaza el set.
-    let newIds = oldIds;
-    if (isState || isGlobal) newIds = [];
-    else if (dto.assigneeIds) newIds = dto.assigneeIds;
-
-    // Reasignación de funcionarios: estado/global limpian; ids reemplazan el set.
-    if (isState || isGlobal) {
-      data.assignees = { set: [] };
-    } else if (dto.assigneeIds) {
-      data.assignees = { set: dto.assigneeIds.map((sid) => ({ id: sid })) };
-    }
-
-    const addedIds = newIds.filter((x) => !oldIds.includes(x));
-    const removedIds = oldIds.filter((x) => !newIds.includes(x));
-    const addedNames = await this.staffNames(addedIds);
+    const [refsBefore, refsAfter] = await Promise.all([
+      this.targetRefs(before),
+      this.targetRefs(after),
+    ]);
 
     return this.prisma.$transaction(async (tx) => {
-      const promo = await tx.promotion.update({
-        where: { id },
-        data,
-        include: { assignees: { select: this.assigneeSelect } },
-      });
-
-      const logEntries: Prisma.PromotionAssignmentLogCreateManyInput[] = [];
-      // Bajas de funcionarios específicos.
-      for (const sid of removedIds) {
-        logEntries.push({
-          promotionId: id, promotionName: name, staffId: sid,
-          staffName: oldNames.get(sid) ?? sid, action: 'UNASSIGNED',
-          assignedByName: updatedBy ?? null,
-        });
-      }
-      // Altas de funcionarios específicos.
-      for (const sid of addedIds) {
-        logEntries.push({
-          promotionId: id, promotionName: name, staffId: sid,
-          staffName: addedNames.get(sid) ?? sid, action: 'ASSIGNED',
-          assignedByName: updatedBy ?? null,
-        });
-      }
-      // Transición de estado de cliente (promo por estado).
-      if (oldStatus !== newStatus) {
-        if (oldStatus) {
-          logEntries.push({
-            promotionId: id, promotionName: name, staffId: null,
-            staffName: statusLabel(oldStatus), action: 'UNASSIGNED', assignedByName: updatedBy ?? null,
-          });
-        }
-        if (newStatus) {
-          logEntries.push({
-            promotionId: id, promotionName: name, staffId: null,
-            staffName: statusLabel(newStatus), action: 'ASSIGNED', assignedByName: updatedBy ?? null,
-          });
-        }
-      }
-      // Transiciones de/hacia "global" (todos los funcionarios).
-      if (isGlobal && !oldWasGlobal) {
-        logEntries.push({
-          promotionId: id, promotionName: name, staffId: null,
-          staffName: this.GLOBAL_LABEL, action: 'ASSIGNED', assignedByName: updatedBy ?? null,
-        });
-      } else if (!isGlobal && oldWasGlobal) {
-        logEntries.push({
-          promotionId: id, promotionName: name, staffId: null,
-          staffName: this.GLOBAL_LABEL, action: 'UNASSIGNED', assignedByName: updatedBy ?? null,
-        });
-      }
-      if (logEntries.length) {
-        await tx.promotionAssignmentLog.createMany({ data: logEntries });
-      }
+      const promo = await tx.promotion.update({ where: { id }, data, include: this.targetInclude });
+      await this.logTargetDiff(tx, id, name, refsBefore, refsAfter, updatedBy);
       return promo;
     });
   }
 
   /**
-   * Historial de asignaciones: qué promo se asignó/desasignó, a qué funcionario,
-   * quién lo hizo y cuándo. Opcionalmente filtrado por promoción.
+   * Bitácora del público: qué destinatario se agregó o quitó de qué promoción,
+   * quién lo hizo y cuándo. Es la traza de "¿por qué a este cliente se le descontó?".
    */
-  async assignmentHistory(promotionId?: string) {
-    return this.prisma.promotionAssignmentLog.findMany({
+  async targetHistory(promotionId?: string) {
+    return this.prisma.promotionTargetLog.findMany({
       where: promotionId ? { promotionId } : undefined,
       orderBy: { createdAt: 'desc' },
       take: 500,
@@ -306,12 +547,40 @@ export class PromotionsService {
         id: true,
         promotionId: true,
         promotionName: true,
-        staffId: true,
-        staffName: true,
+        kind: true,
+        targetLabel: true,
         action: true,
-        assignedByName: true,
+        changedByName: true,
         createdAt: true,
       },
+    });
+  }
+
+  /** Facturas a las que ya se les aplicó la promo (a qué cliente, cuánto y quién). */
+  async applications(promotionId: string) {
+    const rows = await this.prisma.promotionApplication.findMany({
+      where: { promotionId },
+      orderBy: { createdAt: 'desc' },
+      take: 500,
+      select: {
+        id: true, invoiceId: true, amount: true, percentage: true,
+        appliedByName: true, createdAt: true,
+      },
+    });
+    if (!rows.length) return [];
+    const invoices = await this.prisma.subInvoice.findMany({
+      where: { id: { in: rows.map((r) => r.invoiceId) } },
+      select: { id: true, tid: true, subscriber: { select: { fullName: true, abonado: true } } },
+    });
+    const byId = new Map(invoices.map((i) => [i.id, i]));
+    return rows.map((r) => {
+      const inv = byId.get(r.invoiceId);
+      return {
+        ...r,
+        tid: inv?.tid ?? null,
+        subscriberName: inv?.subscriber?.fullName ?? null,
+        abonado: inv?.subscriber?.abonado ?? null,
+      };
     });
   }
 
@@ -322,67 +591,56 @@ export class PromotionsService {
     return { ok: true };
   }
 
-  // ------------------------------------------------------------ Funcionario ----
+  // ---------------------------------------------------------- Facturación ----
 
   /**
-   * Promociones que el usuario puede aplicar hoy sobre una factura: vigentes y
-   * (a) globales, (b) asignadas al usuario — réplica de `list_promos()` — o
-   * (c) por estado, cuando el cliente de la factura está en ese estado (réplica
-   * de `validar_promocion_estado_cus`). `invoiceId` es necesario para las (c).
+   * Promociones que hoy pueden aplicarse a una factura: vigentes y cuyo público
+   * alcanza al CLIENTE de esa factura. Sin factura no hay respuesta posible: la
+   * elegibilidad depende del cliente, no del usuario que pregunta.
    */
-  async available(user: AuthUser, invoiceId?: string) {
-    const t = today();
-    const staff = await this.staffForUser(user);
-
-    // Estado del cliente de la factura (para las promos por estado).
-    let subStatus: string | null = null;
-    if (invoiceId) {
-      const inv = await this.prisma.subInvoice.findUnique({
-        where: { id: invoiceId },
-        select: { subscriber: { select: { status: true } } },
-      });
-      subStatus = inv?.subscriber?.status ?? null;
-    }
-
-    const or: Prisma.PromotionWhereInput[] = [
-      { global: true },
-      ...(staff ? [{ assignees: { some: { id: staff.id } } }] : []),
-      ...(subStatus ? [{ subscriberStatus: subStatus as any }] : []),
-    ];
-    const where: Prisma.PromotionWhereInput = {
-      active: true,
-      startDate: { lte: t },
-      endDate: { gte: t },
-      OR: or,
-    };
-    return this.prisma.promotion.findMany({
-      where,
-      orderBy: { percentage: 'desc' },
-      select: {
-        id: true,
-        name: true,
-        description: true,
-        percentage: true,
-        discountFormat: true,
-        flatAmount: true,
-        startDate: true,
-        endDate: true,
-        global: true,
-        subscriberStatus: true,
-      },
+  async available(invoiceId?: string) {
+    if (!invoiceId) return [];
+    const inv = await this.prisma.subInvoice.findUnique({
+      where: { id: invoiceId },
+      select: { subscriberId: true },
     });
+    if (!inv?.subscriberId) return [];
+    const facts = await this.subscriberFacts(inv.subscriberId);
+    if (!facts) return [];
+
+    const t = today();
+    const vigentes = await this.prisma.promotion.findMany({
+      where: { active: true, startDate: { lte: t }, endDate: { gte: t } },
+      orderBy: { percentage: 'desc' },
+      include: this.targetInclude,
+    });
+    return vigentes
+      .filter((p) => this.reaches(this.audienceOfPromo(p), facts))
+      .map((p) => ({
+        id: p.id,
+        name: p.name,
+        description: p.description,
+        percentage: p.percentage,
+        discountFormat: p.discountFormat,
+        flatAmount: p.flatAmount,
+        startDate: p.startDate,
+        endDate: p.endDate,
+        allSubscribers: p.allSubscribers,
+        subscriberStatuses: p.subscriberStatuses,
+      }));
   }
 
   /**
-   * Aplica una promoción a una factura como nota crédito. Valida vigencia y
-   * autorización del funcionario, y evita aplicar la misma promo dos veces a la
-   * misma factura (legacy `promo_sistema_clientes1`).
+   * Aplica una promoción a una factura como nota crédito. Valida vigencia y que el
+   * CLIENTE de la factura esté dentro del público de la promo —se revalida aquí,
+   * no basta con que la pantalla la haya ofrecido— y evita aplicar la misma promo
+   * dos veces a la misma factura (legacy `promo_sistema_clientes1`).
    */
   async apply(promotionId: string, dto: ApplyPromotionDto, user: AuthUser) {
     const t = today();
     const promo = await this.prisma.promotion.findUnique({
       where: { id: promotionId },
-      include: { assignees: { select: { id: true } } },
+      include: this.targetInclude,
     });
     if (!promo) throw new NotFoundException('Promoción no encontrada');
     if (!promo.active) throw new BadRequestException('La promoción está inactiva');
@@ -391,23 +649,15 @@ export class PromotionsService {
 
     const invoice = await this.prisma.subInvoice.findUnique({
       where: { id: dto.invoiceId },
-      select: { id: true, total: true, subtotal: true, tid: true, subscriber: { select: { status: true } } },
+      select: { id: true, total: true, subtotal: true, tid: true, subscriberId: true },
     });
     if (!invoice) throw new NotFoundException('Factura no encontrada');
 
-    const staff = await this.staffForUser(user);
-    // Autorización: promo por estado → el cliente debe estar en ese estado;
-    // promo por funcionario → global o asignada al usuario.
-    const authorized = promo.subscriberStatus
-      ? invoice.subscriber?.status === promo.subscriberStatus
-      : promo.global || (staff != null && promo.assignees.some((a) => a.id === staff.id));
-    if (!authorized) {
+    const facts = invoice.subscriberId ? await this.subscriberFacts(invoice.subscriberId) : null;
+    if (!facts || !this.reaches(this.audienceOfPromo(promo), facts))
       throw new ForbiddenException(
-        promo.subscriberStatus
-          ? 'La promoción por estado no aplica al estado actual del cliente'
-          : 'No tienes esta promoción asignada',
+        'El cliente de esta factura no está dentro del público de la promoción',
       );
-    }
 
     const already = await this.prisma.promotionApplication.findUnique({
       where: {
@@ -426,6 +676,8 @@ export class PromotionsService {
     if (!(amount > 0))
       throw new BadRequestException('El descuento calculado es cero');
     const label = discountLabel(promo.discountFormat, promo.percentage, num(promo.flatAmount));
+
+    const staff = await this.staffForUser(user);
 
     // Reutiliza la lógica de notas crédito (recalcula total/saldo/estado/cache).
     const note = await this.facturas.createNote(

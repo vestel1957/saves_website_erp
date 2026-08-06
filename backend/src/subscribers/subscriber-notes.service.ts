@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { NotFoundException } from '../core/http/errores';
 import { PrismaService } from '../prisma/prisma.service';
 import type { AuthUser } from '../auth/current-user.decorator';
 import { exigirSedeSuscriptor } from '../common/sede-scope';
@@ -7,7 +7,6 @@ import { exigirSedeSuscriptor } from '../common/sede-scope';
  * Notas internas de un cliente.
  * Extraído de SubscribersService: bloque autónomo sobre `subscriberNote`.
  */
-@Injectable()
 export class SubscriberNotesService {
   constructor(private readonly prisma: PrismaService) {}
 

@@ -1,0 +1,21 @@
+{
+  // Compilación de producción. Antes la orquestaba `nest build`; ahora es `tsc` a
+  // secas, que es lo que el CLI de Nest hacía por debajo.
+  //
+  // `rootDir: "./"` NO es un descuido: fija la salida en `dist/src/main.js`, que es
+  // exactamente la ruta que arranca pm2 (`ecosystem.config.js`). Sin él, `tsc`
+  // tomaría `src` como raíz común y emitiría `dist/main.js`, dejando el proceso sin
+  // arrancar tras el despliegue.
+  //
+  // Los decoradores siguen activados: `class-validator` y `class-transformer` los
+  // usan en los 30 DTO, y no son parte de Nest.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "./",
+    "declaration": false,
+    "sourceMap": true,
+    "incremental": false
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "**/*.spec.ts", "scripts", "prisma", "test"]
+}

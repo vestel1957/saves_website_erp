@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException } from '../../core/http/errores';
+import { Logger } from '../../core/logger';
 import { randomInt } from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
@@ -158,7 +159,6 @@ export type SignatureOtpEstado = {
  *    aprobada ni gastar cuota. Se le enseña como lo que es —un modo de pruebas—
  *    y la firma queda marcada `simulated` en la bitácora.
  */
-@Injectable()
 export class SignatureOtpService {
   private readonly logger = new Logger('SignatureOtp');
 

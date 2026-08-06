@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '../core/http/errores';
 import { Type } from 'class-transformer';
 import { IsOptional, IsString, MinLength } from 'class-validator';
 import { PrismaService } from '../prisma/prisma.service';
@@ -23,7 +23,6 @@ export class UpdateCompanyDto {
   @IsOptional() @IsString() taxId?: string;
 }
 
-@Injectable()
 export class ConfigDataService {
   constructor(private readonly prisma: PrismaService) {}
 
@@ -50,29 +49,6 @@ export class ConfigDataService {
     const b = await this.prisma.branch.findUnique({ where: { id } });
     if (!b) throw new NotFoundException('Sede no encontrada');
     return this.prisma.branch.update({ where: { id }, data: { name: dto.name, summary: dto.summary, dir: dto.dir } });
-  }
-
-  /** Geografía: departamentos con conteo de ciudades + totales. */
-  async geography() {
-    const [deps, cities, locs, hoods] = await Promise.all([
-      this.prisma.department.findMany({ orderBy: { name: 'asc' } }),
-      this.prisma.city.groupBy({ by: ['departmentLegacy'], _count: { _all: true } }),
-      this.prisma.locality.count(),
-      this.prisma.neighborhood.count(),
-    ]);
-    const cityCount = new Map(cities.map((c) => [c.departmentLegacy, c._count._all]));
-    return {
-      totals: { departamentos: deps.length, ciudades: cities.reduce((a, c) => a + c._count._all, 0), localidades: locs, barrios: hoods },
-      departamentos: deps.map((d) => ({ id: d.id, name: d.name, ciudades: cityCount.get(d.legacyId ?? -1) ?? 0 })),
-    };
-  }
-
-  /** Ciudades de un departamento (por legacyId del departamento). */
-  async cities(departmentId: string) {
-    const dep = await this.prisma.department.findUnique({ where: { id: departmentId } });
-    if (!dep) throw new NotFoundException('Departamento no encontrado');
-    const rows = await this.prisma.city.findMany({ where: { departmentLegacy: dep.legacyId }, orderBy: { name: 'asc' } });
-    return rows.map((c) => ({ id: c.id, name: c.name }));
   }
 
   /** Empresa (CompanyInfo, fila única). */

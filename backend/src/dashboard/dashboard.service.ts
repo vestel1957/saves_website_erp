@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import type { OnModuleInit } from '../core/ciclo-vida';
 import { PrismaService } from '../prisma/prisma.service';
 import { num } from '../common/money';
 
@@ -7,7 +7,6 @@ function subName(s: { firstName: string | null; lastName1: string | null; compan
   return (s.fullName?.trim()) || [s.firstName, s.lastName1].filter(Boolean).join(' ').trim() || s.companyName || '—';
 }
 
-@Injectable()
 export class DashboardService implements OnModuleInit {
   constructor(private readonly prisma: PrismaService) {}
 

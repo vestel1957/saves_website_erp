@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '../core/http/errores';
+import { Logger } from '../core/logger';
 import { Mikrotik } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
@@ -63,7 +64,6 @@ type SubForNet = {
   branch: { legacyId: number } | null;
 };
 
-@Injectable()
 export class MikrotikService {
   private readonly logger = new Logger('MikrotikService');
   /** true ⇒ ejecuta de verdad contra los routers. false ⇒ dry-run (simulación segura). */

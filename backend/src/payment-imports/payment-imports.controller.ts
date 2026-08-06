@@ -1,28 +1,26 @@
-import { BadRequestException, Body, Controller, Delete, Get, Param, Post, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { BadRequestException } from '../core/http/errores';
 import { PaymentImportsService } from './payment-imports.service';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { AreaGuard } from '../auth/area.guard';
-import { RequireArea } from '../auth/require-area.decorator';
-import { CurrentUser, AuthUser } from '../auth/current-user.decorator';
+import { AuthUser } from '../auth/current-user.decorator';
 
-/** Cargue masivo de pagos externos (Efecty) — migrado de saves-vestel `Transactions::cargue_xlxs`. */
-@Controller('payment-imports')
-@UseGuards(JwtAuthGuard, AreaGuard)
-@RequireArea('administracion', 'caja')
+/**
+ * Cargue masivo de pagos externos (Efecty) — migrado de saves-vestel `Transactions::cargue_xlxs`.
+ *
+ * Sólo administración (2026-08-03). Su pantalla (`/tesoreria/importar-pagos`) ya se
+ * le había quitado a la cajera el 2026-07-29 —aplica cientos de pagos de golpe y
+ * dispara reconexiones—, pero la API seguía abierta al área caja: quitar la pantalla
+ * no cierra la ruta.
+ */
 export class PaymentImportsController {
   constructor(private readonly imports: PaymentImportsService) {}
 
-  @Get() list() { return this.imports.list(); }
-  @Get(':id') detail(@Param('id') id: string) { return this.imports.detail(id); }
+  list() { return this.imports.list(); }
+  detail(id: string) { return this.imports.detail(id); }
 
-  @Post('upload')
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024 } }))
-  async upload(@UploadedFile() file: any, @Body('date') date: string | undefined, @CurrentUser() user: AuthUser) {
+  async upload(file: any, date: string | undefined, user: AuthUser) {
     if (!file?.buffer) throw new BadRequestException('Sube un archivo .xlsx en el campo "file".');
     return this.imports.upload(file.buffer, file.originalname ?? 'cargue.xlsx', date, user);
   }
 
-  @Post(':id/process') process(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.imports.process(id, user); }
-  @Delete(':id') remove(@Param('id') id: string) { return this.imports.remove(id); }
+  process(id: string, user: AuthUser) { return this.imports.process(id, user); }
+  remove(id: string) { return this.imports.remove(id); }
 }

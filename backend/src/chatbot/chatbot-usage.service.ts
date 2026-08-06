@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Logger } from '../core/logger';
 import OpenAI from 'openai';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -52,7 +52,6 @@ const dayCo = () => {
  * respuesta ni chulito de leído, y nadie en la empresa se enteraba de que había alguien
  * esperando.
  */
-@Injectable()
 export class ChatbotUsageService {
   private readonly logger = new Logger('ChatbotUsage');
   private cache: { at: number; tokens: number; budget: number } | null = null;

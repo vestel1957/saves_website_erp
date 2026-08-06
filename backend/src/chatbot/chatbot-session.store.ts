@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Logger } from '../core/logger';
 import type { SessionStore, StoredPending, Turn } from '@s4gk/wa-agent';
 import { PrismaService } from '../prisma/prisma.service';
 import { WhatsappInboxService } from '../common/whatsapp/whatsapp-inbox.service';
@@ -23,7 +23,6 @@ const MAX_HISTORY = 20;
  * Guardar aquí es barato: son ~2 consultas por mensaje contra los ~2000 ms que tarda
  * una respuesta del LLM.
  */
-@Injectable()
 export class ChatbotSessionStore implements SessionStore {
   private readonly logger = new Logger('ChatbotSessionStore');
 

@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException } from '../core/http/errores';
+import { Logger } from '../core/logger';
 import { PrismaService } from '../prisma/prisma.service';
 import { POSTS, POST_GROUPS, postDef } from './responsibilities.catalog';
 
@@ -19,7 +20,6 @@ export interface Resolved {
   fromFallback: boolean;
 }
 
-@Injectable()
 export class ResponsibilitiesService {
   private readonly logger = new Logger('Responsibilities');
 

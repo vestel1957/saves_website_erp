@@ -1,16 +1,9 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { Allow, IsBoolean, IsOptional, IsString } from 'class-validator';
 import { MikrotikAdminService } from './mikrotik-admin.service';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { AreaGuard } from '../auth/area.guard';
-import { PermissionsGuard } from '../auth/permissions.guard';
-import { RequireArea } from '../auth/require-area.decorator';
-import { RequirePermissions } from '../auth/require-permissions.decorator';
 import { APP_PERMISSIONS } from '../auth/permissions.catalog';
-import { CurrentUser, AuthUser } from '../auth/current-user.decorator';
-import { ModuloRedGuard } from './modulo-red.guard';
+import { AuthUser } from '../auth/current-user.decorator';
 
-class RouterUpsertDto {
+export class RouterUpsertDto {
   @IsOptional() @IsString() name?: string;
   @IsOptional() @IsString() ip?: string;
   @Allow() port?: string | number;
@@ -19,11 +12,11 @@ class RouterUpsertDto {
   @IsOptional() @IsString() username?: string;
   @IsOptional() @IsString() password?: string;
 }
-class ToggleSecretDto {
+export class ToggleSecretDto {
   @IsString() name!: string;
   @IsBoolean() disabled!: boolean;
 }
-class KickDto {
+export class KickDto {
   @IsString() name!: string;
 }
 
@@ -31,44 +24,37 @@ class KickDto {
  * Gestión de routers MikroTik — clon de `Mikrotiks.php` (conectar y configurar).
  * Espejo de OltController: CRUD + validación + lecturas/escrituras en vivo (dry-run).
  */
-@Controller('network/mikrotik')
-@UseGuards(JwtAuthGuard, AreaGuard, PermissionsGuard, ModuloRedGuard)
-@RequireArea('tecnicos', 'administracion')
 export class MikrotikController {
   constructor(private readonly mk: MikrotikAdminService) {}
 
   // --- Modo / opciones ---
-  @Get('mode') mode() { return this.mk.mode(); }
-  @Get('branches') branches() { return this.mk.branches(); }
+  mode() { return this.mk.mode(); }
+  branches() { return this.mk.branches(); }
 
   // --- CRUD de routers ---
-  @Get('routers') routers() { return this.mk.listRouters(); }
-  @RequirePermissions(APP_PERMISSIONS.NETWORK_ROUTERS_MANAGE)
-  @Post('routers') create(@Body() dto: RouterUpsertDto, @CurrentUser() user: AuthUser) { return this.mk.createRouter(dto, user); }
-  @RequirePermissions(APP_PERMISSIONS.NETWORK_ROUTERS_MANAGE)
-  @Patch('routers/:id') update(@Param('id') id: string, @Body() dto: RouterUpsertDto, @CurrentUser() user: AuthUser) { return this.mk.updateRouter(id, dto, user); }
-  @Delete('routers/:id') remove(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.mk.deleteRouter(id, user); }
-  @Post('routers/:id/default') setDefault(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.mk.setDefault(id, user); }
+  routers() { return this.mk.listRouters(); }
+  create(dto: RouterUpsertDto, user: AuthUser) { return this.mk.createRouter(dto, user); }
+  update(id: string, dto: RouterUpsertDto, user: AuthUser) { return this.mk.updateRouter(id, dto, user); }
+  remove(id: string, user: AuthUser) { return this.mk.deleteRouter(id, user); }
+  setDefault(id: string, user: AuthUser) { return this.mk.setDefault(id, user); }
 
   // --- Validación / lecturas en vivo ---
-  @Post(':id/test') test(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.mk.testRouter(id, user); }
-  @Get(':id/system') system(@Param('id') id: string) { return this.mk.systemInfo(id); }
-  @Get(':id/summary') summary(@Param('id') id: string) { return this.mk.summary(id); }
-  @Get(':id/secrets') secrets(@Param('id') id: string, @Query('search') search?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string, @Query('sortBy') sortBy?: string, @Query('sortDir') sortDir?: string) {
+  test(id: string, user: AuthUser) { return this.mk.testRouter(id, user); }
+  system(id: string) { return this.mk.systemInfo(id); }
+  summary(id: string) { return this.mk.summary(id); }
+  secrets(id: string, search?: string, page?: string, pageSize?: string, sortBy?: string, sortDir?: string) {
     return this.mk.secrets(id, { search, page: Number(page), pageSize: Number(pageSize), sortBy, sortDir });
   }
-  @Get(':id/active') active(@Param('id') id: string) { return this.mk.active(id); }
-  @Get(':id/ips') ips(@Param('id') id: string) { return this.mk.ips(id); }
-  @Get(':id/profiles') profiles(@Param('id') id: string) { return this.mk.profiles(id); }
-  @Get(':id/history') history(@Param('id') id: string, @Query('limit') limit?: string) { return this.mk.history(id, Number(limit) || 100); }
+  active(id: string) { return this.mk.active(id); }
+  ips(id: string) { return this.mk.ips(id); }
+  profiles(id: string) { return this.mk.profiles(id); }
+  history(id: string, limit?: string) { return this.mk.history(id, Number(limit) || 100); }
 
   // --- Escrituras (GATE dry-run) ---
-  @RequirePermissions(APP_PERMISSIONS.NETWORK_ROUTERS_MANAGE)
-  @Post(':id/secret/toggle') toggleSecret(@Param('id') id: string, @Body() dto: ToggleSecretDto, @CurrentUser() user: AuthUser) {
+  toggleSecret(id: string, dto: ToggleSecretDto, user: AuthUser) {
     return this.mk.toggleSecret(id, dto.name, dto.disabled, user);
   }
-  @RequirePermissions(APP_PERMISSIONS.NETWORK_ROUTERS_MANAGE)
-  @Post(':id/active/kick') kick(@Param('id') id: string, @Body() dto: KickDto, @CurrentUser() user: AuthUser) {
+  kick(id: string, dto: KickDto, user: AuthUser) {
     return this.mk.kickActive(id, dto.name, user);
   }
 }

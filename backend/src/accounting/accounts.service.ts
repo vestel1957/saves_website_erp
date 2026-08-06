@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '../core/http/errores';
 import { AccountType, NormalSide } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateAccountDto, UpdateAccountDto } from './dto/accounting.dto';
@@ -14,7 +14,6 @@ export interface AccountNode {
   children: AccountNode[];
 }
 
-@Injectable()
 export class AccountsService {
   constructor(private readonly prisma: PrismaService) {}
 

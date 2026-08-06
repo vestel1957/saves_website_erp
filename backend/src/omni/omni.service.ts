@@ -1,5 +1,6 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { orden } from '../common/pagination-params';
+import { BadRequestException, NotFoundException } from '../core/http/errores';
+import { orden, paginacion, type Direccion } from '../common/pagination-params';
+import { rangoDeDiasColombia } from '../common/fecha-colombia';
 import { Type } from 'class-transformer';
 import { IsArray, IsIn, IsInt, IsNumber, IsOptional, IsString, Min, MinLength, ValidateNested } from 'class-validator';
 import { Prisma } from '@prisma/client';
@@ -49,7 +50,6 @@ export class QuoteStatusDto {
   @IsString() @IsIn(['draft', 'pending', 'sent', 'accepted', 'rejected', 'converted']) status!: string;
 }
 
-@Injectable()
 export class OmniService {
   constructor(
     private readonly prisma: PrismaService,
@@ -57,36 +57,170 @@ export class OmniService {
   ) {}
 
   // --- Eventos / agenda ---
-  /** Columnas ordenables de la tabla de la agenda. */
-  private static readonly ORDEN_EVENTOS = {
-    title: 'title', start: 'start', end: 'end', description: 'description',
-    orderNo: 'orderNo', assignedBy: 'assignedBy',
+  /**
+   * Columnas ordenables de la tabla de la agenda, con los nulos SIEMPRE al final.
+   *
+   * Sin lo de los nulos, la agenda abría con 45 filas sin fecha arriba del todo
+   * (Postgres pone NULLS FIRST en `DESC`): la primera pantalla era una columna
+   * "Inicio" llena de guiones y parecía que la vista no cargaba.
+   *
+   * "Asignó" NO está y no es un olvido: la columna guarda el id legacy del
+   * funcionario ('20', '165'), no su nombre; el nombre se resuelve al salir. Ordenar
+   * por ella daba el orden de unos números que el usuario no ve —y como es texto, ni
+   * siquiera el numérico: '100' antes que '20'—. Para eso está el filtro "Asignó",
+   * que sí ofrece a la gente por nombre.
+   */
+  private static readonly ORDEN_EVENTOS: Record<string, (dir: Direccion) => unknown> = {
+    title: (dir) => ({ title: { sort: dir, nulls: 'last' } }),
+    start: (dir) => ({ start: { sort: dir, nulls: 'last' } }),
+    end: (dir) => ({ end: { sort: dir, nulls: 'last' } }),
+    description: (dir) => ({ description: { sort: dir, nulls: 'last' } }),
+    orderNo: (dir) => ({ orderNo: { sort: dir, nulls: 'last' } }),
   };
 
-  async events(params: { from?: string; to?: string; page?: number; pageSize?: number; sortBy?: string; sortDir?: string }) {
-    const page = Math.max(1, Number(params.page) || 1);
-    const pageSize = Math.min(200, Math.max(1, Number(params.pageSize) || 50));
-    const where: Prisma.CalendarEventWhereInput = {};
-    if (params.from || params.to) {
-      where.start = {};
-      if (params.from) (where.start as any).gte = new Date(params.from);
-      if (params.to) (where.start as any).lte = new Date(params.to);
+  private static readonly PRIORIDADES = ['Baja', 'Media', 'Alta', 'Urgente'];
+
+  /** Filtros de la agenda; los comparten el listado y las cifras de arriba. */
+  private static filtroEventos(f: {
+    search?: string; from?: string; to?: string; priority?: string; assignedBy?: string;
+  }): Prisma.CalendarEventWhereInput {
+    const and: Prisma.CalendarEventWhereInput[] = [];
+
+    // Rango por DÍAS de Colombia, con el "hasta" inclusive. Ver `rangoDeDiasColombia`:
+    // esto es lo que estaba roto —un `lte` a la medianoche UTC del propio día, que
+    // dejaba fuera el día entero salvo el evento imposible de las 00:00 en punto—.
+    const rango = rangoDeDiasColombia(f.from, f.to);
+    if (rango === null) {
+      throw new BadRequestException('El rango de fechas no es válido: revisa "Desde" y "Hasta".');
     }
+    if (rango.gte || rango.lt) and.push({ start: rango });
+
+    const texto = (f.search ?? '').trim();
+    if (texto) {
+      // El número se busca como ORDEN además de como texto: en la tabla la columna
+      // se pinta '#3408', así que se escribe con almohadilla tan a menudo como sin ella.
+      const n = Number(texto.replace(/^#/, ''));
+      const o: Prisma.CalendarEventWhereInput[] = [
+        { title: { contains: texto, mode: 'insensitive' } },
+        { description: { contains: texto, mode: 'insensitive' } },
+      ];
+      if (Number.isInteger(n) && n > 0) o.push({ orderNo: n });
+      and.push({ OR: o });
+    }
+
+    const prioridad = (f.priority ?? '').trim();
+    if (prioridad) {
+      if (!OmniService.PRIORIDADES.some((p) => p.toLowerCase() === prioridad.toLowerCase())) {
+        throw new BadRequestException('Esa prioridad no existe.');
+      }
+      and.push({ priority: { equals: prioridad, mode: 'insensitive' } });
+    }
+
+    const asigno = (f.assignedBy ?? '').trim();
+    // `sin` = los que el legacy importó sin responsable (564). Sin esta opción no
+    // había forma de llegar a ellos desde la pantalla.
+    if (asigno === 'sin') and.push({ OR: [{ assignedBy: null }, { assignedBy: '' }] });
+    else if (asigno) and.push({ assignedBy: asigno });
+
+    return and.length ? { AND: and } : {};
+  }
+
+  /**
+   * `Staff.legacyId` → nombre, para las filas de una página.
+   *
+   * `CalendarEvent.assignedBy` es el `asigno` del legacy: un id numérico guardado
+   * como texto. Sin traducir, la columna "Asignó" mostraba '20' y '165'.
+   */
+  private async nombresDeAsignadores(ids: (string | null)[]): Promise<Map<string, string>> {
+    const numeros = [...new Set(ids.map((v) => Number(v)).filter((n) => Number.isInteger(n) && n > 0))];
+    if (!numeros.length) return new Map();
+    const filas = await this.prisma.staff.findMany({
+      where: { legacyId: { in: numeros } },
+      select: { legacyId: true, name: true },
+    });
+    return new Map(filas.flatMap((s) => (s.legacyId == null ? [] : [[String(s.legacyId), s.name.trim()] as [string, string]])));
+  }
+
+  /**
+   * Cómo se escribe un `assignedBy` en pantalla.
+   *
+   * 17 de los 70 ids que aparecen en los eventos (6.398 filas) no cruzan con
+   * ninguna ficha: son cuentas que el propio legacy ya había borrado cuando se
+   * migró, así que no hay nombre que poner y no lo va a haber. Se etiquetan como
+   * "Funcionario #105" y no con el número pelado, que en la columna "Asignó" se
+   * lee como un dato corrupto en vez de como lo que es: alguien que ya no está.
+   */
+  private static etiquetaAsignador(id: string, nombres: Map<string, string>): string {
+    return nombres.get(id) ?? (/^\d+$/.test(id) ? `Funcionario #${id}` : id);
+  }
+
+  async events(params: {
+    search?: string; from?: string; to?: string; priority?: string; assignedBy?: string;
+    page?: string; pageSize?: string; sortBy?: string; sortDir?: string;
+  }) {
+    const { page, pageSize, skip, take } = paginacion(params, { porDefecto: 50, maxPageSize: 200 });
+    const where = OmniService.filtroEventos(params);
     const [rows, total] = await Promise.all([
-      this.prisma.calendarEvent.findMany({ where, orderBy: orden(params, OmniService.ORDEN_EVENTOS, { start: 'desc' }), skip: (page - 1) * pageSize, take: pageSize }),
+      this.prisma.calendarEvent.findMany({
+        where,
+        orderBy: orden(params, OmniService.ORDEN_EVENTOS, [{ start: { sort: 'desc', nulls: 'last' } }, { id: 'asc' }]),
+        skip, take,
+      }),
       this.prisma.calendarEvent.count({ where }),
     ]);
+    const nombres = await this.nombresDeAsignadores(rows.map((e) => e.assignedBy));
     return {
-      items: rows.map((e) => ({ id: e.id, orderNo: e.orderNo, title: e.title, description: e.description, color: e.color, start: e.start, end: e.end, allDay: e.allDay, assignedBy: e.assignedBy, priority: e.priority })),
+      items: rows.map((e) => ({
+        id: e.id, orderNo: e.orderNo, title: e.title, description: e.description, color: e.color,
+        start: e.start, end: e.end, allDay: e.allDay, priority: e.priority,
+        assignedBy: e.assignedBy ? OmniService.etiquetaAsignador(e.assignedBy, nombres) : null,
+      })),
       total, page, pageSize, pages: Math.ceil(total / pageSize),
     };
   }
-  async eventsStats() {
-    const [total, latest] = await Promise.all([
-      this.prisma.calendarEvent.count(),
-      this.prisma.calendarEvent.findFirst({ orderBy: { start: 'desc' }, select: { start: true } }),
+
+  /**
+   * Las cifras de arriba, SOBRE LOS MISMOS FILTROS que la tabla.
+   *
+   * Antes no recibían nada: la tarjeta decía "131.913 eventos" mientras la tabla
+   * mostraba doce. Una cifra que contradice lo que hay debajo es exactamente lo que
+   * hace dudar de si el filtro está aplicándose.
+   */
+  async eventsStats(params: { search?: string; from?: string; to?: string; priority?: string; assignedBy?: string } = {}) {
+    const where = OmniService.filtroEventos(params);
+    const conFecha: Prisma.CalendarEventWhereInput = { AND: [where, { start: { not: null } }] };
+    const [total, conOrden, primero, ultimo] = await Promise.all([
+      this.prisma.calendarEvent.count({ where }),
+      this.prisma.calendarEvent.count({ where: { AND: [where, { orderNo: { not: null } }] } }),
+      this.prisma.calendarEvent.findFirst({ where: conFecha, orderBy: { start: 'asc' }, select: { start: true } }),
+      this.prisma.calendarEvent.findFirst({ where: conFecha, orderBy: { start: 'desc' }, select: { start: true } }),
     ]);
-    return { total, ultimo: latest?.start ?? null };
+    return { total, conOrden, primero: primero?.start ?? null, ultimo: ultimo?.start ?? null };
+  }
+
+  /**
+   * Qué se puede elegir en los desplegables del filtro.
+   *
+   * La lista de "Asignó" sale de los eventos QUE HAY (70 personas), no del censo de
+   * funcionarios: un desplegable con los 199 empleados, 129 de ellos sin un solo
+   * evento, obliga a probar opciones que no devuelven nada.
+   */
+  async eventFilters() {
+    const grupos = await this.prisma.calendarEvent.groupBy({ by: ['assignedBy'], _count: { _all: true } });
+    const nombres = await this.nombresDeAsignadores(grupos.map((g) => g.assignedBy));
+    const asignadores = grupos
+      .filter((g) => !!g.assignedBy)
+      .map((g) => ({
+        id: g.assignedBy!,
+        nombre: OmniService.etiquetaAsignador(g.assignedBy!, nombres),
+        // Los que ya no tienen ficha van al final del desplegable: son 17 de 70 y
+        // arriba (ordenan por dígito antes que por letra) tapaban a la gente real.
+        sinFicha: !nombres.has(g.assignedBy!),
+        total: g._count._all,
+      }))
+      .sort((a, b) => Number(a.sinFicha) - Number(b.sinFicha) || a.nombre.localeCompare(b.nombre, 'es'));
+    const sin = grupos.filter((g) => !g.assignedBy).reduce((s, g) => s + g._count._all, 0);
+    return { asignadores, sinAsignar: sin, prioridades: OmniService.PRIORIDADES };
   }
 
   async createEvent(dto: EventDto, user: AuthUser) {

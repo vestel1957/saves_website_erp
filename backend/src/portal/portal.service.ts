@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { UnauthorizedException } from '../core/http/errores';
 import { PrismaService } from '../prisma/prisma.service';
 import { signSubscriberToken } from '../auth/crypto.util';
 import { num } from '../common/money';
@@ -12,7 +12,6 @@ function fullName(s: { firstName: string | null; lastName1: string | null; lastN
   return parts || s.companyName?.trim() || 'Cliente';
 }
 
-@Injectable()
 export class PortalService {
   constructor(private readonly prisma: PrismaService) {}
 

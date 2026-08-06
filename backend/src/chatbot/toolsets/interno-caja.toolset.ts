@@ -1,4 +1,3 @@
-import { Injectable } from '@nestjs/common';
 import type { Toolset, ToolContext, ToolDef } from '@s4gk/wa-agent';
 import { PERMISSION_DENIED } from '@s4gk/wa-agent';
 import { APP_PERMISSIONS as P } from '../../auth/permissions.catalog';
@@ -34,7 +33,6 @@ const hoy = () => new Date().toISOString().slice(0, 10);
  * el recibo a la vista, es de las cosas más caras de deshacer del ERP; el ingreso
  * simple sí, porque es un asiento aislado y anulable.
  */
-@Injectable()
 export class InternoCajaToolset implements Toolset {
   constructor(
     private readonly treasury: TreasuryService,

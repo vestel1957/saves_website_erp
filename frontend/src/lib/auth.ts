@@ -20,7 +20,25 @@ export type AuthUser = {
   name: string;
   roles: string[];
   permissions: string[];
+  /**
+   * Sedes (`Branch.legacyId`) a las que llega el usuario. **Vacío = TODAS**, ojo con
+   * la semántica: es la misma de `User.sedesAccede` en el backend. Lo resuelve la
+   * sesión (`resolveUser`) uniendo las sedes marcadas con la sede de su caja.
+   */
+  sedes?: number[];
 };
+
+/**
+ * ¿A este usuario le toca ver una sola parcela del sistema?
+ *
+ * Es la pregunta que hacen las pantallas para NO pintar el filtro de sedes: quien
+ * está acotado (la cajera, típicamente) no elige sede — el backend le devuelve sólo
+ * la suya, así que un desplegable con "Todas las sedes" sería una mentira y un
+ * botón que no hace nada.
+ */
+export function isSedeScoped(user: Pick<AuthUser, "sedes"> | null | undefined): boolean {
+  return !!user?.sedes?.length;
+}
 
 /** Permission keys — must mirror backend `permissions.catalog.ts`. */
 export const PERM = {
@@ -106,6 +124,33 @@ export function can(
 /** Global superadmin only (system.admin). Inventory admin is NOT global. */
 export function isSuperadmin(user: Pick<AuthUser, "permissions"> | null | undefined): boolean {
   return !!user && (user.permissions ?? []).includes(PERM.SYSTEM_ADMIN);
+}
+
+/**
+ * Quién es "un técnico en la calle" a efectos de ubicación: a quien se le exige
+ * el permiso del navegador (`GeoGate`) y de quien se reporta la posición
+ * mientras tiene la app abierta (`LatidoUbicacion`).
+ *
+ * Vive aquí, y no dentro de cada componente, porque son dos reglas que TIENEN
+ * que decir lo mismo: exigirle la ubicación a alguien de quien luego no se
+ * reporta nada —o al revés— es el tipo de desajuste que nadie nota hasta que
+ * alguien pregunta por qué no sale en el mapa.
+ *
+ * Los mandos quedan fuera a propósito (mismos exentos que la geo-cerca del
+ * cierre de órdenes): en un escritorio sin GPS el punto sería basura, y no es
+ * información que el sistema tenga por qué recoger.
+ */
+export function esTecnicoDeCampo(
+  user: Pick<AuthUser, "permissions"> | null | undefined,
+): boolean {
+  if (!user) return false;
+  const granted = user.permissions ?? [];
+  return (
+    granted.includes(PERM.AREA_TECNICOS) &&
+    !granted.includes(PERM.AREA_GERENCIA) &&
+    !granted.includes(PERM.AREA_ADMINISTRACION) &&
+    !granted.includes(PERM.SYSTEM_ADMIN)
+  );
 }
 
 // ---- token cookie (client side) -------------------------------------------

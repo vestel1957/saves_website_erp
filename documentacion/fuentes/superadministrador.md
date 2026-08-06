@@ -105,7 +105,7 @@ Hay dos tipos de roles:
 
 ## Permisos en la ficha del empleado
 
-**Dónde:** Menú lateral → ADMINISTRACIÓN → Empleados → abra una persona (ruta `/empleados/[id]`), pestaña **Permisos y accesos**.
+**Dónde:** Menú lateral → CONFIGURACIÓN → Empleados → abra una persona (ruta `/configuracion/empleados/[id]`), pestaña **Permisos y accesos**.
 
 **Para qué sirve:** ver, y en su caso ajustar con detalle, qué puede hacer una persona dentro del sistema. Es la vista "por empleado" (mientras que Usuarios y roles es la vista "por cuenta").
 
@@ -182,7 +182,7 @@ Cada rol del sistema tiene su propio manual con el detalle de las pantallas que 
 |---|---|---|
 | Contador | Libros, estados financieros y mapeo de cuentas | Las cinco de Contabilidad |
 | Jefe de bodega | Material, equipos y despacho de inventario | Material, Equipos (incluida **Transferencias**) y Compras |
-| Recursos Humanos | Empleados, cuadrillas y trámite de accesos | Empleados y Móviles / cuadrillas, más el área Administración |
+| Recursos Humanos | Empleados y trámite de accesos | Empleados, más el área Administración |
 | Auditoría / Consulta | Revisión de cifras y rastros, solo lectura | Dashboard, Reportes, Contabilidad, Material y **Bitácora** |
 
 > **Esto es lo que más consultas le va a generar.** Los cuatro roles funcionales traen sus permisos

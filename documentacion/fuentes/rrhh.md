@@ -1,11 +1,9 @@
 # Manual de Recursos Humanos
 
 Este manual está dirigido a la persona encargada del **personal** de Vestel: quien mantiene al día
-la información de los empleados, organiza las cuadrillas de técnicos y coordina con Sistemas el
-acceso de cada quien al sistema.
+la información de los empleados y coordina con Sistemas el acceso de cada quien al sistema.
 
-Su rol es **Director de Recursos Humanos**. Trabaja sobre dos pantallas: **Empleados** y **Móviles /
-cuadrillas**.
+Su rol es **Director de Recursos Humanos**. Trabaja sobre una pantalla: **Empleados**.
 
 ## Qué puede y qué no puede hacer
 
@@ -16,7 +14,7 @@ cuadrillas**.
 | Consultar el resumen de actividad de un empleado | Cambiar permisos de una persona |
 | Ver si un empleado tiene cuenta y qué puede hacer | Habilitar o inhabilitar el acceso al sistema |
 | Inhabilitar o reactivar al empleado en la ficha | Restablecer contraseñas |
-| Crear y organizar móviles (cuadrillas) | Ver facturación, caja, contabilidad ni red |
+| — | Ver facturación, caja, contabilidad ni red |
 
 > **Punto clave:** RRHH prepara la ficha; el **Superadministrador** entrega el acceso. Esta
 > separación es deliberada: quien administra al personal no debería poder darse permisos a sí mismo
@@ -29,7 +27,7 @@ Para trabajar necesita que **Sistemas** le habilite dos cosas en su usuario:
 | Qué pedir | Para qué |
 |---|---|
 | Acceso al área **Administración** | Es el área a la que pertenece la pantalla de Empleados |
-| Pantallas **Empleados** y **Móviles / cuadrillas** | Las dos pantallas de su trabajo diario |
+| Pantalla **Empleados** | La pantalla de su trabajo diario |
 
 > Si al entrar el menú se ve vacío o no aparece **PERSONAS / PROYECTOS**, es esto lo que falta. No
 > es su contraseña.
@@ -38,7 +36,7 @@ Para trabajar necesita que **Sistemas** le habilite dos cosas en su usuario:
 
 ## Empleados
 
-**Dónde:** menú **PERSONAS / PROYECTOS → Empleados** (`/empleados`).
+**Dónde:** menú **CONFIGURACIÓN → Empleados** (`/configuracion/empleados`).
 
 **Para qué sirve:** es el listado del personal de la empresa y la puerta a la ficha de cada
 empleado, con sus datos personales, de salud y contacto y —si tiene cuenta— su acceso al sistema.
@@ -129,34 +127,6 @@ que se cargaron. Cada archivo se abre desde la misma lista.
 
 ---
 
-## Móviles / cuadrillas
-
-**Dónde:** menú **PERSONAS / PROYECTOS → Móviles / cuadrillas** (`/empleados/moviles`).
-
-**Para qué sirve:** agrupa técnicos en "móviles" (cuadrillas o equipos de trabajo) para poder
-asignarles órdenes y agenda **como grupo** en lugar de uno por uno.
-
-**Qué va a ver:** una tarjeta por cada móvil, con su nombre, estado (Activa/Inactiva) y los
-técnicos que la integran. Cada tarjeta tiene botones de editar y eliminar, y un botón para
-gestionar sus técnicos.
-
-**Paso a paso (crear una móvil):**
-
-1. Pulse **Nueva móvil**.
-2. Escriba el **Nombre** (por ejemplo "Móvil 1 · Yopal") y elija el **Estado**.
-3. Pulse **Guardar**.
-
-**Paso a paso (agregar o quitar técnicos):**
-
-1. En la tarjeta de la móvil, pulse **Gestionar técnicos**.
-2. Para agregar, elija un técnico de la lista y pulse **Agregar**.
-3. Para quitar uno, pulse la equis junto a su nombre.
-
-> Cuando un técnico se retira o cambia de sede, quítelo de su móvil. Si no, seguirá apareciendo
-> como disponible para asignarle órdenes de trabajo.
-
----
-
 ## Nómina
 
 El módulo de **nómina** (contratos, periodos, novedades, liquidación y desprendibles) **todavía no
@@ -173,17 +143,14 @@ sirve de insumo es la ficha del empleado: datos personales, documento, EPS, pens
 **Cada vez que entra alguien:**
 
 1. Cree la ficha con nombre, documento, **email**, teléfono, cargo/rol, área y datos de salud.
-2. Si es técnico, agréguelo a su **móvil**.
-3. Pida al Superadministrador la cuenta de acceso y entregue la contraseña temporal.
+2. Pida al Superadministrador la cuenta de acceso y entregue la contraseña temporal.
 
 **Cada vez que sale alguien:**
 
 1. Marque al empleado como **Inhabilitado**.
 2. Pida al Superadministrador que **inhabilite la cuenta**.
-3. Quítelo de su móvil.
 
 **Una vez al mes:**
 
 1. Filtre la lista de empleados por estado **Activo** y compárela con la nómina real.
 2. Revise que no queden como activos empleados que ya se fueron.
-3. Verifique que los técnicos activos estén todos asignados a una móvil.

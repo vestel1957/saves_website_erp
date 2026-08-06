@@ -17,6 +17,7 @@ type Tecnico = {
   evidenciaPct: number | null; firmaPct: number | null;
   geoOk: number; geoFuera: number; muestraSuficiente: boolean;
   vencidas: number; antiguedadDias: number | null;
+  puntos: number; puntajePromedio: number | null; sinPuntaje: number;
 };
 
 /** El nivel compartido, pintado como clases de texto para la tabla. */
@@ -100,6 +101,15 @@ export function RendimientoTecnicos({ data, from, to }: { data: any; from: strin
         ejecuta el sistema y no miden a nadie.
         {" "}La cifra que manda es la <strong>re-visita</strong>: el cliente volvió a quejarse dentro de{" "}
         {eq.ventanaRevisitaDias} días del trabajo. Menos re-visita = trabajo que quedó bien hecho.
+        {" "}Los <strong>puntos</strong> miden otra cosa: cuánto trabajo cargó cada uno. Cada orden vale de 1 a 5
+        según su tipo (una instalación no es una revisión) y se suman al cerrarla — dos técnicos con las mismas
+        órdenes cerradas pueden tener puntajes muy distintos.
+        {eq.sinPuntaje > 0 && (
+          <> {" "}<span className="text-warning-text">
+            {nfmt(eq.sinPuntaje)} órdenes cerradas del periodo no traen puntaje: se cerraron antes de que
+            existiera y no suman.
+          </span></>
+        )}
         {data.sinAtribuir > 0 && (
           <> {" "}<span className="text-warning-text">
             {nfmt(data.sinAtribuir)} órdenes de campo del periodo no tienen técnico asignado y no entran en ninguna fila.
@@ -108,9 +118,11 @@ export function RendimientoTecnicos({ data, from, to }: { data: any; from: strin
       </div>
 
       <Section>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
           <TrendStat label="Órdenes de campo cerradas" value={nfmt(eq.cerradas)} icon="clipboard-check"
             hint={`${nfmt(eq.tecnicos)} técnicos · ${nfmt(eq.conMuestra)} con muestra suficiente`} />
+          <TrendStat label="Puntos del equipo" value={nfmt(eq.puntos ?? 0)} icon="award"
+            hint={eq.medianaPuntos != null ? `Mediana por técnico: ${nfmt(eq.medianaPuntos)} puntos` : "Aún sin referencia"} />
           <TrendStat label="Re-visita del equipo" value={pctTxt(eq.revisitaPct)} icon="repeat"
             tone={eq.revisitaPct != null && eq.revisitaPct > 15 ? "error" : eq.revisitaPct != null && eq.revisitaPct > 10 ? "warning" : "success"}
             hint={`${nfmt(eq.revisitas)} clientes volvieron a llamar`} />
@@ -124,6 +136,18 @@ export function RendimientoTecnicos({ data, from, to }: { data: any; from: strin
             hint={eq.vencidas ? `${nfmt(eq.vencidas)} llevan más de ${eq.diasVencimiento} días abiertas` : "Ninguna pasada de plazo"} />
         </div>
       </Section>
+
+      {/* Carga de trabajo. Va antes que la re-visita porque responde la pregunta
+          que se hace primero ("¿quién trabajó más?") y porque leer la calidad de
+          alguien sin saber cuánto cargó es la forma más rápida de ser injusto. */}
+      <ChartCard title="Puntos por técnico" subtitle="Suma de lo que valieron sus órdenes cerradas · más alto es más trabajo" icon="award">
+        <HBarList monochrome accent="var(--color-brand)"
+          valueFormat={(v: number) => nfmt(v)}
+          rows={[...tecnicos].sort((a, b) => b.puntos - a.puntos).filter((t) => t.puntos > 0).map((t) => ({
+            label: t.nombre, value: t.puntos,
+            hint: `${nfmt(t.cerradas)} órdenes${t.puntajePromedio != null ? ` · ${t.puntajePromedio} puntos por orden` : ""}`,
+          }))} />
+      </ChartCard>
 
       <ChartCard title="Re-visita por técnico" subtitle={`Mediana del equipo: ${pctTxt(eq.medianaRevisita)} · más bajo es mejor`} icon="repeat">
         <HBarList monochrome accent="var(--color-warning)"
@@ -151,6 +175,22 @@ export function RendimientoTecnicos({ data, from, to }: { data: any; from: strin
               ),
             },
             { key: "cerr", header: "Cerradas", align: "right", render: (r: Tecnico) => nfmt(r.cerradas) },
+            {
+              // Los puntos van pegados a "Cerradas" a propósito: es la misma
+              // pregunta ("cuánto hizo") mejor contestada, y verlas juntas es lo
+              // que enseña que 40 cortes no son 40 instalaciones.
+              key: "pts", header: "Puntos", align: "right", render: (r: Tecnico) => (
+                <span className="font-semibold text-text-primary"
+                  title={r.puntajePromedio != null
+                    ? `${r.puntajePromedio} puntos por orden en promedio${r.sinPuntaje ? ` · ${nfmt(r.sinPuntaje)} cerradas sin puntaje` : ""}`
+                    : "Ninguna de sus órdenes cerradas trae puntaje"}>
+                  {nfmt(r.puntos)}
+                  {r.puntajePromedio != null && (
+                    <span className="ml-1 text-[11px] font-normal text-text-tertiary">({r.puntajePromedio}/orden)</span>
+                  )}
+                </span>
+              ),
+            },
             {
               key: "abie", header: "Sin cerrar", align: "right", render: (r: Tecnico) => {
                 if (!r.abiertas) return <span className="text-text-tertiary">—</span>;

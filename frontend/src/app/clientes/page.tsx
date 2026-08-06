@@ -26,7 +26,7 @@ import { LoadError } from "@/components/ui/LoadError";
 export default function ClientesPage() {
   const router = useRouter();
   const [createOpen, setCreateOpen] = useState(false);
-  const { loading: authLoading, authFetch } = useAuth();
+  const { loading: authLoading, authFetch, sedeScoped } = useAuth();
   const [branches, setBranches] = useState<Branch[]>([]);
 
   const [search, setSearch] = useState("");
@@ -105,10 +105,14 @@ export default function ClientesPage() {
           <option value="">Todos los estados</option>
           {Object.entries(SUB_STATUS_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </Select>
-        <Select value={branchId} onChange={(e) => setBranchId(e.target.value)} className="w-auto">
-          <option value="">Todas las sedes</option>
-          {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-        </Select>
+        {/* Sin filtro de sede para quien está acotado a la suya: el listado ya viene
+            sólo con sus clientes, así que elegir sede no tendría entre qué elegir. */}
+        {!sedeScoped && (
+          <Select value={branchId} onChange={(e) => setBranchId(e.target.value)} className="w-auto">
+            <option value="">Todas las sedes</option>
+            {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </Select>
+        )}
         <SubscriberFilters
           servicio={servicio} tecnologia={tecnologia} cuenta={cuenta}
           onServicio={setServicio} onTecnologia={setTecnologia} onCuenta={setCuenta}

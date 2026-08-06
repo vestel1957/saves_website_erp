@@ -40,7 +40,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 export function GenerarFacturasModal({
   open, onClose, onDone,
 }: { open: boolean; onClose: () => void; onDone: () => void }) {
-  const { authFetch } = useAuth();
+  const { authFetch, sedeScoped } = useAuth();
   const [branches, setBranches] = useState<{ id: string; name: string }[]>([]);
   const [branchId, setBranchId] = useState("");
   const [invoiceDate, setInvoiceDate] = useState(today);
@@ -100,12 +100,15 @@ export function GenerarFacturasModal({
         </p>
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <Field label="Sede">
-            <Select value={branchId} onChange={(e) => setBranchId(e.target.value)}>
-              <option value="">Todas las sedes</option>
-              {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-            </Select>
-          </Field>
+          {/* Acotado a una sede: no elige — la corrida sale con sus abonados y ya. */}
+          {!sedeScoped && (
+            <Field label="Sede">
+              <Select value={branchId} onChange={(e) => setBranchId(e.target.value)}>
+                <option value="">Todas las sedes</option>
+                {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </Select>
+            </Field>
+          )}
           <Field label="Fecha de factura">
             <Input type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} />
           </Field>

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Icon } from "@/components/Icon";
 import { Button } from "@/components/ui/Button";
 import { useAuth } from "@/context/AuthProvider";
-import { PERM, can } from "@/lib/auth";
+import { esTecnicoDeCampo } from "@/lib/auth";
 import { pedirUbicacion } from "@/lib/geo";
 
 /**
@@ -76,12 +76,9 @@ export function GeoGate({ children }: { children: React.ReactNode }) {
   const [comprobando, setComprobando] = useState(false);
 
   // Aplica solo a técnicos. Gerencia, administración y el superusuario quedan
-  // fuera: son los mismos exentos que en la geo-cerca del cierre.
-  const esTecnico =
-    !!user &&
-    can(user, PERM.AREA_TECNICOS) &&
-    !can(user, [PERM.AREA_GERENCIA, PERM.AREA_ADMINISTRACION]) &&
-    !(user.permissions ?? []).includes(PERM.SYSTEM_ADMIN);
+  // fuera: son los mismos exentos que en la geo-cerca del cierre. El criterio
+  // vive en `lib/auth` porque el latido de ubicación tiene que usar el mismo.
+  const esTecnico = esTecnicoDeCampo(user);
 
   const comprobar = useCallback(async () => {
     if (typeof window === "undefined") return;

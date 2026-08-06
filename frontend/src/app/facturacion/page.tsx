@@ -30,7 +30,7 @@ const GenerarFacturasModal = dynamic(() => import("@/components/billing/GenerarF
 const isOverdue = (r: InvoiceRow) => r.balance > 0 && !!r.dueDate && new Date(r.dueDate).getTime() < Date.now();
 
 export default function FacturacionPage() {
-  const { loading: authLoading, authFetch, can, isSuperadmin } = useAuth();
+  const { loading: authLoading, authFetch, can, isSuperadmin, sedeScoped } = useAuth();
   const canEmit = isSuperadmin || can(PERM.AREA_CONTABILIDAD);
   const [eMode, setEMode] = useState<{ live: boolean } | null>(null);
   const [emittingId, setEmittingId] = useState<string | null>(null);
@@ -346,12 +346,15 @@ export default function FacturacionPage() {
                 {Object.entries(RON_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
               </Select>
             </Field>
-            <Field label="Sede">
-              <Select value={branchId} onChange={(e) => setBranchId(e.target.value)}>
-                <option value="">Todas</option>
-                {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-              </Select>
-            </Field>
+            {/* Sin selector de sede para quien está acotado a la suya (ver isSedeScoped). */}
+            {!sedeScoped && (
+              <Field label="Sede">
+                <Select value={branchId} onChange={(e) => setBranchId(e.target.value)}>
+                  <option value="">Todas</option>
+                  {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                </Select>
+              </Field>
+            )}
             <Field label="Desde"><Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></Field>
             <Field label="Hasta"><Input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></Field>
           </div>
@@ -423,6 +426,13 @@ export default function FacturacionPage() {
                     : <button type="button" onClick={() => setConfirmar(r)} disabled={emittingId === r.id} title={eMode?.live ? "Emitir e-factura (DIAN)" : "Emitir e-factura (DRY-RUN)"}
                         className="tap rounded-lg border border-border-default p-1.5 text-text-secondary transition-colors hover:bg-surface-2 disabled:opacity-40">
                         <Icon name={emittingId === r.id ? "loader" : "file-signature"} size={14} className={emittingId === r.id ? "animate-spin" : ""} /></button>)}
+                  {/* Editar abre el detalle con el editor ya desplegado: la edición
+                      necesita los conceptos de la factura, que la lista no trae. */}
+                  {canEmit && r.status !== "CANCELED" && (
+                    <Link href={`/facturacion/${r.id}?editar=1`} title="Editar factura"
+                      className="tap inline-flex rounded-lg border border-border-default p-1.5 text-text-secondary transition-colors hover:bg-surface-2">
+                      <Icon name="pencil" size={14} /></Link>
+                  )}
                   <Link href={`/facturacion/${r.id}`} title="Ver detalle"
                     className="inline-flex items-center rounded-lg border border-border-default px-2.5 py-1.5 text-[12px] font-semibold text-text-secondary transition-colors hover:bg-surface-2">Ver</Link>
                 </div>

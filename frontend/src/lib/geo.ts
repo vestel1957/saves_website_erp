@@ -37,7 +37,17 @@ export function geoDisponible(): boolean {
  * más lento y gasta más batería, pero un punto de ±2 km no sirve para decir
  * dónde vive un abonado, que es justo para lo que se usa esto.
  */
-export function pedirUbicacion(timeoutMs = 15000): Promise<ResultadoGeo> {
+export function pedirUbicacion(
+  timeoutMs = 15000,
+  /**
+   * Antigüedad tolerable del punto, en ms. El valor por defecto (0) obliga a
+   * medir de nuevo, que es lo correcto cuando el punto va a quedar guardado como
+   * la casa de un abonado o como prueba de que el técnico estaba en la puerta.
+   * El latido de ubicación sí acepta un punto de hace unos segundos: reutilizar
+   * la última medida del sistema le ahorra al teléfono encender el GPS.
+   */
+  maximumAge = 0,
+): Promise<ResultadoGeo> {
   return new Promise((resolve) => {
     if (typeof window === "undefined" || !navigator.geolocation) {
       return resolve({ ok: false, motivo: "sin-soporte" });
@@ -62,7 +72,7 @@ export function pedirUbicacion(timeoutMs = 15000): Promise<ResultadoGeo> {
                 ? "timeout"
                 : "no-disponible",
         }),
-      { enableHighAccuracy: true, timeout: timeoutMs, maximumAge: 0 },
+      { enableHighAccuracy: true, timeout: timeoutMs, maximumAge },
     );
   });
 }

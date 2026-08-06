@@ -235,6 +235,8 @@ export function buildExportDoc(rep: string, label: string, data: any, from: stri
         columns: [
           { label: "Técnico" },
           { label: "Cerradas", align: "right" },
+          { label: "Puntos", align: "right" },
+          { label: "Puntaje medio", align: "right" },
           { label: "Sin cerrar", align: "right" },
           { label: "Antigüedad (días)", align: "right" },
           { label: "Re-visitas", align: "right" },
@@ -246,7 +248,8 @@ export function buildExportDoc(rep: string, label: string, data: any, from: stri
         rows: (data.tecnicos ?? []).map((r: any) => ({
           cells: [
             `${r.nombre}${r.muestraSuficiente ? "" : " (muestra baja)"}`,
-            r.cerradas, r.abiertas, r.antiguedadDias ?? "—", r.revisitas,
+            r.cerradas, r.puntos ?? 0, r.puntajePromedio ?? "—",
+            r.abiertas, r.antiguedadDias ?? "—", r.revisitas,
             r.revisitaPct ?? "—", r.firmaPct ?? "—", r.evidenciaPct ?? "—", r.cicloHoras ?? "—",
           ],
         })),
@@ -257,6 +260,8 @@ export function buildExportDoc(rep: string, label: string, data: any, from: stri
           columns: [{ label: "Indicador" }, { label: "Valor", align: "right" }],
           rows: [
             { cells: ["Órdenes de campo cerradas", eq.cerradas] },
+            { cells: ["Puntos repartidos", eq.puntos ?? 0] },
+            { cells: ["Mediana de puntos por técnico", eq.medianaPuntos ?? "—"] },
             { cells: ["Clientes que volvieron a llamar", eq.revisitas] },
             { cells: ["Re-visita del equipo (%)", eq.revisitaPct ?? "—"], bold: true },
             { cells: ["Mediana por técnico (%)", eq.medianaRevisita ?? "—"] },

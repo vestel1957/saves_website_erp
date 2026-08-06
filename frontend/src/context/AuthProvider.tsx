@@ -17,6 +17,7 @@ import {
   clearTokenCookie,
   fetchMe,
   getTokenFromCookie,
+  isSedeScoped,
   isSuperadmin,
   setTokenCookie,
   type AuthUser,
@@ -26,6 +27,11 @@ type AuthContextValue = {
   user: AuthUser | null;
   loading: boolean;
   isSuperadmin: boolean;
+  /**
+   * El usuario está acotado a unas sedes concretas (la cajera a la suya). Las
+   * pantallas lo usan para NO pintar el filtro de sedes: no tiene entre qué elegir.
+   */
+  sedeScoped: boolean;
   /** Returns true if the user holds (any of) the required permission(s). */
   can: (required?: string | string[]) => boolean;
   login: (email: string, password: string) => Promise<AuthUser>;
@@ -38,7 +44,7 @@ type AuthContextValue = {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 // ── Caché en memoria para catálogos estables ──────────────────────────────
-// Sedes, bodegas, planes, geografía, roles, pantallas… cambian rarísima vez
+// Sedes, bodegas, planes, roles, pantallas… cambian rarísima vez
 // pero se re-piden en cada montaje de página (authFetch fuerza no-store). Se
 // cachean por sesión con TTL corto; cualquier mutación (POST/PUT/PATCH/DELETE)
 // vacía la caché para no servir datos viejos tras una edición.
@@ -47,7 +53,6 @@ const CATALOG_PATHS = [
   "/inventory/warehouses",
   "/network/warehouses",
   "/config/branches",
-  "/config/geography",
   "/plans",
   "/auth/roles",
   "/auth/screens",
@@ -164,6 +169,7 @@ export function AuthProvider({
       user,
       loading,
       isSuperadmin: isSuperadmin(user),
+      sedeScoped: isSedeScoped(user),
       can: (required) => can(user, required),
       login,
       logout,

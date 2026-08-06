@@ -110,6 +110,15 @@ const ROUTE_AREA: [RegExp, string[]][] = [
   // La bandeja de WhatsApp la atiende quien atiende clientes; configurar el canal
   // sigue siendo de sistemas y vive bajo /configuracion.
   [/^\/whatsapp(\/|$)/, ["administracion", "caja", "sistemas"]],
+  // El puntaje de las órdenes lo fija gerencia (es con qué se mide al técnico),
+  // aunque la pantalla viva con el resto de catálogos. Regla específica ANTES de
+  // la general de /configuracion, que sigue siendo sólo de sistemas.
+  [/^\/configuracion\/puntajes(\/|$)/, ["sistemas", "gerencia"]],
+  // Empleados se mudó a CONFIGURACIÓN (2026-08-05) con ruta y todo. Conserva
+  // "administracion" además de "sistemas": quien lleva la gente (fichas, cargos,
+  // documentos) sigue siendo administración — mudar la pantalla de sección no es
+  // quitarle el acceso a quien la usa. Regla específica ANTES de la general.
+  [/^\/configuracion\/empleados(\/|$)/, ["sistemas", "administracion"]],
   [/^\/configuracion(\/|$)/, ["sistemas"]],
   [/^\/clientes(\/|$)/, ["administracion", "caja"]],
   [/^\/playhub(\/|$)/, ["administracion"]],
@@ -126,7 +135,11 @@ const ROUTE_AREA: [RegExp, string[]][] = [
   [/^\/ordenes(\/|$)/, ["administracion"]],
   [/^\/proveedores(\/|$)/, ["administracion"]],
   [/^\/devoluciones(\/|$)/, ["administracion"]],
-  [/^\/empleados(\/|$)/, ["administracion"]],
+  // El archivo de documentos bajó a PERSONAS / PROYECTOS (2026-08-05): dejó de ser
+  // /configuracion/documentos y por eso ya no hereda el gate de sistemas. Se le
+  // conserva el área además de dársela a administración, dueña de la sección.
+  // OJO: no confundir con /documentacion (los manuales), que no lleva gate.
+  [/^\/documentos(\/|$)/, ["administracion", "sistemas"]],
   [/^\/proyectos(\/|$)/, ["administracion"]],
   [/^\/agenda(\/|$)/, ["administracion", "caja"]],
 ];

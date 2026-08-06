@@ -111,6 +111,7 @@ const contabilidad: NavItem[] = [
   { icon: "list-tree", label: "Plan de cuentas", href: "/contabilidad/plan-de-cuentas" },
   { icon: "book-open", label: "Libro diario y mayor", href: "/contabilidad/libros" },
   { icon: "bar-chart-3", label: "Balance y estados", href: "/contabilidad/informes" },
+  { icon: "calendar", label: "Cierre de mes", href: "/contabilidad/cierres" },
   { icon: "settings", label: "Mapeo de cuentas", href: "/contabilidad/mapeo-cuentas" },
 ];
 
@@ -178,16 +179,19 @@ const inventario: NavItem[] = [
 const crm: NavItem[] = [
   { icon: "users", label: "Administrar clientes", href: "/clientes" },
   { icon: "users-round", label: "Grupos de clientes", href: "/clientes/grupos" },
-  { icon: "hand-coins", label: "Cobranza / Acuerdos", href: "/cobranza" },
   { icon: "headphones", label: "Soporte técnico", href: "/soporte" },
   { icon: "calendar-clock", label: "Agendamiento", href: "/soporte/agenda" },
   { icon: "map-pin", label: "Geo-cerca de cierres", href: "/soporte/geocerca" },
 ];
 
-// PERSONAS / PROYECTOS — equipo interno, proyectos y tareas.
+// PERSONAS / PROYECTOS — proyectos, tareas y el archivo de documentos.
+// EMPLEADOS se fue a CONFIGURACIÓN (2026-08-05) y DOCUMENTOS llegó desde allí. No
+// se renombró la etiqueta y ya: las rutas se movieron con ellas
+// (/configuracion/empleados y /documentos), porque dejar el menú diciendo una cosa
+// y la URL otra descuadra el gate por área del middleware y la llave de pantalla
+// (que se deriva del href). Ver los redirects en next.config.mjs.
 const personas: NavItem[] = [
-  { icon: "contact", label: "Empleados", href: "/empleados" },
-  { icon: "truck", label: "Móviles / cuadrillas", href: "/empleados/moviles" },
+  { icon: "folder", label: "Documentos", href: "/documentos" },
   { icon: "layers", label: "Proyectos", href: "/proyectos" },
   { icon: "list-checks", label: "Tareas / Pendientes", href: "/tareas" },
   // /agenda es el calendario de eventos (omni/events), no un listado de tareas:
@@ -244,9 +248,24 @@ const configuracion: NavItem[] = [
   { icon: "gauge", label: "Planes de servicio", href: "/configuracion/planes" },
   { icon: "folder", label: "Categorías de transacción", href: "/configuracion/categorias" },
   { icon: "user-cog", label: "Usuarios y roles", href: "/configuracion/usuarios" },
+  // Empleados llegó desde PERSONAS / PROYECTOS (2026-08-05) con su ruta a cuestas.
+  // Va pegado a Usuarios porque es el mismo oficio visto de dos lados: aquí está la
+  // persona (su ficha, sus documentos, su cargo) y allí su login y su rol.
+  // "Móviles / cuadrillas" se retiró del sistema (2026-08-05, decisión del usuario):
+  // pantalla, módulo `movil` del backend y tablas. Nunca se usó — las dos tablas
+  // llegaron vacías del legacy y las órdenes se asignan a un técnico, no a una cuadrilla.
+  { icon: "contact", label: "Empleados", href: "/configuracion/empleados" },
   // Quién responde por cada frente. Va pegado a Usuarios a propósito: se nombra al
   // encargado justo después de crear la gente, y es lo que dirige sus avisos.
   { icon: "contact", label: "Encargados por cargo", href: "/configuracion/responsables" },
+  // Cuánto vale cada tipo de orden. Va aquí y no en Reportes porque es un
+  // catálogo que se edita, no un informe que se lee — aunque lo que produce se
+  // vea en el tablero de rendimiento.
+  { icon: "award", label: "Puntaje de órdenes", href: "/configuracion/puntajes" },
+  // Las cláusulas de permanencia del contrato. Van en Configuración y no en
+  // Clientes porque son un catálogo que se define una vez para todos; lo que se
+  // elige por cliente (cuál le aplica) está en su ficha.
+  { icon: "file-signature", label: "Cláusulas de permanencia", href: "/configuracion/contratos" },
   {
     icon: "message-circle",
     label: "Canal de WhatsApp",
@@ -265,7 +284,6 @@ const configuracion: NavItem[] = [
   { icon: "history", label: "Bitácora / auditoría", href: "/configuracion/actividad" },
   // Importar y exportar viven en un solo hub (/configuracion/datos).
   { icon: "file-spreadsheet", label: "Importar / Exportar", href: "/configuracion/datos" },
-  { icon: "folder", label: "Documentos", href: "/configuracion/documentos" },
 ];
 
 // DOCUMENTACIÓN — manuales de uso del sistema, uno por rol.

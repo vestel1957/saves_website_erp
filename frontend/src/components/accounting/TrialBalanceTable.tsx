@@ -11,11 +11,21 @@ export function TrialBalanceTable({ data }: { data: TrialBalance }) {
   const t = useTablaOrdenable(data.rows, {
     codigo: (r) => r.code,
     cuenta: (r) => r.name,
+    anterior: (r) => r.saldoAnterior,
     debito: (r) => r.debit,
     credito: (r) => r.credit,
     deudor: (r) => r.saldoDeudor,
     acreedor: (r) => r.saldoAcreedor,
   });
+
+  /**
+   * La columna del arrastre solo aparece cuando el informe mira un periodo: pedido
+   * sobre todo el histórico no hay nada anterior, y una columna entera de guiones
+   * haría dudar de si el arrastre existe o está roto.
+   */
+  const conArrastre = data.rows.some((r) => r.saldoAnterior !== 0);
+  /** El arrastre viene con signo (deudor +, acreedor −); se pinta por su lado. */
+  const arrastre = (n: number) => (n === 0 ? "—" : `${fullCurrency(Math.abs(n))} ${n > 0 ? "db" : "cr"}`);
 
   return (
     <div className="overflow-x-auto rounded-xl border border-border-subtle bg-surface">
@@ -28,6 +38,9 @@ export function TrialBalanceTable({ data }: { data: TrialBalance }) {
               <span className="text-[13px] font-medium text-text-secondary">{r.name}</span>
             </div>
             <div className="mt-2 grid grid-cols-2 gap-2 text-[12px]">
+              {conArrastre && (
+                <div className="col-span-2"><span className="block text-[10px] uppercase text-text-tertiary">Saldo anterior</span><span className="font-mono text-text-secondary">{arrastre(r.saldoAnterior)}</span></div>
+              )}
               <div><span className="block text-[10px] uppercase text-text-tertiary">Mov. Débito</span><span className="font-mono text-text-secondary">{money(r.debit)}</span></div>
               <div><span className="block text-[10px] uppercase text-text-tertiary">Mov. Crédito</span><span className="font-mono text-text-secondary">{money(r.credit)}</span></div>
               <div><span className="block text-[10px] uppercase text-text-tertiary">Saldo Deudor</span><span className="font-mono font-medium text-text-primary">{money(r.saldoDeudor)}</span></div>
@@ -53,6 +66,9 @@ export function TrialBalanceTable({ data }: { data: TrialBalance }) {
           <tr className="border-b border-border-subtle bg-surface-2 text-[10px] uppercase tracking-wider text-text-tertiary">
             <th className="px-4 py-2.5 text-left font-semibold"><BotonOrden t={t} clave="codigo">Código</BotonOrden></th>
             <th className="px-4 py-2.5 text-left font-semibold"><BotonOrden t={t} clave="cuenta">Cuenta</BotonOrden></th>
+            {conArrastre && (
+              <th className="px-4 py-2.5 text-right font-semibold"><BotonOrden t={t} clave="anterior">Saldo anterior</BotonOrden></th>
+            )}
             <th className="px-4 py-2.5 text-right font-semibold"><BotonOrden t={t} clave="debito">Mov. Débito</BotonOrden></th>
             <th className="px-4 py-2.5 text-right font-semibold"><BotonOrden t={t} clave="credito">Mov. Crédito</BotonOrden></th>
             <th className="px-4 py-2.5 text-right font-semibold"><BotonOrden t={t} clave="deudor">Saldo Deudor</BotonOrden></th>
@@ -64,6 +80,9 @@ export function TrialBalanceTable({ data }: { data: TrialBalance }) {
             <tr key={r.accountId} className="border-b border-border-subtle last:border-0 hover:bg-surface-2">
               <td className="px-4 py-2 font-mono text-[12px] text-text-tertiary">{r.code}</td>
               <td className="px-4 py-2 text-[13px] text-text-secondary">{r.name}</td>
+              {conArrastre && (
+                <td className="px-4 py-2 text-right font-mono text-[13px] text-text-secondary">{arrastre(r.saldoAnterior)}</td>
+              )}
               <td className="px-4 py-2 text-right font-mono text-[13px] text-text-secondary">{money(r.debit)}</td>
               <td className="px-4 py-2 text-right font-mono text-[13px] text-text-secondary">{money(r.credit)}</td>
               <td className="px-4 py-2 text-right font-mono text-[13px] font-medium text-text-primary">{money(r.saldoDeudor)}</td>
@@ -74,6 +93,11 @@ export function TrialBalanceTable({ data }: { data: TrialBalance }) {
             <td className="px-4 py-2.5 text-[12px] text-text-tertiary" colSpan={2}>
               TOTALES
             </td>
+            {/* El total del arrastre suma cero cuando la contabilidad cuadra: lo que
+                una cuenta trae a favor, otra lo trae en contra. */}
+            {conArrastre && (
+              <td className="px-4 py-2.5 text-right font-mono text-[13px] text-text-primary">{arrastre(data.totals.saldoAnterior)}</td>
+            )}
             <td className="px-4 py-2.5 text-right font-mono text-[13px] text-text-primary">{fullCurrency(data.totals.debit)}</td>
             <td className="px-4 py-2.5 text-right font-mono text-[13px] text-text-primary">{fullCurrency(data.totals.credit)}</td>
             <td className="px-4 py-2.5 text-right font-mono text-[13px] text-text-primary">{fullCurrency(data.totals.saldoDeudor)}</td>

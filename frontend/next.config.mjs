@@ -17,6 +17,15 @@ const nextConfig = {
       { source: "/red/mikrotik/:id", destination: "/mikrotik/:id", permanent: true },
       { source: "/red/masivo", destination: "/mikrotik/masivo", permanent: true },
       { source: "/red/ips", destination: "/mikrotik/ips", permanent: true },
+      // Empleados pasó a CONFIGURACIÓN y Documentos a PERSONAS / PROYECTOS
+      // (2026-08-05). `:path*` cubre la ficha (/empleados/7) y Móviles.
+      { source: "/empleados", destination: "/configuracion/empleados", permanent: true },
+      // "Móviles / cuadrillas" se retiró del sistema (2026-08-05): su enlace guardado
+      // cae en el listado de empleados, no en un 404. Va ANTES del `:path*`.
+      { source: "/empleados/moviles", destination: "/configuracion/empleados", permanent: true },
+      { source: "/configuracion/empleados/moviles", destination: "/configuracion/empleados", permanent: true },
+      { source: "/empleados/:path*", destination: "/configuracion/empleados/:path*", permanent: true },
+      { source: "/configuracion/documentos", destination: "/documentos", permanent: true },
     ];
   },
 };

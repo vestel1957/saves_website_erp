@@ -34,6 +34,54 @@ export interface FiscalPeriodRow {
   endDate: string;
   status: "OPEN" | "CLOSED" | "LOCKED";
   closedAt: string | null;
+  closedBy?: string | null;
+}
+
+/** Una cuenta en el arrastre: con cuánto entró, qué se movió y con cuánto sale. */
+export interface PeriodBalanceRow {
+  accountId: string;
+  code: string;
+  name: string;
+  type: "ASSET" | "LIABILITY" | "EQUITY" | "INCOME" | "COST" | "EXPENSE";
+  opening: number;
+  debit: number;
+  credit: number;
+  closing: number;
+}
+
+export interface PeriodBalanceTotals {
+  opening: number;
+  debit: number;
+  credit: number;
+  closing: number;
+}
+
+export interface PeriodBalances {
+  periodo: FiscalPeriodRow;
+  /** false = el periodo sigue abierto y estas cifras todavía se mueven. */
+  guardado: boolean;
+  asientoCierre: { id: string; number: number; date: string; description: string } | null;
+  items: PeriodBalanceRow[];
+  totales: PeriodBalanceTotals;
+}
+
+export interface ClosePreview {
+  periodo: { id: string; name: string; startDate: string; endDate: string };
+  anterior: { id: string; name: string; status: string } | null;
+  filas: (PeriodBalanceRow & { saldo: number })[];
+  cierre: {
+    cuentaResultado: { id: string; code: string; name: string } | null;
+    lineas: { accountId: string; code: string; name: string; debit: number; credit: number }[];
+    /** Positivo = utilidad; negativo = pérdida. */
+    utilidad: number;
+  };
+  totales: PeriodBalanceTotals;
+}
+
+export interface ClosedPeriod extends FiscalPeriodRow {
+  asientoCierre: { id: string; number: number } | null;
+  utilidad: number;
+  cuentasArrastradas: number;
 }
 
 type Fetcher = (path: string, init?: RequestInit) => Promise<Response>;
@@ -96,10 +144,14 @@ export function accountingApi(authFetch: Fetcher) {
     getPayables: () => get<OpenItems>("/accounting/payables"),
     getPayablesAging: () => get<AgingBuckets>("/accounting/payables/aging"),
 
-    // periodos
+    // periodos y arrastre de fin de mes
     getPeriods: () => get<FiscalPeriodRow[]>("/accounting/periods"),
     createPeriod: (data: { year: number; month?: number }) => send<FiscalPeriodRow>("/accounting/periods", "POST", data),
-    closePeriod: (id: string) => send<FiscalPeriodRow>(`/accounting/periods/${id}/close`, "POST"),
+    /** El arrastre del periodo (guardado si está cerrado; en vivo si sigue abierto). */
+    getPeriodBalances: (id: string) => get<PeriodBalances>(`/accounting/periods/${id}/balances`),
+    /** Qué pasaría al cerrar, sin escribir nada. */
+    previewClose: (id: string) => get<ClosePreview>(`/accounting/periods/${id}/preview`),
+    closePeriod: (id: string) => send<ClosedPeriod>(`/accounting/periods/${id}/close`, "POST"),
     reopenPeriod: (id: string) => send<FiscalPeriodRow>(`/accounting/periods/${id}/reopen`, "POST"),
 
     // mapeo de cuentas

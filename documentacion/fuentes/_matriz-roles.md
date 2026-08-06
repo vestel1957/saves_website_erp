@@ -38,17 +38,17 @@ persona pueda trabajar.
 
 | Rol | Grupo | Permisos | Pantallas | Usuarios | Estado |
 |---|---|---:|---:|---:|---|
-| **Superadministrador** | Administración | 164 | 67 | 21 | Acceso total |
-| **Gerencia** | Áreas Vestel | 20 | 17 | 1 | Operativo |
-| **Administración** | Áreas Vestel | 17 | 14 | 26 | Operativo |
-| **Contabilidad** | Áreas Vestel | 16 | 12 | 1 | Operativo |
-| **Técnicos** | Áreas Vestel | 20 | 15 | 52 | Operativo |
-| **Sistemas** | Áreas Vestel | 17 | 11 | 1 | Operativo |
-| **Caja y ventas** | Áreas Vestel | 16 | 14 | 21 | Operativo |
-| **Auditoría / Consulta** | Administración | 7 | 0 | 1 | Requiere habilitar pantallas |
-| **Jefe de bodega** | Inventario | 3 | 0 | 1 | Requiere habilitar pantallas |
-| **Director de Recursos Humanos** | Recursos Humanos | 4 | 0 | 1 | Requiere habilitar pantallas |
-| **Contador** | Contabilidad | 17 | 0 | 1 | Requiere habilitar pantallas |
+| **Superadministrador** | Administración | 183 | 85 | 22 | Acceso total |
+| **Gerencia** | Áreas Vestel | 27 | 24 | 2 | Operativo |
+| **Administración** | Áreas Vestel | 36 | 32 | 27 | Operativo |
+| **Contabilidad** | Áreas Vestel | 23 | 19 | 2 | Operativo |
+| **Técnicos** | Áreas Vestel | 11 | 6 | 53 | Operativo |
+| **Sistemas** | Áreas Vestel | 22 | 15 | 2 | Operativo |
+| **Caja y ventas** | Áreas Vestel | 18 | 15 | 22 | Operativo |
+| **Auditoría / Consulta** | Administración | 7 | 0 | 2 | Requiere habilitar pantallas |
+| **Jefe de bodega** | Inventario | 4 | 1 | 2 | Operativo |
+| **Director de Recursos Humanos** | Recursos Humanos | 4 | 0 | 2 | Requiere habilitar pantallas |
+| **Contador** | Contabilidad | 17 | 0 | 2 | Requiere habilitar pantallas |
 
 Los tres estados significan cosas distintas:
 
@@ -73,9 +73,15 @@ Las seis áreas de Vestel y las pantallas que cada una trae por defecto.
 | Pantalla | Ruta | Ger. | Admin. | Cont. | Tec. | Sist. | Caja |
 |---|---|:-:|:-:|:-:|:-:|:-:|:-:|
 | **Gerencia** | |  |  |  |  |  |  |
-| Panel (ejecutivo / de caja) | `/dashboard` | Sí | — | — | — | — | Sí |
+| Panel (ejecutivo / de caja / del técnico) | `/dashboard` | Sí | — | — | Sí | — | Sí |
 | **Reportes** | |  |  |  |  |  |  |
 | Reportes (índice) | `/reportes` | Sí | — | — | — | — | — |
+| Tendencias e histórico | `/reportes/tendencias` | Sí | — | — | — | — | — |
+| Índice de recaudo | `/reportes/indice-recaudo` | Sí | — | — | — | — | — |
+| ARPU por abonado | `/reportes/arpu` | Sí | — | — | — | — | — |
+| Antigüedad y permanencia | `/reportes/permanencia` | Sí | — | — | — | — | — |
+| Capacidad de red (NAPs) | `/reportes/capacidad-red` | Sí | — | — | — | — | — |
+| Reincidencia de cortes | `/reportes/reincidencia` | Sí | — | — | — | — | — |
 | Resumen de facturación | `/reportes/facturacion` | Sí | — | — | — | — | — |
 | Recaudo | `/reportes/recaudo` | Sí | — | — | — | — | — |
 | Ventas por sede | `/reportes/ventas-sede` | Sí | — | — | — | — | — |
@@ -91,66 +97,79 @@ Las seis áreas de Vestel y las pantallas que cada una trae por defecto.
 | Anulaciones (control) | `/reportes/anulaciones` | Sí | — | — | — | — | — |
 | Actividad en el sistema | `/reportes/actividad` | Sí | — | — | — | — | — |
 | **Facturación** | |  |  |  |  |  |  |
-| Administrar facturas | `/facturacion` | — | — | Sí | — | — | Sí |
-| Notas crédito/débito | `/facturacion/notas` | — | — | Sí | — | — | Sí |
+| Administrar facturas | `/facturacion` | — | — | Sí | — | — | — |
+| Notas crédito/débito | `/facturacion/notas` | — | — | Sí | — | — | — |
 | Facturas electrónicas | `/facturacion/electronica` | — | — | Sí | — | — | — |
 | Cotizaciones | `/cotizaciones` | — | — | Sí | — | — | — |
 | **Caja / Cobranza** | |  |  |  |  |  |  |
-| Movimientos de caja | `/tesoreria` | — | — | Sí | — | — | Sí |
-| Apertura de caja | `/tesoreria/apertura` | — | — | Sí | — | — | Sí |
+| Movimientos de caja | `/tesoreria` | — | — | Sí | — | — | — |
 | Cierre de caja | `/tesoreria/cierres` | — | — | Sí | — | — | Sí |
-| Importar pagos (Efecty) | `/tesoreria/importar-pagos` | — | Sí | — | — | — | Sí |
+| Ingresos | `/tesoreria/ingresos` | — | — | Sí | — | — | Sí |
+| Egresos | `/tesoreria/egresos` | — | — | Sí | — | — | Sí |
+| Nueva transacción | `/tesoreria/nueva` | — | — | Sí | — | — | Sí |
+| Pagos fijos programados | `/tesoreria/pagos-fijos` | — | — | Sí | — | — | Sí |
+| Transferencia entre cajas | `/tesoreria/transferencia` | — | — | Sí | — | — | Sí |
+| Anulaciones (control) | `/tesoreria/anulaciones` | — | — | Sí | — | — | — |
+| Cajas y categorías | `/tesoreria/cajas` | — | Sí | Sí | — | — | — |
+| Importar pagos (Efecty) | `/tesoreria/importar-pagos` | — | Sí | — | — | — | — |
 | **Contabilidad** | |  |  |  |  |  |  |
 | Resumen contable | `/contabilidad` | — | — | Sí | — | — | — |
 | Plan de cuentas | `/contabilidad/plan-de-cuentas` | — | — | Sí | — | — | — |
 | Libro diario y mayor | `/contabilidad/libros` | — | — | Sí | — | — | — |
 | Balance y estados financieros | `/contabilidad/informes` | — | — | Sí | — | — | — |
+| Cierre de mes (arrastre de saldos) | `/contabilidad/cierres` | — | Sí | Sí | — | — | — |
 | Mapeo de cuentas | `/contabilidad/mapeo-cuentas` | — | — | Sí | — | — | — |
 | **Clientes** | |  |  |  |  |  |  |
 | Clientes | `/clientes` | — | Sí | — | — | — | Sí |
-| Cobranza / Acuerdos de pago | `/cobranza` | — | Sí | — | — | — | Sí |
 | PlayHub / IPTV | `/playhub` | — | Sí | — | — | — | — |
 | **Soporte** | |  |  |  |  |  |  |
 | Tickets / Órdenes de trabajo | `/soporte` | — | — | — | Sí | — | Sí |
+| Agendamiento de órdenes | `/soporte/agenda` | — | Sí | — | — | — | Sí |
+| Mi agenda (técnico) | `/mi-agenda` | — | — | — | Sí | — | — |
 | **Red / ISP** | |  |  |  |  |  |  |
-| Conexiones | `/red/conexiones` | — | — | — | Sí | — | — |
-| Transferencias | `/red/transferencias` | — | — | — | Sí | — | — |
-| Administrar equipos | `/red/equipos` | — | — | — | Sí | — | — |
-| Ingreso de equipo | `/red/equipos/nuevo` | — | — | — | Sí | — | — |
-| Bodega de equipos | `/red/bodegas` | — | — | — | Sí | — | — |
-| Red / ISP (resumen) | `/red` | — | — | — | Sí | — | — |
-| ONUs | `/red/onus` | — | — | — | Sí | — | — |
-| Cajas NAP | `/red/naps` | — | — | — | Sí | — | — |
-| Gestión OLT | `/red/olt` | — | — | — | Sí | — | — |
-| GenieACS · TR-069 | `/red/genieacs` | — | — | — | Sí | — | — |
+| Conexiones | `/red/conexiones` | — | Sí | — | — | — | — |
+| Transferencias | `/red/transferencias` | — | Sí | — | — | — | Sí |
+| Administrar equipos | `/red/equipos` | — | Sí | — | — | — | — |
+| Ingreso de equipo | `/red/equipos/nuevo` | — | Sí | — | — | — | — |
+| Bodega de equipos | `/red/bodegas` | — | Sí | — | Sí | — | — |
+| Red / ISP (resumen) | `/red` | — | Sí | — | — | — | — |
+| ONUs | `/red/onus` | — | Sí | — | — | — | — |
+| Cajas NAP | `/red/naps` | — | Sí | — | — | — | — |
+| Gestión OLT | `/red/olt` | — | Sí | — | — | — | — |
+| GenieACS · TR-069 | `/red/genieacs` | — | Sí | — | — | — | — |
 | **Mikrotik** | |  |  |  |  |  |  |
-| Gestión de routers | `/mikrotik` | — | — | — | Sí | — | — |
-| Operaciones masivas | `/mikrotik/masivo` | — | — | — | Sí | — | — |
-| IPs de usuarios | `/mikrotik/ips` | — | — | — | Sí | — | — |
+| Gestión de routers | `/mikrotik` | — | Sí | — | — | — | — |
+| Operaciones masivas | `/mikrotik/masivo` | — | Sí | — | — | — | — |
+| IPs de usuarios | `/mikrotik/ips` | — | Sí | — | — | — | — |
 | **Inventario / Compras** | |  |  |  |  |  |  |
 | Material | `/inventario` | — | Sí | — | — | — | — |
-| Traspasos | `/inventario/traspasos` | — | Sí | — | — | — | — |
-| Órdenes de compra | `/ordenes` | — | Sí | — | — | — | Sí |
-| Historial de órdenes | `/ordenes/historial` | — | Sí | — | — | — | Sí |
+| Traspasos | `/inventario/traspasos` | — | Sí | — | — | — | Sí |
+| Bodegas de material | `/inventario/bodegas` | — | Sí | — | Sí | — | — |
+| Órdenes de compra | `/ordenes` | — | Sí | — | — | — | — |
+| Historial de órdenes | `/ordenes/historial` | — | Sí | — | — | — | — |
 | Proveedores | `/proveedores` | — | Sí | — | — | — | — |
 | Devoluciones | `/devoluciones` | — | Sí | — | — | — | — |
 | **Personas y Proyectos** | |  |  |  |  |  |  |
-| Empleados | `/empleados` | — | Sí | — | — | — | — |
+| Documentos | `/documentos` | — | Sí | — | — | Sí | — |
 | Proyectos | `/proyectos` | — | Sí | — | — | — | — |
 | Agenda / Tareas | `/agenda` | — | Sí | — | — | — | Sí |
 | Tareas / Pendientes | `/tareas` | Sí | Sí | — | Sí | — | Sí |
+| **WhatsApp** | |  |  |  |  |  |  |
+| Bandeja de WhatsApp (chats) | `/whatsapp` | — | Sí | — | — | Sí | Sí |
 | **Sistemas** | |  |  |  |  |  |  |
 | Configuración | `/configuracion` | — | — | — | — | Sí | — |
 | Planes de servicio | `/configuracion/planes` | — | — | — | — | Sí | — |
 | API pública | `/configuracion/api` | — | — | — | — | Sí | — |
 | Usuarios y roles | `/configuracion/usuarios` | — | — | — | — | Sí | — |
+| Empleados | `/configuracion/empleados` | — | Sí | — | — | Sí | — |
+| Encargados por cargo | `/configuracion/responsables` | — | — | — | — | Sí | — |
+| Puntaje de órdenes | `/configuracion/puntajes` | Sí | — | — | — | Sí | — |
 | Mensajería / WhatsApp | `/configuracion/whatsapp` | — | — | — | — | Sí | — |
 | Agente de WhatsApp (bot) | `/configuracion/chatbot` | — | — | — | — | Sí | — |
 | Automatizaciones | `/configuracion/automatizaciones` | — | — | — | — | Sí | — |
 | Bitácora / Auditoría | `/configuracion/actividad` | — | — | — | — | Sí | — |
 | Importar / Exportar | `/configuracion/datos` | — | — | — | — | Sí | — |
 | Mensajería | `/configuracion/mensajes` | — | — | — | — | Sí | — |
-| Documentos | `/configuracion/documentos` | — | — | — | — | Sí | — |
 
 > El **Superadministrador** ve todas las pantallas por su acceso total (`system.admin`); no
 > aparece como columna porque no depende de esta tabla.
@@ -187,41 +206,39 @@ El catálogo de pantallas debe ser el espejo del menú. Cuando una opción del m
 el catálogo, no existe la llave `screen.*` que permitiría concederla: esa opción queda visible
 **solo para el Superadministrador**, y no hay forma de dársela a nadie más sin tocar el código.
 
-**Opciones del menú sin llave en el catálogo (21):** hoy solo las ve el Superadministrador.
+**Opciones del menú sin llave en el catálogo (13):** hoy solo las ve el Superadministrador.
 
 | Sección del menú | Opción | Ruta |
 |---|---|---|
 | PRINCIPAL | Mapa | `/mapa` |
-| PRINCIPAL | Plantillas | `/configuracion/whatsapp/plantillas` |
-| PRINCIPAL | Envío masivo | `/configuracion/whatsapp/masivo` |
 | CLIENTES / CRM | Grupos de clientes | `/clientes/grupos` |
 | CLIENTES / CRM | Geo-cerca de cierres | `/soporte/geocerca` |
 | FACTURACIÓN | Ventas recurrentes | `/facturacion/recurrente` |
 | FACTURACIÓN | Promociones | `/configuracion/promociones` |
-| CAJA / TESORERÍA | Ingresos | `/tesoreria/ingresos` |
-| CAJA / TESORERÍA | Egresos | `/tesoreria/egresos` |
-| CAJA / TESORERÍA | Nueva transacción | `/tesoreria/nueva` |
-| CAJA / TESORERÍA | Transferencia entre cajas | `/tesoreria/transferencia` |
-| CAJA / TESORERÍA | Anulaciones | `/tesoreria/anulaciones` |
-| CAJA / TESORERÍA | Cajas y categorías | `/tesoreria/cajas` |
 | INVENTARIO | Categorías de material | `/inventario/categorias` |
-| INVENTARIO | Bodegas de material | `/inventario/bodegas` |
 | INVENTARIO | Actas | `/inventario/actas` |
 | INVENTARIO | Órdenes de servicio | `/ordenes/servicios` |
 | INVENTARIO | Categorías de compra | `/ordenes/categorias` |
-| PERSONAS / PROYECTOS | Móviles / cuadrillas | `/empleados/moviles` |
 | CONFIGURACIÓN | Categorías de transacción | `/configuracion/categorias` |
+| CONFIGURACIÓN | Plantillas | `/configuracion/whatsapp/plantillas` |
+| CONFIGURACIÓN | Envío masivo | `/configuracion/whatsapp/masivo` |
 | DOCUMENTACIÓN | Manuales de uso | `/documentacion` |
 
 > Esta tabla es una **lista de pendientes**, no una descripción de cómo debería ser. Cada fila
 > es una pantalla que su área no puede ver: mientras la llave no exista, quien la necesita
 > tiene que pedirle a un Superadministrador que haga esa operación por él.
 
-**Llaves del catálogo que ya no están en el menú (3):** son permisos que se pueden
+**Llaves del catálogo que ya no están en el menú (9):** son permisos que se pueden
 conceder pero no llevan a ninguna opción visible.
 
 | Pantalla | Ruta |
 |---|---|
+| Tendencias e histórico | `/reportes/tendencias` |
+| Índice de recaudo | `/reportes/indice-recaudo` |
+| ARPU por abonado | `/reportes/arpu` |
+| Antigüedad y permanencia | `/reportes/permanencia` |
+| Capacidad de red (NAPs) | `/reportes/capacidad-red` |
+| Reincidencia de cortes | `/reportes/reincidencia` |
 | Ingreso de equipo | `/red/equipos/nuevo` |
 | Red / ISP (resumen) | `/red` |
 | ONUs | `/red/onus` |
@@ -236,7 +253,7 @@ todavía no protege ninguna operación: concederlo o quitarlo hoy no cambia nada
 
 ### Superadministrador
 
-*Llave:* `super-admin` · *Grupo:* Administración · *Usuarios:* 21
+*Llave:* `super-admin` · *Grupo:* Administración · *Usuarios:* 22
 
 Acceso total a toda la plataforma.
 
@@ -244,11 +261,11 @@ Acceso total a toda la plataforma.
 
 ### Gerencia
 
-*Llave:* `area-gerencia` · *Grupo:* Áreas Vestel · *Usuarios:* 1
+*Llave:* `area-gerencia` · *Grupo:* Áreas Vestel · *Usuarios:* 2
 
 Visión ejecutiva: panel de indicadores y reportes.
 
-**Pantallas que abre:** 17.
+**Pantallas que abre:** 24.
 
 **Permisos de acción:**
 
@@ -258,25 +275,26 @@ Visión ejecutiva: panel de indicadores y reportes.
 
 ### Administración
 
-*Llave:* `area-administracion` · *Grupo:* Áreas Vestel · *Usuarios:* 26
+*Llave:* `area-administracion` · *Grupo:* Áreas Vestel · *Usuarios:* 27
 
 Clientes, inventario, compras, empleados y proyectos.
 
-**Pantallas que abre:** 14.
+**Pantallas que abre:** 32.
 
 **Permisos de acción:**
 
 - `area.administracion` — Área: Administración
 - `dashboard.view` — Ver panel ejecutivo *(declarado, aún sin uso)*
 - `hr.employees.read` — Ver empleados (RRHH)
+- `whatsapp.inbox` — Atender la bandeja de WhatsApp (ver y responder chats)
 
 ### Contabilidad
 
-*Llave:* `area-contabilidad` · *Grupo:* Áreas Vestel · *Usuarios:* 1
+*Llave:* `area-contabilidad` · *Grupo:* Áreas Vestel · *Usuarios:* 2
 
 Facturación, cobranza/caja y facturación electrónica.
 
-**Pantallas que abre:** 12.
+**Pantallas que abre:** 19.
 
 **Permisos de acción:**
 
@@ -287,11 +305,11 @@ Facturación, cobranza/caja y facturación electrónica.
 
 ### Técnicos
 
-*Llave:* `area-tecnicos` · *Grupo:* Áreas Vestel · *Usuarios:* 52
+*Llave:* `area-tecnicos` · *Grupo:* Áreas Vestel · *Usuarios:* 53
 
 Soporte/tickets, red/ISP, equipos y corte/reconexión.
 
-**Pantallas que abre:** 15.
+**Pantallas que abre:** 6.
 
 **Permisos de acción:**
 
@@ -303,37 +321,39 @@ Soporte/tickets, red/ISP, equipos y corte/reconexión.
 
 ### Sistemas
 
-*Llave:* `area-sistemas` · *Grupo:* Áreas Vestel · *Usuarios:* 1
+*Llave:* `area-sistemas` · *Grupo:* Áreas Vestel · *Usuarios:* 2
 
 Configuración, usuarios y roles, WhatsApp y dispositivos.
 
-**Pantallas que abre:** 11.
+**Pantallas que abre:** 15.
 
 **Permisos de acción:**
 
 - `area.sistemas` — Área: Sistemas
 - `system.users.manage` — Gestionar usuarios y roles
 - `system.whatsapp` — Gestionar conexión de WhatsApp
+- `whatsapp.inbox` — Atender la bandeja de WhatsApp (ver y responder chats)
 - `system.cron.run` — Ejecutar procesos programados a mano (facturación masiva)
 - `network.routers.manage` — Administrar routers y sesiones PPPoE
 - `network.olt.manage` — Administrar ONUs de la OLT (autorizar/reiniciar/eliminar)
 
 ### Caja y ventas
 
-*Llave:* `area-caja` · *Grupo:* Áreas Vestel · *Usuarios:* 21
+*Llave:* `area-caja` · *Grupo:* Áreas Vestel · *Usuarios:* 22
 
-Cajera: apertura/cierre de caja, movimientos, facturación, notas, clientes, tickets y órdenes.
+Cajera: apertura/cierre de su caja, ingresos, egresos, transferencias, entrega de material a técnicos, transferencias de equipos, clientes y tickets.
 
-**Pantallas que abre:** 14.
+**Pantallas que abre:** 15.
 
 **Permisos de acción:**
 
 - `area.caja` — Área: Caja y ventas
 - `accounting.view` — Ver contabilidad *(declarado, aún sin uso)*
+- `whatsapp.inbox` — Atender la bandeja de WhatsApp (ver y responder chats)
 
 ### Auditoría / Consulta
 
-*Llave:* `auditor` · *Grupo:* Administración · *Usuarios:* 1
+*Llave:* `auditor` · *Grupo:* Administración · *Usuarios:* 2
 
 Solo lectura transversal: panel, contabilidad e inventario.
 
@@ -351,11 +371,11 @@ Solo lectura transversal: panel, contabilidad e inventario.
 
 ### Jefe de bodega
 
-*Llave:* `warehouse-manager` · *Grupo:* Inventario · *Usuarios:* 1
+*Llave:* `warehouse-manager` · *Grupo:* Inventario · *Usuarios:* 2
 
 Acceso total al inventario y único autorizado para asignar material a funcionarios.
 
-**Pantallas que abre:** 0.
+**Pantallas que abre:** 1.
 
 **Permisos de acción:**
 
@@ -365,7 +385,7 @@ Acceso total al inventario y único autorizado para asignar material a funcionar
 
 ### Director de Recursos Humanos
 
-*Llave:* `hr-director` · *Grupo:* Recursos Humanos · *Usuarios:* 1
+*Llave:* `hr-director` · *Grupo:* Recursos Humanos · *Usuarios:* 2
 
 Gestiona empleados, sus documentos y su acceso al sistema (crea logins y asigna roles).
 
@@ -380,7 +400,7 @@ Gestiona empleados, sus documentos y su acceso al sistema (crea logins y asigna 
 
 ### Contador
 
-*Llave:* `accountant` · *Grupo:* Contabilidad · *Usuarios:* 1
+*Llave:* `accountant` · *Grupo:* Contabilidad · *Usuarios:* 2
 
 Operación completa de contabilidad y nómina.
 

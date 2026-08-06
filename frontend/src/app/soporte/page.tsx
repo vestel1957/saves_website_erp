@@ -53,7 +53,7 @@ export default function SoportePage() {
 
 function SoporteGeneral() {
   const router = useRouter();
-  const { loading: authLoading, authFetch, user } = useAuth();
+  const { loading: authLoading, authFetch, user, sedeScoped } = useAuth();
   const [stats, setStats] = useState<SupportStats | null>(null);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
@@ -167,10 +167,13 @@ function SoporteGeneral() {
           <option value="">Todos los detalles</option>
           {TICKET_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
         </Select>
-        <Select value={sede} onChange={(e) => setSede(e.target.value)} className="w-auto">
-          <option value="">Todas las sedes</option>
-          {options.sedes.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-        </Select>
+        {/* Quien está acotado a su sede no elige sede: sus órdenes ya vienen filtradas. */}
+        {!sedeScoped && (
+          <Select value={sede} onChange={(e) => setSede(e.target.value)} className="w-auto">
+            <option value="">Todas las sedes</option>
+            {options.sedes.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </Select>
+        )}
         <Select value={priority} onChange={(e) => setPriority(e.target.value)} className="w-auto">
           <option value="">Toda prioridad</option>
           {TICKET_PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}

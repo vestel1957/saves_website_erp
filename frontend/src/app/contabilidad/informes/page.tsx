@@ -6,12 +6,16 @@ import { TabBar } from "@/components/accounting/TabBar";
 import { TrialBalanceTable } from "@/components/accounting/TrialBalanceTable";
 import { StatementSection, TotalRow } from "@/components/accounting/StatementView";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
+import { Select } from "@/components/ui/Field";
 import { useAuth } from "@/context/AuthProvider";
-import { accountingApi } from "@/lib/accounting";
+import { accountingApi, type FiscalPeriodRow } from "@/lib/accounting";
 import type { TrialBalance, IncomeStatement, BalanceSheet } from "@/lib/accounting-types";
 import { fullCurrency } from "@/lib/format";
 
 type Tab = "comprobacion" | "resultados" | "balance";
+
+/** 'YYYY-MM-DD' de un ISO, sin pasar por la zona horaria del navegador. */
+const dia = (iso: string) => iso.slice(0, 10);
 
 export default function InformesPage() {
   const { authFetch } = useAuth();
@@ -22,11 +26,27 @@ export default function InformesPage() {
   const [bs, setBs] = useState<BalanceSheet | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Periodo del informe. Elegir un mes es lo que hace visible el ARRASTRE: el balance
+  // de comprobación gana la columna "saldo anterior" con lo que viene del mes pasado.
+  const [periodos, setPeriodos] = useState<FiscalPeriodRow[]>([]);
+  const [periodoId, setPeriodoId] = useState("");
+  const periodo = periodos.find((p) => p.id === periodoId) ?? null;
+  const rango = periodo ? { from: dia(periodo.startDate), to: dia(periodo.endDate) } : undefined;
+
+  useEffect(() => {
+    api.getPeriods().then(setPeriodos).catch(() => {});
+  }, [api]);
+
   useEffect(() => {
     let alive = true;
+    setLoading(true);
     (async () => {
       try {
-        const [a, b, c] = await Promise.all([api.getTrialBalance(), api.getIncomeStatement(), api.getBalanceSheet()]);
+        const [a, b, c] = await Promise.all([
+          api.getTrialBalance(rango),
+          api.getIncomeStatement(rango),
+          api.getBalanceSheet(rango),
+        ]);
         if (!alive) return;
         setTb(a); setPyg(b); setBs(c);
       } finally {
@@ -34,7 +54,8 @@ export default function InformesPage() {
       }
     })();
     return () => { alive = false; };
-  }, [api]);
+    // El rango se deriva del periodo elegido; depender del objeto recargaría en cada render.
+  }, [api, periodoId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loading) return <PageSkeleton />;
 
@@ -46,17 +67,41 @@ export default function InformesPage() {
     <div className="flex flex-col gap-4">
       <PageHeading icon="bar-chart-3" title="Balance y estados financieros" subtitle="Comprobación, estado de resultados y balance general" />
 
-      <div className="max-w-lg">
-        <TabBar<Tab>
-          tabs={[
-            { key: "comprobacion", label: "Comprobación" },
-            { key: "resultados", label: "Estado de resultados" },
-            { key: "balance", label: "Balance general" },
-          ]}
-          active={tab}
-          onChange={setTab}
-        />
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="max-w-lg">
+          <TabBar<Tab>
+            tabs={[
+              { key: "comprobacion", label: "Comprobación" },
+              { key: "resultados", label: "Estado de resultados" },
+              { key: "balance", label: "Balance general" },
+            ]}
+            active={tab}
+            onChange={setTab}
+          />
+        </div>
+        <Select
+          value={periodoId}
+          onChange={(e) => setPeriodoId(e.target.value)}
+          className="h-9 w-auto text-[12.5px]"
+          aria-label="Periodo del informe"
+        >
+          <option value="">Todo el histórico</option>
+          {periodos.map((p) => (
+            <option key={p.id} value={p.id}>{p.name}{p.status !== "OPEN" ? " (cerrado)" : ""}</option>
+          ))}
+        </Select>
       </div>
+
+      {/* El balance general es acumulado a la fecha de corte, no "lo del mes": decirlo
+          evita leer el mismo selector de dos maneras distintas en dos pestañas. */}
+      {periodo && (
+        <p className="text-[12px] text-text-tertiary">
+          {tab === "balance"
+            ? <>Situación acumulada al <b>{dia(periodo.endDate)}</b>, con todo lo arrastrado de los meses anteriores.</>
+            : <>Movimientos del {dia(periodo.startDate)} al {dia(periodo.endDate)}
+                {tab === "comprobacion" ? <>, con el saldo que cada cuenta trae del mes anterior.</> : "."}</>}
+        </p>
+      )}
 
       {tab === "comprobacion" && tb && <TrialBalanceTable data={tb} />}
 

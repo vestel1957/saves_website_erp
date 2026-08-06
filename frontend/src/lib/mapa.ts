@@ -58,7 +58,20 @@ export const MOTIVO_PING: Record<string, string> = {
   "ticket.attach": "subió evidencia",
   "subscriber.capture": "capturó el GPS de un cliente",
   manual: "registró su ubicación",
+  heartbeat: "tenía la app abierta",
 };
+
+/**
+ * Pasado este rato sin reportar, el punto deja de ser "dónde está" y pasa a ser
+ * "dónde estuvo". Son varias veces el latido (1 min) para que perder un par de
+ * reportes —un sótano, un semáforo sin cobertura— no lo apague; bajarlo más
+ * llenaría el mapa de técnicos parpadeando entre gris y morado.
+ */
+export const TECNICO_EN_VIVO_MIN = 4;
+
+/** Morado lleno = reportando ahora; gris = el último punto ya tiene horas. */
+export const COLOR_TECNICO_VIVO = "#7c3aed";
+export const COLOR_TECNICO_FRIO = "#94a3b8";
 
 /** "hace 4 min" / "hace 2 h 10 min" */
 export function haceCuanto(min: number): string {

@@ -1,10 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import Link from "next/link";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
-import { Select } from "@/components/ui/Field";
+import { Input, Select } from "@/components/ui/Field";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { LoadError } from "@/components/ui/LoadError";
 import { toast } from "@/components/ui/Toast";
@@ -16,12 +16,79 @@ type Tarjeta = {
   id: string; code: number | null; subject: string; type: string;
   priority: string | null; status: string; created: string; problema: string | null;
   seq: number | null; agendadaPor: string | null;
+  /** El técnico fue y no la pudo hacer. Vuelve a esta bandeja para reagendarla. */
+  noAtendida: { fecha: string; motivo: string | null; por: string | null } | null;
   staffId: string | null; tecnico: string | null;
   cliente: string | null; abonado: number | null; subscriberId: string | null;
   direccion: string | null; telefono: string | null; sede: string | null; barrio: string | null;
 };
-type Columna = { staffId: string; nombre: string; ordenes: Tarjeta[] };
-type Tablero = { fecha: string; hoy: string; sinAgendar: Tarjeta[]; sinAgendarTotal: number; columnas: Columna[] };
+/** `ordenes` viene filtrada; `total`/`pendientes` son la carga real del día, sin filtro. */
+type Columna = { staffId: string; nombre: string; ordenes: Tarjeta[]; total: number; pendientes: number };
+/** Un tipo de orden ofrecible en el filtro, con cuántas hay y de qué clase es. */
+type TipoOrden = { tipo: string; clase: string; total: number };
+type Tablero = {
+  fecha: string; hoy: string; filtrando: boolean;
+  sinAgendar: Tarjeta[]; sinAgendarTotal: number; sinAgendarSinFiltro: number | null;
+  tipos: TipoOrden[]; columnas: Columna[];
+};
+
+/**
+ * Los filtros del tablero. Filtran ÓRDENES, no técnicos: las columnas se quedan
+ * todas —incluida la del técnico al que hoy no le coincide nada—, porque es
+ * justamente donde hay que poder soltar lo que se acaba de encontrar.
+ *
+ * Van al servidor y no se aplican sobre lo ya cargado: la bandeja de "sin agendar"
+ * llega recortada a las 200 más urgentes, así que filtrar en el navegador buscaría
+ * dentro de esas 200 y una orden abierta que no esté ahí no aparecería nunca.
+ */
+type Filtros = { q: string; clase: string; tipo: string; prioridad: string; estado: string; noAtendidas: boolean };
+const SIN_FILTROS: Filtros = { q: "", clase: "", tipo: "", prioridad: "", estado: "", noAtendidas: false };
+const hayFiltros = (f: Filtros) =>
+  f.q.trim() !== "" || f.clase !== "" || f.tipo !== "" || f.prioridad !== "" || f.estado !== "" || f.noAtendidas;
+
+const CLASES = [
+  { valor: "servicio", etiqueta: "Servicio" },
+  { valor: "reclamo", etiqueta: "Reclamo" },
+  { valor: "incidente", etiqueta: "Incidente" },
+];
+
+/** La query del tablero: filtros (+ día, si se pide uno concreto). */
+function queryTablero(f: Filtros, fecha?: string | null) {
+  const qs = new URLSearchParams();
+  if (fecha) qs.set("fecha", fecha);
+  if (f.q.trim()) qs.set("q", f.q.trim());
+  if (f.clase) qs.set("clase", f.clase);
+  if (f.tipo) qs.set("tipo", f.tipo);
+  if (f.prioridad) qs.set("prioridad", f.prioridad);
+  if (f.estado) qs.set("estado", f.estado);
+  if (f.noAtendidas) qs.set("noAtendidas", "1");
+  return qs.toString();
+}
+
+/**
+ * En qué puesto queda una orden al soltarla, en la numeración de la columna.
+ *
+ * Se calcula con `seq` —la posición REAL de la visita en el día— y no con el índice
+ * del array: con un filtro puesto la columna en pantalla se salta tarjetas, y ahí el
+ * índice deja de ser la posición. El servidor recibe siempre "ponla en el puesto N"
+ * de la columna completa y renumera él.
+ *
+ * `destino` es la tarjeta sobre la que se suelta: la arrastrada se mete JUSTO ANTES
+ * (es la línea que se pinta encima). Si venía de más arriba en la misma columna, al
+ * sacarla las de abajo suben una, y por eso ahí el puesto es uno menos.
+ */
+const puestoAntesDe = (destino: Tarjeta, arrastrada: Tarjeta | undefined, indiceDestino: number) => {
+  const s = destino.seq ?? indiceDestino + 1;
+  const d = arrastrada?.seq ?? null;
+  return d != null && d < s ? s - 1 : s;
+};
+
+/**
+ * Puesto para quedar JUSTO DESPUÉS de `destino`, viniendo de más arriba (es el botón
+ * "bajar"). Al sacar la arrastrada, `destino` sube un puesto: meterla en el número
+ * que ocupaba `destino` la deja detrás de ella.
+ */
+const puestoDespuesDe = (destino: Tarjeta, indiceDestino: number) => destino.seq ?? indiceDestino + 1;
 
 const TONO_BADGE: Record<string, string> = {
   error: "bg-error-soft text-error-text",
@@ -89,6 +156,20 @@ function TarjetaOrden({
           <div className="flex items-start gap-1 text-[10.5px] text-text-tertiary">
             <Icon name="map-pin" size={10} className="mt-0.5 shrink-0" />
             <span className="truncate" title={t.direccion ?? undefined}>{t.barrio ?? t.direccion}</span>
+          </div>
+        )}
+        {/* Una orden que el técnico intentó y no pudo NO es lo mismo que una que
+            nunca se agendó, aunque las dos caigan en esta bandeja: en la primera ya
+            hubo un viaje. El motivo va a la vista para que se pueda decidir sin
+            abrir la orden (llamar antes, cambiar de día, mandar material). */}
+        {t.noAtendida && (
+          <div className="mt-1 flex items-start gap-1 rounded bg-warning-soft px-1.5 py-1 text-[10.5px] text-warning-text">
+            <Icon name="alert-triangle" size={10} className="mt-0.5 shrink-0" />
+            <span className="min-w-0">
+              <b>No se pudo atender</b>
+              {t.noAtendida.motivo ? `: ${t.noAtendida.motivo}` : ""}
+              {t.noAtendida.por ? <span className="block opacity-80">— {t.noAtendida.por}</span> : null}
+            </span>
           </div>
         )}
         {t.telefono && (
@@ -159,7 +240,7 @@ function TarjetaOrden({
  */
 function ColumnaTablero({
   clave, titulo, subtitulo, icono, tarjetas, staffId, tecnicos,
-  zona, setZona, antesDe, setAntesDe, arrastrando, setArrastrando, mover, resaltar,
+  zona, setZona, antesDe, setAntesDe, arrastrando, setArrastrando, mover, vacia,
 }: {
   clave: string; titulo: string; subtitulo: string; icono: string;
   tarjetas: Tarjeta[]; staffId: string | null; tecnicos: Columna[];
@@ -167,9 +248,8 @@ function ColumnaTablero({
   antesDe: string | null; setAntesDe: Dispatch<SetStateAction<string | null>>;
   arrastrando: string | null; setArrastrando: (id: string | null) => void;
   mover: (ticketId: string, staffId: string | null, posicion?: number) => void;
-  /** Filtro visual: lo que no coincide se ATENÚA en vez de ocultarse. Quitar
-      tarjetas correría los índices con los que se calcula la posición del drop. */
-  resaltar?: (t: Tarjeta) => boolean;
+  /** Qué decir cuando no hay tarjetas que pintar (cambia si hay filtro puesto). */
+  vacia: string;
 }) {
   // `dragover` dispara sin parar mientras el puntero se mueve: los setters van
   // guardados contra el valor previo para no re-renderizar el tablero por evento.
@@ -186,11 +266,7 @@ function ColumnaTablero({
     if (id) void mover(id, staffId, posicion);
   };
 
-  /**
-   * Suelta ENCIMA de la tarjeta `i`: la arrastrada toma su puesto. Si viene de más
-   * arriba en la MISMA columna, al sacarla las de abajo suben una — por eso ahí la
-   * posición es `i` y no `i + 1`.
-   */
+  /** Suelta ENCIMA de la tarjeta `i`: la arrastrada se mete justo antes que ella. */
   const soltarSobre = (i: number) => (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -198,9 +274,9 @@ function ColumnaTablero({
     setAntesDe(null);
     const id = e.dataTransfer.getData("text/plain") || arrastrando;
     setArrastrando(null);
-    if (!id || id === tarjetas[i]?.id) return;
-    const desde = tarjetas.findIndex((t) => t.id === id);
-    void mover(id, staffId, desde !== -1 && desde < i ? i : i + 1);
+    const destino = tarjetas[i];
+    if (!id || !destino || id === destino.id) return;
+    void mover(id, staffId, puestoAntesDe(destino, tarjetas.find((t) => t.id === id), i));
   };
 
   return (
@@ -229,12 +305,12 @@ function ColumnaTablero({
       <div className="flex max-h-[calc(100vh-290px)] flex-col gap-2 overflow-y-auto pr-0.5">
         {tarjetas.length === 0 ? (
           <div className="rounded-lg border border-dashed border-border-default px-3 py-6 text-center text-[11px] text-text-tertiary">
-            {staffId ? "Arrastra aquí sus visitas del día" : "Nada sin agendar"}
+            {vacia}
           </div>
         ) : tarjetas.map((t, i) => (
           <div
             key={t.id}
-            className={`relative transition-opacity ${resaltar && !resaltar(t) ? "opacity-25" : ""}`}
+            className="relative"
             onDragOver={staffId ? (e) => {
               e.preventDefault();
               e.stopPropagation();
@@ -250,15 +326,20 @@ function ColumnaTablero({
             {antesDe === t.id && (
               <div aria-hidden className="absolute -top-[6px] left-1 right-1 h-[3px] rounded-full bg-brand" />
             )}
+            {/* El número es el puesto REAL de la visita en el día (`seq`), no el de la
+                lista en pantalla: con un filtro puesto la numeración se salta huecos
+                —1, 4, 7— y eso es lo correcto, porque el técnico va a hacer la 4 en
+                cuarto lugar aunque la cajera solo esté mirando las urgentes.
+                Subir/bajar mueven respecto a la tarjeta VISIBLE de al lado. */}
             <TarjetaOrden
               t={t}
-              indice={staffId ? i + 1 : undefined}
+              indice={staffId ? t.seq ?? i + 1 : undefined}
               tecnicos={tecnicos}
               arrastrando={arrastrando}
               setArrastrando={setArrastrando}
               onAgendar={(destino) => void mover(t.id, destino)}
-              onSubir={staffId && i > 0 ? () => void mover(t.id, staffId, i) : undefined}
-              onBajar={staffId && i < tarjetas.length - 1 ? () => void mover(t.id, staffId, i + 2) : undefined}
+              onSubir={staffId && i > 0 ? () => void mover(t.id, staffId, puestoAntesDe(tarjetas[i - 1], t, i - 1)) : undefined}
+              onBajar={staffId && i < tarjetas.length - 1 ? () => void mover(t.id, staffId, puestoDespuesDe(tarjetas[i + 1], i + 1)) : undefined}
               onQuitar={staffId ? () => void mover(t.id, null) : undefined}
             />
           </div>
@@ -286,6 +367,8 @@ function ColumnaTablero({
  */
 export default function AgendaPage() {
   const { loading: authLoading, authFetch } = useAuth();
+  // `null` = hoy, y lo resuelve el backend (que es quien sabe qué día es en Colombia).
+  // La respuesta NO se guarda aquí: hacerlo disparaba una segunda carga al montar.
   const [fecha, setFecha] = useState<string | null>(null);
   const [d, setD] = useState<Tablero | null>(null);
   const [err, setErr] = useState(false);
@@ -301,35 +384,38 @@ export default function AgendaPage() {
     if (id === null) { setZona(null); setAntesDe(null); }
   }, []);
 
-  // Filtros del tablero. Técnico oculta las demás columnas; estado y prioridad
-  // solo atenúan (ver `resaltar` en ColumnaTablero).
-  const [fTecnico, setFTecnico] = useState("");
-  const [fEstado, setFEstado] = useState("");
-  const [fPrioridad, setFPrioridad] = useState("");
-  const resaltar = useMemo(() => {
-    if (!fEstado && !fPrioridad) return undefined;
-    return (t: Tarjeta) => {
-      const okEstado = !fEstado || (fEstado === "__cerradas__"
-        ? t.status === "RESUELTO" || t.status === "ANULADA"
-        : t.status === fEstado);
-      const okPrioridad = !fPrioridad || (t.priority ?? "").trim().toLowerCase() === fPrioridad.toLowerCase();
-      return okEstado && okPrioridad;
-    };
-  }, [fEstado, fPrioridad]);
+  const [filtros, setFiltros] = useState<Filtros>(SIN_FILTROS);
+  const puso = <K extends keyof Filtros>(k: K, v: Filtros[K]) => setFiltros((f) => ({ ...f, [k]: v }));
+  const filtrando = hayFiltros(filtros);
+  const claveFiltros = useMemo(() => queryTablero(filtros), [filtros]);
+
+  // Los filtros los lee `cargar` de una ref para que la función no cambie de
+  // identidad al teclear: es la que llama `mover` después de cada arrastre, y una
+  // referencia nueva por letra volvería a montar medio tablero en mitad del gesto.
+  // La ref se sincroniza en un efecto declarado ANTES del de carga: los efectos
+  // corren en orden de declaración, así que cuando el de abajo pide el tablero la
+  // ref ya trae los filtros de este render.
+  const filtrosRef = useRef(filtros);
+  useEffect(() => { filtrosRef.current = filtros; }, [filtros]);
 
   const cargar = useCallback(async (f?: string | null) => {
     setErr(false);
     try {
-      const qs = f ? `?fecha=${f}` : "";
-      const r = await authFetch(`/support/agenda${qs}`);
+      const qs = queryTablero(filtrosRef.current, f);
+      const r = await authFetch(`/support/agenda${qs ? `?${qs}` : ""}`);
       if (!r.ok) throw new Error(String(r.status));
-      const j: Tablero = await r.json();
-      setD(j);
-      setFecha(j.fecha);
+      setD(await r.json());
     } catch { setErr(true); }
   }, [authFetch]);
 
-  useEffect(() => { if (!authLoading) void cargar(null); }, [authLoading, cargar]);
+  // Una sola carga por cambio: día o filtros. El buscador espera a que se deje de
+  // teclear; lo demás (desplegables) va sin retardo, que es lo que se espera al
+  // elegir una opción.
+  useEffect(() => {
+    if (authLoading) return;
+    const t = window.setTimeout(() => { void cargar(fecha); }, filtrosRef.current.q.trim() ? 300 : 0);
+    return () => window.clearTimeout(t);
+  }, [authLoading, fecha, claveFiltros, cargar]);
 
   const mover = useCallback(async (ticketId: string, staffId: string | null, posicion?: number) => {
     if (!fecha) return;
@@ -346,10 +432,14 @@ export default function AgendaPage() {
     } finally { setGuardando(false); }
   }, [authFetch, fecha, cargar]);
 
-  const esAbierta = (o: Tarjeta) => o.status === "PENDIENTE" || o.status === "REALIZANDO";
-  const totalAgendadas = useMemo(() => (d?.columnas ?? []).reduce((s, c) => s + c.ordenes.length, 0), [d]);
-  const totalPendientes = useMemo(
-    () => (d?.columnas ?? []).reduce((s, c) => s + c.ordenes.filter(esAbierta).length, 0),
+  // Las cifras del día van SIN filtro (`total`/`pendientes` los manda el backend):
+  // lo repartido no cambia porque se busque una orden, y un contador que baja al
+  // teclear es justo el dato con el que se reparte mal el día.
+  const totalAgendadas = useMemo(() => (d?.columnas ?? []).reduce((s, c) => s + c.total, 0), [d]);
+  const totalPendientes = useMemo(() => (d?.columnas ?? []).reduce((s, c) => s + c.pendientes, 0), [d]);
+  /** Cuántas coinciden con el filtro, contando la bandeja y las ya repartidas. */
+  const coinciden = useMemo(
+    () => (d ? d.sinAgendarTotal + d.columnas.reduce((s, c) => s + c.ordenes.length, 0) : 0),
     [d],
   );
 
@@ -358,13 +448,18 @@ export default function AgendaPage() {
   if (!d) return <PageSkeleton />;
 
   const esHoy = d.fecha === d.hoy;
-  const irA = (f: string) => { setFecha(f); void cargar(f); };
+  // Con una clase elegida solo se ofrecen sus tipos: mezclar 'Instalacion' con
+  // 'Revision de Internet' cuando ya se pidió "reclamo" es ofrecer nada.
+  const tiposOfrecidos = filtros.clase ? d.tipos.filter((t) => t.clase === filtros.clase) : d.tipos;
+  // Solo cambia el día: de recargar se encarga el efecto, que es el único sitio
+  // desde el que se pide el tablero al cambiar día o filtros.
+  const irA = (f: string) => setFecha(f);
 
-  /** Descarga el Excel del tablero completo del día que está en pantalla. */
+  /** Descarga el Excel de lo que hay en pantalla: mismo día y mismos filtros. */
   const exportar = async () => {
     setExportando(true);
     try {
-      const res = await authFetch(`/support/agenda/export.xlsx?fecha=${d.fecha}`);
+      const res = await authFetch(`/support/agenda/export.xlsx?${queryTablero(filtros, d.fecha)}`);
       if (!res.ok) throw new Error("No se pudo exportar");
       const blob = await res.blob();
       const a = document.createElement("a");
@@ -424,28 +519,98 @@ export default function AgendaPage() {
           </>
         )}
         <span>·</span>
-        <span><b className="text-text-primary">{d.sinAgendarTotal}</b> sin agendar</span>
+        <span><b className="text-text-primary">{d.sinAgendarSinFiltro ?? d.sinAgendarTotal}</b> sin agendar</span>
+        {filtrando && (
+          <>
+            <span>·</span>
+            <span className="font-semibold text-brand">
+              {coinciden === 1 ? "1 orden coincide" : `${coinciden} órdenes coinciden`} con el filtro
+            </span>
+          </>
+        )}
       </div>
 
+      {/* Los filtros buscan ÓRDENES, no técnicos: la pregunta de la ventanilla es
+          "dónde quedó la orden de la señora del barrio Centro" o "qué instalaciones
+          me faltan", y ninguna de las dos se responde eligiendo un técnico. Las
+          columnas se quedan todas: la del técnico sin coincidencias también, porque
+          es donde hay que poder soltar lo que se acaba de encontrar. */}
       <div className="flex flex-wrap items-center gap-2">
-        <Select value={fTecnico} onChange={(e) => setFTecnico(e.target.value)} className="h-8 w-auto text-[12px]" aria-label="Filtrar por técnico">
-          <option value="">Todos los técnicos</option>
-          {d.columnas.map((c) => <option key={c.staffId} value={c.staffId}>{c.nombre}</option>)}
+        <div className="relative min-w-0 flex-1 sm:max-w-xs">
+          <Icon name="search" size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-text-tertiary" />
+          <Input
+            value={filtros.q}
+            onChange={(e) => puso("q", e.target.value)}
+            placeholder="N° de orden, cliente, barrio, dirección, teléfono…"
+            aria-label="Buscar órdenes en la agenda"
+            className="h-8 !py-0 pl-8 text-[12px]"
+          />
+          {filtros.q && (
+            <button type="button" onClick={() => puso("q", "")} aria-label="Borrar la búsqueda"
+              className="tap absolute right-2 top-1/2 -translate-y-1/2 text-text-tertiary hover:text-text-primary">
+              <Icon name="x" size={13} />
+            </button>
+          )}
+        </div>
+        {/* Elegir clase acota los tipos, y por eso limpia el tipo que ya no
+            pertenece a ella: dejarlo puesto habría dado un tablero vacío con dos
+            filtros que se contradicen sin decirlo. */}
+        <Select
+          value={filtros.clase}
+          onChange={(e) => {
+            const clase = e.target.value;
+            setFiltros((f) => ({
+              ...f,
+              clase,
+              tipo: clase && !d.tipos.some((t) => t.tipo === f.tipo && t.clase === clase) ? "" : f.tipo,
+            }));
+          }}
+          className="h-8 w-auto text-[12px]"
+          aria-label="Filtrar por clase de orden"
+        >
+          <option value="">Toda clase</option>
+          {CLASES.map((c) => <option key={c.valor} value={c.valor}>{c.etiqueta}</option>)}
         </Select>
-        <Select value={fEstado} onChange={(e) => setFEstado(e.target.value)} className="h-8 w-auto text-[12px]" aria-label="Filtrar por estado">
+        {/* Los tipos salen de las órdenes que hay, ordenados por cuántas son: lo que
+            más se repite —y lo que más se reparte— queda arriba. El número al lado
+            evita el clic a ciegas en un tipo que solo tiene una. */}
+        <Select value={filtros.tipo} onChange={(e) => puso("tipo", e.target.value)} className="h-8 w-auto max-w-[15rem] text-[12px]" aria-label="Filtrar por tipo de orden">
+          <option value="">Todo tipo</option>
+          {tiposOfrecidos.map((t) => (
+            <option key={t.tipo} value={t.tipo}>{t.tipo} ({t.total})</option>
+          ))}
+          {/* Si el tipo puesto ya no está en la lista (cambió el día), se ofrece
+              igual: si no, el desplegable enseñaría "Todo tipo" con un filtro activo. */}
+          {filtros.tipo && !tiposOfrecidos.some((t) => t.tipo === filtros.tipo) && (
+            <option value={filtros.tipo}>{filtros.tipo}</option>
+          )}
+        </Select>
+        <Select value={filtros.estado} onChange={(e) => puso("estado", e.target.value)} className="h-8 w-auto text-[12px]" aria-label="Filtrar por estado">
           <option value="">Todos los estados</option>
           <option value="PENDIENTE">Pendientes</option>
           <option value="REALIZANDO">En curso</option>
-          <option value="__cerradas__">Cerradas</option>
+          <option value="cerradas">Cerradas</option>
         </Select>
-        <Select value={fPrioridad} onChange={(e) => setFPrioridad(e.target.value)} className="h-8 w-auto text-[12px]" aria-label="Filtrar por prioridad">
+        <Select value={filtros.prioridad} onChange={(e) => puso("prioridad", e.target.value)} className="h-8 w-auto text-[12px]" aria-label="Filtrar por prioridad">
           <option value="">Toda prioridad</option>
           {TICKET_PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
         </Select>
-        {(fTecnico || fEstado || fPrioridad) && (
+        {/* Las que un técnico fue a hacer y no pudo son la cola que se reagenda
+            primero: merecen un botón y no ir escondidas dentro de un desplegable. */}
+        <button
+          type="button"
+          onClick={() => puso("noAtendidas", !filtros.noAtendidas)}
+          aria-pressed={filtros.noAtendidas}
+          className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[12px] font-semibold transition-colors ${
+            filtros.noAtendidas ? "border-warning-border bg-warning-soft text-warning-text" : "border-border-default bg-surface text-text-secondary hover:bg-surface-2"
+          }`}
+        >
+          <Icon name="alert-triangle" size={13} /> No atendidas
+        </button>
+        {filtrando && (
           <button
             type="button"
-            onClick={() => { setFTecnico(""); setFEstado(""); setFPrioridad(""); }}
+            onClick={() => setFiltros(SIN_FILTROS)}
             className="text-[12px] font-semibold text-brand hover:underline"
           >
             Limpiar filtros
@@ -460,9 +625,11 @@ export default function AgendaPage() {
         <ColumnaTablero
           clave="__sin__"
           titulo="Sin agendar"
-          subtitulo={d.sinAgendar.length < d.sinAgendarTotal
-            ? `${d.sinAgendar.length} de ${d.sinAgendarTotal} · lo urgente primero`
-            : `${d.sinAgendarTotal} abiertas sin día`}
+          subtitulo={filtrando
+            ? `${d.sinAgendarTotal} de ${d.sinAgendarSinFiltro ?? d.sinAgendarTotal} coinciden`
+            : d.sinAgendar.length < d.sinAgendarTotal
+              ? `${d.sinAgendar.length} de ${d.sinAgendarTotal} · lo urgente primero`
+              : `${d.sinAgendarTotal} abiertas sin día`}
           icono="inbox"
           tarjetas={d.sinAgendar}
           staffId={null}
@@ -471,17 +638,21 @@ export default function AgendaPage() {
           antesDe={antesDe} setAntesDe={setAntesDe}
           arrastrando={arrastrando} setArrastrando={alArrastrar}
           mover={mover}
-          resaltar={resaltar}
+          vacia={filtrando ? "Ninguna sin agendar coincide" : "Nada sin agendar"}
         />
-        {d.columnas.filter((c) => !fTecnico || c.staffId === fTecnico).map((c) => {
-          const pendientes = c.ordenes.filter(esAbierta).length;
-          const cerradas = c.ordenes.length - pendientes;
+        {d.columnas.map((c) => {
+          const cerradas = c.total - c.pendientes;
+          // La carga del técnico se sigue leyendo entera aunque haya filtro; lo que
+          // el filtro cambia es cuántas de esas se están viendo.
+          const carga = `${c.pendientes} ${c.pendientes === 1 ? "pendiente" : "pendientes"}${cerradas ? ` · ${cerradas} ${cerradas === 1 ? "cerrada" : "cerradas"}` : ""}`;
           return (
             <ColumnaTablero
               key={c.staffId}
               clave={c.staffId}
               titulo={c.nombre}
-              subtitulo={`${pendientes} ${pendientes === 1 ? "pendiente" : "pendientes"}${cerradas ? ` · ${cerradas} ${cerradas === 1 ? "cerrada" : "cerradas"}` : ""}`}
+              // "a la vista" solo cuando hay algo que recortar: en un técnico sin
+              // nada agendado, "0 pendientes · 0 a la vista" dice dos veces cero.
+              subtitulo={filtrando && c.total > 0 ? `${carga} · ${c.ordenes.length} a la vista` : carga}
               icono="hard-hat"
               tarjetas={c.ordenes}
               staffId={c.staffId}
@@ -490,7 +661,9 @@ export default function AgendaPage() {
               antesDe={antesDe} setAntesDe={setAntesDe}
               arrastrando={arrastrando} setArrastrando={alArrastrar}
               mover={mover}
-              resaltar={resaltar}
+              vacia={filtrando
+                ? c.total > 0 ? "Ninguna de sus visitas coincide" : "Sin visitas hoy"
+                : "Arrastra aquí sus visitas del día"}
             />
           );
         })}
@@ -503,8 +676,9 @@ export default function AgendaPage() {
 
       {d.sinAgendar.length < d.sinAgendarTotal && (
         <p className="text-[11.5px] text-text-tertiary">
-          Se muestran las {d.sinAgendar.length} más urgentes y antiguas de {d.sinAgendarTotal} sin agendar.
-          El resto aparece a medida que vayas repartiendo estas.
+          Se muestran las {d.sinAgendar.length} más urgentes y antiguas de {d.sinAgendarTotal} sin agendar
+          {filtrando ? " que coinciden con el filtro" : ""}. El resto aparece a medida que vayas repartiendo estas
+          {filtrando ? ", o afinando la búsqueda" : ""}.
         </p>
       )}
     </div>

@@ -63,6 +63,8 @@ export interface TrialBalanceRow {
   accountId: string;
   code: string;
   name: string;
+  /** Arrastre: saldo con el que la cuenta entra al periodo (débito − crédito). */
+  saldoAnterior: number;
   debit: number;
   credit: number;
   saldoDeudor: number;
@@ -71,8 +73,11 @@ export interface TrialBalanceRow {
 
 export interface TrialBalance {
   rows: TrialBalanceRow[];
-  totals: { debit: number; credit: number; saldoDeudor: number; saldoAcreedor: number };
+  totals: { saldoAnterior: number; debit: number; credit: number; saldoDeudor: number; saldoAcreedor: number };
+  /** Cuadran los movimientos del periodo. */
   balanced: boolean;
+  /** Cuadran los saldos finales (arrastre incluido). */
+  saldosCuadrados: boolean;
 }
 
 export interface StatementLine {

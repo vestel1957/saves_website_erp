@@ -1,8 +1,9 @@
 "use client";
 
 import { Fragment, useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { Icon } from "@/components/Icon";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -19,6 +20,11 @@ import { INVOICE_KIND_LABEL, RON_LABEL } from "@/lib/billing";
 import { type AvailablePromotion, discountLabel, isFlatDiscount, isBeforeTaxDiscount } from "@/lib/promotions";
 import { fmtDate } from "@/lib/format";
 
+const EditarFacturaModal = dynamic(
+  () => import("@/components/billing/EditarFacturaModal").then((m) => m.EditarFacturaModal),
+  { ssr: false },
+);
+
 /** Descuento que aplicaría la promoción sobre esta factura (estimación en pantalla). */
 function descuentoEstimado(p: AvailablePromotion, f: any) {
   const base = isBeforeTaxDiscount(p.discountFormat) ? (f.subtotal ?? f.total) : f.total;
@@ -27,6 +33,8 @@ function descuentoEstimado(p: AvailablePromotion, f: any) {
 
 export default function FacturaDetallePage() {
   const { id } = useParams<{ id: string }>();
+  // `?editar=1` viene del lápiz del listado: abre el editor en cuanto carga la factura.
+  const abrirEditor = useSearchParams().get("editar") === "1";
   const { loading: authLoading, authFetch, can, isSuperadmin } = useAuth();
   const [f, setF] = useState<any | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -35,6 +43,7 @@ export default function FacturaDetallePage() {
   const [applyingId, setApplyingId] = useState<string | null>(null);
   const [eMode, setEMode] = useState<{ live: boolean } | null>(null);
   const [emitting, setEmitting] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
   const [voidOpen, setVoidOpen] = useState(false);
   const [voidReason, setVoidReason] = useState("");
   const [voiding, setVoiding] = useState(false);
@@ -68,6 +77,13 @@ export default function FacturaDetallePage() {
     void loadInvoice();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authLoading, authFetch, id]);
+
+  // Llegó con `?editar=1` y la factura ya está en pantalla: se abre el editor una
+  // sola vez, y sólo si la factura se puede tocar.
+  useEffect(() => {
+    if (abrirEditor && f && canEmit && f.status !== "CANCELED" && !f.stamped) setEditOpen(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [abrirEditor, f?.id]);
 
   function openPromos() {
     setPromoOpen(true);
@@ -181,10 +197,20 @@ export default function FacturaDetallePage() {
           <>
             <Badge label={INVOICE_STATUS_LABEL[f.status] ?? f.status} tone={INVOICE_STATUS_TONE[f.status] ?? "default"} />
             {f.ron && <Badge label={RON_LABEL[f.ron] ?? f.ron} tone="default" />}
+            {/* `editedAt` también lo pone una nota crédito (para blindarla del sync),
+                así que el rótulo va por `editCount`, que sólo cuenta ediciones. */}
+            {f.editCount > 0 && <Badge label={f.editCount > 1 ? `Editada ×${f.editCount}` : "Editada"} tone="warning" />}
             <span className="text-[11px] text-text-tertiary">{INVOICE_KIND_LABEL[f.kind] ?? f.kind}</span>
           </>
         }
-        subtitle={<>Emitida {fmtDate(f.date)} · Vence {fmtDate(f.dueDate)}{f.branchRef ? ` · ${f.branchRef}` : ""}</>}
+        subtitle={
+          <>
+            Emitida {fmtDate(f.date)} · Vence {fmtDate(f.dueDate)}{f.branchRef ? ` · ${f.branchRef}` : ""}
+            {f.editCount > 0 && f.editedAt && (
+              <> · Editada {fmtDate(f.editedAt)}{f.editedBy ? ` por ${f.editedBy}` : ""}</>
+            )}
+          </>
+        }
         actions={
           <>
             <Button variant="secondary" size="sm" className="w-full sm:w-auto" onClick={() => openPdf("rollo")}>
@@ -196,6 +222,14 @@ export default function FacturaDetallePage() {
             <Button variant="secondary" size="sm" className="w-full sm:w-auto" onClick={openPromos}>
               <Icon name="gift" size={14} /> Aplicar promoción
             </Button>
+            {/* Editar sólo mientras el documento se pueda tocar: anulada no, y timbrada
+                ante la DIAN tampoco (esa se ajusta con nota crédito). El backend lo
+                vuelve a validar: esconder el botón no es la barrera. */}
+            {canEmit && f.status !== "CANCELED" && !f.stamped && (
+              <Button variant="secondary" size="sm" className="w-full sm:w-auto" onClick={() => setEditOpen(true)}>
+                <Icon name="pencil" size={14} /> Editar factura
+              </Button>
+            )}
             {canEmit && f.status !== "CANCELED" && (
               <Button variant="danger" size="sm" className="w-full sm:w-auto" onClick={() => setVoidOpen(true)}>
                 <Icon name="ban" size={14} /> Anular factura
@@ -282,7 +316,17 @@ export default function FacturaDetallePage() {
         rows={f.items ?? []}
         empty="Sin ítems."
         columns={[
-          { key: "product", header: "Concepto", render: (r: any) => <span className="font-medium text-text-primary">{r.product}</span> },
+          {
+            key: "product", header: "Concepto",
+            render: (r: any) => (
+              <span className="flex items-center gap-2">
+                <span className="font-medium text-text-primary">{r.product}</span>
+                {/* Las notas se ven distinto porque juegan distinto: el editor de la
+                    factura no las toca y sólo se deshacen con la nota contraria. */}
+                {r.nota && <Badge label="Nota" tone="info" />}
+              </span>
+            ),
+          },
           { key: "qty", header: "Cant.", align: "right", render: (r: any) => r.qty },
           { key: "price", header: "Precio", align: "right", render: (r: any) => cop(r.price) },
           { key: "tax", header: "IVA", align: "right", render: (r: any) => cop(r.taxTotal) },
@@ -313,16 +357,25 @@ export default function FacturaDetallePage() {
         ]}
       />
 
+      {editOpen && (
+        <EditarFacturaModal
+          open
+          factura={f}
+          onClose={() => setEditOpen(false)}
+          onDone={() => void loadInvoice()}
+        />
+      )}
+
       {promoOpen && (
         <Modal open onClose={() => setPromoOpen(false)} title="Aplicar promoción">
           <div className="flex flex-col gap-3">
             <p className="text-[12px] text-text-tertiary">
-              Promociones vigentes que tienes autorizadas. Al aplicar una se genera una nota crédito por el porcentaje sobre el total de la factura (#{f.tid}, total {cop(f.total)}).
+              Promociones vigentes cuyo público incluye a este cliente. Al aplicar una se genera una nota crédito por el descuento sobre el total de la factura (#{f.tid}, total {cop(f.total)}).
             </p>
             {!promos ? (
               <p className="text-[13px] text-text-tertiary">Cargando…</p>
             ) : promos.length === 0 ? (
-              <p className="text-[13px] text-text-tertiary">No tienes promociones vigentes asignadas.</p>
+              <p className="text-[13px] text-text-tertiary">Este cliente no está dentro del público de ninguna promoción vigente.</p>
             ) : (
               <div className="flex flex-col gap-2">
                 {promos.map((p) => (
@@ -332,7 +385,9 @@ export default function FacturaDetallePage() {
                         <span className="truncate text-[13px] font-semibold text-text-primary">{p.name}</span>
                         <Badge tone="brand" label={discountLabel(p)} />
                         {isBeforeTaxDiscount(p.discountFormat) && <Badge tone="default" label="Antes de imp." />}
-                        {p.subscriberStatus ? <Badge tone="warning" label="Por estado del cliente" /> : p.global && <Badge tone="info" label="Global" />}
+                        {p.allSubscribers
+                          ? <Badge tone="info" label="Todos los clientes" />
+                          : p.subscriberStatuses.length > 0 && <Badge tone="warning" label="Por estado del cliente" />}
                       </div>
                       <div className="text-[11px] text-text-tertiary">
                         {p.description ? `${p.description} · ` : ""}Descuento estimado {cop(descuentoEstimado(p, f))}

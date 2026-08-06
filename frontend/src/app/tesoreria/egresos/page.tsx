@@ -6,6 +6,8 @@ import { LinkMovimientos } from "@/components/cobranzas/LinkMovimientos";
 import { Icon } from "@/components/Icon";
 import { Button } from "@/components/ui/Button";
 import { TxTable } from "@/components/cobranzas/TxTable";
+import { useAuth } from "@/context/AuthProvider";
+import { PERM } from "@/lib/auth";
 import type { TxRow } from "@/lib/treasury";
 import dynamic from "next/dynamic";
 
@@ -13,6 +15,9 @@ const EgresoModal = dynamic(() => import("@/components/cobranzas/TesoreriaModals
 const EditarMovimientoModal = dynamic(() => import("@/components/cobranzas/TesoreriaModals").then((m) => m.EditarMovimientoModal), { ssr: false });
 
 export default function EgresosPage() {
+  const { can, isSuperadmin } = useAuth();
+  // Registrar el egreso sí; corregirle el monto o la fecha después, no (ver ingresos).
+  const puedeEditar = isSuperadmin || can(PERM.AREA_CONTABILIDAD);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<TxRow | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -34,7 +39,7 @@ export default function EgresosPage() {
         params={{ type: "EXPENSE" }}
         refreshKey={refreshKey}
         empty="No hay egresos registrados."
-        rowAction={(r) => r.status !== "ANULADA" ? (
+        rowAction={(r) => puedeEditar && r.status !== "ANULADA" ? (
           <button type="button" onClick={() => setEditing(r)} title="Editar movimiento"
             className="inline-flex min-h-8 items-center gap-1 text-[12px] font-medium text-text-secondary hover:text-brand">
             <Icon name="pencil" size={13} /> Editar

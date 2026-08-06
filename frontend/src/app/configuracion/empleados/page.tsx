@@ -163,7 +163,7 @@ export default function EmpleadosPage() {
             onSort={orden.onSort}
             rows={data?.items ?? []}
             empty={verInhabilitados ? "No hay empleados inhabilitados." : "No se encontraron empleados con esos criterios."}
-            onRowClick={(r: any) => router.push(`/empleados/${r.id}`)}
+            onRowClick={(r: any) => router.push(`/configuracion/empleados/${r.id}`)}
             columns={[
               { key: "name", header: "Nombre", sortable: true, render: (r: any) => <span className="font-medium text-text-primary">{r.name}</span> },
               { key: "docNumber", header: "Documento", sortable: true, render: (r: any) => <span className="text-text-secondary">{r.docNumber ?? "—"}</span> },

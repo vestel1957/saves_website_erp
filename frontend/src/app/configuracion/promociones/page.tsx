@@ -1,58 +1,27 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Modal } from "@/components/Modal";
-import { Input, Field, Select } from "@/components/ui/Field";
+import { Input } from "@/components/ui/Field";
 import { Icon } from "@/components/Icon";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { SUB_STATUS_LABEL } from "@/lib/subscribers";
 import { BotonOrden, useTablaOrdenable } from "@/components/ui/tabla-ordenable";
+import { PromocionModal } from "@/components/promotions/PromocionModal";
 import {
-  type Promotion, type PromotionAssignee, type PromotionAssignmentLog, type DiscountFormat,
-  DISCOUNT_FORMAT_OPTIONS, discountLabel, isFlatDiscount, isBeforeTaxDiscount,
+  type Promotion, type PromotionCatalogs, type PromotionTargetLog,
+  type PromotionApplication,
+  discountLabel, isBeforeTaxDiscount,
 } from "@/lib/promotions";
 
-const STATUS_KEYS = Object.keys(SUB_STATUS_LABEL);
-const statusText = (s: string | null) => (s ? SUB_STATUS_LABEL[s] ?? s : "");
+const statusText = (s: string) => SUB_STATUS_LABEL[s] ?? s;
+const cop = (n: number) => `$${Math.round(Number(n || 0)).toLocaleString("es-CO")}`;
 
-type StaffOption = { id: string; name: string; area: string | null };
-
-// Tipo de promoción (nombres fieles al legacy settings/promociones):
-//  ingresar = campaña disponible para TODOS los funcionarios (legacy colaborador=null)
-//  colaboradores = asignada a funcionarios específicos (legacy "Actualizar")
-//  estado = ligada a un estado de cliente (legacy "Estados Promos Para Clientes")
-type Tipo = "ingresar" | "colaboradores" | "estado";
-const TIPO_OPTIONS: { value: Tipo; label: string }[] = [
-  { value: "ingresar", label: "Ingresar (todos los funcionarios)" },
-  { value: "colaboradores", label: "Asignar a colaboradores" },
-  { value: "estado", label: "Estados Promos Para Clientes" },
-];
-
-type Draft = {
-  name: string;
-  description: string;
-  discountFormat: DiscountFormat;
-  percentage: string;
-  flatAmount: string;
-  startDate: string;
-  endDate: string;
-  active: boolean;
-  tipo: Tipo;
-  assigneeIds: string[];
-  subscriberStatus: string;
-};
-
-const todayStr = () => new Date().toISOString().slice(0, 10);
-const EMPTY: Draft = {
-  name: "", description: "", discountFormat: "%", percentage: "", flatAmount: "",
-  startDate: todayStr(), endDate: todayStr(),
-  active: true, tipo: "colaboradores", assigneeIds: [], subscriberStatus: "",
-};
 const dstr = (iso: string) => iso.slice(0, 10);
 const dtstr = (iso: string) =>
   new Date(iso).toLocaleString("es-CO", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -60,20 +29,37 @@ const dtstr = (iso: string) =>
 /** ¿Programada = activa, aún no vigente y con fecha de inicio futura? */
 const isProgramada = (p: Promotion) => p.active && !p.vigente && new Date(p.startDate).getTime() > Date.now();
 
-function HistoryTable({ rows, showPromo }: { rows: PromotionAssignmentLog[] | null; showPromo: boolean }) {
+/** Público de la promo, en fichas legibles (lo que se ve en la tarjeta). */
+function publicoChips(p: Promotion): { label: string; icon: string }[] {
+  if (p.allSubscribers) return [{ label: "Todos los clientes", icon: "users" }];
+  const chips: { label: string; icon: string }[] = [];
+  for (const s of p.subscriberStatuses) chips.push({ label: statusText(s), icon: "activity" });
+  if (p.subscribers.length === 1) {
+    const s = p.subscribers[0];
+    chips.push({ label: `${s.fullName?.trim() || "Cliente"} #${s.abonado}`, icon: "user" });
+  } else if (p.subscribers.length > 1) {
+    chips.push({ label: `${p.subscribers.length} clientes puntuales`, icon: "user" });
+  }
+  for (const pl of p.plans) chips.push({ label: pl.name, icon: "wifi" });
+  for (const b of p.branches) chips.push({ label: b.name, icon: "landmark" });
+  for (const n of p.neighborhoods) chips.push({ label: n.name, icon: "map-pin" });
+  return chips;
+}
+
+function HistoryTable({ rows, showPromo }: { rows: PromotionTargetLog[] | null; showPromo: boolean }) {
   if (!rows) return <p className="text-[13px] text-text-tertiary">Cargando…</p>;
-  if (rows.length === 0) return <p className="text-[13px] text-text-tertiary">Sin movimientos de asignación todavía.</p>;
+  if (rows.length === 0) return <p className="text-[13px] text-text-tertiary">Sin cambios de público todavía.</p>;
   return <HistoryRows rows={rows} showPromo={showPromo} />;
 }
 
-/** Filas del historial, separadas para poder usar el hook de orden. */
-function HistoryRows({ rows, showPromo }: { rows: PromotionAssignmentLog[]; showPromo: boolean }) {
+/** Filas de la bitácora, separadas para poder usar el hook de orden. */
+function HistoryRows({ rows, showPromo }: { rows: PromotionTargetLog[]; showPromo: boolean }) {
   const t = useTablaOrdenable(rows, {
     fecha: (h) => h.createdAt,
     promo: (h) => h.promotionName,
-    funcionario: (h) => h.staffName,
+    destinatario: (h) => h.targetLabel,
     accion: (h) => h.action,
-    por: (h) => h.assignedByName,
+    por: (h) => h.changedByName,
   });
   return (
     <div className="overflow-x-auto">
@@ -82,7 +68,7 @@ function HistoryRows({ rows, showPromo }: { rows: PromotionAssignmentLog[]; show
           <tr className="border-b border-border-subtle text-left text-text-tertiary">
             <th className="py-1.5 pr-3 font-medium"><BotonOrden t={t} clave="fecha">Fecha</BotonOrden></th>
             {showPromo && <th className="py-1.5 pr-3 font-medium"><BotonOrden t={t} clave="promo">Promoción</BotonOrden></th>}
-            <th className="py-1.5 pr-3 font-medium"><BotonOrden t={t} clave="funcionario">Funcionario</BotonOrden></th>
+            <th className="py-1.5 pr-3 font-medium"><BotonOrden t={t} clave="destinatario">Destinatario</BotonOrden></th>
             <th className="py-1.5 pr-3 font-medium"><BotonOrden t={t} clave="accion">Acción</BotonOrden></th>
             <th className="py-1.5 pr-3 font-medium"><BotonOrden t={t} clave="por">Por</BotonOrden></th>
           </tr>
@@ -92,11 +78,11 @@ function HistoryRows({ rows, showPromo }: { rows: PromotionAssignmentLog[]; show
             <tr key={h.id} className="border-b border-border-subtle/60">
               <td className="whitespace-nowrap py-1.5 pr-3 text-text-tertiary">{dtstr(h.createdAt)}</td>
               {showPromo && <td className="py-1.5 pr-3 font-medium text-text-primary">{h.promotionName}</td>}
-              <td className="py-1.5 pr-3 text-text-primary">{h.staffName}</td>
+              <td className="py-1.5 pr-3 text-text-primary">{h.targetLabel}</td>
               <td className="py-1.5 pr-3">
-                <Badge tone={h.action === "ASSIGNED" ? "success" : "default"} label={h.action === "ASSIGNED" ? "Asignada" : "Retirada"} />
+                <Badge tone={h.action === "ADDED" ? "success" : "default"} label={h.action === "ADDED" ? "Agregado" : "Quitado"} />
               </td>
-              <td className="py-1.5 pr-3 text-text-tertiary">{h.assignedByName ?? "—"}</td>
+              <td className="py-1.5 pr-3 text-text-tertiary">{h.changedByName ?? "—"}</td>
             </tr>
           ))}
         </tbody>
@@ -118,13 +104,12 @@ function Kpi({ label, value, tone }: { label: string; value: number; tone: "succ
 export default function PromocionesPage() {
   const { authFetch, isSuperadmin } = useAuth();
   const [promos, setPromos] = useState<Promotion[] | null>(null);
-  const [staff, setStaff] = useState<StaffOption[]>([]);
+  const [catalogs, setCatalogs] = useState<PromotionCatalogs | null>(null);
   const [editing, setEditing] = useState<Promotion | null>(null);
-  const [draft, setDraft] = useState<Draft>({ ...EMPTY });
-  const [busy, setBusy] = useState(false);
-  const [staffQuery, setStaffQuery] = useState("");
-  const [history, setHistory] = useState<PromotionAssignmentLog[] | null>(null);
+  const [history, setHistory] = useState<PromotionTargetLog[] | null>(null);
   const [historyFor, setHistoryFor] = useState<Promotion | null>(null);
+  const [appsFor, setAppsFor] = useState<Promotion | null>(null);
+  const [apps, setApps] = useState<PromotionApplication[] | null>(null);
   const [confirmar, setConfirmar] = useState<Promotion | null>(null);
   const [borrando, setBorrando] = useState(false);
 
@@ -145,17 +130,20 @@ export default function PromocionesPage() {
     if (!isSuperadmin) return;
     load();
     loadHistory();
-    void authFetch(`/staff?pageSize=100`)
-      .then((r) => (r.ok ? r.json() : { items: [] }))
-      .then((d) => setStaff((d.items ?? []).map((s: any) => ({ id: s.id, name: s.name, area: s.area }))))
-      .catch(() => setStaff([]));
+    void authFetch(`/promotions/catalogs`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then(setCatalogs)
+      .catch(() => setCatalogs(null));
   }, [authFetch, isSuperadmin, load, loadHistory]);
 
-  const filteredStaff = useMemo(() => {
-    const q = staffQuery.trim().toLowerCase();
-    if (!q) return staff;
-    return staff.filter((s) => `${s.name} ${s.area ?? ""}`.toLowerCase().includes(q));
-  }, [staff, staffQuery]);
+  // Aplicaciones de una promo (a qué facturas se le descontó de verdad).
+  useEffect(() => {
+    if (!appsFor) { setApps(null); return; }
+    void authFetch(`/promotions/${appsFor.id}/applications`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then(setApps)
+      .catch(() => setApps([]));
+  }, [appsFor, authFetch]);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -179,91 +167,24 @@ export default function PromocionesPage() {
   const programadasN = (promos ?? []).filter(isProgramada).length;
   const aplicN = (promos ?? []).reduce((s, p) => s + (p.timesApplied || 0), 0);
 
-  function resetForm() { setEditing(null); setStaffQuery(""); setDraft({ ...EMPTY }); }
-  function openNew() { resetForm(); setModalOpen(true); }
-  function closeModal() { setModalOpen(false); resetForm(); }
-  function openEdit(p: Promotion) {
-    setEditing(p);
-    setStaffQuery("");
-    setDraft({
-      name: p.name, description: p.description ?? "",
-      discountFormat: p.discountFormat ?? "%",
-      percentage: p.percentage ? String(p.percentage) : "",
-      flatAmount: p.flatAmount != null ? String(p.flatAmount) : "",
-      startDate: dstr(p.startDate), endDate: dstr(p.endDate),
-      active: p.active,
-      tipo: p.subscriberStatus ? "estado" : p.global ? "ingresar" : "colaboradores",
-      assigneeIds: p.assignees.map((a) => a.id),
-      subscriberStatus: p.subscriberStatus ?? "",
-    });
-    setModalOpen(true);
-  }
-
-  function toggleAssignee(id: string) {
-    const has = draft.assigneeIds.includes(id);
-    setDraft({ ...draft, assigneeIds: has ? draft.assigneeIds.filter((x) => x !== id) : [...draft.assigneeIds, id] });
-  }
-
-  async function save() {
-    if (!draft.name.trim()) { toast("La promoción necesita un nombre", "alert-circle"); return; }
-    const flat = isFlatDiscount(draft.discountFormat);
-    let pct: number | undefined;
-    let flatAmt: number | undefined;
-    if (flat) {
-      flatAmt = Number(draft.flatAmount);
-      if (!(flatAmt > 0)) { toast("El monto fijo del descuento debe ser mayor a $0", "alert-circle"); return; }
-    } else {
-      pct = Number(draft.percentage);
-      if (!Number.isInteger(pct) || pct < 1 || pct > 100) { toast("El porcentaje debe estar entre 1 y 100", "alert-circle"); return; }
-    }
-    if (draft.endDate < draft.startDate) { toast("La fecha final no puede ser anterior a la inicial", "alert-circle"); return; }
-    if (draft.tipo === "estado") {
-      if (!draft.subscriberStatus) { toast("Elige el estado de cliente al que aplica la promo", "alert-circle"); return; }
-    } else if (draft.tipo === "colaboradores" && draft.assigneeIds.length === 0) {
-      toast("Asigna al menos un colaborador (o usa 'Ingresar' para todos)", "alert-circle"); return;
-    }
-    setBusy(true);
-    try {
-      const body = JSON.stringify({
-        name: draft.name.trim(),
-        description: draft.description.trim() || undefined,
-        discountFormat: draft.discountFormat,
-        percentage: pct,
-        flatAmount: flatAmt,
-        startDate: draft.startDate,
-        endDate: draft.endDate,
-        active: draft.active,
-        subscriberStatus: draft.tipo === "estado" ? draft.subscriberStatus : null,
-        global: draft.tipo === "ingresar",
-        assigneeIds: draft.tipo === "colaboradores" ? draft.assigneeIds : [],
-      });
-      const res = editing
-        ? await authFetch(`/promotions/${editing.id}`, { method: "PUT", body })
-        : await authFetch(`/promotions`, { method: "POST", body });
-      if (!res.ok) throw new Error((await res.json().catch(() => null))?.message || "No se pudo guardar");
-      toast(editing ? "Promoción actualizada" : "Promoción creada", "check");
-      closeModal(); load(); loadHistory();
-    } catch (e) {
-      toast((e as Error).message, "alert-circle");
-    } finally {
-      setBusy(false);
-    }
-  }
+  function openNew() { setEditing(null); setModalOpen(true); }
+  function openEdit(p: Promotion) { setEditing(p); setModalOpen(true); }
+  function closeModal() { setModalOpen(false); setEditing(null); }
 
   async function remove(p: Promotion) {
-    if (!confirm(`¿Eliminar la promoción "${p.name}"?`)) return;
+    setBorrando(true);
     try {
       const res = await authFetch(`/promotions/${p.id}`, { method: "DELETE" });
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.message || "No se pudo eliminar");
       toast("Promoción eliminada", "check");
+      setConfirmar(null);
       load(); loadHistory();
     } catch (e) {
       toast((e as Error).message, "alert-circle");
+    } finally {
+      setBorrando(false);
     }
   }
-
-  const targetText = (p: Promotion) =>
-    p.subscriberStatus ? `Clientes en "${statusText(p.subscriberStatus)}"` : p.global ? "Todos los funcionarios" : `${p.assignees.length} funcionario(s)`;
 
   return (
     <div className="space-y-4">
@@ -271,17 +192,16 @@ export default function PromocionesPage() {
         <PageHeading
           icon="gift"
           title="Promociones"
-          subtitle="Campañas de descuento asignadas a funcionarios. El funcionario aplica el % a las facturas (como nota crédito) mientras la promo esté vigente."
+          subtitle="Campañas de descuento dirigidas a CLIENTES. Cada promoción define a quién alcanza —todos, un estado, clientes puntuales, un plan, una sede o un barrio— y solo aparece en las facturas de esos clientes."
         />
-        <button onClick={openNew}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-brand px-3.5 py-2 text-[13px] font-semibold text-on-brand transition-colors hover:bg-brand-hover">
+        <Button onClick={openNew} className="shrink-0">
           <Icon name="plus" size={15} /> Nueva promoción
-        </button>
+        </Button>
       </div>
 
       {/* Tabs */}
       <div className="flex gap-2">
-        {([["promos", "Promociones", "gift"], ["historial", "Historial", "history"]] as [typeof tab, string, string][]).map(([k, label, icon]) => (
+        {([["promos", "Promociones", "gift"], ["historial", "Bitácora del público", "history"]] as [typeof tab, string, string][]).map(([k, label, icon]) => (
           <button key={k} type="button" onClick={() => setTab(k)}
             className={`inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-[12px] font-semibold transition-colors ${tab === k ? "border-brand bg-brand-soft text-brand" : "border-border-default text-text-secondary hover:bg-surface-2"}`}>
             <Icon name={icon} size={14} /> {label}
@@ -325,51 +245,64 @@ export default function PromocionesPage() {
             </div>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {visible.map((p) => (
-                <div key={p.id} className="flex flex-col gap-2 rounded-xl border border-border-subtle bg-surface p-4 shadow-sm transition-colors hover:border-brand/40">
-                  <div className="flex items-start justify-between gap-2">
-                    <span className="truncate text-[14px] font-semibold text-text-primary">{p.name}</span>
-                    <Badge tone="brand" label={discountLabel(p)} />
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {p.vigente ? <Badge tone="success" label="Vigente" /> : <Badge tone="default" label={p.active ? "Fuera de fecha" : "Inactiva"} />}
-                    {isBeforeTaxDiscount(p.discountFormat) && <Badge tone="default" label="Antes de imp." />}
-                    {p.subscriberStatus ? <Badge tone="warning" label={`Estado: ${statusText(p.subscriberStatus)}`} /> : p.global ? <Badge tone="info" label="Todos los funcionarios" /> : <Badge tone="default" label={`${p.assignees.length} colaborador(es)`} />}
-                  </div>
-                  {p.description && <p className="truncate text-[12px] text-text-tertiary">{p.description}</p>}
-                  <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11.5px] text-text-tertiary">
-                    <span>{dstr(p.startDate)} → {dstr(p.endDate)}</span>
-                    <span>{targetText(p)}</span>
-                    {p.timesApplied > 0 && <span className="font-medium text-text-secondary">{p.timesApplied} aplicación(es)</span>}
-                  </div>
-                  {!p.subscriberStatus && !p.global && p.assignees.length > 0 && (
-                    <div className="flex flex-wrap gap-1">
-                      {p.assignees.slice(0, 5).map((a: PromotionAssignee) => (
-                        <span key={a.id} className="rounded-md bg-surface-2 px-1.5 py-0.5 text-[11px] text-text-secondary">{a.name}</span>
-                      ))}
-                      {p.assignees.length > 5 && <span className="text-[11px] text-text-tertiary">+{p.assignees.length - 5}</span>}
+              {visible.map((p) => {
+                const chips = publicoChips(p);
+                return (
+                  <div key={p.id} className="flex flex-col gap-2 rounded-xl border border-border-subtle bg-surface p-4 shadow-sm transition-colors hover:border-brand/40">
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="truncate text-[14px] font-semibold text-text-primary">{p.name}</span>
+                      <Badge tone="brand" label={discountLabel(p)} />
                     </div>
-                  )}
-                  <div className="mt-auto flex items-center justify-end gap-1 border-t border-border-subtle pt-2">
-                    <button type="button" onClick={() => setHistoryFor(p)} className="tap rounded-md p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-text-primary" title="Historial de asignaciones">
-                      <Icon name="history" size={15} />
-                    </button>
-                    <button type="button" onClick={() => openEdit(p)} className="tap rounded-md p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-text-primary" title="Editar">
-                      <Icon name="pencil" size={15} />
-                    </button>
-                    <button type="button" onClick={() => remove(p)} className="tap rounded-md p-1.5 text-text-tertiary hover:bg-error-soft hover:text-error-text" title="Eliminar">
-                      <Icon name="trash" size={15} />
-                    </button>
+                    <div className="flex flex-wrap gap-1.5">
+                      {p.vigente ? <Badge tone="success" label="Vigente" /> : <Badge tone="default" label={p.active ? "Fuera de fecha" : "Inactiva"} />}
+                      {isBeforeTaxDiscount(p.discountFormat) && <Badge tone="default" label="Antes de imp." />}
+                    </div>
+                    {p.description && <p className="truncate text-[12px] text-text-tertiary">{p.description}</p>}
+
+                    {/* Público: a qué clientes alcanza */}
+                    <div className="rounded-lg bg-surface-2 px-2 py-1.5">
+                      <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-text-tertiary">Aplica a</div>
+                      <div className="flex flex-wrap gap-1">
+                        {chips.slice(0, 6).map((c, i) => (
+                          <span key={i} className="inline-flex items-center gap-1 rounded-md bg-surface px-1.5 py-0.5 text-[11px] text-text-secondary">
+                            <Icon name={c.icon} size={11} className="text-text-tertiary" /> {c.label}
+                          </span>
+                        ))}
+                        {chips.length > 6 && <span className="text-[11px] text-text-tertiary">+{chips.length - 6}</span>}
+                        {chips.length === 0 && <span className="text-[11px] text-warning-text">Sin público: no aparece en ninguna factura</span>}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11.5px] text-text-tertiary">
+                      <span>{dstr(p.startDate)} → {dstr(p.endDate)}</span>
+                      {p.timesApplied > 0 && (
+                        <button type="button" onClick={() => setAppsFor(p)} className="font-medium text-brand hover:underline">
+                          {p.timesApplied} aplicación(es)
+                        </button>
+                      )}
+                    </div>
+                    <div className="mt-auto flex items-center justify-end gap-1 border-t border-border-subtle pt-2">
+                      <button type="button" onClick={() => setHistoryFor(p)} className="tap rounded-md p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-text-primary" title="Bitácora del público">
+                        <Icon name="history" size={15} />
+                      </button>
+                      <button type="button" onClick={() => openEdit(p)} className="tap rounded-md p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-text-primary" title="Editar">
+                        <Icon name="pencil" size={15} />
+                      </button>
+                      <button type="button" onClick={() => setConfirmar(p)} className="tap rounded-md p-1.5 text-text-tertiary hover:bg-error-soft hover:text-error-text" title="Eliminar">
+                        <Icon name="trash" size={15} />
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </>
       ) : (
         <>
           <p className="text-[12px] text-text-tertiary">
-            Registro de qué promoción se asignó (o retiró) a cada funcionario, quién lo hizo y cuándo.
+            Registro de qué destinatario entró o salió del público de cada promoción, quién lo hizo y cuándo.
+            Es la traza que responde “¿por qué a este cliente se le descontó?”.
           </p>
           <div className="rounded-xl border border-border-subtle bg-surface p-3">
             <HistoryTable rows={history} showPromo />
@@ -377,108 +310,75 @@ export default function PromocionesPage() {
         </>
       )}
 
-      {/* Modal crear / editar */}
-      <Modal open={modalOpen} onClose={closeModal} title={editing ? `Editar · ${editing.name}` : "Nueva promoción"} maxWidth="max-w-3xl">
-        <div className="grid gap-x-6 gap-y-3 lg:grid-cols-2">
-          {/* Datos de la campaña */}
-          <div className="flex flex-col gap-3">
-            <Field label="Nombre de la campaña">
-              <Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="10% Cortados" />
-            </Field>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto]">
-              <Field label="Tipo de descuento">
-                <Select value={draft.discountFormat} onChange={(e) => setDraft({ ...draft, discountFormat: e.target.value as DiscountFormat })}>
-                  {DISCOUNT_FORMAT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                </Select>
-              </Field>
-              {isFlatDiscount(draft.discountFormat) ? (
-                <Field label="Monto ($)">
-                  <Input className="sm:w-36" type="number" min={1} value={draft.flatAmount} onChange={(e) => setDraft({ ...draft, flatAmount: e.target.value })} placeholder="5000" />
-                </Field>
-              ) : (
-                <Field label="Descuento (%)">
-                  <Input className="sm:w-28" type="number" min={1} max={100} value={draft.percentage} onChange={(e) => setDraft({ ...draft, percentage: e.target.value })} placeholder="10" />
-                </Field>
-              )}
-            </div>
-            <Field label="Descripción" hint="Opcional">
-              <Input value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="Descuento por pronto pago" />
-            </Field>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <Field label="Inicia">
-                <Input type="date" value={draft.startDate} onChange={(e) => setDraft({ ...draft, startDate: e.target.value })} />
-              </Field>
-              <Field label="Finaliza">
-                <Input type="date" value={draft.endDate} onChange={(e) => setDraft({ ...draft, endDate: e.target.value })} />
-              </Field>
-            </div>
-            <label className="flex items-center gap-2 text-[13px] text-text-secondary">
-              <input type="checkbox" checked={draft.active} onChange={(e) => setDraft({ ...draft, active: e.target.checked })} />
-              Activa
-            </label>
-          </div>
+      {/* Crear / editar. Se monta al abrir para que arranque limpio en cada promoción. */}
+      {modalOpen && (
+        <PromocionModal
+          editing={editing}
+          catalogs={catalogs}
+          onClose={closeModal}
+          onSaved={() => { closeModal(); load(); loadHistory(); }}
+        />
+      )}
 
-          {/* Tipo de promoción (fiel al legacy settings/promociones) */}
-          <div className="flex flex-col gap-3">
-            <Field label="Tipo de promoción" hint="Ingresar: para todos. Colaboradores: la aplican los funcionarios elegidos. Estados: aplica a los clientes en ese estado.">
-              <Select value={draft.tipo} onChange={(e) => setDraft({ ...draft, tipo: e.target.value as Tipo })}>
-                {TIPO_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </Select>
-            </Field>
-
-            {draft.tipo === "ingresar" && (
-              <div className="flex items-start gap-2 rounded-lg bg-surface-2 px-3 py-2.5 text-[12px] text-text-secondary">
-                <Icon name="users" size={15} className="mt-0.5 shrink-0 text-text-tertiary" />
-                Disponible para <b>todos los funcionarios</b> (equivale a "Ingresar" del legacy).
-              </div>
-            )}
-
-            {draft.tipo === "estado" && (
-              <Field label="Estado de cliente">
-                <Select value={draft.subscriberStatus} onChange={(e) => setDraft({ ...draft, subscriberStatus: e.target.value })}>
-                  <option value="">— Elegir estado —</option>
-                  {STATUS_KEYS.map((k) => (
-                    <option key={k} value={k}>{SUB_STATUS_LABEL[k]}</option>
-                  ))}
-                </Select>
-              </Field>
-            )}
-
-            {draft.tipo === "colaboradores" && (
-              <Field label="Colaboradores autorizados" hint={`${draft.assigneeIds.length} seleccionado(s)`}>
-                <div className="rounded-lg border border-border-subtle">
-                  <div className="border-b border-border-subtle p-2">
-                    <Input value={staffQuery} onChange={(e) => setStaffQuery(e.target.value)} placeholder="Buscar funcionario…" />
-                  </div>
-                  <div className="grid max-h-40 grid-cols-1 gap-x-2 overflow-y-auto p-1 sm:grid-cols-2">
-                    {filteredStaff.length === 0 ? (
-                      <p className="p-2 text-[12px] text-text-tertiary">Sin funcionarios.</p>
-                    ) : filteredStaff.map((s) => (
-                      <label key={s.id} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-surface-2">
-                        <input type="checkbox" checked={draft.assigneeIds.includes(s.id)} onChange={() => toggleAssignee(s.id)} />
-                        <span className="truncate text-text-primary">{s.name}</span>
-                        {s.area && <span className="shrink-0 text-[11px] text-text-tertiary">· {s.area}</span>}
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              </Field>
-            )}
-          </div>
-        </div>
-
-        <div className="mt-2 flex justify-end gap-2 border-t border-border-subtle pt-3">
-          <Button variant="secondary" onClick={closeModal}>Cancelar</Button>
-          <Button onClick={save} disabled={busy}>{busy ? "Guardando…" : editing ? "Guardar cambios" : "Crear promoción"}</Button>
-        </div>
-      </Modal>
-
-      {/* Historial de una promoción específica */}
+      {/* Bitácora de una promoción específica */}
       {historyFor && (
-        <Modal open onClose={() => setHistoryFor(null)} title={`Historial · ${historyFor.name}`}>
+        <Modal open onClose={() => setHistoryFor(null)} title={`Público · ${historyFor.name}`}>
           <HistoryTable rows={(history ?? []).filter((h) => h.promotionId === historyFor.id)} showPromo={false} />
         </Modal>
       )}
+
+      {/* Facturas a las que se aplicó */}
+      {appsFor && (
+        <Modal open onClose={() => setAppsFor(null)} title={`Aplicaciones · ${appsFor.name}`}>
+          {!apps ? (
+            <p className="text-[13px] text-text-tertiary">Cargando…</p>
+          ) : apps.length === 0 ? (
+            <p className="text-[13px] text-text-tertiary">Todavía no se ha aplicado a ninguna factura.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-[12px]">
+                <thead>
+                  <tr className="border-b border-border-subtle text-left text-text-tertiary">
+                    <th className="py-1.5 pr-3 font-medium">Fecha</th>
+                    <th className="py-1.5 pr-3 font-medium">Cliente</th>
+                    <th className="py-1.5 pr-3 font-medium">Factura</th>
+                    <th className="py-1.5 pr-3 font-medium">Descuento</th>
+                    <th className="py-1.5 pr-3 font-medium">Aplicó</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {apps.map((a) => (
+                    <tr key={a.id} className="border-b border-border-subtle/60">
+                      <td className="whitespace-nowrap py-1.5 pr-3 text-text-tertiary">{dtstr(a.createdAt)}</td>
+                      <td className="py-1.5 pr-3 text-text-primary">
+                        {a.subscriberName ?? "—"} {a.abonado != null && <span className="font-mono text-[11px] text-text-tertiary">#{a.abonado}</span>}
+                      </td>
+                      <td className="py-1.5 pr-3 font-mono text-text-secondary">{a.tid ?? "—"}</td>
+                      <td className="py-1.5 pr-3 font-mono font-semibold text-text-primary">{cop(a.amount)}</td>
+                      <td className="py-1.5 pr-3 text-text-tertiary">{a.appliedByName ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Modal>
+      )}
+
+      {/* Confirmar borrado */}
+      <ConfirmDialog
+        open={!!confirmar}
+        busy={borrando}
+        title="Eliminar promoción"
+        icon="trash"
+        message={<>¿Eliminar la promoción <b>{confirmar?.name}</b>?</>}
+        detail={confirmar?.timesApplied ? (
+          <span>Ya se aplicó a {confirmar.timesApplied} factura(s). Las notas crédito emitidas NO se revierten.</span>
+        ) : undefined}
+        confirmLabel="Eliminar"
+        onConfirm={() => confirmar && void remove(confirmar)}
+        onClose={() => setConfirmar(null)}
+      />
     </div>
   );
 }

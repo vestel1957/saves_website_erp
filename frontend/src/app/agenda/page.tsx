@@ -1,18 +1,21 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
 import { Button } from "@/components/ui/Button";
 import { Input, Select, Textarea, Field } from "@/components/ui/Field";
 import { DataTable } from "@/components/ui/DataTable";
+import { ListToolbar } from "@/components/ui/ListToolbar";
 import { Pagination } from "@/components/ui/Pagination";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
+import { LoadError } from "@/components/ui/LoadError";
 import { Modal } from "@/components/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
+import { useRequest } from "@/lib/useRequest";
 import { useOrden } from "@/lib/useOrden";
 import { mensajeDeError } from "@/lib/errores";
 import { TICKET_PRIORITIES, TICKET_PRIORITY_TONE } from "@/lib/support";
@@ -32,55 +35,116 @@ const toLocalInput = (iso: string | null) => {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 };
 
-export default function AgendaPage() {
-  const { authFetch } = useAuth();
-  const [loading, setLoading] = useState(true);
+const fechaCorta = (iso: string | null) =>
+  iso ? new Date(iso).toLocaleDateString("es-CO", { day: "2-digit", month: "short", year: "numeric" }) : "—";
 
-  // ── Eventos ───────────────────────────────────────────────────────────────
-  const [rows, setRows] = useState<any[]>([]);
-  const [total, setTotal] = useState(0);
+/**
+ * Los filtros de la vista, en un solo objeto.
+ *
+ * Van juntos a propósito: son la dependencia de la carga y lo que hay que vaciar
+ * al pulsar "Limpiar". Sueltos en cinco `useState` había que acordarse de tocar
+ * los cinco en los tres sitios, que es como se quedan filtros huérfanos que la
+ * tabla aplica y el botón de limpiar no.
+ */
+type Filtros = { search: string; from: string; to: string; priority: string; assignedBy: string };
+const SIN_FILTROS: Filtros = { search: "", from: "", to: "", priority: "", assignedBy: "" };
+const cuantosFiltros = (f: Filtros) => Object.values(f).filter((v) => v.trim() !== "").length;
+
+/** `YYYY-MM-DD` de un `Date`, leído en Colombia — la misma zona que usa el backend. */
+const diaISO = (d: Date) =>
+  new Intl.DateTimeFormat("en-CA", { timeZone: "America/Bogota", year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+
+/**
+ * Atajos del rango. La agenda arrastra cinco años de eventos: escribir dos fechas a
+ * mano para ver "lo de este mes" es el paso que hace que nadie use el filtro.
+ */
+const ATAJOS: { etiqueta: string; rango: () => { from: string; to: string } }[] = [
+  { etiqueta: "Hoy", rango: () => { const h = diaISO(new Date()); return { from: h, to: h }; } },
+  {
+    etiqueta: "Últimos 7 días",
+    rango: () => ({ from: diaISO(new Date(Date.now() - 6 * 86400000)), to: diaISO(new Date()) }),
+  },
+  {
+    etiqueta: "Este mes",
+    rango: () => { const h = diaISO(new Date()); return { from: `${h.slice(0, 7)}-01`, to: h }; },
+  },
+  {
+    etiqueta: "Este año",
+    rango: () => { const h = diaISO(new Date()); return { from: `${h.slice(0, 4)}-01-01`, to: h }; },
+  },
+];
+
+export default function AgendaPage() {
+  const { loading: authLoading, authFetch } = useAuth();
+
+  const [filtros, setFiltros] = useState<Filtros>(SIN_FILTROS);
+  const set = <K extends keyof Filtros>(k: K, v: Filtros[K]) => setFiltros((f) => ({ ...f, [k]: v }));
+  const [panelAbierto, setPanelAbierto] = useState(false);
+
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
-  const [pages, setPages] = useState(1);
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
-
-  // ── Stats ─────────────────────────────────────────────────────────────────
-  const [stats, setStats] = useState<any>(null);
 
   // Pagina en el servidor: el orden viaja en la query.
-  const orden = useOrden();
+  const orden = useOrden({ by: "start", dir: "desc" });
 
-  const loadEvents = useCallback(async () => {
-    setLoading(true);
-    try {
-      const qs = new URLSearchParams({ from, to, page: String(page), pageSize: String(pageSize), ...orden.params });
-      const url = `/omni/events?${qs}`;
-      const d: any = await (await authFetch(url)).json();
-      setRows(d.items ?? []);
-      setTotal(d.total ?? 0);
-      setPages(d.pages ?? 1);
-    } finally {
-      setLoading(false);
-    }
-  }, [authFetch, from, to, page, pageSize, orden.clave]);
+  // Los filtros se aplican solos al cambiarlos (con debounce en el buscador, que se
+  // teclea letra a letra). No hay botón "Filtrar": una tabla que ya cambió y un botón
+  // que sigue ahí hacen dudar de si el filtro llegó a aplicarse.
+  const qsFiltros = useMemo(() => {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(filtros)) if (v.trim()) qs.set(k, v.trim());
+    return qs.toString();
+  }, [filtros]);
 
-  const loadStats = useCallback(async () => {
-    const d: any = await (await authFetch("/omni/events/stats")).json();
-    setStats(d);
-  }, [authFetch]);
+  const { data, cargando, error, refrescar } = useRequest<any>(
+    () => {
+      const qs = new URLSearchParams(qsFiltros);
+      qs.set("page", String(page));
+      qs.set("pageSize", String(pageSize));
+      for (const [k, v] of Object.entries(orden.params)) qs.set(k, v);
+      return `/omni/events?${qs}`;
+    },
+    [qsFiltros, page, pageSize, orden.clave],
+    { debounceMs: filtros.search ? 350 : 0, saltar: authLoading },
+  );
 
+  // Las cifras de arriba miran EXACTAMENTE los mismos filtros que la tabla.
+  const { data: stats } = useRequest<any>(
+    () => `/omni/events/stats${qsFiltros ? `?${qsFiltros}` : ""}`,
+    [qsFiltros],
+    { debounceMs: filtros.search ? 350 : 0, saltar: authLoading },
+  );
+
+  // Opciones de los desplegables: quién aparece de verdad en los eventos.
+  const [opciones, setOpciones] = useState<{ asignadores: { id: string; nombre: string; total: number }[]; sinAsignar: number }>({ asignadores: [], sinAsignar: 0 });
   useEffect(() => {
-    void loadEvents();
-  }, [loadEvents]);
+    if (authLoading) return;
+    void authFetch("/omni/events/filters")
+      .then((r) => r.json())
+      .then((o) => setOpciones({ asignadores: o?.asignadores ?? [], sinAsignar: o?.sinAsignar ?? 0 }))
+      .catch(() => {});
+  }, [authLoading, authFetch]);
 
-  // Cambiar el rango vuelve a la página 1: mantener la página vieja sobre un
-  // rango nuevo mostraba una página que ya no existía.
-  useEffect(() => { setPage(1); }, [from, to, pageSize, orden.clave]);
+  // Cambiar cualquier filtro vuelve a la página 1: mantener la página vieja sobre un
+  // resultado nuevo mostraba una página que ya no existía.
+  useEffect(() => { setPage(1); }, [qsFiltros, pageSize, orden.clave]);
 
-  useEffect(() => {
-    void loadStats();
-  }, [loadStats]);
+  const rows: any[] = data?.items ?? [];
+  const total: number = data?.total ?? 0;
+  const activos = cuantosFiltros(filtros);
+
+  // Lo que se ve como chip con el panel cerrado. El buscador no entra: ya se lee
+  // escrito en su propia caja, y repetirlo aquí sería contarlo dos veces.
+  const chips = [
+    filtros.from && { key: "from", etiqueta: `Desde ${filtros.from}`, quitar: () => set("from", "") },
+    filtros.to && { key: "to", etiqueta: `Hasta ${filtros.to}`, quitar: () => set("to", "") },
+    filtros.priority && { key: "priority", etiqueta: `Prioridad: ${filtros.priority}`, quitar: () => set("priority", "") },
+    filtros.assignedBy && {
+      key: "assignedBy",
+      etiqueta: `Asignó: ${filtros.assignedBy === "sin" ? "sin asignar" : opciones.asignadores.find((a) => a.id === filtros.assignedBy)?.nombre ?? filtros.assignedBy}`,
+      quitar: () => set("assignedBy", ""),
+    },
+  ].filter(Boolean) as { key: string; etiqueta: string; quitar: () => void }[];
 
   const [eventModal, setEventModal] = useState<any | "new" | null>(null);
   const [ev, setEv] = useState<any>({ title: "", start: "", end: "", description: "", color: "#6366f1" });
@@ -99,7 +163,7 @@ export default function AgendaPage() {
       const res = await authFetch(editing ? `/omni/events/${eventModal.id}` : "/omni/events", { method: editing ? "PATCH" : "POST", body: JSON.stringify(body) });
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.message || "No se pudo guardar");
       toast(editing ? "Evento actualizado" : "Evento creado", "check");
-      setEventModal(null); void loadEvents(); void loadStats();
+      setEventModal(null); refrescar();
     } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setSavingEv(false); }
   }
 
@@ -108,7 +172,7 @@ export default function AgendaPage() {
     try {
       const res = await authFetch(`/omni/events/${toDelete.id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("No se pudo eliminar");
-      toast("Evento eliminado", "check"); setToDelete(null); void loadEvents(); void loadStats();
+      toast("Evento eliminado", "check"); setToDelete(null); refrescar();
     } catch (e) { toast(mensajeDeError(e), "alert-triangle"); setToDelete(null); }
   }
 
@@ -162,7 +226,10 @@ export default function AgendaPage() {
       render: (r: any) =>
         r.orderNo ? <span className="font-mono text-[12px] text-text-secondary">#{r.orderNo}</span> : "—",
     },
-    { key: "assignedBy", header: "Asignó", sortable: true, render: (r: any) => r.assignedBy || "—" },
+    // Sin `sortable`: la columna guarda el id legacy y el nombre se resuelve al
+    // salir, así que la flecha ordenaría por unos números que no se ven. Para eso
+    // está el filtro "Asignó", que ofrece a la gente por nombre.
+    { key: "assignedBy", header: "Asignó", render: (r: any) => r.assignedBy || "—" },
     { key: "actions", header: "", align: "right" as const, render: (r: any) => (
       <div className="flex justify-end gap-2">
         <button type="button" title="Editar" onClick={() => openEdit(r)} className="tap text-text-tertiary hover:text-brand"><Icon name="pencil" size={14} /></button>
@@ -171,7 +238,14 @@ export default function AgendaPage() {
     ) },
   ];
 
-  if (loading && rows.length === 0 && !stats) return <PageSkeleton />;
+  if (authLoading) return <PageSkeleton />;
+
+  const cifras: { icono: string; etiqueta: string; valor: string }[] = [
+    { icono: "calendar-clock", etiqueta: activos ? "Eventos filtrados" : "Total eventos", valor: (stats?.total ?? 0).toLocaleString("es-CO") },
+    { icono: "receipt", etiqueta: "Con orden", valor: (stats?.conOrden ?? 0).toLocaleString("es-CO") },
+    { icono: "calendar", etiqueta: "Primer evento", valor: fechaCorta(stats?.primero ?? null) },
+    { icono: "activity", etiqueta: "Último evento", valor: fechaCorta(stats?.ultimo ?? null) },
+  ];
 
   return (
     <>
@@ -185,64 +259,139 @@ export default function AgendaPage() {
         </div>
       </div>
 
-      {/* stats */}
+      {/* cifras: siempre sobre lo que está filtrado */}
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
-        <div className="flex items-center gap-3 rounded-xl border border-border-subtle bg-surface p-4">
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-soft">
-            <Icon name="calendar-clock" size={18} className="text-brand" />
-          </span>
-          <div className="min-w-0">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-text-tertiary">Total eventos</p>
-            <p className="text-[18px] font-bold text-text-primary">{stats?.total ?? 0}</p>
-          </div>
-        </div>
-        {stats?.ultimo && (
-          <div className="flex items-center gap-3 rounded-xl border border-border-subtle bg-surface p-4">
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-surface-2">
-              <Icon name="activity" size={18} className="text-text-secondary" />
+        {cifras.map((c) => (
+          <div key={c.etiqueta} className="flex items-center gap-3 rounded-xl border border-border-subtle bg-surface p-4">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-soft">
+              <Icon name={c.icono} size={18} className="text-brand" />
             </span>
             <div className="min-w-0">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-text-tertiary">Último evento</p>
-              <p className="truncate text-[13px] font-semibold text-text-primary">
-                {new Date(stats.ultimo).toLocaleDateString("es-CO", { day: "2-digit", month: "short", year: "numeric" })}
-              </p>
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-text-tertiary">{c.etiqueta}</p>
+              <p className="truncate text-[16px] font-bold text-text-primary">{c.valor}</p>
             </div>
           </div>
-        )}
+        ))}
       </div>
 
       {/* Eventos */}
       <div className="flex flex-col gap-4">
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            setPage(1);
-            void loadEvents();
-          }}
-          className="flex flex-wrap items-end gap-2"
+        <ListToolbar
+          search={filtros.search}
+          onSearch={(v) => set("search", v)}
+          searchPlaceholder="Buscar por título, descripción o N° de orden…"
+          actions={
+            data && (
+              <span className="whitespace-nowrap text-[12px] text-text-tertiary">
+                <span className="font-semibold text-text-secondary">{total.toLocaleString("es-CO")}</span> eventos
+              </span>
+            )
+          }
         >
-          <Field label="Desde">
-            <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
-          </Field>
-          <Field label="Hasta">
-            <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} />
-          </Field>
-          <Button type="submit" variant="secondary">
-            <Icon name="search" size={14} /> Filtrar
-          </Button>
-        </form>
+          <button
+            type="button"
+            onClick={() => setPanelAbierto((v) => !v)}
+            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-[12px] font-semibold transition-colors ${panelAbierto || chips.length ? "border-brand bg-brand-soft text-brand" : "border-border-default bg-surface text-text-secondary hover:bg-surface-2"}`}
+          >
+            <Icon name="sliders-horizontal" size={14} /> Filtros
+            {chips.length > 0 && <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-brand px-1 text-[10px] font-bold text-on-brand">{chips.length}</span>}
+            <Icon name={panelAbierto ? "chevron-up" : "chevron-down"} size={14} />
+          </button>
+        </ListToolbar>
 
-        <DataTable columns={columns} rows={rows} empty="No hay eventos en el rango seleccionado" sort={orden.sort} onSort={orden.onSort} />
+        {/* Panel de filtros (colapsable), igual que en Facturación. */}
+        {panelAbierto && (
+          <div className="rounded-xl border border-border-subtle bg-surface-subtle p-3">
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              <Field label="Desde">
+                <Input type="date" value={filtros.from} max={filtros.to || undefined} onChange={(e) => set("from", e.target.value)} />
+              </Field>
+              <Field label="Hasta">
+                <Input type="date" value={filtros.to} min={filtros.from || undefined} onChange={(e) => set("to", e.target.value)} />
+              </Field>
+              <Field label="Prioridad">
+                <Select value={filtros.priority} onChange={(e) => set("priority", e.target.value)}>
+                  <option value="">Todas</option>
+                  {TICKET_PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
+                </Select>
+              </Field>
+              <Field label="Asignó">
+                <Select value={filtros.assignedBy} onChange={(e) => set("assignedBy", e.target.value)}>
+                  <option value="">Todos</option>
+                  {opciones.asignadores.map((a) => (
+                    <option key={a.id} value={a.id}>{a.nombre} ({a.total.toLocaleString("es-CO")})</option>
+                  ))}
+                  {opciones.sinAsignar > 0 && <option value="sin">Sin asignar ({opciones.sinAsignar.toLocaleString("es-CO")})</option>}
+                </Select>
+              </Field>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-1.5">
+              {ATAJOS.map((a) => (
+                <button
+                  key={a.etiqueta}
+                  type="button"
+                  onClick={() => setFiltros((f) => ({ ...f, ...a.rango() }))}
+                  className="rounded-lg border border-border-default bg-surface px-2.5 py-1.5 text-[12px] font-medium text-text-secondary transition-colors hover:bg-surface-2"
+                >
+                  {a.etiqueta}
+                </button>
+              ))}
+              {activos > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setFiltros(SIN_FILTROS)}
+                  className="ml-auto rounded-lg border border-border-default bg-surface px-3 py-1.5 text-[12px] font-semibold text-text-secondary hover:bg-surface-2"
+                >
+                  Limpiar filtros
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
-        {total > 0 && (
-          <Pagination
-            meta={{ page, pageSize, total, pageCount: pages }}
-            onPage={setPage}
-            onPageSize={(s) => {
-              setPageSize(s);
-              setPage(1);
-            }}
-          />
+        {/* Con el panel cerrado, los filtros puestos siguen a la vista como chips:
+            una tabla recortada sin nada que lo explique es lo que se lee como "no hay datos". */}
+        {!panelAbierto && chips.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {chips.map((c) => (
+              <button
+                key={c.key}
+                type="button"
+                onClick={c.quitar}
+                className="inline-flex items-center gap-1 rounded-full border border-border-subtle bg-surface px-2.5 py-1 text-[11px] font-medium text-text-secondary transition-colors hover:bg-surface-2"
+              >
+                {c.etiqueta} <Icon name="x" size={12} className="text-text-tertiary" />
+              </button>
+            ))}
+            <button type="button" onClick={() => setFiltros(SIN_FILTROS)} className="px-1 text-[11px] font-semibold text-brand hover:underline">
+              Limpiar todo
+            </button>
+          </div>
+        )}
+
+        {/* Un rango invertido o una fecha imposible los rechaza el backend: mostrarlo
+            como error es lo que distingue "no hay eventos" de "el filtro está mal". */}
+        {error ? (
+          <LoadError message={error} onRetry={refrescar} />
+        ) : (
+          <>
+            <DataTable
+              columns={columns}
+              rows={rows}
+              loading={cargando}
+              empty={activos ? "Ningún evento coincide con los filtros" : "No hay eventos"}
+              sort={orden.sort}
+              onSort={orden.onSort}
+            />
+
+            {total > 0 && (
+              <Pagination
+                meta={{ page, pageSize, total, pageCount: data?.pages ?? 1 }}
+                onPage={setPage}
+                onPageSize={(s) => { setPageSize(s); setPage(1); }}
+              />
+            )}
+          </>
         )}
       </div>
 

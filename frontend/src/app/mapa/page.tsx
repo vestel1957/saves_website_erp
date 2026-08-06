@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { PageHeading } from "@/components/ui/PageHeading";
@@ -15,7 +15,10 @@ import type { BranchOpt } from "@/lib/network";
 import { COLOR_ESTADO, type PuntoMapa } from "@/components/map/Mapa";
 import { CENTRO_POR_DEFECTO } from "@/lib/geo";
 import {
+  COLOR_TECNICO_FRIO,
+  COLOR_TECNICO_VIVO,
   MOTIVO_PING,
+  TECNICO_EN_VIVO_MIN,
   haceCuanto,
   type CoberturaGeo,
   type PuntoTecnico,
@@ -29,6 +32,9 @@ const Mapa = dynamic(() => import("@/components/map/Mapa").then((m) => m.Mapa), 
 });
 
 type Capa = "abonados" | "naps" | "tecnicos";
+
+/** Cada cuánto se vuelve a pedir la posición de los técnicos (ellos laten cada minuto). */
+const REFRESCO_TECNICOS_MS = 30_000;
 
 function Chip({
   activo,
@@ -65,7 +71,7 @@ function Chip({
 
 export default function MapaPage() {
   const router = useRouter();
-  const { loading: authLoading, can } = useAuth();
+  const { loading: authLoading, can, sedeScoped } = useAuth();
   const verTecnicos = can([PERM.AREA_GERENCIA, PERM.AREA_ADMINISTRACION, PERM.AREA_SISTEMAS]);
 
   const [q, setQ] = useState("");
@@ -96,6 +102,24 @@ export default function MapaPage() {
   const tecnicos = useRequest<PuntoTecnico[]>(() => "/geo/technicians", [], {
     saltar: authLoading || !verTecnicos,
   });
+
+  // Los técnicos se mueven; los abonados y las NAPs no. Solo esta capa se vuelve
+  // a pedir sola, y solo mientras alguien está mirando de verdad la pestaña —
+  // dejar el mapa abierto en una pantalla de la oficina no debe estar pegándole
+  // a la API toda la tarde. Al volver a la pestaña se refresca al momento.
+  const refrescarTecnicos = tecnicos.refrescar;
+  useEffect(() => {
+    if (!verTecnicos || !capas.tecnicos) return;
+    const tic = () => {
+      if (document.visibilityState === "visible") refrescarTecnicos();
+    };
+    const id = setInterval(tic, REFRESCO_TECNICOS_MS);
+    document.addEventListener("visibilitychange", tic);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", tic);
+    };
+  }, [verTecnicos, capas.tecnicos, refrescarTecnicos]);
 
   const cobertura = useRequest<CoberturaGeo>(() => "/geo/coverage", [], { saltar: authLoading });
 
@@ -141,16 +165,25 @@ export default function MapaPage() {
     }
     if (capas.tecnicos && verTecnicos) {
       for (const t of tecnicos.data ?? []) {
+        // Un pin no distingue "está ahí" de "estuvo ahí esta mañana", y esa
+        // diferencia es justo la que se mira. El color la dice sin abrir nada.
+        const enVivo = t.minutosDesde <= TECNICO_EN_VIVO_MIN;
         out.push({
           id: `t-${t.userId}`,
           tipo: "tecnico",
           lat: t.lat,
           lng: t.lng,
           titulo: t.userName,
+          color: enVivo ? COLOR_TECNICO_VIVO : COLOR_TECNICO_FRIO,
           // Con precisión mala el pin miente; el círculo enseña el margen real.
           radioM: t.accuracy && t.accuracy > 60 ? t.accuracy : undefined,
           detalles: [
-            { label: "Visto", valor: haceCuanto(t.minutosDesde) },
+            {
+              label: "Visto",
+              valor: enVivo
+                ? `en vivo · ${haceCuanto(t.minutosDesde)}`
+                : haceCuanto(t.minutosDesde),
+            },
             { label: "Al", valor: MOTIVO_PING[t.reason] ?? t.reason },
             { label: "Precisión", valor: t.accuracy ? `±${Math.round(t.accuracy)} m` : null },
           ],
@@ -202,14 +235,17 @@ export default function MapaPage() {
             onChange={(e) => setQ(e.target.value)}
           />
         </div>
-        <Select value={sede} onChange={(e) => setSede(e.target.value)} className="w-44">
-          <option value="">Todas las sedes</option>
-          {(branches.data ?? []).map((b) => (
-            <option key={b.id} value={b.id}>
-              {b.name}
-            </option>
-          ))}
-        </Select>
+        {/* Quien está acotado a su sede no la elige: el mapa ya le llega recortado. */}
+        {!sedeScoped && (
+          <Select value={sede} onChange={(e) => setSede(e.target.value)} className="w-44">
+            <option value="">Todas las sedes</option>
+            {(branches.data ?? []).map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.name}
+              </option>
+            ))}
+          </Select>
+        )}
         <Chip
           activo={capas.abonados}
           onClick={() => alternar("abonados")}
@@ -230,7 +266,7 @@ export default function MapaPage() {
           <Chip
             activo={capas.tecnicos}
             onClick={() => alternar("tecnicos")}
-            color="#7c3aed"
+            color={COLOR_TECNICO_VIVO}
             n={tecnicos.data?.length}
           >
             Técnicos

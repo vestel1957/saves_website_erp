@@ -24,11 +24,14 @@ export function Dropdown({
   children,
   align = "right",
   width = 264,
+  triggerClassName = "",
 }: {
   trigger: ReactNode;
   children: ReactNode | RenderChildren;
   align?: "left" | "right";
   width?: number;
+  /** Para que el disparador pueda ocupar la fila entera en móvil, como los botones. */
+  triggerClassName?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
@@ -92,7 +95,7 @@ export function Dropdown({
         ref={triggerRef}
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="flex items-center"
+        className={`flex items-center ${triggerClassName}`}
       >
         {trigger}
       </button>

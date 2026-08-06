@@ -21,7 +21,7 @@ import { useOrden } from "@/lib/useOrden";
 import { mensajeDeError } from "@/lib/errores";
 
 export default function ConexionesPage() {
-  const { loading: authLoading, authFetch } = useAuth();
+  const { loading: authLoading, authFetch, sedeScoped } = useAuth();
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [branchId, setBranchId] = useState("");
@@ -132,12 +132,14 @@ export default function ConexionesPage() {
       </div>
 
       <ListToolbar search={search} onSearch={setSearch} searchPlaceholder="Buscar por puerto, NAP o cliente…">
-        <Select value={branchId} onChange={(e) => setBranchId(e.target.value)} className="w-auto">
-          <option value="">Todas las sedes</option>
-          {branches.map((b) => (
-            <option key={b.id} value={b.id}>{b.name}</option>
-          ))}
-        </Select>
+        {!sedeScoped && (
+          <Select value={branchId} onChange={(e) => setBranchId(e.target.value)} className="w-auto">
+            <option value="">Todas las sedes</option>
+            {branches.map((b) => (
+              <option key={b.id} value={b.id}>{b.name}</option>
+            ))}
+          </Select>
+        )}
         <div className="min-w-[220px]">
           <Combobox
             items={napOptions}

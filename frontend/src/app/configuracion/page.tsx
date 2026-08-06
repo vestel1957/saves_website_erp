@@ -14,13 +14,12 @@ import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import { mensajeDeError } from "@/lib/errores";
 
-type Tab = "Empresa" | "Sedes" | "Cajas" | "Geografía";
+type Tab = "Empresa" | "Sedes" | "Cajas";
 
 const TABS: { key: Tab; label: string; icon: string }[] = [
   { key: "Empresa", label: "Empresa", icon: "settings" },
   { key: "Sedes", label: "Sedes", icon: "map-pin" },
   { key: "Cajas", label: "Cajas", icon: "banknote" },
-  { key: "Geografía", label: "Geografía", icon: "map-pin" },
 ];
 
 /* -------------------------------------------------------------------------- */
@@ -308,72 +307,6 @@ function CajasTab() {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Geografía                                                                   */
-/* -------------------------------------------------------------------------- */
-
-function GeografiaTab() {
-  const { authFetch } = useAuth();
-  const [loading, setLoading] = useState(true);
-  const [geo, setGeo] = useState<any>(null);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const data: any = await (await authFetch("/config/geography")).json();
-      setGeo(data);
-    } catch {
-      toast("No se pudo cargar la geografía", "x");
-    } finally {
-      setLoading(false);
-    }
-  }, [authFetch]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  if (loading) return <PageSkeleton />;
-
-  const totals = geo?.totals ?? {};
-  const cards = [
-    { label: "Departamentos", value: totals.departamentos ?? 0, icon: "map-pin" },
-    { label: "Ciudades", value: totals.ciudades ?? 0, icon: "map-pin" },
-    { label: "Localidades", value: totals.localidades ?? 0, icon: "boxes" },
-    { label: "Barrios", value: totals.barrios ?? 0, icon: "package" },
-  ];
-
-  return (
-    <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {cards.map((c) => (
-          <div key={c.label} className="rounded-xl border border-border-subtle bg-surface p-4">
-            <div className="mb-2 flex h-8 w-8 items-center justify-center rounded-lg bg-surface-2">
-              <Icon name={c.icon} size={16} className="text-text-secondary" />
-            </div>
-            <div className="text-[22px] font-bold text-text-primary">{c.value}</div>
-            <div className="text-[12px] text-text-tertiary">{c.label}</div>
-          </div>
-        ))}
-      </div>
-
-      <DataTable
-        rows={geo?.departamentos ?? []}
-        empty="Sin departamentos."
-        columns={[
-          { key: "name", header: "Departamento", render: (r: any) => <span className="font-medium">{r.name}</span> },
-          {
-            key: "ciudades",
-            header: "# Ciudades",
-            align: "right",
-            render: (r: any) => r.ciudades ?? 0,
-          },
-        ]}
-      />
-    </div>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
 /* Página                                                                      */
 /* -------------------------------------------------------------------------- */
 
@@ -388,7 +321,7 @@ export default function ConfiguracionPage() {
       <PageHeading
         icon="sliders-horizontal"
         title="Configuración"
-        subtitle="Empresa, sedes, cajas y geografía"
+        subtitle="Empresa, sedes y cajas"
       />
 
       <div className="flex flex-wrap gap-2">
@@ -415,7 +348,6 @@ export default function ConfiguracionPage() {
       {tab === "Empresa" && <EmpresaTab />}
       {tab === "Sedes" && <SedesTab />}
       {tab === "Cajas" && <CajasTab />}
-      {tab === "Geografía" && <GeografiaTab />}
     </div>
   );
 }

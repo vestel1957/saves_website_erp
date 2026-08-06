@@ -10,16 +10,15 @@ Este manual está dirigido al rol de **Sistemas (Configuración)** de SAVES, el 
 
 **Dónde:** menú Configuración (opción principal, ruta `/configuracion`).
 
-**Para qué sirve.** Guarda los datos básicos de Vestel (nombre, NIT, dirección, contacto) y te deja consultar las sedes, las cajas y la geografía donde opera la empresa. Es la información que el sistema usa como referencia en facturas y reportes.
+**Para qué sirve.** Guarda los datos básicos de Vestel (nombre, NIT, dirección, contacto) y te deja consultar las sedes y las cajas de la empresa. Es la información que el sistema usa como referencia en facturas y reportes.
 
-**Qué vas a ver.** En la parte de arriba hay cuatro pestañas. Cada una muestra una cosa distinta:
+**Qué vas a ver.** En la parte de arriba hay tres pestañas. Cada una muestra una cosa distinta:
 
 | Pestaña | Qué muestra |
 | --- | --- |
 | Empresa | Formulario con los datos de la empresa (editable). |
 | Sedes | Lista de sedes con su dirección y cuántos abonados tiene cada una. |
 | Cajas | Lista de cuentas de caja (titular, número de cuenta, sede y saldo). Solo consulta. |
-| Geografía | Totales de departamentos, ciudades, localidades y barrios, y la lista de departamentos. Solo consulta. |
 
 **Paso a paso (editar los datos de la empresa):**
 
@@ -33,7 +32,7 @@ Este manual está dirigido al rol de **Sistemas (Configuración)** de SAVES, el 
 2. Ubica la sede en la lista y presiona **Editar** a la derecha.
 3. Cambia el Nombre, el Resumen o la Dirección y presiona **Guardar**.
 
-> Las pestañas **Cajas** y **Geografía** son solo de consulta: te sirven para revisar saldos y cobertura, pero no se editan desde aquí.
+> La pestaña **Cajas** es solo de consulta: te sirve para revisar saldos, pero no se edita desde aquí.
 
 ## Planes de servicio
 
@@ -214,7 +213,7 @@ Este manual está dirigido al rol de **Sistemas (Configuración)** de SAVES, el 
 
 ## Documentos
 
-**Dónde:** menú Configuración > Documentos (`/configuracion/documentos`).
+**Dónde:** menú PERSONAS / PROYECTOS > Documentos (`/documentos`).
 
 **Para qué sirve.** Es la biblioteca de documentos de Vestel: un lugar para subir y guardar archivos (contratos, formatos, manuales) organizados por carpetas.
 
@@ -374,13 +373,13 @@ Este manual está dirigido al rol de **Sistemas (Configuración)** de SAVES, el 
 
 **Dónde:** menú Configuración > Promociones (`/configuracion/promociones`).
 
-**Para qué sirve.** Crear campañas de descuento y asignarlas a funcionarios para que ellos las apliquen a las facturas de los clientes (el descuento se aplica como nota crédito) mientras la promoción esté vigente. Solo el superusuario administra esta pantalla.
+**Para qué sirve.** Crear campañas de descuento **dirigidas a clientes**: cada promoción define a qué clientes alcanza (su *público*) y solo aparece en las facturas de esos clientes, donde se aplica como nota crédito mientras esté vigente. Así nadie puede descontarle a un cliente que no correspondía. Solo el superusuario administra esta pantalla.
 
 **Qué vas a ver.**
 
-- Dos pestañas arriba: **Promociones** e **Historial**.
-- En Promociones: tres indicadores (Vigentes, Programadas, Aplicaciones), un buscador con filtros (Todas / Vigentes / Programadas) y las promociones en tarjetas.
-- En Historial: el registro de qué promoción se asignó o retiró a cada funcionario, quién lo hizo y cuándo.
+- Dos pestañas arriba: **Promociones** y **Bitácora del público**.
+- En Promociones: tres indicadores (Vigentes, Programadas, Aplicaciones), un buscador con filtros (Todas / Vigentes / Programadas) y las promociones en tarjetas. Cada tarjeta muestra un bloque **Aplica a** con el público de esa promoción.
+- En Bitácora del público: el registro de qué destinatario entró o salió del público de cada promoción, quién lo hizo y cuándo. Es la traza que responde "¿por qué a este cliente se le descontó?".
 
 **Paso a paso (crear una promoción):**
 
@@ -399,14 +398,20 @@ Este manual está dirigido al rol de **Sistemas (Configuración)** de SAVES, el 
 5. (Opcional) Escribe una **Descripción**.
 6. Define **Inicia** y **Finaliza** (la fecha final no puede ser anterior a la inicial).
 7. Deja marcada **Activa**.
-8. Elige el **Tipo de promoción**:
-   - **Ingresar (todos los funcionarios):** queda disponible para todos.
-   - **Asignar a colaboradores:** la aplican solo los funcionarios que marques (busca y selecciona al menos uno).
-   - **Estados Promos Para Clientes:** aplica a los clientes que estén en un estado específico (debes elegir el estado).
-9. Presiona **Crear promoción**.
+8. En **¿A qué clientes aplica?** define el público:
+   - **Todos los clientes:** sin excepciones (ignora los demás criterios).
+   - **Estado del cliente:** por ejemplo Activo, o Cartera.
+   - **Clientes puntuales:** busca y agrega uno por uno los clientes que quieras.
+   - **Plan contratado:** todos los que tengan ese plan.
+   - **Sede** y **Barrio:** todos los de esa sede o ese barrio.
+9. Mira el contador **Clientes alcanzados**: te dice, antes de guardar, a cuántos clientes reales llega la promoción (con "Ver ejemplos" puedes revisar algunos nombres). Si dice 0, la promoción no aparecerá en ninguna factura.
+10. Presiona **Crear promoción**.
 
-**Paso a paso (editar, ver historial o eliminar):**
+> Los criterios se suman con **Y**: "Activo" + sede "Yopal" alcanza solo a los activos de Yopal. Dentro de un mismo criterio se suman con **O**: "Activo" y "Cartera" alcanza a los de cualquiera de los dos estados.
 
-1. En cada tarjeta, usa el ícono de reloj/historial para ver sus asignaciones, el lápiz para editar y la basura para eliminar (pide confirmación).
+**Paso a paso (editar, ver la bitácora o eliminar):**
+
+1. En cada tarjeta, usa el ícono de reloj para ver los cambios de su público, el lápiz para editar y la basura para eliminar (pide confirmación).
+2. Si la promoción ya se aplicó, el enlace "N aplicación(es)" abre la lista de facturas descontadas: a qué cliente, cuánto y quién la aplicó.
 
 > Una promoción **Programada** es la que está activa pero con fecha de inicio futura: aún no se puede aplicar. Una **Vigente** es la que está dentro de su rango de fechas y sí se puede aplicar.

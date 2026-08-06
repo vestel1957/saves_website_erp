@@ -6,7 +6,7 @@ import { Icon } from "../Icon";
 
 /**
  * Encabezado común de las fichas de detalle (`/clientes/123`, `/soporte/45`,
- * `/facturacion/9`, `/empleados/7`…).
+ * `/facturacion/9`, `/configuracion/empleados/7`…).
  *
  * Antes cada ficha se inventaba el suyo: cinco tipografías distintas para el
  * mismo rol (16, 17, 18, 19 y 20 px), el "volver" unas veces como enlace, otras

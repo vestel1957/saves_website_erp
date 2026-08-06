@@ -1,6 +1,8 @@
 # dependencies
 node_modules/
 **/node_modules/
+# mPDF y sus dependencias PHP (se reponen con `composer install` en backend/contrato-php)
+backend/contrato-php/vendor/
 
 # builds
 dist/

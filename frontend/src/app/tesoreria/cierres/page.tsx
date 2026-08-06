@@ -243,6 +243,18 @@ function CierresAdmin() {
     [cajas, sede],
   );
 
+  /**
+   * La única caja que ve el usuario, si sólo ve una. `/treasury/cash-accounts` ya
+   * viene acotado por `caja-scope.ts`, así que a la cajera le llega su caja y nada
+   * más: elegirla a mano es un paso vacío, se selecciona sola.
+   */
+  const unicaCaja = cajas.length === 1 ? cajas[0] : null;
+  useEffect(() => {
+    if (!unicaCaja) return;
+    setSede(String(unicaCaja.branchLegacy ?? ""));
+    setCashAccountId(String(unicaCaja.id));
+  }, [unicaCaja]);
+
   // Se carga solo: la caja y el día son el estado de la pantalla, no un formulario que
   // haya que enviar. `cashAccountId` vacío = todavía no hay nada que pedir.
   useEffect(() => {
@@ -340,26 +352,37 @@ function CierresAdmin() {
           </button>
         )}
 
-        <Select
-          value={sede}
-          aria-label="Sede"
-          className="w-auto min-w-[9rem]"
-          onChange={(e) => { setSede(e.target.value); setCashAccountId(""); }}
-        >
-          <option value="">— Sede —</option>
-          {sedes.map(([id, nombre]) => <option key={id} value={id}>{nombre}</option>)}
-        </Select>
+        {/* Con una sola caja a la vista (la cajera) no hay nada que elegir: se pinta
+            de qué caja es el arqueo y se quitan los dos desplegables. */}
+        {unicaCaja ? (
+          <span className="inline-flex items-center gap-1.5 rounded-lg border border-border-default px-2.5 py-1.5 text-[13px] font-semibold text-text-primary">
+            <Icon name="landmark" size={14} className="text-text-tertiary" />
+            {unicaCaja.sede ? `${unicaCaja.sede} · ` : ""}{unicaCaja.name}
+          </span>
+        ) : (
+          <>
+            <Select
+              value={sede}
+              aria-label="Sede"
+              className="w-auto min-w-[9rem]"
+              onChange={(e) => { setSede(e.target.value); setCashAccountId(""); }}
+            >
+              <option value="">— Sede —</option>
+              {sedes.map(([id, nombre]) => <option key={id} value={id}>{nombre}</option>)}
+            </Select>
 
-        <Select
-          value={cashAccountId}
-          aria-label="Caja"
-          disabled={!sede}
-          className="w-auto min-w-[10rem]"
-          onChange={(e) => setCashAccountId(e.target.value)}
-        >
-          <option value="">{sede ? "— Caja —" : "— Elige primero la sede —"}</option>
-          {cajasDeLaSede.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </Select>
+            <Select
+              value={cashAccountId}
+              aria-label="Caja"
+              disabled={!sede}
+              className="w-auto min-w-[10rem]"
+              onChange={(e) => setCashAccountId(e.target.value)}
+            >
+              <option value="">{sede ? "— Caja —" : "— Elige primero la sede —"}</option>
+              {cajasDeLaSede.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </Select>
+          </>
+        )}
 
         {/* El estado del cierre deja de ser un renglón gris debajo del informe. */}
         {a && (

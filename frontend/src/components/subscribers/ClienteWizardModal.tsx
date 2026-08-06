@@ -72,6 +72,7 @@ export function ClienteWizardModal({
   const [localities, setLocalities] = useState<Geo[]>([]);
   const [neighborhoods, setNeighborhoods] = useState<Geo[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
+  const [clausulas, setClausulas] = useState<{ legacyId: number | null; nombre: string; meses: number }[]>([]);
   const [dup, setDup] = useState<DupCheck>({});
   const [checkingPpp, setCheckingPpp] = useState(false);
 
@@ -107,8 +108,17 @@ export function ClienteWizardModal({
   useEffect(() => {
     if (!open) return;
     setStep(0);
-    void geo("/subscribers/branches").then(setBranches);
+    // El catálogo llega acotado a las sedes del usuario. Si sólo tiene una (la
+    // cajera), se elige sola: no hay decisión que tomar y dejarla en "—" sólo
+    // conseguiría que el alta fallara con un 403 por no indicar sede.
+    void geo("/subscribers/branches").then((bs: Branch[]) => {
+      setBranches(bs);
+      if (bs.length === 1) setF((p) => (p.branchId ? p : { ...p, branchId: bs[0].id }));
+    });
     void geo("/subscribers/geo/departments").then(setDepartments);
+    // Solo las activas: el catálogo puede tener cláusulas retiradas que siguen
+    // imprimiéndose en contratos viejos pero ya no se ofrecen en un alta.
+    void geo("/clausulas?soloActivas=1").then(setClausulas);
 
     if (mode === "edit" && subscriberId) {
       void authFetch(`/subscribers/${subscriberId}/form`)
@@ -179,6 +189,9 @@ export function ClienteWizardModal({
       companyName: f.companyName, customerType: f.customerType || undefined, docType: f.docType,
       docNumber: f.docNumber, email: f.email, phone1: f.phone1, phone2: f.phone2, birthDate: f.birthDate,
       estrato: f.estrato, suscripcion: f.suscripcion || undefined, contractDate: f.contractDate || undefined,
+      // "" = sin permanencia, y eso hay que poder GUARDARLO: mandar undefined
+      // dejaría puesta la cláusula anterior al quitarla en una edición.
+      clausula: f.clausula === "" ? null : Number(f.clausula),
       departmentRef: f.departmentRef, cityRef: f.cityRef, localityRef: f.localityRef, neighborhood: f.neighborhood,
       addressLine: f.addressLine, branchId: f.branchId || undefined, nomenclature,
       // Conectividad (legacy `create.php`: name_s, contra, perfil, Ipremota, tegnologia).
@@ -274,6 +287,18 @@ export function ClienteWizardModal({
               <Field label="Estrato"><Select value={f.estrato} onChange={set("estrato")}><option value="">—</option>{ESTRATOS.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
               <Field label="Suscripción"><Select value={f.suscripcion} onChange={set("suscripcion")}><option value="">—</option>{SUSCRIPCIONES.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
               <Field label="Fecha contrato"><Input value={f.contractDate} onChange={set("contractDate")} type="date" /></Field>
+              <div className="col-span-2">
+                <Field label="Cláusula de permanencia" hint="Lo que paga el cliente si se retira antes de tiempo. Sin cláusula puede irse cuando quiera.">
+                  <Select value={f.clausula} onChange={set("clausula")}>
+                    <option value="">Sin permanencia</option>
+                    {clausulas.map((c) => (
+                      <option key={c.legacyId ?? c.nombre} value={String(c.legacyId ?? "")}>
+                        {c.nombre} · {c.meses} meses
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+              </div>
             </div>
           </Section>
         </div>
@@ -387,6 +412,7 @@ export function ClienteWizardModal({
             <Rev k="Nacimiento" v={f.birthDate} />
             <Rev k="Tipo cliente" v={f.customerType} />
             <Rev k="Suscripción" v={f.suscripcion} />
+            <Rev k="Permanencia" v={clausulas.find((c) => String(c.legacyId) === String(f.clausula))?.nombre ?? "Sin permanencia"} />
             <Rev k="Estrato" v={f.estrato} />
             <Rev k="Dirección" v={[f.nomenclatura, f.numero1, f.adicionauno, "#", f.numero2, f.adicional2, "-", f.numero3].filter(Boolean).join(" ")} />
             <Rev k="Barrio (id)" v={f.neighborhood} />

@@ -45,7 +45,7 @@ export function OrdersFilterButton({
   categories: { id: string; name: string }[];
   branches: { name: string }[];
 }) {
-  const { authFetch } = useAuth();
+  const { authFetch, sedeScoped } = useAuth();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<OrderFilters>(value);
   const [suppliers, setSuppliers] = useState<{ id: string; name: string }[] | null>(null);
@@ -104,12 +104,14 @@ export function OrdersFilterButton({
               {categories.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
             </Select>
           </Field>
-          <Field label="Sede">
-            <Select value={draft.branch} onChange={(e) => set({ branch: e.target.value })}>
-              <option value="">Todas las sedes</option>
-              {branches.map((b) => <option key={b.name} value={b.name}>{b.name}</option>)}
-            </Select>
-          </Field>
+          {!sedeScoped && (
+            <Field label="Sede">
+              <Select value={draft.branch} onChange={(e) => set({ branch: e.target.value })}>
+                <option value="">Todas las sedes</option>
+                {branches.map((b) => <option key={b.name} value={b.name}>{b.name}</option>)}
+              </Select>
+            </Field>
+          )}
           <Field label="Proveedor" hint={suppliers === null ? "Cargando…" : undefined}>
             <Select value={draft.supplier} onChange={(e) => set({ supplier: e.target.value })} disabled={suppliers === null}>
               <option value="">Todos los proveedores</option>

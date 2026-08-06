@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation";
 import { Sidebar } from "@/components/Sidebar";
 import { TopNav } from "@/components/TopNav";
 import { GeoGate } from "@/components/map/GeoGate";
+import { LatidoUbicacion } from "@/components/map/LatidoUbicacion";
 import { PantallaGate } from "@/components/PantallaGate";
 
 // Rutas públicas que NO llevan el chrome de staff (mismo criterio que el
@@ -22,6 +23,10 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   if (bare) return <>{children}</>;
   return (
     <div className="flex h-screen overflow-hidden bg-canvas">
+      {/* Reporta la posición del técnico cada minuto. Va aquí, en el shell que se
+          monta una sola vez, y no dentro de una pantalla: así late en toda la
+          jornada y no solo mientras el técnico mira una página concreta. */}
+      <LatidoUbicacion />
       <Sidebar />
       <div className="flex flex-1 flex-col overflow-hidden">
         <TopNav />

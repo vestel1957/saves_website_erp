@@ -6,11 +6,11 @@
   { "slug": "facturacion-ficha",          "ruta": "/facturacion",           "pasos": [{ "fila": 1, "espera": 1800 }] },
   { "slug": "soporte-ficha",              "ruta": "/soporte",               "pasos": [{ "fila": 1, "espera": 1800 }] },
   { "slug": "ordenes-ficha",              "ruta": "/ordenes",               "pasos": [{ "fila": 1, "espera": 1800 }] },
-  { "slug": "empleados-ficha",            "ruta": "/empleados",             "pasos": [{ "fila": 1, "espera": 1800 }] },
+  { "slug": "empleados-ficha",            "ruta": "/configuracion/empleados", "pasos": [{ "fila": 1, "espera": 1800 }] },
   { "slug": "mikrotik-ficha",             "ruta": "/mikrotik",              "pasos": [{ "fila": 1, "espera": 2500 }] },
   { "slug": "red-naps-ficha",             "ruta": "/red/naps",              "pasos": [{ "fila": 1, "espera": 1800 }] },
   { "slug": "red-olt-ficha",              "ruta": "/red/olt",               "pasos": [{ "fila": 1, "espera": 2500 }] },
   { "slug": "inventario-traspasos-nuevo", "ruta": "/inventario/traspasos",  "pasos": [{ "clic": "Nuevo traspaso" }] },
-  { "slug": "empleados-permisos",         "ruta": "/empleados",             "pasos": [{ "fila": 1, "espera": 1500 }, { "pestana": "Permisos" }] },
-  { "slug": "empleados-documentos",       "ruta": "/empleados",             "pasos": [{ "fila": 1, "espera": 1500 }, { "pestana": "Documentos" }] }
+  { "slug": "empleados-permisos",         "ruta": "/configuracion/empleados", "pasos": [{ "fila": 1, "espera": 1500 }, { "pestana": "Permisos" }] },
+  { "slug": "empleados-documentos",       "ruta": "/configuracion/empleados", "pasos": [{ "fila": 1, "espera": 1500 }, { "pestana": "Documentos" }] }
 ]

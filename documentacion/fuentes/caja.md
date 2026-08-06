@@ -310,7 +310,7 @@ Todo tu día gira alrededor de tres momentos. Si entiendes estos tres pasos, ent
    - **Ver / imprimir PDF** para descargar o imprimir la factura.
    - Registrar el pago del cliente.
    - **Anular** la factura si estás autorizado (si tenía pagos, ese dinero se reversa y sale del arqueo).
-   - Aplicar una **promoción** autorizada, que genera una nota crédito.
+   - Aplicar una **promoción**, que genera una nota crédito. Solo salen las promociones vigentes cuyo público incluye a ESE cliente: si el cliente no está dentro, la promoción ni aparece.
 
 > Algunas acciones (emitir factura electrónica, generar facturas en lote, exportar) solo aparecen si tienes el permiso; si no las ves, es que ese permiso está en otra área.
 > Antes de entregar el PDF al cliente, verifica que el total y el saldo sean los correctos.

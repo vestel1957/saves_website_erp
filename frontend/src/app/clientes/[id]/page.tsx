@@ -17,6 +17,7 @@ import dynamic from "next/dynamic";
 import { Dropdown, MenuItem } from "@/components/ui/Dropdown";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
+import { PERM } from "@/lib/auth";
 import {
   SUB_STATUS_LABEL, SUB_STATUS_TONE, INVOICE_KIND_LABEL, INVOICE_RON_LABEL, INVOICE_RON_TONE,
   INVOICE_STATUS_LABEL, INVOICE_STATUS_TONE, cop,
@@ -39,6 +40,9 @@ const EditarFacturaModal = dynamic(() => import("@/components/subscribers/Editar
 const CambiarPlanModal = dynamic(() => import("@/components/subscribers/CambiarPlanModal").then((m) => m.CambiarPlanModal), { ssr: false });
 const CambiarEstadoModal = dynamic(() => import("@/components/subscribers/CambiarEstadoModal").then((m) => m.CambiarEstadoModal), { ssr: false });
 const NuevaOrdenModal = dynamic(() => import("@/components/soporte/NuevaOrdenModal").then((m) => m.NuevaOrdenModal), { ssr: false });
+// El bloque del contrato entra con la pestaña Resumen: arrastra el lienzo de la
+// firma, que no tiene por qué viajar en el chunk inicial de la ficha.
+const ContratoCard = dynamic(() => import("@/components/subscribers/ContratoCard").then((m) => m.ContratoCard), { ssr: false });
 
 type Detail = any;
 
@@ -220,7 +224,11 @@ function StatCell({ label, tone, destacada, className = "", title, children }: {
 export default function ClienteDetallePage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const { loading: authLoading, authFetch } = useAuth();
+  const { loading: authLoading, authFetch, can, isSuperadmin } = useAuth();
+  // Tocar una factura desde la ficha —cambiarle fechas o borrarla— es de contabilidad.
+  // La cajera llega hasta aquí por su trabajo (ver la deuda, registrar el pago), pero
+  // no corrige documentos de cobro; el backend niega las dos rutas igual.
+  const puedeTocarFacturas = isSuperadmin || can(PERM.AREA_CONTABILIDAD);
   const [c, setC] = useState<Detail | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [payOpen, setPayOpen] = useState(false);
@@ -759,7 +767,7 @@ export default function ClienteDetallePage() {
               <Row label="Tecnología" value={c.network?.installTech} />
             </Card>
 
-            <Card title="Contrato / Facturación" icon="file-text">
+            <Card title="Facturación" icon="file-text">
               <Row label="Suscripción" value={c.suscripcion} />
               <Row label="Fecha contrato" value={fmtDate(c.contractDate)} />
               {/* La antigüedad venía en la franja de arriba, donde ahora va el plan. */}
@@ -782,6 +790,11 @@ export default function ClienteDetallePage() {
                 }
               />
             </Card>
+          </div>
+
+          {/* Contrato: permanencia, firma, huella y los dos PDF. */}
+          <div className="mb-4">
+            <ContratoCard subscriberId={id} nombre={c.name} openPdf={openPdf} />
           </div>
 
           {/* Notas */}
@@ -989,8 +1002,12 @@ export default function ClienteDetallePage() {
                   )}
                   <ActionBtn icon="gift" title="Promociones" tone="warning" onClick={() => setInfoModal({ type: "promo", inv: r })} />
                   <ActionBtn icon="cloud" title="Factura electrónica (Siigo)" tone="info" onClick={() => setInfoModal({ type: "siigo", inv: r })} />
-                  <ActionBtn icon="pencil" title="Editar factura" tone="brand" onClick={() => openEditInvoice(r)} />
-                  <ActionBtn icon="trash" title="Eliminar factura" tone="error" onClick={() => setConfirmar({ kind: "factura", inv: r })} />
+                  {puedeTocarFacturas && (
+                    <>
+                      <ActionBtn icon="pencil" title="Editar factura" tone="brand" onClick={() => openEditInvoice(r)} />
+                      <ActionBtn icon="trash" title="Eliminar factura" tone="error" onClick={() => setConfirmar({ kind: "factura", inv: r })} />
+                    </>
+                  )}
                 </div>
               ),
             },

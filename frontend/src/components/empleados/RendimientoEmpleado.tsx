@@ -60,6 +60,8 @@ type Resumen = {
   firmaPct: number | null;
   vencidas: number;
   antiguedadDias: number | null;
+  puntos: number;
+  puntajePromedio: number | null;
   muestraSuficiente: boolean;
 };
 
@@ -181,7 +183,7 @@ export function RendimientoEmpleado({
         )}
       </p>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <TrendStat
           label="Órdenes de campo cerradas"
           value={nfmt(resumen.cerradas)}
@@ -190,6 +192,16 @@ export function RendimientoEmpleado({
             resumen.anuladas
               ? `${nfmt(resumen.asignadas)} asignadas · ${nfmt(resumen.anuladas)} anuladas`
               : `${nfmt(resumen.asignadas)} asignadas en el periodo`
+          }
+        />
+        <TrendStat
+          label="Puntos"
+          value={nfmt(resumen.puntos ?? 0)}
+          icon="award"
+          hint={
+            resumen.puntajePromedio != null
+              ? `${resumen.puntajePromedio} puntos por orden · cada orden vale de 1 a 5 según su tipo`
+              : "Sus órdenes cerradas aún no traen puntaje"
           }
         />
         <TrendStat

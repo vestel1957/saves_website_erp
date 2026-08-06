@@ -974,7 +974,7 @@ export default function EmpleadoDetallePage() {
   return (
     <>
       <DetailHeader
-        backHref="/empleados"
+        backHref="/configuracion/empleados"
         backLabel="Empleados"
         icon="user"
         title={emp.name ?? "Empleado"}

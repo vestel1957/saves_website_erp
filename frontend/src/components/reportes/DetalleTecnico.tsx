@@ -60,6 +60,8 @@ export type FilaPorTipo = {
   cerradas: number;
   revisitas: number;
   revisitaPct: number | null;
+  /** Puntos que sumó este tipo de trabajo en el periodo. */
+  puntos: number;
 };
 
 export function DetalleTecnico({
@@ -80,6 +82,11 @@ export function DetalleTecnico({
           <DataTable rows={porTipo} empty="Sin órdenes cerradas." columns={[
             { key: "t", header: "Tipo de trabajo", render: (r: FilaPorTipo) => r.tipo },
             { key: "c", header: "Cerradas", align: "right", render: (r: FilaPorTipo) => nfmt(r.cerradas) },
+            { key: "pts", header: "Puntos", align: "right", render: (r: FilaPorTipo) => (
+              <span title={r.cerradas ? `${Math.round((10 * (r.puntos ?? 0)) / r.cerradas) / 10} puntos por orden` : undefined}>
+                {nfmt(r.puntos ?? 0)}
+              </span>
+            ) },
             { key: "v", header: "Volvieron", align: "right", render: (r: FilaPorTipo) => nfmt(r.revisitas) },
             { key: "p", header: "Re-visita", align: "right", render: (r: FilaPorTipo) => (
               <span className={r.revisitaPct == null ? "text-text-tertiary" : r.revisitaPct >= 20 ? "text-error-text font-semibold" : r.revisitaPct >= 12 ? "text-warning-text font-semibold" : "text-success-text"}>

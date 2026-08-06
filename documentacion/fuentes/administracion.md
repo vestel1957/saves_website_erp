@@ -316,24 +316,6 @@ Cada fila tiene botones de lápiz (editar) y papelera (eliminar).
 > El correo es el vínculo con la cuenta de acceso. Si un empleado no tiene cuenta y le agregas correo, el superusuario podrá crearle el acceso desde la pestaña Permisos.
 > Solo el superusuario puede crear cuentas, cambiar permisos, asignar roles, habilitar/inhabilitar el acceso o restablecer contraseñas. Cuando se genera una contraseña temporal, se muestra una sola vez: cópiala y entrégala al empleado.
 
-## Móviles / cuadrillas
-
-**Dónde:** Menú lateral → PERSONAL → Móviles / cuadrillas.
-
-**Para qué sirve:** Agrupa técnicos en "móviles" (cuadrillas o equipos de trabajo) para asignarles órdenes y agenda como grupo.
-
-**Qué vas a ver:** Una tarjeta por cada móvil, con su nombre, estado (Activa/Inactiva) y los técnicos que la integran. Cada tarjeta tiene botones de editar y eliminar y un botón para gestionar sus técnicos.
-
-**Paso a paso (crear una móvil):**
-1. Haz clic en **Nueva móvil**.
-2. Escribe el **Nombre** (por ejemplo "Móvil 1 · Yopal") y elige el **Estado**.
-3. Haz clic en **Guardar**.
-
-**Paso a paso (agregar o quitar técnicos de una móvil):**
-1. En la tarjeta de la móvil, haz clic en **Gestionar técnicos**.
-2. Para agregar, elige un técnico en la lista y haz clic en **Agregar**.
-3. Para quitar uno, haz clic en la equis junto a su nombre.
-
 ## Proyectos
 
 **Dónde:** Menú lateral → PROYECTOS → Proyectos.

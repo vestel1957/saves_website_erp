@@ -6,6 +6,8 @@ import { AuthUser } from '../auth/current-user.decorator';
 import { WhatsappService } from '../common/whatsapp/whatsapp.service';
 import { RouterosClient, RouterosError } from './routeros/routeros-client';
 import { decryptSecret, encryptSecret } from '../common/secret-box';
+import { IpAllocatorService } from './ip-allocator.service';
+import { conservaEstadoAlReconectar } from './estado-al-reconectar';
 
 /**
  * Integración real de corte / reconexión contra los MikroTik de Vestel.
@@ -30,6 +32,14 @@ import { decryptSecret, encryptSecret } from '../common/secret-box';
 
 const ADDRESS_LIST_ACTIVE = 'ACTIVOS';
 const ADDRESS_LIST_DEBTOR = 'MOROSOS';
+
+/**
+ * ¿La ficha trae una IP usable? Ojo con `"0"`: 1.611 abonados lo tienen como
+ * `ipRemote` (basura heredada del legacy) y tratarlo como IP buena significaba
+ * mandarle al router `remote-address=0` y, sobre todo, no repartirles nunca una
+ * de verdad — que es justo lo que los deja sin poder cortarse.
+ */
+const esIpValida = (v?: string | null): boolean => /^\d{1,3}(\.\d{1,3}){3}$/.test((v ?? '').trim());
 
 export type MikrotikAction = 'CUT' | 'RECONNECT' | 'STATUS' | 'TEST' | 'PROVISION' | 'PROFILE';
 
@@ -70,9 +80,20 @@ export class MikrotikService {
   private live = process.env.MIKROTIK_LIVE === 'true';
   private liveCheckedAt = 0;
 
+  /**
+   * Caché corta del estado en vivo por abonado. La ficha del cliente lo pide sola
+   * al abrirse, así que un router podría recibir una consulta por cada pestaña que
+   * alguien abre; con 10 s de gracia la misma ficha reabierta no vuelve a marcar.
+   * Cualquier acción sobre el abonado (corte, reconexión, alta…) la invalida en
+   * `audit()`, para que el semáforo no enseñe el estado de antes del clic.
+   */
+  private statusCache = new Map<string, { at: number; res: MikrotikActionResult }>();
+  private static readonly STATUS_TTL_MS = 10_000;
+
   constructor(
     private prisma: PrismaService,
     private whatsapp: WhatsappService,
+    private ips: IpAllocatorService,
   ) {}
 
   get isLive(): boolean {
@@ -175,6 +196,50 @@ export class MikrotikService {
     return `activo_${sub.legacyId ?? sub.id}`;
   }
 
+  /**
+   * Resuelve el nombre de un perfil PPP contra los que EXISTEN en el router.
+   *
+   * RouterOS no compara el valor de `profile=` literalmente: lo resuelve por
+   * PREFIJO. Un plan guardado como "100" hace match con `100Megas`,
+   * `100MegasD` y `100MegasSt` a la vez y el router responde
+   * `ambiguous value of profile, more than one possible value matches input`,
+   * que tumba el /ppp/secret/add ENTERO: el abonado queda ACTIVO en el sistema
+   * y sin secret en el router, o sea sin navegar y sin que nadie se entere.
+   *
+   * Aquí se manda siempre el `.id` del perfil (`*24`), que no admite
+   * interpretación. Y si el nombre no identifica uno solo, el error dice qué
+   * perfil se pidió, cuáles hay y en qué router, en vez del mensaje críptico.
+   */
+  private async resolveProfileId(
+    api: RouterosClient,
+    profileRaw: string,
+    routerName: string,
+  ): Promise<{ id: string; name: string }> {
+    const pedido = (profileRaw || 'default').trim();
+    const rows = await api.comm('/ppp/profile/getall', { '.proplist': '.id,name' });
+    const perfiles = rows
+      .filter((r) => r['.id'] && r.name != null)
+      .map((r) => ({ id: r['.id'], name: r.name.trim() }));
+
+    // 1) nombre exacto  2) exacto ignorando mayúsculas  3) prefijo único
+    const norm = (s: string) => s.toLowerCase();
+    const exacto = perfiles.find((p) => p.name === pedido)
+      ?? perfiles.find((p) => norm(p.name) === norm(pedido));
+    if (exacto) return exacto;
+
+    const porPrefijo = perfiles.filter((p) => norm(p.name).startsWith(norm(pedido)));
+    if (porPrefijo.length === 1) return porPrefijo[0];
+
+    const candidatos = (porPrefijo.length ? porPrefijo : perfiles).map((p) => p.name);
+    throw new RouterosError(
+      porPrefijo.length
+        ? `El perfil "${pedido}" es ambiguo en ${routerName}: coincide con ${candidatos.join(', ')}. `
+          + 'Corrige el perfil del plan para que sea el nombre exacto del router.'
+        : `El perfil "${pedido}" no existe en ${routerName}. `
+          + `Perfiles disponibles: ${candidatos.slice(0, 25).join(', ')}${candidatos.length > 25 ? '…' : ''}.`,
+    );
+  }
+
   // ------------------------------------------------------------------
   // Auditoría
   // ------------------------------------------------------------------
@@ -185,6 +250,8 @@ export class MikrotikService {
     res: MikrotikActionResult,
     user?: AuthUser,
   ) {
+    // La foto guardada ya no vale: acabamos de tocar al abonado en el router.
+    if (sub?.id) this.statusCache.delete(sub.id);
     try {
       await this.prisma.mikrotikActionLog.create({
         data: {
@@ -529,21 +596,53 @@ export class MikrotikService {
       mikrotik: routerInfo, steps: [], message: '',
     };
 
+    /**
+     * RouterOS NO acepta cadena vacía en los argumentos de dirección: manda
+     * `invalid value for argument remote-address` y tumba el alta entera. La
+     * mayoría de abonados no lleva IP fija (la reparte el pool del profile), así
+     * que enviar `remote-address=''` significaba que un cliente normal no se
+     * podía provisionar NUNCA. Los campos sin valor sencillamente no se mandan:
+     * el router los deja en su defecto, que es justo lo que se quiere.
+     */
     const secretData: Record<string, string> = {
       name,
-      password: full.pppPassword || '',
-      'remote-address': full.ipRemote || '',
-      'local-address': full.ipLocal || '',
       profile: (full.pppProfile || 'default').trim(),
-      comment,
       service: full.pppService || 'pppoe',
     };
+    if (full.pppPassword) secretData.password = full.pppPassword;
+    if (full.ipLocal?.trim()) secretData['local-address'] = full.ipLocal.trim();
+    if (comment) secretData.comment = comment;
+
+    /**
+     * IP fija automática. El corte se hace metiendo la IP del cliente en la
+     * address-list MOROSOS (ver `cutOnApi`), así que un abonado sin IP fija no se
+     * puede cortar: reconecta y sale por otra dirección. Antes la escribía a mano
+     * la cajera —de ahí las ~149 repetidas y los 1.611 con `ipRemote = "0"`, que
+     * son abonados que en la práctica no se pueden cortar—.
+     *
+     * Sólo se reparte cuando NO hay una válida: una IP que ya funciona no se toca
+     * nunca, porque cambiarla obliga a reiniciar la sesión PPP del cliente.
+     */
+    const ipActual = esIpValida(full.ipRemote) ? full.ipRemote!.trim() : null;
+    let ipReservada: string | null = null;
+    if (ipActual) {
+      secretData['remote-address'] = ipActual;
+    } else if (this.live) {
+      const asignada = await this.ips.asignar(router, subscriberId);
+      if (asignada.ip) {
+        ipReservada = asignada.ip;
+        secretData['remote-address'] = asignada.ip;
+        res.steps.push(`IP asignada automáticamente: ${asignada.ip} (quedan ${asignada.libres} libres)`);
+      } else {
+        res.steps.push(`sin IP automática: ${asignada.motivo}`);
+      }
+    }
 
     if (!this.live) {
       res.steps = [
         `connect ${routerInfo.host}`,
         `/ppp/secret/print ?name=${name}  (¿existe?)`,
-        `si no existe → /ppp/secret/add name=${name} profile=${secretData.profile} remote-address=${secretData['remote-address']} service=${secretData.service}`,
+        `si no existe → /ppp/secret/add ${Object.entries(secretData).map(([k, v]) => `${k}=${v}`).join(' ')}`,
         `si existe → /ppp/secret/set (actualiza perfil/IP/clave)`,
       ];
       res.ok = true;
@@ -556,6 +655,11 @@ export class MikrotikService {
     try {
       await api.connect(router.ip, Number(router.port), router.username, decryptSecret(router.password), { timeoutMs: 8000 });
       res.steps.push(`conectado a ${routerInfo.host}`);
+      // El perfil se manda por .id: el nombre lo resuelve RouterOS por prefijo
+      // y un valor ambiguo tumba el alta entera (ver resolveProfileId).
+      const perfil = await this.resolveProfileId(api, secretData.profile, router.name);
+      secretData.profile = perfil.id;
+      res.steps.push(`perfil "${perfil.name}" (${perfil.id})`);
       const existing = await api.comm('/ppp/secret/getall', { '.proplist': '.id', '?name': name });
       if (existing.length && existing[0]['.id']) {
         await api.comm('/ppp/secret/set', { '.id': existing[0]['.id'], ...secretData });
@@ -572,6 +676,21 @@ export class MikrotikService {
       res.error = e instanceof RouterosError ? e.message : (e as Error).message;
       res.message = `Fallo el alta: ${res.error}`;
     }
+
+    // La IP se guarda en la ficha SÓLO si de verdad quedó en el router: si el
+    // alta falló, soltarla evita quemar una dirección por cada reintento.
+    if (ipReservada) {
+      if (res.ok) {
+        await this.prisma.subscriber
+          .update({ where: { id: subscriberId }, data: { ipRemote: ipReservada } })
+          .catch(() => undefined);
+        await this.ips.confirmar(router, ipReservada);
+      } else {
+        await this.ips.liberar(router, ipReservada);
+        res.steps.push(`IP ${ipReservada} liberada (el alta no llegó a aplicarse)`);
+      }
+    }
+
     await this.audit('PROVISION' as MikrotikAction, sub, router, res, user);
     return res;
   }
@@ -614,8 +733,11 @@ export class MikrotikService {
       res.steps.push(`conectado a ${routerInfo.host}`);
       const secret = await api.comm('/ppp/secret/getall', { '.proplist': '.id', '?name': name });
       if (!secret.length || !secret[0]['.id']) throw new RouterosError(`No existe /ppp/secret para ${name}.`);
-      await api.comm('/ppp/secret/set', { '.id': secret[0]['.id'], profile });
-      res.steps.push(`perfil actualizado → ${profile}`);
+      // Por .id, no por nombre: un perfil ambiguo dejaba al cliente sin cambio
+      // de plan con un error que nadie sabía leer (ver resolveProfileId).
+      const perfil = await this.resolveProfileId(api, profile, router.name);
+      await api.comm('/ppp/secret/set', { '.id': secret[0]['.id'], profile: perfil.id });
+      res.steps.push(`perfil actualizado → ${perfil.name}`);
       const active = await api.comm('/ppp/active/getall', { '.proplist': '.id', '?name': name });
       if (active.length && active[0]['.id']) {
         await api.comm('/ppp/active/remove', { '.id': active[0]['.id'] });
@@ -637,6 +759,8 @@ export class MikrotikService {
   // ESTADO EN VIVO
   // ------------------------------------------------------------------
   async liveStatus(subscriberId: string): Promise<MikrotikActionResult> {
+    const hit = this.statusCache.get(subscriberId);
+    if (hit && Date.now() - hit.at < MikrotikService.STATUS_TTL_MS) return hit.res;
     await this.syncLive();
     const sub = await this.loadSubscriber(subscriberId);
     if (!sub.pppUsername) {
@@ -687,6 +811,9 @@ export class MikrotikService {
       res.error = e instanceof RouterosError ? e.message : (e as Error).message;
       res.message = `No se pudo leer el estado: ${res.error}`;
     }
+    // Se guarda también el fallo: si el router no responde, no tiene sentido que
+    // cada ficha abierta se quede otros 6 s esperando el mismo timeout.
+    this.statusCache.set(subscriberId, { at: Date.now(), res });
     return res;
   }
 
@@ -899,6 +1026,10 @@ export class MikrotikService {
   // ------------------------------------------------------------------
   private async markStatus(sub: SubForNet, next: 'CORTADO' | 'ACTIVO') {
     if (sub.status === next) return;
+    // Reconectar a alguien con acuerdo de pago le devuelve el servicio, no le borra el
+    // acuerdo: su estado se queda como está (ver `estado-al-reconectar.ts`). El corte sí
+    // manda sobre cualquier estado — dejar de pagar el acuerdo es exactamente el caso.
+    if (next === 'ACTIVO' && conservaEstadoAlReconectar(sub.status)) return;
     await this.prisma.subscriber.update({
       where: { id: sub.id },
       data: {

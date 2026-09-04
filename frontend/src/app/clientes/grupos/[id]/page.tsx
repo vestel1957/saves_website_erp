@@ -9,7 +9,9 @@ import { DataTable } from "@/components/ui/DataTable";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Input, Select } from "@/components/ui/Field";
-import { Pagination } from "@/components/ui/Pagination";
+import { Pagination, TODOS } from "@/components/ui/Pagination";
+import { toast } from "@/components/ui/Toast";
+import { mensajeDeError } from "@/lib/errores";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { BulkWhatsappModal } from "@/components/subscribers/BulkWhatsappModal";
 import { SubscriberFilters } from "@/components/subscribers/SubscriberFilters";
@@ -31,7 +33,9 @@ export default function SedeClientesPage() {
   const [tecnologia, setTecnologia] = useState("");
   const [cuenta, setCuenta] = useState("");
   const [page, setPage] = useState(1);
+  // 0 = "Todos" (ver TODOS de la paginación): se le pide al servidor la sede entera.
   const [pageSize, setPageSize] = useState(25);
+  const [exporting, setExporting] = useState(false);
 
   // Selección de abonados para envío masivo (persiste entre páginas de la sede).
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -68,7 +72,12 @@ export default function SedeClientesPage() {
 
   const { data, cargando: loading, error, refrescar: load } = useRequest<SubscriberList>(
     () => {
-      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize), branchId: String(id), ...orden.params });
+      const qs = new URLSearchParams({
+        page: String(pageSize === TODOS ? 1 : page),
+        pageSize: String(pageSize === TODOS ? 20000 : pageSize),
+        branchId: String(id),
+        ...orden.params,
+      });
       if (search.trim()) qs.set("search", search.trim());
       if (status) qs.set("status", status);
       if (servicio) qs.set("servicio", servicio);
@@ -83,6 +92,33 @@ export default function SedeClientesPage() {
   );
   useEffect(() => { setPage(1); }, [search, status, servicio, tecnologia, cuenta, pageSize, orden.clave]);
 
+  /** Excel con TODOS los abonados que cumplen los filtros, no solo la página. */
+  const exportar = async () => {
+    setExporting(true);
+    try {
+      const qs = new URLSearchParams({ branchId: String(id), ...orden.params });
+      if (search.trim()) qs.set("search", search.trim());
+      if (status) qs.set("status", status);
+      if (servicio) qs.set("servicio", servicio);
+      if (tecnologia) qs.set("tecnologia", tecnologia);
+      const cp = cuentaParams(cuenta);
+      if (cp.cuenta) qs.set("cuenta", cp.cuenta);
+      if (cp.deuda) qs.set("deuda", cp.deuda);
+      const res = await authFetch(`/subscribers/export.xlsx?${qs.toString()}`);
+      if (!res.ok) throw new Error("No se pudo exportar");
+      const blob = await res.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `clientes-${(sedeName || "sede").toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (e) {
+      toast(mensajeDeError(e), "alert-triangle");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   if (authLoading) return <PageSkeleton />;
 
   return (
@@ -90,12 +126,18 @@ export default function SedeClientesPage() {
       <Link href="/clientes/grupos" className="inline-flex items-center gap-1.5 self-start text-[12px] font-semibold text-brand hover:underline">
         <Icon name="arrow-left" size={14} /> Volver a sedes
       </Link>
-      <PageHeading
-        icon="warehouse"
-        showBack={false} // ya hay un "Volver a sedes" arriba; dos botones de volver confunden
-        title={sedeName || "Sede"}
-        subtitle={data ? `${data.total.toLocaleString("es-CO")} clientes en esta sede` : "Clientes de la sede"}
-      />
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <PageHeading
+          icon="warehouse"
+          showBack={false} // ya hay un "Volver a sedes" arriba; dos botones de volver confunden
+          title={sedeName || "Sede"}
+          subtitle={data ? `${data.total.toLocaleString("es-CO")} clientes en esta sede` : "Clientes de la sede"}
+        />
+        <Button size="sm" variant="secondary" onClick={exportar} disabled={exporting || !data?.total}>
+          <Icon name={exporting ? "loader" : "download"} size={14} className={exporting ? "animate-spin" : ""} />
+          {exporting ? "Exportando…" : "Exportar Excel"}
+        </Button>
+      </div>
 
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative min-w-[240px] flex-1">
@@ -173,9 +215,15 @@ export default function SedeClientesPage() {
               { key: "go", header: "", align: "right", render: (r) => <Link href={`/clientes/${r.id}`} className="inline-flex items-center gap-1 rounded-lg border border-border-default px-3 py-1.5 text-[12px] font-semibold text-text-secondary transition-colors hover:bg-surface-2">Ver ficha →</Link> },
             ]}
           />
-          {data && data.pages > 1 && (
+          {data && data.total > 0 && (
             <div className="mt-3">
-              <Pagination meta={{ page: data.page, pageSize: data.pageSize, total: data.total, pageCount: data.pages }} onPage={setPage} onPageSize={setPageSize} />
+              <Pagination
+                meta={{ page: data.page, pageSize: data.pageSize, total: data.total, pageCount: data.pages }}
+                onPage={setPage}
+                onPageSize={setPageSize}
+                conTodos
+                esTodos={pageSize === TODOS}
+              />
             </div>
           )}
         </>

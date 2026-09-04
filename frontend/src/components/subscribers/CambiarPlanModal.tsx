@@ -9,9 +9,10 @@ import { Icon } from "@/components/Icon";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { fullCurrency } from "@/lib/format";
-import { type Plan, type ChangePlanResult, type ServiceKind, SERVICE_KIND_LABEL } from "@/lib/plans";
+import { Segmented } from "@/components/ui/Segmented";
+import { type Bundle, type Plan, type ChangePlanResult, type ServiceKind, SERVICE_KIND_LABEL } from "@/lib/plans";
 
-type SubService = { kind: ServiceKind | string; planName?: string | null; price?: number };
+type SubService = { kind: ServiceKind | string; planName?: string | null; price?: number; qty?: number };
 
 /** Orden en que se muestran los servicios en el modal. */
 const KIND_ORDER: ServiceKind[] = ["INTERNET", "TV", "PUNTOS", "STREAMING"];
@@ -37,8 +38,20 @@ export function CambiarPlanModal({
 }) {
   const { authFetch } = useAuth();
   const [plans, setPlans] = useState<Plan[] | null>(null);
+  const [bundles, setBundles] = useState<Bundle[]>([]);
   // Selección por kind: kind → planId elegido ("" = mantener el actual).
   const [sel, setSel] = useState<Record<string, string>>({});
+  /**
+   * Se vende de dos maneras. Arranca en "sueltos" —lo de siempre— para no
+   * cambiarle el gesto a quien lleva meses cambiando planes de a uno.
+   */
+  const [modo, setModo] = useState<"sueltos" | "combo">("sueltos");
+  const [comboSel, setComboSel] = useState("");
+  /**
+   * Puntos de TV: aquí no se elige plan sino CUÁNTOS televisores extra tiene.
+   * `null` = no se tocan (es lo que se envía si nadie lo mueve).
+   */
+  const [puntos, setPuntos] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState<ChangePlanResult[] | null>(null);
 
@@ -46,10 +59,17 @@ export function CambiarPlanModal({
     if (!open) return;
     setResults(null);
     setSel({});
+    setModo("sueltos");
+    setComboSel("");
+    setPuntos(null);
     void authFetch(`/plans?activeOnly=true`)
       .then((r) => (r.ok ? r.json() : []))
       .then(setPlans)
       .catch(() => setPlans([]));
+    void authFetch(`/plan-bundles?activeOnly=true`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => setBundles(Array.isArray(d) ? d : []))
+      .catch(() => setBundles([]));
   }, [open, authFetch]);
 
   // Planes agrupados por kind, respetando el orden de KIND_ORDER.
@@ -59,7 +79,8 @@ export function CambiarPlanModal({
       if (!map.has(p.kind)) map.set(p.kind, []);
       map.get(p.kind)!.push(p);
     }
-    return KIND_ORDER.filter((k) => map.has(k)).map((k) => ({ kind: k, plans: map.get(k)! }));
+    // PUNTOS se saca del selector: no se elige un plan, se dice cuántos son.
+    return KIND_ORDER.filter((k) => k !== "PUNTOS" && map.has(k)).map((k) => ({ kind: k, plans: map.get(k)! }));
   }, [plans]);
 
   const currentByKind = useMemo(() => {
@@ -69,22 +90,60 @@ export function CambiarPlanModal({
   }, [services]);
 
   const chosenIds = Object.values(sel).filter(Boolean);
+  const combo = bundles.find((b) => b.id === comboSel) ?? null;
+  const puntosPlan = (plans ?? []).find((p) => p.kind === "PUNTOS") ?? null;
+  const suPunto = services.find((x) => x.kind === "PUNTOS");
+  const puntosActuales = suPunto?.qty ?? 0;
+  // Respeta la tarifa negociada del abonado (hay comerciales por encima del
+  // precio de lista); solo cae al catálogo cuando todavía no tiene puntos.
+  const precioPunto = suPunto?.price ?? puntosPlan?.price ?? 0;
+  const puntosCambian = puntos !== null && puntos !== puntosActuales;
+  const puedeAplicar = modo === "combo" ? Boolean(combo) : chosenIds.length > 0 || puntosCambian;
 
   async function apply() {
-    if (chosenIds.length === 0) return;
+    if (!puedeAplicar) return;
     setBusy(true);
     try {
-      const res = await authFetch(`/subscribers/${subscriberId}/plans`, {
-        method: "POST",
-        body: JSON.stringify({ planIds: chosenIds }),
-      });
-      if (!res.ok) {
-        const msg = await res.json().catch(() => null);
-        throw new Error(msg?.message || "No se pudieron cambiar los planes");
+      // Vender un combo no es mandar sus planes por la ruta de siempre: el
+      // precio del paquete lo pone el backend a partir del combo, no la pantalla.
+      // Los puntos van por su propia ruta: es una cantidad sobre el servicio de
+      // TV, no un plan del catálogo, y se puede cambiar sin tocar ningún plan.
+      if (modo === "sueltos" && puntosCambian) {
+        const rp = await authFetch(`/subscribers/${subscriberId}/puntos`, {
+          method: "POST",
+          body: JSON.stringify({ qty: puntos }),
+        });
+        if (!rp.ok) {
+          const msg = await rp.json().catch(() => null);
+          throw new Error(msg?.message || "No se pudo cambiar la cantidad de puntos");
+        }
       }
-      const data: { ok: boolean; results: ChangePlanResult[] } = await res.json();
-      setResults(data.results ?? []);
-      toast("Planes actualizados", "check");
+
+      let results: ChangePlanResult[] = [];
+      if (modo === "combo" || chosenIds.length > 0) {
+        const res = modo === "combo"
+          ? await authFetch(`/subscribers/${subscriberId}/bundle`, {
+              method: "POST",
+              body: JSON.stringify({ bundleId: comboSel }),
+            })
+          : await authFetch(`/subscribers/${subscriberId}/plans`, {
+              method: "POST",
+              body: JSON.stringify({ planIds: chosenIds }),
+            });
+        if (!res.ok) {
+          const msg = await res.json().catch(() => null);
+          throw new Error(msg?.message || "No se pudieron cambiar los planes");
+        }
+        const data: { ok: boolean; results: ChangePlanResult[] } = await res.json();
+        results = data.results ?? [];
+      }
+      setResults(results);
+      toast(
+        modo === "combo" ? `Combo “${combo?.name}” aplicado`
+          : chosenIds.length === 0 ? `Puntos de TV: ${puntos}`
+          : "Planes actualizados",
+        "check",
+      );
       onDone?.();
     } catch (e) {
       toast((e as Error).message, "alert-circle");
@@ -134,7 +193,58 @@ export function CambiarPlanModal({
             </p>
           )}
 
-          {byKind.map(({ kind, plans: kindPlans }) => {
+          {/* El selector solo aparece si de verdad hay algo que vender en combo. */}
+          {bundles.length > 0 && (
+            <Segmented
+              ariaLabel="Forma de venta"
+              value={modo}
+              onChange={setModo}
+              options={[
+                { value: "sueltos", label: "Planes sueltos" },
+                { value: "combo", label: `Combos (${bundles.length})` },
+              ]}
+            />
+          )}
+
+          {modo === "combo" && (
+            <div className="flex flex-col gap-2">
+              <Select value={comboSel} onChange={(e) => setComboSel(e.target.value)}>
+                <option value="">— Elige un combo —</option>
+                {bundles.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name} — {fullCurrency(b.total)}/mes
+                  </option>
+                ))}
+              </Select>
+              {combo && (
+                <div className="rounded-lg border border-border-subtle bg-surface-2 p-3">
+                  {combo.description && <p className="mb-1.5 text-[12px] text-text-tertiary">{combo.description}</p>}
+                  {combo.items.map((it) => (
+                    <div key={it.planId} className="flex items-baseline justify-between gap-2 text-[12.5px]">
+                      <span className="truncate text-text-secondary">
+                        <span className="text-text-tertiary">{SERVICE_KIND_LABEL[it.kind]}:</span> {it.planName}
+                      </span>
+                      <span className="shrink-0 font-mono text-text-primary">{fullCurrency(it.price)}</span>
+                    </div>
+                  ))}
+                  <div className="mt-1.5 flex items-baseline justify-between border-t border-border-subtle pt-1.5">
+                    <span className="text-[13px] font-semibold text-text-primary">Total</span>
+                    <span className="font-mono text-[14px] font-bold text-text-primary">{fullCurrency(combo.total)}/mes</span>
+                  </div>
+                  {combo.savings > 0 && (
+                    <p className="mt-1 text-right text-[11.5px] font-semibold text-success-text">
+                      Ahorra {fullCurrency(combo.savings)}/mes contra {fullCurrency(combo.listTotal)} por separado
+                    </p>
+                  )}
+                  <p className="mt-1.5 text-[11px] text-text-tertiary">
+                    Se le cambian {combo.items.length} servicio(s) de una vez, cada uno al precio del combo.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {modo === "sueltos" && byKind.map(({ kind, plans: kindPlans }) => {
             const current = currentByKind[kind];
             const selected = kindPlans.find((p) => p.id === sel[kind]) ?? null;
             return (
@@ -164,14 +274,66 @@ export function CambiarPlanModal({
             );
           })}
 
+          {/* Puntos de TV: televisores extra en la misma casa. Es una cantidad
+              sobre el servicio de televisión —no un plan— y por eso se pide con
+              un contador y no con un desplegable. */}
+          {modo === "sueltos" && puntosPlan && (
+            <div className="rounded-lg border border-border-subtle p-3">
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="text-[13px] font-semibold text-text-primary">{SERVICE_KIND_LABEL.PUNTOS}</span>
+                <span className="text-[11px] text-text-tertiary">
+                  Actual: <span className="font-medium text-text-secondary">{puntosActuales}</span>
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="secondary"
+                  onClick={() => setPuntos(Math.max(0, (puntos ?? puntosActuales) - 1))}
+                  disabled={(puntos ?? puntosActuales) <= 0}
+                  aria-label="Quitar un punto"
+                >
+                  <Icon name="minus" size={15} />
+                </Button>
+                <input
+                  type="number"
+                  min={0}
+                  max={200}
+                  value={puntos ?? puntosActuales}
+                  onChange={(e) => setPuntos(Math.max(0, Math.min(200, Number(e.target.value) || 0)))}
+                  className="w-16 rounded-md border border-border-subtle bg-surface px-2 py-1 text-center text-[13px] text-text-primary"
+                />
+                <Button
+                  variant="secondary"
+                  onClick={() => setPuntos(Math.min(200, (puntos ?? puntosActuales) + 1))}
+                  disabled={(puntos ?? puntosActuales) >= 200}
+                  aria-label="Agregar un punto"
+                >
+                  <Icon name="plus" size={15} />
+                </Button>
+                <span className="text-[11px] text-text-tertiary">
+                  televisor(es) extra · {fullCurrency(precioPunto)} c/u
+                </span>
+              </div>
+              {puntosCambian && (
+                <p className="mt-1.5 text-[11px] text-text-tertiary">
+                  {puntos === 0
+                    ? "Se le quitan los puntos: dejan de cobrarse en la próxima factura."
+                    : `Suma ${fullCurrency(precioPunto * (puntos ?? 0))}/mes a partir de la próxima factura.`}
+                </p>
+              )}
+            </div>
+          )}
+
           <div className="flex items-center justify-between gap-2">
             <span className="text-[11px] text-text-tertiary">
-              {chosenIds.length === 0 ? "Elige al menos un servicio a cambiar." : `${chosenIds.length} servicio(s) por cambiar.`}
+              {modo === "combo"
+                ? combo ? `${combo.items.length} servicio(s) por cambiar.` : "Elige un combo."
+                : chosenIds.length === 0 ? "Elige al menos un servicio a cambiar." : `${chosenIds.length} servicio(s) por cambiar.`}
             </span>
             <div className="flex gap-2">
               <Button variant="secondary" onClick={onClose}>Cancelar</Button>
-              <Button onClick={apply} disabled={chosenIds.length === 0 || busy}>
-                {busy ? "Aplicando…" : "Cambiar planes"}
+              <Button onClick={apply} disabled={!puedeAplicar || busy}>
+                {busy ? "Aplicando…" : modo === "combo" ? "Aplicar combo" : "Cambiar planes"}
               </Button>
             </div>
           </div>

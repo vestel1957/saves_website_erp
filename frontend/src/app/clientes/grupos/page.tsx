@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
 import { Badge } from "@/components/ui/Badge";
@@ -10,12 +9,13 @@ import { PagedTable } from "@/components/ui/PagedTable";
 import { ListToolbar } from "@/components/ui/ListToolbar";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { LoadError } from "@/components/ui/LoadError";
+import { Button } from "@/components/ui/Button";
+import { exportReportExcel } from "@/lib/report-export";
 import { useAuth } from "@/context/AuthProvider";
 
 type BranchStat = { id: string; name: string; total: number; activos: number; cortados: number; cartera: number };
 
 export default function GruposClientesPage() {
-  const router = useRouter();
   const { loading: authLoading, authFetch } = useAuth();
   const [branches, setBranches] = useState<BranchStat[] | null>(null);
   const [err, setErr] = useState(false);
@@ -34,9 +34,31 @@ export default function GruposClientesPage() {
 
   const shown = (branches ?? []).filter((b) => b.name.toLowerCase().includes(search.trim().toLowerCase()));
 
+  /** Excel de lo que se está viendo (respeta la búsqueda). */
+  const exportar = () =>
+    exportReportExcel({
+      title: "Grupos de clientes",
+      subtitle: search.trim() ? `Sedes que coinciden con \u201c${search.trim()}\u201d` : "Abonados agrupados por sede",
+      tables: [{
+        columns: [
+          { label: "Sede" },
+          { label: "Abonados", align: "right" },
+          { label: "Activos", align: "right" },
+          { label: "Cortados", align: "right" },
+          { label: "Cartera", align: "right" },
+        ],
+        rows: shown.map((b) => ({ cells: [b.name, b.total, b.activos, b.cortados, b.cartera] })),
+      }],
+    });
+
   return (
     <div className="space-y-4">
-      <PageHeading icon="users-round" title="Grupos de clientes" subtitle="Abonados agrupados por sede" />
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <PageHeading icon="users-round" title="Grupos de clientes" subtitle="Abonados agrupados por sede" />
+        <Button size="sm" variant="secondary" onClick={exportar} disabled={!shown.length}>
+          <Icon name="download" size={14} /> Exportar Excel
+        </Button>
+      </div>
 
       <ListToolbar search={search} onSearch={setSearch} searchPlaceholder="Buscar sede…" />
 
@@ -46,9 +68,10 @@ export default function GruposClientesPage() {
         <PageSkeleton />
       ) : (
         <PagedTable
+          conTodos
           rows={shown}
           empty={search ? "Ninguna sede coincide con la búsqueda." : "No hay sedes registradas."}
-          onRowClick={(b: BranchStat) => router.push(`/clientes/grupos/${b.id}`)}
+          rowHref={(b: BranchStat) => `/clientes/grupos/${b.id}`}
           columns={[
             { key: "name", header: "Sede", render: (b: BranchStat) => (
               <span className="inline-flex items-center gap-2">

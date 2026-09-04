@@ -1,36 +1,70 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Modal } from "@/components/Modal";
 import { Button } from "@/components/ui/Button";
 import { Input, Select, Field } from "@/components/ui/Field";
 import { Icon } from "@/components/Icon";
+import { Badge } from "@/components/ui/Badge";
+import { Segmented } from "@/components/ui/Segmented";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { mensajeDeError } from "@/lib/errores";
+import { fullCurrency } from "@/lib/format";
+import { type Bundle, type Plan, type ServiceKind, SERVICE_KIND_LABEL } from "@/lib/plans";
+// Las casillas de la dirección (y sus catálogos encadenados) viven aparte: las
+// comparte con la orden de traslado, que captura a dónde se muda el cliente.
+import { DireccionFields, NOM_KEYS, direccionArmada } from "@/components/subscribers/DireccionFields";
 
 /* Catálogos de valores fijos (tomados literal del legacy customers/edit.php) */
 const CUSTOMER_TYPES = ["Natural", "Juridico", "Gubernamental", "Militar"];
 const DOC_TYPES = ["CC", "CE", "NIT", "PAS", "PPT"];
 const SUSCRIPCIONES = ["Residencial", "Corporativo", "Dedicado"];
 const ESTRATOS = ["Estrato 1", "Estrato 2", "Estrato 3", "Estrato 4", "Estrato 5", "Estrato 6", "Estrato 7", "Estrato 8"];
-const NOMENCLATURAS = ["Calle", "Carrera", "Diagonal", "Transversal", "Manzana"];
-const ADICIONALES = ["", "bis", "sur", "a", "a sur", "b", "b sur", "c", "d", "e", "f", "g", "h", "a bis", "b bis", "c bis", "d bis", "oeste"];
-const ADICIONALES2 = ["", "Lote", ...ADICIONALES.slice(1)];
-const RESIDENCIAS = ["", "Casa", "Apartamento", "Edificio", "Oficina", "Vereda"];
-const DIVICIONES = ["", "Torre", "Interior", "Manzana", "Bloque"];
-const DIVICIONES2 = ["", "Apartamento", "Casa"];
-
-type Geo = { legacyId: number | null; name: string };
 type Branch = { id: string; name: string };
 
-const NOM_KEYS = [
-  "nomenclatura", "numero1", "adicionauno", "numero2", "adicional2", "numero3",
-  "residencia", "referencia", "divicion", "divnum1", "divicion2", "divnum2",
-] as const;
+/**
+ * Una afiliación del catálogo (`GET /subscribers/afiliaciones`).
+ *
+ * La afiliación es lo que se le cobra al cliente el día que entra —y lo ÚNICO que se le
+ * cobra: la mensualidad arranca el 1º del mes siguiente, por la corrida—. Son productos
+ * de contabilidad con precios distintos (Combo 70.000, Villavo 50.000, Dedicado 300.000),
+ * así que se eligen del catálogo, no se escriben a mano.
+ */
+type Afiliacion = { id: string; name: string; price: number; taxRate: number };
 
 /** Tecnologías de instalación (enum InstallTech del backend). */
 const INSTALL_TECHS = ["GPON", "EPON", "EOC", "RADIO", "FIBRA"];
+
+/**
+ * Espejo de `backend/src/subscribers/conexion-alta.ts`.
+ *
+ * El alta ya NO pregunta por los datos de conexión: el servidor los deriva del
+ * propio cliente (nombre completo pegado en mayúsculas como usuario, número de
+ * documento como clave), que es la convención de siempre y la que traen los
+ * abonados importados del legacy. Se repite el cálculo aquí SÓLO para enseñar en
+ * pantalla lo que se va a crear; el valor bueno lo pone el backend, que además
+ * numera la variante (`JUANPEREZ2`) si el nombre ya está tomado.
+ */
+const soloLetrasYNumeros = (v: string) =>
+  v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+
+/** Usuario PPPoE: los cuatro trozos del nombre pegados (o la razón social). */
+function usuarioPppDe(p: Record<string, any>): string {
+  const persona = [p.firstName, p.secondName, p.lastName1, p.lastName2]
+    .map((s) => soloLetrasYNumeros(String(s ?? "").trim()))
+    .join("");
+  return persona || soloLetrasYNumeros(String(p.companyName ?? "").trim());
+}
+
+/** Clave PPPoE: el documento sin puntos ni espacios. */
+const clavePppDe = (doc: any) => String(doc ?? "").replace(/[^A-Za-z0-9]/g, "");
+
+/** Etiqueta comercial de la única tecnología que se vende hoy (backend: GPON). */
+const ETIQUETA_FTTH = "FTTH (fibra óptica)";
+
+/** Orden en que se ofrecen los servicios del catálogo (igual que CambiarPlanModal). */
+const KIND_ORDER: ServiceKind[] = ["INTERNET", "TV", "PUNTOS", "STREAMING"];
 
 const EMPTY: Record<string, any> = {
   abonado: "", firstName: "", secondName: "", lastName1: "", lastName2: "", companyName: "",
@@ -39,13 +73,25 @@ const EMPTY: Record<string, any> = {
   departmentRef: "", cityRef: "", localityRef: "", neighborhood: "", addressLine: "",
   clausula: "", gpsLat: "", gpsLng: "", branchId: "",
   pppUsername: "", pppPassword: "", pppProfile: "", ipRemote: "", installTech: "",
+  // Alta completa: qué se hace además de guardar la ficha. Por defecto TODO,
+  // que es lo que se espera de un alta (y lo que no pasaba antes).
+  provision: true, firstInvoice: true, installOrder: true, installCharge: "",
+  // "" = la que propone el sistema según el plan; el precio vacío = el del catálogo.
+  affiliationId: "", affiliationPrice: "",
   ...Object.fromEntries(NOM_KEYS.map((k) => [k, ""])),
 };
 
 const dateInput = (d?: string | null) => (d ? new Date(d).toISOString().slice(0, 10) : "");
 const str = (v: any) => (v == null ? "" : String(v));
 
-const STEPS = ["Datos personales", "Ubicación / dirección", "Conectividad", "Revisión"];
+const STEPS = ["Datos personales", "Ubicación / dirección", "Plan y conexión", "Revisión"];
+
+/** Resultado de un paso del alta que devuelve el backend (ver AltaClienteService). */
+type PasoAlta = { hecho: boolean; motivo?: string; resultado?: any };
+type ResultadoAlta = {
+  id: string; abonado: number;
+  planes: PasoAlta; router: PasoAlta; factura: PasoAlta; orden: PasoAlta;
+};
 
 /** Resultado del chequeo de duplicados del backend. */
 type DupCheck = {
@@ -67,14 +113,22 @@ export function ClienteWizardModal({
   const [step, setStep] = useState(0);
   const [f, setF] = useState<Record<string, any>>(EMPTY);
   const [saving, setSaving] = useState(false);
-  const [departments, setDepartments] = useState<Geo[]>([]);
-  const [cities, setCities] = useState<Geo[]>([]);
-  const [localities, setLocalities] = useState<Geo[]>([]);
-  const [neighborhoods, setNeighborhoods] = useState<Geo[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [clausulas, setClausulas] = useState<{ legacyId: number | null; nombre: string; meses: number }[]>([]);
   const [dup, setDup] = useState<DupCheck>({});
   const [checkingPpp, setCheckingPpp] = useState(false);
+  const [plans, setPlans] = useState<Plan[] | null>(null);
+  /** Plan elegido por tipo de servicio: kind → planId ("" = ninguno). */
+  const [planSel, setPlanSel] = useState<Record<string, string>>({});
+  /** Combos que se pueden vender hoy (vacío = no hay ninguno armado). */
+  const [bundles, setBundles] = useState<Bundle[]>([]);
+  /** Se contrata plan a plan o un combo cerrado. Arranca en "sueltos". */
+  const [modoVenta, setModoVenta] = useState<"sueltos" | "combo">("sueltos");
+  const [comboSel, setComboSel] = useState("");
+  /** Catálogo de afiliaciones (lo que se cobra al entrar). */
+  const [afiliaciones, setAfiliaciones] = useState<Afiliacion[]>([]);
+  /** Lo que hizo el alta, para contarlo en vez de cerrar y dejarlo a la fe. */
+  const [alta, setAlta] = useState<ResultadoAlta | null>(null);
 
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setF((p) => ({ ...p, [k]: e.target.value }));
 
@@ -108,6 +162,19 @@ export function ClienteWizardModal({
   useEffect(() => {
     if (!open) return;
     setStep(0);
+    setAlta(null);
+    setPlanSel({});
+    setModoVenta("sueltos");
+    setComboSel("");
+    // Las afiliaciones no cuelgan de /billing/catalog a propósito: el alta también la
+    // hacen administración y técnicos, que no tienen el área de facturación.
+    void geo("/subscribers/afiliaciones").then((d: { items?: Afiliacion[] } | Afiliacion[]) =>
+      setAfiliaciones(Array.isArray(d) ? d : (d?.items ?? [])),
+    );
+    // El catálogo de planes es de donde sale el perfil/velocidad del router Y el
+    // precio que se factura: por eso el alta elige plan y no escribe un perfil a mano.
+    void geo("/plans?activeOnly=true").then(setPlans);
+    void geo("/plan-bundles?activeOnly=true").then((bs: Bundle[]) => setBundles(Array.isArray(bs) ? bs : []));
     // El catálogo llega acotado a las sedes del usuario. Si sólo tiene una (la
     // cajera), se elige sola: no hay decisión que tomar y dejarla en "—" sólo
     // conseguiría que el alta fallara con un 403 por no indicar sede.
@@ -115,7 +182,6 @@ export function ClienteWizardModal({
       setBranches(bs);
       if (bs.length === 1) setF((p) => (p.branchId ? p : { ...p, branchId: bs[0].id }));
     });
-    void geo("/subscribers/geo/departments").then(setDepartments);
     // Solo las activas: el catálogo puede tener cláusulas retiradas que siguen
     // imprimiéndose en contratos viejos pero ya no se ofrecen en un alta.
     void geo("/clausulas?soloActivas=1").then(setClausulas);
@@ -139,41 +205,91 @@ export function ClienteWizardModal({
             ipRemote: str(d.ipRemote), installTech: str(d.installTech),
             ...Object.fromEntries(NOM_KEYS.map((k) => [k, str(nom[k])])),
           });
-          // Cargar los niveles dependientes para que los selects muestren el valor actual.
-          if (d.departmentRef) void geo(`/subscribers/geo/cities?department=${d.departmentRef}`).then(setCities);
-          if (d.cityRef) void geo(`/subscribers/geo/localities?city=${d.cityRef}`).then(setLocalities);
-          if (d.localityRef) void geo(`/subscribers/geo/neighborhoods?locality=${d.localityRef}`).then(setNeighborhoods);
         })
         .catch(() => toast("No se pudo cargar el cliente", "alert-circle"));
     } else {
       setF(EMPTY);
-      setCities([]); setLocalities([]); setNeighborhoods([]);
     }
   }, [open, mode, subscriberId, authFetch, geo]);
-
-  // Cascada dependiente.
-  function onDepartment(e: React.ChangeEvent<HTMLSelectElement>) {
-    const v = e.target.value;
-    setF((p) => ({ ...p, departmentRef: v, cityRef: "", localityRef: "", neighborhood: "" }));
-    setCities([]); setLocalities([]); setNeighborhoods([]);
-    if (v) void geo(`/subscribers/geo/cities?department=${v}`).then(setCities);
-  }
-  function onCity(e: React.ChangeEvent<HTMLSelectElement>) {
-    const v = e.target.value;
-    setF((p) => ({ ...p, cityRef: v, localityRef: "", neighborhood: "" }));
-    setLocalities([]); setNeighborhoods([]);
-    if (v) void geo(`/subscribers/geo/localities?city=${v}`).then(setLocalities);
-  }
-  function onLocality(e: React.ChangeEvent<HTMLSelectElement>) {
-    const v = e.target.value;
-    setF((p) => ({ ...p, localityRef: v, neighborhood: "" }));
-    setNeighborhoods([]);
-    if (v) void geo(`/subscribers/geo/neighborhoods?locality=${v}`).then(setNeighborhoods);
-  }
 
   // Validación de campos obligatorios (paso 1) — igual que los `required` del legacy.
   // La razón social solo aplica a empresas/entidades (o si ya trae valor guardado).
   const showCompany = ["Juridico", "Gubernamental", "Militar"].includes(f.customerType) || !!f.companyName?.trim();
+
+  // Planes agrupados por tipo de servicio, en el orden en que se ofrecen.
+  const byKind = useMemo(() => {
+    const map = new Map<string, Plan[]>();
+    for (const p of plans ?? []) {
+      if (!map.has(p.kind)) map.set(p.kind, []);
+      map.get(p.kind)!.push(p);
+    }
+    return KIND_ORDER.filter((k) => map.has(k)).map((k) => ({ kind: k, plans: map.get(k)! }));
+  }, [plans]);
+
+  const planIds = useMemo(() => Object.values(planSel).filter(Boolean), [planSel]);
+  const comboElegido = useMemo(() => bundles.find((b) => b.id === comboSel) ?? null, [bundles, comboSel]);
+  const usaCombo = modoVenta === "combo" && comboElegido !== null;
+  /**
+   * Los planes que se van a contratar, vengan de los desplegables o de dentro
+   * de un combo. De aquí sale el perfil que se le escribe al router, que es el
+   * mismo mande quien mande.
+   */
+  const planesElegidos = useMemo(() => {
+    const ids = usaCombo ? comboElegido!.items.map((it) => it.planId) : planIds;
+    return ids.map((id) => (plans ?? []).find((p) => p.id === id)).filter(Boolean) as Plan[];
+  }, [usaCombo, comboElegido, planIds, plans]);
+  // En un combo la mensualidad NO es la suma de los planes de lista: es lo que
+  // cobra el paquete.
+  const mensualidad = usaCombo ? comboElegido!.total : planesElegidos.reduce((s, p) => s + p.price, 0);
+  const cargoInstalacion = Number(f.installCharge || 0);
+
+  /**
+   * Afiliación que se propone según lo contratado — espejo de `nombreSugerido()` en
+   * `backend/src/subscribers/afiliacion.ts`. Los tres casos cubren casi todas las altas;
+   * el resto (Villavo, Dedicado, Streaming) se elige a mano del desplegable.
+   */
+  const afiliacionSugerida = useMemo(() => {
+    const kinds = new Set(planesElegidos.map((p) => p.kind));
+    const nombre = kinds.has("INTERNET") && kinds.has("TV") ? "Afiliación Combo"
+      : kinds.has("INTERNET") ? "Afiliación Internet solo"
+      : kinds.has("TV") ? "Afiliación Television"
+      : null;
+    if (!nombre) return null;
+    const sinTildes = (v: string) => v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    return afiliaciones.find((a) => sinTildes(a.name) === sinTildes(nombre)) ?? null;
+  }, [planesElegidos, afiliaciones]);
+
+  /** La que se va a cobrar: la elegida a mano, o la propuesta. */
+  const afiliacion = useMemo(
+    () => afiliaciones.find((a) => a.id === f.affiliationId) ?? afiliacionSugerida,
+    [afiliaciones, f.affiliationId, afiliacionSugerida],
+  );
+  /** Precio a cobrar: el que se escribió encima, o el del catálogo. */
+  const precioAfiliacion = f.affiliationPrice === "" ? (afiliacion?.price ?? 0) : Number(f.affiliationPrice || 0);
+  /** Lo que va a decir la factura de afiliación. */
+  const totalAfiliacion = precioAfiliacion + cargoInstalacion;
+
+  /**
+   * El perfil del router lo pone el plan de internet, no la mano: es lo que
+   * `provision` escribe en el `/ppp/secret`. Se refleja en el formulario para que
+   * se vea qué se va a mandar (el backend lo vuelve a fijar desde el plan igual).
+   */
+  const perfilDelPlan = planesElegidos.find((p) => p.kind === "INTERNET")?.pppProfile ?? "";
+
+  /**
+   * Conexión del alta, deducida del cliente. No es un campo del formulario: se
+   * calcula para poder enseñarla antes de crear (el backend la vuelve a derivar
+   * igual, ver `credencialesPpp`).
+   */
+  const pppAuto = {
+    usuario: usuarioPppDe(f),
+    clave: clavePppDe(f.docNumber),
+  };
+  /** Usuario PPP que va a tener el cliente: derivado al crear, el suyo al editar. */
+  const usuarioPpp = mode === "create" ? pppAuto.usuario : f.pppUsername;
+  useEffect(() => {
+    if (perfilDelPlan) setF((p) => (p.pppProfile === perfilDelPlan ? p : { ...p, pppProfile: perfilDelPlan }));
+  }, [perfilDelPlan]);
 
   const missing: string[] = [];
   if (!f.firstName.trim()) missing.push("1er nombre");
@@ -195,10 +311,33 @@ export function ClienteWizardModal({
       departmentRef: f.departmentRef, cityRef: f.cityRef, localityRef: f.localityRef, neighborhood: f.neighborhood,
       addressLine: f.addressLine, branchId: f.branchId || undefined, nomenclature,
       // Conectividad (legacy `create.php`: name_s, contra, perfil, Ipremota, tegnologia).
-      // Sin pppUsername el cliente no se puede aprovisionar en el Mikrotik.
-      pppUsername: f.pppUsername || undefined, pppPassword: f.pppPassword || undefined,
-      pppProfile: f.pppProfile || undefined, ipRemote: f.ipRemote || undefined,
-      installTech: f.installTech || undefined,
+      // Al CREAR no se manda ninguno: el backend deriva usuario/clave del cliente,
+      // pone la tecnología (FTTH) y deja que `provision` reparta la IP libre. Al
+      // EDITAR sí viajan, que es donde se corrigen a mano los abonados viejos.
+      ...(mode === "edit"
+        ? {
+            pppUsername: f.pppUsername || undefined, pppPassword: f.pppPassword || undefined,
+            pppProfile: f.pppProfile || undefined, ipRemote: f.ipRemote || undefined,
+            installTech: f.installTech || undefined,
+          }
+        : { pppProfile: f.pppProfile || undefined }),
+      // Alta completa (sólo al crear: en una edición estos pasos ya pasaron o se
+      // hacen desde la ficha, y repetirlos duplicaría factura y orden).
+      ...(mode === "create"
+        ? {
+            // El combo manda: el backend saca sus planes y sus precios de ahí.
+            ...(usaCombo ? { bundleId: comboSel } : { planIds: planIds.length ? planIds : undefined }),
+            provision: !!f.provision,
+            firstInvoice: !!f.firstInvoice,
+            // La afiliación es lo que se cobra al entrar (la mensualidad la cobra la
+            // corrida del mes siguiente). Sin elección explícita la deduce el backend
+            // del plan contratado, igual que `afiliacionSugerida` aquí.
+            affiliationId: f.affiliationId || undefined,
+            affiliationPrice: f.affiliationPrice === "" ? undefined : precioAfiliacion,
+            installCharge: cargoInstalacion > 0 ? cargoInstalacion : undefined,
+            installOrder: !!f.installOrder,
+          }
+        : {}),
     };
   }
 
@@ -216,7 +355,12 @@ export function ClienteWizardModal({
       const out = await res.json().catch(() => ({}));
       toast(mode === "edit" ? "Cliente actualizado" : `Cliente creado (abonado ${out.abonado ?? ""})`);
       onDone(out.id ?? subscriberId);
-      onClose();
+      // En el alta NO se cierra: el alta son cuatro pasos (plan, router, factura,
+      // orden) y alguno puede haber fallado —el router típicamente—. Cerrar de
+      // golpe es como se llegaba a clientes creados "bien" que no existían en el
+      // Mikrotik. Se muestra el parte y el usuario cierra.
+      if (mode === "create") setAlta(out as ResultadoAlta);
+      else onClose();
     } catch (e) {
       toast(mensajeDeError(e) ?? "Error al guardar", "alert-circle");
     } finally {
@@ -224,14 +368,58 @@ export function ClienteWizardModal({
     }
   }
 
-  const geoOpts = (list: Geo[], current: string) => (
-    <>
-      <option value="">— Seleccionar —</option>
-      {/* si el valor actual no está en la lista cargada, lo mostramos igual */}
-      {current && !list.some((g) => String(g.legacyId) === current) && <option value={current}>({current})</option>}
-      {list.map((g) => <option key={g.legacyId} value={String(g.legacyId)}>{g.name}</option>)}
-    </>
-  );
+  // Parte del alta: qué quedó hecho y qué no. Sustituye al wizard una vez creado.
+  if (alta) {
+    return (
+      <Modal open={open} onClose={onClose} title={`Cliente creado — abonado ${alta.abonado}`} maxWidth="max-w-3xl">
+        <div className="flex flex-col gap-2">
+          <PasoResultado
+            icono="package"
+            titulo="Plan contratado"
+            paso={alta.planes}
+            ok={(r: any[]) => `${r.map((p) => p.name).join(" + ")} · lo factura la corrida mensual desde el mes que viene.`}
+          />
+          <PasoResultado
+            icono="router"
+            titulo="Alta en el Mikrotik"
+            paso={alta.router}
+            ok={(r: any) => {
+              const ip = (r?.steps ?? []).find((s: string) => s.startsWith("IP asignada"));
+              const base = r?.dryRun ? `SIMULADO (dry-run): ${r.message}` : r?.message ?? "Secret creado.";
+              return ip ? `${base} · ${ip}` : base;
+            }}
+            tono={alta.router.resultado?.dryRun ? "warning" : undefined}
+          />
+          <PasoResultado
+            icono="file-text"
+            titulo="Factura de afiliación"
+            paso={alta.factura}
+            ok={(r: any) => `Factura #${r.tid} · ${r.afiliacion ?? "afiliación"} por ${fullCurrency(r.total)}. Al pagarla se abre sola la orden de instalación.`}
+          />
+          <PasoResultado
+            icono="clipboard-list"
+            titulo="Orden de instalación"
+            paso={alta.orden}
+            ok={(r: any) =>
+              r?.esperandoPago
+                ? "Queda a la espera del pago de la factura de afiliación: en cuanto entre el pago, la orden se abre sola y le llega al encargado de soporte."
+                : `Orden #${r?.code} abierta.`
+            }
+            tono={alta.orden.resultado?.esperandoPago ? "warning" : undefined}
+            etiqueta={alta.orden.resultado?.esperandoPago ? "AL PAGAR" : undefined}
+          />
+          <p className="text-[12px] text-text-tertiary">
+            Lo que no haya quedado se puede rehacer desde la ficha del cliente (Cambiar plan,
+            o Mikrotik → Dar de alta) sin volver a crearlo.
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={onClose}>Cerrar</Button>
+            <Button onClick={() => { onDone(alta.id); onClose(); }}>Ver el cliente</Button>
+          </div>
+        </div>
+      </Modal>
+    );
+  }
 
   return (
     <Modal open={open} onClose={onClose} title={mode === "edit" ? "Editar cliente" : "Nuevo cliente"} maxWidth="max-w-3xl">
@@ -307,84 +495,170 @@ export function ClienteWizardModal({
       {/* Paso 2 — Sede/zona → dirección → adicionales */}
       {step === 1 && (
         <div className="flex flex-col gap-4">
-          <Section title="Sede y zona">
+          <Section title="Sede">
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <Field label="Sede"><Select value={f.branchId} onChange={set("branchId")}><option value="">—</option>{branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</Select></Field>
-              <Field label="Departamento"><Select value={f.departmentRef} onChange={onDepartment}>{geoOpts(departments, f.departmentRef)}</Select></Field>
-              <Field label="Ciudad"><Select value={f.cityRef} onChange={onCity}>{geoOpts(cities, f.cityRef)}</Select></Field>
-              <Field label="Localidad"><Select value={f.localityRef} onChange={onLocality}>{geoOpts(localities, f.localityRef)}</Select></Field>
-              <Field label="Barrio"><Select value={f.neighborhood} onChange={set("neighborhood")}>{geoOpts(neighborhoods, f.neighborhood)}</Select></Field>
             </div>
           </Section>
 
-          <Section title="Dirección">
-            <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
-              <Field label="Nomencl."><Select value={f.nomenclatura} onChange={set("nomenclatura")}><option value="">—</option>{NOMENCLATURAS.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
-              <Field label="N°"><Input value={f.numero1} onChange={set("numero1")} /></Field>
-              <Field label="Adic."><Select value={f.adicionauno} onChange={set("adicionauno")}>{ADICIONALES.map((t) => <option key={t} value={t}>{t || "—"}</option>)}</Select></Field>
-              <Field label="N°"><Input value={f.numero2} onChange={set("numero2")} /></Field>
-              <Field label="Adic."><Select value={f.adicional2} onChange={set("adicional2")}>{ADICIONALES2.map((t) => <option key={t} value={t}>{t || "—"}</option>)}</Select></Field>
-              <Field label="N° (placa)"><Input value={f.numero3} onChange={set("numero3")} /></Field>
-            </div>
-            <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
-              <Field label="Residencia"><Select value={f.residencia} onChange={set("residencia")}>{RESIDENCIAS.map((t) => <option key={t} value={t}>{t || "—"}</option>)}</Select></Field>
-              <div className="col-span-1 sm:col-span-3"><Field label="Referencia"><Input value={f.referencia} onChange={set("referencia")} /></Field></div>
-              <Field label="División 1"><Select value={f.divicion} onChange={set("divicion")}>{DIVICIONES.map((t) => <option key={t} value={t}>{t || "—"}</option>)}</Select></Field>
-              <Field label="Nº div1"><Input value={f.divnum1} onChange={set("divnum1")} /></Field>
-              <Field label="División 2"><Select value={f.divicion2} onChange={set("divicion2")}>{DIVICIONES2.map((t) => <option key={t} value={t}>{t || "—"}</option>)}</Select></Field>
-              <Field label="Nº div2"><Input value={f.divnum2} onChange={set("divnum2")} /></Field>
-            </div>
-            <div className="mt-2">
-              <Field label="Dirección del cliente (comercial)" hint="Las coordenadas GPS las registra el técnico en la instalación."><Input value={f.addressLine} onChange={set("addressLine")} /></Field>
-            </div>
+          <Section title="Zona y dirección">
+            <DireccionFields
+              value={f as Record<string, string>}
+              onChange={(patch) => setF((p) => ({ ...p, ...patch }))}
+              hintComercial="Las coordenadas GPS las registra el técnico en la instalación."
+            />
           </Section>
         </div>
       )}
 
-      {/* Paso 3 — conectividad (PPP / Mikrotik) */}
+      {/* Paso 3 — plan contratado + conectividad (PPP / Mikrotik) */}
       {step === 2 && (
         <div className="flex flex-col gap-2">
-          <Section title="Conexión PPP">
-            <p className="mb-2 text-[12px] text-text-tertiary">
-              Sin usuario PPP el cliente no se puede aprovisionar en el Mikrotik. El nombre de
-              usuario debe ser único: se valida contra la base de datos y contra el router de la sede.
-            </p>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-              <Field label="Usuario PPP">
-                <Input
-                  value={f.pppUsername}
-                  onChange={set("pppUsername")}
-                  onBlur={() => {
-                    if (!f.pppUsername?.trim()) { setDup((p) => ({ ...p, pppUsername: null })); return; }
-                    setCheckingPpp(true);
-                    void checkDup({ pppUsername: f.pppUsername, branchId: f.branchId || undefined, installTech: f.installTech || undefined })
-                      .finally(() => setCheckingPpp(false));
-                  }}
+          {mode === "create" && (
+            <Section title="Plan contratado">
+              <p className="mb-2 text-[12px] text-text-tertiary">
+                El plan decide tres cosas a la vez: la <b>velocidad</b> (es el perfil que se
+                escribe en el Mikrotik), el <b>precio</b> que se le factura cada mes y lo que
+                lleva la primera factura. Sin plan el cliente nace sin servicio y la corrida
+                mensual no lo factura.
+              </p>
+              {!plans && <p className="text-[12px] text-text-tertiary">Cargando planes…</p>}
+              {plans && byKind.length === 0 && (
+                <p className="text-[12px] text-text-tertiary">
+                  No hay planes en el catálogo. Créalos en Configuración → Planes.
+                </p>
+              )}
+
+              {bundles.length > 0 && (
+                <Segmented
+                  className="mb-2"
+                  ariaLabel="Forma de contratación"
+                  value={modoVenta}
+                  onChange={setModoVenta}
+                  options={[
+                    { value: "sueltos", label: "Planes sueltos" },
+                    { value: "combo", label: `Combos (${bundles.length})` },
+                  ]}
                 />
-              </Field>
-              <Field label="Clave PPP"><Input value={f.pppPassword} onChange={set("pppPassword")} /></Field>
-              <Field label="Perfil / velocidad"><Input value={f.pppProfile} onChange={set("pppProfile")} /></Field>
-              <Field label="IP remota"><Input value={f.ipRemote} onChange={set("ipRemote")} /></Field>
-              <Field label="Tecnología">
-                <Select value={f.installTech} onChange={set("installTech")}>
-                  <option value="">— Seleccionar —</option>
-                  {INSTALL_TECHS.map((t) => <option key={t} value={t}>{t}</option>)}
-                </Select>
-              </Field>
-            </div>
-            {checkingPpp && <p className="mt-2 text-[12px] text-text-tertiary">Verificando disponibilidad…</p>}
-            {!checkingPpp && dup.pppUsername && (
-              <div className={`mt-2 rounded-lg px-3 py-2 text-[12px] ${
-                dup.pppUsername.taken
-                  ? "bg-error-soft text-error-text"
-                  : dup.pppUsername.router === "unreachable"
-                    ? "border border-warning-border bg-warning-soft text-text-secondary"
-                    : "bg-success-soft text-success-text"
-              }`}>
-                {dup.pppUsername.message}
+              )}
+
+              {modoVenta === "combo" && (
+                <div className="mb-2 flex flex-col gap-2">
+                  <Select value={comboSel} onChange={(e) => setComboSel(e.target.value)}>
+                    <option value="">— Elige un combo —</option>
+                    {bundles.map((b) => (
+                      <option key={b.id} value={b.id}>{b.name} — {fullCurrency(b.total)}/mes</option>
+                    ))}
+                  </Select>
+                  {comboElegido && (
+                    <div className="rounded-lg border border-border-subtle bg-surface-2 p-3">
+                      {comboElegido.description && (
+                        <p className="mb-1.5 text-[12px] text-text-tertiary">{comboElegido.description}</p>
+                      )}
+                      {comboElegido.items.map((it) => (
+                        <div key={it.planId} className="flex items-baseline justify-between gap-2 text-[12.5px]">
+                          <span className="truncate text-text-secondary">
+                            <span className="text-text-tertiary">{SERVICE_KIND_LABEL[it.kind]}:</span> {it.planName}
+                          </span>
+                          <span className="shrink-0 font-mono text-text-primary">{fullCurrency(it.price)}</span>
+                        </div>
+                      ))}
+                      {comboElegido.savings > 0 && (
+                        <p className="mt-1.5 border-t border-border-subtle pt-1.5 text-right text-[11.5px] font-semibold text-success-text">
+                          Ahorra {fullCurrency(comboElegido.savings)}/mes contra {fullCurrency(comboElegido.listTotal)} por separado
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className={`grid grid-cols-1 gap-2 sm:grid-cols-2 ${modoVenta === "combo" ? "hidden" : ""}`}>
+                {byKind.map(({ kind, plans: kindPlans }) => {
+                  const elegido = kindPlans.find((p) => p.id === planSel[kind]) ?? null;
+                  return (
+                    <Field key={kind} label={SERVICE_KIND_LABEL[kind]}>
+                      <Select
+                        value={planSel[kind] ?? ""}
+                        onChange={(e) => setPlanSel((s) => ({ ...s, [kind]: e.target.value }))}
+                      >
+                        <option value="">— Sin {SERVICE_KIND_LABEL[kind].toLowerCase()} —</option>
+                        {kindPlans.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name} — {fullCurrency(p.price)}/mes{p.pppProfile ? ` · ${p.pppProfile}` : ""}
+                          </option>
+                        ))}
+                      </Select>
+                      {elegido && !elegido.pppProfile && (
+                        <p className="mt-1 text-[11px] text-text-tertiary">
+                          Este plan no trae perfil de router: sólo fija la mensualidad.
+                        </p>
+                      )}
+                    </Field>
+                  );
+                })}
               </div>
-            )}
-          </Section>
+              {planesElegidos.length > 0 && (
+                <p className="mt-2 rounded-lg bg-surface-2 px-3 py-2 text-[12px] text-text-secondary">
+                  Mensualidad: <b className="text-text-primary">{fullCurrency(mensualidad)}</b>
+                  {perfilDelPlan ? <> · perfil al router: <b className="text-text-primary">{perfilDelPlan}</b></> : null}
+                </p>
+              )}
+            </Section>
+          )}
+          {/* La conexión al router no se pregunta al crear: el backend la deriva del
+              cliente (usuario = nombre en mayúsculas, clave = documento, IP automática).
+              Al EDITAR sí se puede escribir a mano, por los abonados viejos del legacy. */}
+          {mode === "edit" && (
+            <Section title="Conexión PPP">
+              <p className="mb-2 text-[12px] text-text-tertiary">
+                Sin usuario PPP el cliente no se puede aprovisionar en el Mikrotik. El nombre de
+                usuario debe ser único: se valida contra la base de datos y contra el router de la sede.
+              </p>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                <Field label="Usuario PPP">
+                  <Input
+                    value={f.pppUsername}
+                    onChange={set("pppUsername")}
+                    onBlur={() => {
+                      if (!f.pppUsername?.trim()) { setDup((p) => ({ ...p, pppUsername: null })); return; }
+                      setCheckingPpp(true);
+                      void checkDup({ pppUsername: f.pppUsername, branchId: f.branchId || undefined, installTech: f.installTech || undefined })
+                        .finally(() => setCheckingPpp(false));
+                    }}
+                  />
+                </Field>
+                <Field label="Clave PPP"><Input value={f.pppPassword} onChange={set("pppPassword")} /></Field>
+                <Field
+                  label="Perfil / velocidad"
+                  hint={perfilDelPlan ? "Lo pone el plan contratado." : "Sin plan de internet elegido; se puede escribir a mano."}
+                >
+                  <Input value={f.pppProfile} onChange={set("pppProfile")} readOnly={!!perfilDelPlan} />
+                </Field>
+                <Field label="IP remota" hint="Déjala vacía: se asigna sola al dar de alta en el router.">
+                  <Input value={f.ipRemote} onChange={set("ipRemote")} placeholder="automática" />
+                </Field>
+                <Field label="Tecnología">
+                  <Select value={f.installTech} onChange={set("installTech")}>
+                    <option value="">— Seleccionar —</option>
+                    {INSTALL_TECHS.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </Select>
+                </Field>
+              </div>
+              {checkingPpp && <p className="mt-2 text-[12px] text-text-tertiary">Verificando disponibilidad…</p>}
+              {!checkingPpp && dup.pppUsername && (
+                <div className={`mt-2 rounded-lg px-3 py-2 text-[12px] ${
+                  dup.pppUsername.taken
+                    ? "bg-error-soft text-error-text"
+                    : dup.pppUsername.router === "unreachable"
+                      ? "border border-warning-border bg-warning-soft text-text-secondary"
+                      : "bg-success-soft text-success-text"
+                }`}>
+                  {dup.pppUsername.message}
+                </div>
+              )}
+            </Section>
+          )}
         </div>
       )}
 
@@ -414,14 +688,99 @@ export function ClienteWizardModal({
             <Rev k="Suscripción" v={f.suscripcion} />
             <Rev k="Permanencia" v={clausulas.find((c) => String(c.legacyId) === String(f.clausula))?.nombre ?? "Sin permanencia"} />
             <Rev k="Estrato" v={f.estrato} />
-            <Rev k="Dirección" v={[f.nomenclatura, f.numero1, f.adicionauno, "#", f.numero2, f.adicional2, "-", f.numero3].filter(Boolean).join(" ")} />
+            <Rev k="Dirección" v={direccionArmada(f as Record<string, string>)} />
             <Rev k="Barrio (id)" v={f.neighborhood} />
             <Rev k="Sede" v={branches.find((b) => b.id === f.branchId)?.name} />
-            <Rev k="Usuario PPP" v={f.pppUsername} />
-            <Rev k="Tecnología" v={f.installTech} />
-            <Rev k="Perfil" v={f.pppProfile} />
-            <Rev k="IP remota" v={f.ipRemote} />
+            <Rev k="Usuario PPP" v={usuarioPpp} />
+            <Rev k="Clave PPP" v={mode === "create" ? pppAuto.clave : f.pppPassword} />
+            <Rev k="Tecnología" v={mode === "create" ? ETIQUETA_FTTH : f.installTech} />
+            <Rev k="Perfil" v={perfilDelPlan || f.pppProfile} />
+            <Rev k="IP remota" v={mode === "create" ? "automática" : f.ipRemote} />
+            {mode === "create" && (
+              <>
+                <Rev k="Plan(es)" v={planesElegidos.map((p) => p.name).join(" + ")} />
+                <Rev k="Mensualidad" v={mensualidad > 0 ? `${fullCurrency(mensualidad)}/mes (desde el mes que viene)` : undefined} />
+                <Rev k="Afiliación" v={f.firstInvoice && afiliacion ? `${afiliacion.name} · ${fullCurrency(precioAfiliacion)}` : undefined} />
+              </>
+            )}
           </div>
+
+          {/* Qué se hace ADEMÁS de guardar la ficha. Se enseña y se puede quitar:
+              un alta no es sólo la fila del cliente, y quien la hace tiene que ver
+              lo que va a pasar antes de pulsar. */}
+          {mode === "create" && (
+            <div className="mt-2 flex flex-col gap-1.5">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-text-tertiary">Al crear el cliente</div>
+
+              <Accion
+                checked={!!f.provision}
+                onChange={(v) => setF((p) => ({ ...p, provision: v }))}
+                titulo="Darlo de alta en el Mikrotik"
+                detalle={
+                  pppAuto.usuario
+                    ? `Crea el secret PPPoE "${pppAuto.usuario}"${perfilDelPlan ? ` con perfil ${perfilDelPlan}` : ""} en el router de la sede y le asigna una IP libre automáticamente.`
+                    : "Necesita el nombre del cliente (paso 1): de ahí sale el usuario PPPoE."
+                }
+                disabled={!pppAuto.usuario}
+              />
+
+              <Accion
+                checked={!!f.firstInvoice}
+                onChange={(v) => setF((p) => ({ ...p, firstInvoice: v }))}
+                titulo="Emitir la factura de afiliación"
+                detalle={
+                  afiliaciones.length === 0
+                    ? "No se pudo cargar el catálogo de afiliaciones."
+                    : totalAfiliacion > 0
+                      ? `Por ${fullCurrency(totalAfiliacion)}${cargoInstalacion > 0 ? ` (afiliación + instalación ${fullCurrency(cargoInstalacion)})` : ""}. La mensualidad NO se cobra ahora: el mes en curso va incluido y la primera factura de ${fullCurrency(mensualidad)} sale el 1º del mes que viene.`
+                      : "Sin cobro: no se emite factura y la orden de instalación se abre de una vez."
+                }
+                disabled={afiliaciones.length === 0}
+              >
+                {/* Lo que se cobra al entrar NO es la mensualidad: es la afiliación, un
+                    producto del catálogo de contabilidad. Se propone la que toca según
+                    el plan y se puede cambiar (Villavo, Dedicado, promociones…). */}
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <Field label="Afiliación que se cobra">
+                    <Select
+                      value={f.affiliationId || afiliacion?.id || ""}
+                      onChange={(e) => setF((p) => ({ ...p, affiliationId: e.target.value, affiliationPrice: "" }))}
+                    >
+                      {!afiliacion && <option value="">— elige una —</option>}
+                      {afiliaciones.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.name} · {fullCurrency(a.price)}{a.id === afiliacionSugerida?.id ? " (la del plan)" : ""}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                  <Field label={`Valor (catálogo: ${fullCurrency(afiliacion?.price ?? 0)})`}>
+                    <Input
+                      value={f.affiliationPrice}
+                      onChange={set("affiliationPrice")}
+                      inputMode="numeric"
+                      placeholder={String(afiliacion?.price ?? 0)}
+                    />
+                  </Field>
+                  <Field label="Cobro de instalación (opcional)">
+                    <Input
+                      value={f.installCharge}
+                      onChange={set("installCharge")}
+                      inputMode="numeric"
+                      placeholder="0"
+                    />
+                  </Field>
+                </div>
+              </Accion>
+
+              <Accion
+                checked={!!f.installOrder}
+                onChange={(v) => setF((p) => ({ ...p, installOrder: v }))}
+                titulo="Abrir la orden de instalación al pagar"
+                detalle="La orden NO se abre ahora: nace sola en cuanto se pague la factura de afiliación, y de ahí le llega al encargado de soporte para que la reparta. Al cerrarla el cliente queda ACTIVO. (Sin factura que cobrar, se abre de una vez.)"
+              />
+            </div>
+          )}
         </div>
       )}
 
@@ -471,6 +830,69 @@ function Section({ title, children }: { title: string; children: React.ReactNode
         {title}
       </div>
       {children}
+    </div>
+  );
+}
+
+/**
+ * Una de las cosas que hace el alta además de guardar la ficha, con su
+ * interruptor. Va marcada por defecto: el alta completa es lo normal y apagarla
+ * es la excepción (por eso se ve, en vez de esconderse en un "avanzado").
+ */
+function Accion({
+  checked, onChange, titulo, detalle, disabled, children,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  titulo: string;
+  detalle: string;
+  disabled?: boolean;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className={`rounded-lg border border-border-subtle bg-surface-2 p-2.5 ${disabled ? "opacity-60" : ""}`}>
+      <label className={`flex items-start gap-2.5 ${disabled ? "" : "cursor-pointer"}`}>
+        <input
+          type="checkbox"
+          className="mt-0.5 accent-brand"
+          checked={checked && !disabled}
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.checked)}
+        />
+        <span className="min-w-0">
+          <span className="block text-[13px] font-semibold text-text-primary">{titulo}</span>
+          <span className="block text-[11.5px] text-text-tertiary">{detalle}</span>
+        </span>
+      </label>
+      {children && !disabled && <div className="mt-2 pl-6">{children}</div>}
+    </div>
+  );
+}
+
+/** Resultado de un paso del alta: hecho (verde) o pendiente con su motivo. */
+function PasoResultado({
+  icono, titulo, paso, ok, tono, etiqueta,
+}: {
+  icono: string;
+  titulo: string;
+  paso: PasoAlta;
+  ok: (resultado: any) => string;
+  tono?: "warning";
+  /** Sustituye el rótulo del paso hecho ("HECHO"/"SIMULADO") cuando ninguno describe lo que pasó. */
+  etiqueta?: string;
+}) {
+  const bien = paso.hecho;
+  const color = !bien ? "border-warning-border bg-warning-soft" : tono === "warning" ? "border-warning-border bg-warning-soft" : "border-border-subtle bg-surface-2";
+  return (
+    <div className={`rounded-lg border p-2.5 ${color}`}>
+      <div className="flex items-center gap-2">
+        <Icon name={icono} size={14} />
+        <span className="text-[13px] font-semibold text-text-primary">{titulo}</span>
+        <Badge tone={bien ? (tono === "warning" ? "warning" : "success") : "warning"} label={bien ? (etiqueta ?? (tono === "warning" ? "SIMULADO" : "HECHO")) : "PENDIENTE"} />
+      </div>
+      <p className="mt-1 text-[11.5px] text-text-secondary">
+        {bien ? ok(paso.resultado) : (paso.motivo ?? "No se hizo.")}
+      </p>
     </div>
   );
 }

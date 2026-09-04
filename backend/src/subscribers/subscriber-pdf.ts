@@ -13,10 +13,28 @@ const fmtShort = (d: Date | string) => new Date(d).toLocaleDateString('es-CO');
 type Statement = {
   subscriber: { name: string; abonado: number; docType: string | null; docNumber: string | null; addressLine: string | null; branch: string | null };
   totalCharges: number; totalPayments: number; balance: number; pazysalvo: boolean;
+  puedeEmitirPazYSalvo?: boolean; motivosPazYSalvo?: string[];
   movements: { date: string | Date; concept: string; debit: number; credit: number; balance: number }[];
 };
 
 const BRAND = B.NAVY;
+
+/**
+ * Quien firma el certificado de paz y salvo. Va impreso bajo la línea de firma:
+ * antes salía sólo "Firma autorizada — VESTEL", y un certificado sin el nombre de
+ * quien lo expide no le sirve a quien lo recibe (banco, arrendador, otro operador).
+ *
+ * Está aquí, en una sola constante, porque el mismo PDF lo emiten dos caminos —el
+ * botón de la ficha del cliente y el chatbot por WhatsApp— y ambos pasan por
+ * `pazYSalvoPdf`. Si mañana firma otra persona, se cambia este bloque y cambia en
+ * los dos sitios. No se lee del usuario que pulsa el botón a propósito: quien
+ * expide el certificado es siempre la misma persona, no la cajera de turno.
+ */
+const FIRMANTE = {
+  nombre: 'Windy Sussan Muñoz Martinez',
+  documento: 'C.C. 46.456.153',
+  cargo: 'Firma autorizada — VESTEL',
+};
 
 const header = (doc: PDFKit.PDFDocument, title: string) => B.docHeader(doc, title);
 
@@ -33,7 +51,15 @@ function clientBlock(doc: PDFKit.PDFDocument, sub: Statement['subscriber']) {
   doc.moveDown(0.8);
 }
 
-/** Certificado de paz y salvo. */
+/**
+ * Certificado de paz y salvo.
+ *
+ * Sólo se llama cuando el certificado SE PUEDE expedir: quien decide es el
+ * controlador (`SubscribersController.pazYSalvo`), que exige saldo en cero y equipo
+ * devuelto. Aquí ya no hay versión "en negativo" — un PDF con membrete diciendo que
+ * el cliente debe no es un certificado de nada, y era lo que salía antes cada vez que
+ * alguien pulsaba el botón sin mirar el saldo.
+ */
 export function pazYSalvoPdf(res: Response, data: Statement) {
   const doc = B.newDoc(PDFDocument);
   doc.pipe(res);
@@ -41,27 +67,24 @@ export function pazYSalvoPdf(res: Response, data: Statement) {
   clientBlock(doc, data.subscriber);
 
   doc.moveDown(0.5).fontSize(11).font('Helvetica').fillColor('#111');
-  if (data.pazysalvo) {
-    doc.text(
-      `Por medio de la presente, VESTEL certifica que el cliente ${data.subscriber.name}, ` +
-      `identificado con ${data.subscriber.docType ?? 'documento'} ${data.subscriber.docNumber ?? ''} ` +
-      `(abonado N° ${data.subscriber.abonado}), se encuentra A PAZ Y SALVO por todo concepto ` +
-      `con nuestra empresa a la fecha de expedición de este documento.`,
-      { align: 'justify', lineGap: 3 },
-    );
-  } else {
-    doc.fillColor('#b91c1c').text(
-      `El cliente ${data.subscriber.name} (abonado N° ${data.subscriber.abonado}) NO se encuentra a paz y salvo. ` +
-      `Presenta un saldo pendiente de ${cop(data.balance)} a la fecha.`,
-      { align: 'justify', lineGap: 3 },
-    );
-  }
+  doc.text(
+    `Por medio de la presente, VESTEL certifica que el cliente ${data.subscriber.name}, ` +
+    `identificado con ${data.subscriber.docType ?? 'documento'} ${data.subscriber.docNumber ?? ''} ` +
+    `(abonado N° ${data.subscriber.abonado}), se encuentra A PAZ Y SALVO por todo concepto ` +
+    `con nuestra empresa a la fecha de expedición de este documento, y que ha hecho ` +
+    `entrega de la totalidad de los equipos de nuestra propiedad que tenía a su cargo.`,
+    { align: 'justify', lineGap: 3 },
+  );
 
   doc.moveDown(1.5).fillColor('#333').fontSize(10);
   doc.text(`Expedido el ${fmtDate(new Date())}.`);
   doc.moveDown(3);
   doc.moveTo(40, doc.y).lineTo(240, doc.y).strokeColor('#999').stroke();
-  doc.fontSize(9).fillColor('#666').text('Firma autorizada — VESTEL', 40, doc.y + 4);
+  doc.font('Helvetica-Bold').fontSize(10).fillColor('#111')
+    .text(FIRMANTE.nombre, 40, doc.y + 5, { width: 200 });
+  doc.font('Helvetica').fontSize(9).fillColor('#666')
+    .text(FIRMANTE.documento, 40, doc.y + 1, { width: 200 });
+  doc.text(FIRMANTE.cargo, 40, doc.y + 1, { width: 200 });
 
   B.finish(doc);
 }

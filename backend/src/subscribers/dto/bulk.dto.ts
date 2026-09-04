@@ -8,7 +8,7 @@ export class BulkFilterDto {
   @IsOptional() @IsString() servicio?: string; // internet | tv | combo
   @IsOptional() @IsString() tecnologia?: string; // FTTH | EOC
   @IsOptional() @IsString() cuenta?: string; // aldia | debe | compromiso
-  @IsOptional() @IsString() deuda?: string; // 1 | gt2
+  @IsOptional() @IsString() deuda?: string; // 1 | gt2 | fija (debe su mensualidad o más)
 }
 
 export class BulkMessageDto extends BulkFilterDto {

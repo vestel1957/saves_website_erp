@@ -2,6 +2,8 @@
 
 export type SubscriberRow = {
   id: string;
+  /** ID del legacy (`customers.id`). null en los clientes creados en este stack. */
+  legacyId: number | null;
   abonado: number;
   name: string;
   docType: string | null;
@@ -10,6 +12,10 @@ export type SubscriberRow = {
   email: string | null;
   status: string | null;
   branch: string | null;
+  /** Barrio ya resuelto a nombre (en la BD es el id del catálogo legacy). */
+  neighborhood: string | null;
+  /** Municipio ya resuelto a nombre (en la BD es el id del catálogo legacy). */
+  city: string | null;
   /** Saldo a favor del abonado (cache de transacciones). NO es lo que debe. */
   balance: number;
   /** Lo que debe: Σ(total − pagado) de sus facturas sin pagar. */
@@ -75,18 +81,59 @@ export const SUB_CUENTA_OPTS: { value: string; label: string }[] = [
   { value: "", label: "Toda la cuenta" },
   { value: "aldia", label: "Al día" },
   { value: "debe", label: "Con deuda" },
-  { value: "debe1", label: "Debe 1 mes" },
-  { value: "debeGt2", label: "Debe +2 meses" },
+  // Por PLATA (lo que se mira para cortar) vs. por número de documentos
+  // abiertos, que no es lo mismo: ver `debtIds` en el backend.
+  { value: "debeFija", label: "Debe su mensualidad o más" },
+  { value: "debe1", label: "Tiene 1 factura sin pagar" },
+  { value: "debeGt2", label: "Tiene +2 facturas sin pagar" },
   { value: "compromiso", label: "En compromiso" },
 ];
 
 /** Traduce el valor del select de "Estado de cuenta" a los query params del backend. */
 export function cuentaParams(v: string): { cuenta?: string; deuda?: string } {
+  if (v === "debeFija") return { deuda: "fija" };
   if (v === "debe1") return { deuda: "1" };
   if (v === "debeGt2") return { deuda: "gt2" };
   if (v === "aldia" || v === "debe" || v === "compromiso") return { cuenta: v };
   return {};
 }
+
+/**
+ * TIPO DE DOCUMENTO de un adjunto del cliente (`SubscriberFile.kind`).
+ *
+ * Espejo de `backend/src/subscribers/subscriber-file-kinds.ts`, que es quien manda:
+ * el backend rechaza con 400 cualquier tipo que no esté en su lista, así que si se
+ * agrega uno aquí hay que agregarlo allá (y al revés).
+ *
+ * Dos de ellos NO son una simple etiqueta y suben por su propia ruta:
+ * `CARTA_RETIRO` habilita el paz y salvo y `VIVIENDA` es la foto de la ficha.
+ */
+export const SUB_FILE_KIND_OPTS: { value: string; label: string; hint?: string }[] = [
+  { value: "CARTA_RETIRO", label: "Carta de retiro", hint: "PDF o imagen · habilita el paz y salvo" },
+  { value: "SUSPENSION", label: "Solicitud de suspensión" },
+  { value: "SOLICITUD", label: "Solicitud / petición" },
+  { value: "RECLAMO", label: "Reclamo (PQR)" },
+  { value: "CONTRATO", label: "Contrato o anexo" },
+  { value: "IDENTIDAD", label: "Documento de identidad" },
+  { value: "SOPORTE_PAGO", label: "Soporte de pago" },
+  { value: "TRASLADO", label: "Traslado" },
+  { value: "CAMBIO_TITULAR", label: "Cambio de titular" },
+  { value: "DEVOLUCION_EQUIPO", label: "Devolución de equipo" },
+  { value: "ACTA", label: "Acta o constancia" },
+  { value: "VIVIENDA", label: "Foto de la vivienda", hint: "JPG, PNG o WEBP · será la foto de la ficha" },
+  { value: "OTRO", label: "Otro documento" },
+];
+
+export const SUB_FILE_KIND_LABEL: Record<string, string> = Object.fromEntries(
+  SUB_FILE_KIND_OPTS.map((o) => [o.value, o.label]),
+);
+
+/** Color de la pastilla: los papeles que mueven el servicio saltan a la vista. */
+export const SUB_FILE_KIND_TONE: Record<string, "success" | "error" | "warning" | "info" | "default" | "brand"> = {
+  CARTA_RETIRO: "error", SUSPENSION: "warning", RECLAMO: "warning",
+  SOLICITUD: "info", TRASLADO: "info", CAMBIO_TITULAR: "info",
+  CONTRATO: "brand", SOPORTE_PAGO: "success",
+};
 
 export const INVOICE_STATUS_LABEL: Record<string, string> = {
   PAID: "Pagada", DUE: "Pendiente", PARTIAL: "Parcial", CANCELED: "Anulada",
@@ -168,3 +215,22 @@ export const STATUS_AVATAR_CLASS: Record<string, string> = {
   info: "bg-info-soft text-info-text",
   default: "bg-surface-2 text-text-secondary",
 };
+
+/**
+ * ¿Ciudad y sede nombran el mismo sitio? Cada sede se llama como su municipio
+ * (Yopal, Villanueva, Monterrey…), así que pintar las dos deja "Yopal · Yopal".
+ * Se comparan sin distinguir mayúsculas y con `trim`: el catálogo del legacy
+ * trae nombres con espacios de sobra ("Popayán ", "Achi ").
+ */
+export function mismoSitio(city?: string | null, branch?: string | null): boolean {
+  if (!city || !branch) return false;
+  const norm = (s: string) =>
+    s.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  return norm(city) === norm(branch);
+}
+
+/** Dónde vive el cliente, en una línea: "Centro · Yopal" (la sede solo si difiere). */
+export function ubicacionDe(s: { neighborhood?: string | null; city?: string | null; branch?: string | null }): string {
+  return [s.neighborhood, s.city, mismoSitio(s.city, s.branch) ? null : s.branch]
+    .filter(Boolean).join(" · ");
+}

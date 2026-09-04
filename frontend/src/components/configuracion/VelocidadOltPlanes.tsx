@@ -299,7 +299,7 @@ export function VelocidadOltPlanes() {
                     <td className="px-3 py-2">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="font-semibold text-text-primary">{f.name}</span>
-                        {!f.active && <Badge tone="default" label="Inactivo" />}
+                        {!f.active && <Badge tone="warning" label="Oculto" />}
                         {mapeado
                           ? <Badge tone="success" label="Configurado" />
                           : f.subscribers > 0 && <Badge tone="warning" label="Sin velocidad" />}

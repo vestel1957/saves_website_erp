@@ -8,6 +8,7 @@ import { Select, Textarea } from "@/components/ui/Field";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { SUB_STATUS_LABEL, SUB_STATUS_TONE } from "@/lib/subscribers";
+import { fmtDate } from "@/lib/format";
 
 /** Orden de las opciones: los estados de operación diaria primero. */
 const STATUS_ORDER = [
@@ -23,12 +24,15 @@ const STATUS_ORDER = [
 export function CambiarEstadoModal({
   subscriberId,
   current,
+  motivoActual,
   open,
   onClose,
   onDone,
 }: {
   subscriberId: string;
   current?: string | null;
+  /** Por qué está en el estado en que está (lo escribió quien lo cambió la última vez). */
+  motivoActual?: { reason: string; author?: string | null; date?: string | null } | null;
   open: boolean;
   onClose: () => void;
   onDone?: () => void;
@@ -74,6 +78,21 @@ export function CambiarEstadoModal({
           <Badge label={SUB_STATUS_LABEL[current ?? ""] ?? current ?? "Sin estado"} tone={SUB_STATUS_TONE[current ?? ""] ?? "default"} />
         </div>
 
+        {/* El motivo del cambio ANTERIOR, aquí mismo: es donde se escribió y es
+            donde se vuelve a buscar. Sin esto el campo de abajo parecía tragarse
+            lo que se escribía. */}
+        {motivoActual?.reason && (
+          <div className="rounded-lg border border-border-subtle bg-surface-2 p-2.5">
+            <div className="text-[11px] uppercase tracking-wide text-text-tertiary">Motivo del último cambio</div>
+            <p className="text-[12.5px] leading-snug text-text-primary">{motivoActual.reason}</p>
+            {(motivoActual.author || motivoActual.date) && (
+              <p className="mt-0.5 text-[11px] text-text-tertiary">
+                {[motivoActual.author, motivoActual.date ? fmtDate(motivoActual.date) : null].filter(Boolean).join(" · ")}
+              </p>
+            )}
+          </div>
+        )}
+
         <Select value={status} onChange={(e) => setStatus(e.target.value)}>
           <option value="">— Elegir nuevo estado —</option>
           {STATUS_ORDER.filter((s) => s !== current).map((s) => (
@@ -83,13 +102,14 @@ export function CambiarEstadoModal({
 
         <Textarea
           rows={2}
-          placeholder="Motivo del cambio (opcional, queda en el historial)"
+          placeholder="Motivo del cambio (queda junto al estado, en el historial y en las observaciones)"
           value={note}
           onChange={(e) => setNote(e.target.value)}
         />
 
         <p className="text-[11px] text-text-tertiary">
-          Este cambio es administrativo y queda registrado en el historial de estados.
+          Este cambio es administrativo y queda registrado —con su motivo— en el historial
+          de estados y en las observaciones del cliente.
           No corta ni reconecta el servicio en el router — para eso usa la acción de Conexión.
         </p>
 

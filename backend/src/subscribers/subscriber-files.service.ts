@@ -12,6 +12,13 @@ type UploadedFileMeta = {
 };
 
 /**
+ * El catálogo de tipos de documento vive en `subscriber-file-kinds.ts` (lo comparten
+ * el controlador, el estado de cuenta y la pantalla). Se reexporta la marca de la
+ * carta de retiro porque es la que ya importaban `SubscribersService` y el router.
+ */
+export { KIND_CARTA_RETIRO } from './subscriber-file-kinds';
+
+/**
  * Adjuntos de un cliente (metadata en BD; el binario lo guarda multer en disco).
  * Extraído de SubscribersService: bloque autónomo sobre `subscriberFile`.
  */
@@ -31,12 +38,26 @@ export class SubscriberFilesService {
       mimeType: f.mimeType,
       size: f.size,
       uploadedBy: f.uploadedByName,
+      // Para qué es el adjunto (`VIVIENDA` = foto de la casa). La ficha saca de
+      // aquí la foto de arriba sin pedir una lista aparte.
+      kind: f.kind,
       createdAt: f.createdAt,
+      // Los adjuntos que vienen del sistema anterior (`meta_data` type=6) no traen
+      // fecha de subida: allá la tabla no la guarda. `createdAt` es la de importación,
+      // así que la pantalla no la muestra como si fuera la del archivo.
+      legacy: f.legacyId != null,
     }));
   }
 
-  /** Registra la metadata de un archivo ya guardado en disco por multer. */
-  async addFile(id: string, file: UploadedFileMeta, uploadedByName?: string, user?: AuthUser) {
+  /**
+   * Registra la metadata de un archivo ya guardado en disco por multer.
+   *
+   * `kind` marca PARA QUÉ es el adjunto (carta de retiro, suspensión, solicitud,
+   * foto de la vivienda…). El catálogo y su validación están en
+   * `subscriber-file-kinds.ts`; aquí llega ya normalizado. Sin él, adjunto sin
+   * clasificar, como los que bajan del sistema anterior.
+   */
+  async addFile(id: string, file: UploadedFileMeta, uploadedByName?: string, user?: AuthUser, kind?: string) {
     await exigirSedeSuscriptor(this.prisma, user, id);
     const row = await this.prisma.subscriberFile.create({
       data: {
@@ -46,6 +67,7 @@ export class SubscriberFilesService {
         mimeType: file.mimetype,
         size: file.size,
         uploadedByName: uploadedByName ?? null,
+        kind: kind ?? null,
       },
     });
     return {
@@ -53,6 +75,7 @@ export class SubscriberFilesService {
       name: row.originalName,
       mimeType: row.mimeType,
       size: row.size,
+      kind: row.kind,
       createdAt: row.createdAt,
     };
   }

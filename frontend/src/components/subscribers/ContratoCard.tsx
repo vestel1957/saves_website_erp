@@ -9,6 +9,7 @@ import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import { fmtDate } from "@/lib/format";
 import { mensajeDeError } from "@/lib/errores";
+import { ACCEPT_IMAGEN } from "@/lib/adjuntos";
 import { FirmaModal } from "./FirmaModal";
 
 type Estado = {
@@ -233,7 +234,7 @@ export function ContratoCard({
           <input
             ref={fileInput}
             type="file"
-            accept="image/jpeg,image/png,image/webp"
+            accept={ACCEPT_IMAGEN}
             className="hidden"
             onChange={(e) => {
               const f = e.target.files?.[0];

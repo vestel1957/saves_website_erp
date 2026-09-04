@@ -1,5 +1,6 @@
 import {
   IsOptional, IsString, MaxLength, MinLength, IsDateString, ValidateIf, IsEmail, IsIn, IsObject, IsInt,
+  IsArray, IsBoolean, IsNumber, Min, ArrayMaxSize,
 } from 'class-validator';
 
 /** Agregar una nota/observación al cliente. */
@@ -45,6 +46,31 @@ export const SUBSCRIBER_STATUSES = [
 export class ChangeStatusDto {
   @IsIn(SUBSCRIBER_STATUSES as unknown as string[])
   status!: string;
+
+  @IsOptional() @IsString() @MaxLength(500)
+  note?: string;
+}
+
+/** Servicios cuyo estado se puede mover a mano desde la ficha. */
+export const SERVICIOS_ESTADO = ['INTERNET', 'TV'] as const;
+
+/** Estados de un servicio (enum Prisma `ServiceStatus`). */
+export const SERVICE_STATUSES = ['ACTIVO', 'CORTADO', 'SUSPENDIDO'] as const;
+
+/**
+ * Cambio manual del estado de UN servicio del abonado (su internet o su televisión).
+ *
+ * Es el hermano por servicio de `ChangeStatusDto`: el estado del abonado dice cómo está
+ * la cuenta, y esto dice qué está recibiendo. Hacen falta los dos porque no son lo
+ * mismo —se puede tener la TV suspendida y el internet navegando— y hasta ahora el
+ * segundo sólo se podía mover cerrando una orden.
+ */
+export class ChangeServiceStatusDto {
+  @IsIn(SERVICIOS_ESTADO as unknown as string[])
+  servicio!: string;
+
+  @IsIn(SERVICE_STATUSES as unknown as string[])
+  estado!: string;
 
   @IsOptional() @IsString() @MaxLength(500)
   note?: string;
@@ -168,6 +194,10 @@ export class UpdateSubscriberDto {
  * Crear un cliente nuevo. Mismos campos que el update, pero con los mínimos
  * obligatorios del legacy (1er nombre, celular, correo, nacimiento). El
  * `abonado` se autogenera (max+1) si no viene.
+ *
+ * Los campos del bloque "alta completa" (planes, provisión, factura y orden) los
+ * consume `AltaClienteService`, no `SubscribersService.create`: la fila del
+ * abonado se escribe igual que siempre y encima se corre el resto del alta.
  */
 export class CreateSubscriberDto extends UpdateSubscriberDto {
   @IsString() @MinLength(1) @MaxLength(80)
@@ -181,6 +211,60 @@ export class CreateSubscriberDto extends UpdateSubscriberDto {
 
   @IsDateString()
   declare birthDate: string;
+
+  /**
+   * Planes del catálogo que contrata (uno por tipo de servicio: internet, TV…).
+   * Es lo que fija el perfil/velocidad del router Y lo que factura el cron
+   * mensual: sin plan, el abonado nace sin `SubscriberService` y no lo factura
+   * nadie. Ver `AltaClienteService.alta`.
+   */
+  @IsOptional() @IsArray() @ArrayMaxSize(6) @IsString({ each: true })
+  planIds?: string[];
+
+  /**
+   * Combo que contrata, en vez de elegir los planes sueltos. Si viene, MANDA
+   * sobre `planIds`: son sus planes al precio del paquete.
+   */
+  @IsOptional() @IsString()
+  bundleId?: string;
+
+  /** Crear el secret PPPoE en el Mikrotik de la sede. Exige `pppUsername`. */
+  @IsOptional() @IsBoolean()
+  provision?: boolean;
+
+  /** Emitir la factura de afiliación (el producto «Afiliación …», NO la mensualidad). */
+  @IsOptional() @IsBoolean()
+  firstInvoice?: boolean;
+
+  /**
+   * Afiliación que se le cobra: `Material.id` de un producto «Afiliación …».
+   * Ausente = la deduce el backend de los servicios contratados (`nombreSugerido`).
+   */
+  @IsOptional() @IsString()
+  affiliationId?: string;
+
+  /**
+   * Precio de la afiliación, si no es el del catálogo. 0 = se regala (y entonces no
+   * hay factura que emitir, salvo que se cobre instalación aparte).
+   */
+  @IsOptional() @IsNumber() @Min(0)
+  affiliationPrice?: number;
+
+  /** Cargo de instalación aparte, en la misma factura. 0 / ausente = no se cobra. */
+  @IsOptional() @IsNumber() @Min(0)
+  installCharge?: number;
+
+  /** Abrir la orden de instalación (clase servicio, detalle "Instalacion"). */
+  @IsOptional() @IsBoolean()
+  installOrder?: boolean;
+
+  /** Técnico al que nace asignada la orden de instalación (texto, como el legacy). */
+  @IsOptional() @IsString() @MaxLength(80)
+  installAssigned?: string;
+
+  /** Día para el que se agenda la instalación (YYYY-MM-DD). Exige técnico. */
+  @IsOptional() @IsDateString()
+  installScheduledFor?: string;
 }
 
 /** Campos que la pantalla de alta manda para el chequeo previo de duplicados. */
@@ -194,4 +278,48 @@ export class CheckDuplicatesDto {
   @IsOptional() @IsString() localityRef?: string;
   @IsOptional() @IsString() neighborhood?: string;
   @IsOptional() @IsString() addressLine?: string;
+}
+
+/**
+ * Estados con los que un equipo vuelve del cliente (mismos tres del legacy:
+ * `views/customers/equipos.php`, modal "Devolucion de equipo").
+ */
+export const RETURN_EQUIPMENT_STATUSES = ['Bueno', 'Malo', 'Depurado'] as const;
+
+/**
+ * Devolución de un equipo que estaba instalado en casa del cliente.
+ *
+ * `warehouseId` es opcional a propósito: con estado "Depurado" el equipo va SIEMPRE
+ * a la bodega de depurados (no vuelve al stock utilizable) y con los otros dos, si
+ * no se elige, el servidor lo manda a la bodega de la sede del cliente. El motivo
+ * es obligatorio —al revés que el legacy, donde se podía dejar vacío— porque es lo
+ * único que explica después por qué ese equipo dejó de estar instalado.
+ */
+export class ReturnEquipmentDto {
+  @IsIn(RETURN_EQUIPMENT_STATUSES as unknown as string[])
+  status!: string;
+
+  @IsString() @MinLength(3) @MaxLength(500)
+  reason!: string;
+
+  @IsOptional() @IsString()
+  warehouseId?: string;
+
+  /**
+   * Día en que se recogió el equipo. Por defecto hoy; se puede fechar atrás
+   * porque el técnico casi siempre trae el equipo días antes de que alguien
+   * registre la devolución, y la fecha que importa es la de la recogida, no la
+   * del tecleo. El servidor no acepta fechas futuras (ver `returnEquipment`).
+   */
+  @IsOptional() @IsDateString()
+  returnedAt?: string;
+
+  /**
+   * Devolución POR RETIRO: el equipo no vuelve por un cambio ni por un daño,
+   * vuelve porque el cliente se va. Además de soltar el equipo, deja al cliente
+   * en RETIRADO e intenta el corte en el router (misma cascada que el cierre de
+   * una orden de "Retiro voluntario", ver SupportWriteService.applyCloseCascade).
+   */
+  @IsOptional() @IsBoolean()
+  withdrawal?: boolean;
 }

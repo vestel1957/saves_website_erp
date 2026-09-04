@@ -1,4 +1,4 @@
-import { ArrayMinSize, ArrayMaxSize, IsArray, IsBoolean, IsEnum, IsInt, IsNumber, IsOptional, IsString, MaxLength, Min, MinLength } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsEnum, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
 import { ServiceKind } from '@prisma/client';
 
 /** Crear un plan del catálogo. */
@@ -53,6 +53,15 @@ export class UpdatePlanDto {
 export class AssignPlanDto {
   @IsString() @MinLength(1)
   planId!: string;
+}
+
+/**
+ * Cuántos puntos de TV adicionales (televisores extra) tiene el abonado.
+ * `0` quita la línea y deja de cobrarse el mes siguiente.
+ */
+export class SetPuntosDto {
+  @IsInt() @Min(0) @Max(200)
+  qty!: number;
 }
 
 /**

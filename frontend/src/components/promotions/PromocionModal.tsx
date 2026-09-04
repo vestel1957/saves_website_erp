@@ -11,10 +11,10 @@ import { useAuth } from "@/context/AuthProvider";
 import { PasoPublico } from "@/components/promotions/PublicoPromocion";
 import { useAlcance } from "@/components/promotions/useAlcance";
 import {
-  type DiscountFormat, type Promotion, type PromotionAudience, type PromotionCatalogs,
-  type PromotionDraft, type PromotionSubscriber, type PromotionTemplate,
-  EMPTY_AUDIENCE, FACTURA_EJEMPLO, discountLabel, isFlatDiscount,
-  requisitosPromocion, simularDescuento,
+  type DiscountFormat, type InvoiceScope, type Promotion, type PromotionAudience,
+  type PromotionCatalogs, type PromotionDraft, type PromotionSubscriber, type PromotionTemplate,
+  EMPTY_AUDIENCE, FACTURA_EJEMPLO, INVOICE_SCOPE_OPTIONS, discountLabel, isFlatDiscount,
+  motivoNoPreaplicableEnPortal, motivoNoPublicableEnPortal, requisitosPromocion, simularDescuento,
 } from "@/lib/promotions";
 
 const iso = (d: Date) => d.toISOString().slice(0, 10);
@@ -27,6 +27,7 @@ const PASOS = ["Descuento", "Clientes", "Fechas"];
 const EMPTY: PromotionDraft = {
   name: "", description: "", discountFormat: "%", percentage: "", flatAmount: "",
   startDate: iso(new Date()), endDate: iso(new Date()), active: true,
+  invoiceScope: "MENSUALIDAD_DEL_MES", portalPublish: false, portalPreapply: false,
 };
 
 /** Atajos de vigencia: el 90% de las campañas cae en uno de estos rangos. */
@@ -124,6 +125,9 @@ export function PromocionModal({
           startDate: dstr(editing.startDate),
           endDate: dstr(editing.endDate),
           active: editing.active,
+          invoiceScope: editing.invoiceScope ?? "MENSUALIDAD_DEL_MES",
+          portalPublish: editing.portalPublish,
+          portalPreapply: editing.portalPreapply ?? false,
         }
       : { ...EMPTY },
   );
@@ -165,6 +169,19 @@ export function PromocionModal({
   const valor = flat ? draft.flatAmount : draft.percentage;
   const sim = simularDescuento(draft.discountFormat, Number(draft.percentage), Number(draft.flatAmount));
 
+  // El portal de pagos no admite cualquier campaña; si no la admite, la casilla se
+  // apaga sola y dice por qué (ver `motivoNoPublicableEnPortal`).
+  const noPortal = motivoNoPublicableEnPortal(draft, audience);
+  // Que el portal cobre ya rebajado es la OTRA forma de descontar en línea, y choca
+  // con publicarla (ver `motivoNoPreaplicableEnPortal`).
+  const noPreaplicar = motivoNoPreaplicableEnPortal(draft);
+
+  // A qué facturas del cliente llega el descuento en ventanilla. No es un detalle:
+  // una campaña de cartera que se deje en "la mensualidad del mes" no descuenta nada,
+  // porque lo que debe un cliente en cartera es siempre de meses anteriores.
+  const alcanceFacturas = INVOICE_SCOPE_OPTIONS.find((o) => o.value === draft.invoiceScope)
+    ?? INVOICE_SCOPE_OPTIONS[0];
+
   // Las mismas cuatro reglas de siempre, repartidas entre los pasos que las piden.
   const req = requisitosPromocion(draft, audience);
   const pasoOk = [req[0].ok && req[1].ok, req[2].ok, req[3].ok];
@@ -190,6 +207,7 @@ export function PromocionModal({
       flatAmount: t.flatAmount != null ? String(t.flatAmount) : "",
       startDate: dstr(t.startDate),
       endDate: dstr(t.endDate),
+      invoiceScope: t.invoiceScope ?? "MENSUALIDAD_DEL_MES",
     });
   }
 
@@ -214,6 +232,9 @@ export function PromocionModal({
         startDate: draft.startDate,
         endDate: draft.endDate,
         active: draft.active,
+        invoiceScope: draft.invoiceScope,
+        portalPublish: draft.portalPublish && !noPortal,
+        portalPreapply: draft.portalPreapply && !noPreaplicar,
         ...audience,
         ...(editing ? {} : { saveAsTemplate: guardarPlantilla }),
       });
@@ -228,7 +249,7 @@ export function PromocionModal({
     } finally {
       setBusy(false);
     }
-  }, [authFetch, audience, busy, draft, editing, flat, guardarPlantilla, onSaved, todoOk]);
+  }, [authFetch, audience, busy, draft, editing, flat, guardarPlantilla, noPortal, onSaved, todoOk]);
 
   /**
    * Enter avanza al paso siguiente. NO crea la promoción desde el último paso: crear
@@ -354,6 +375,20 @@ export function PromocionModal({
               </div>
             </div>
 
+            <div>
+              <span className="mb-1 block text-[11px] font-semibold text-text-tertiary">
+                Se le descuenta a
+              </span>
+              <Segmented
+                ariaLabel="A qué facturas alcanza el descuento"
+                className="w-full"
+                value={draft.invoiceScope}
+                onChange={(v) => set({ invoiceScope: v as InvoiceScope })}
+                options={INVOICE_SCOPE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+              />
+              <p className="mt-1 text-[11.5px] text-text-tertiary">{alcanceFacturas.detail}</p>
+            </div>
+
             <Eco>
               {sim
                 ? <>En una factura de {cop(FACTURA_EJEMPLO.total)} el cliente pagaría <V>{cop(sim.paga)}</V></>
@@ -428,6 +463,46 @@ export function PromocionModal({
                 : "Se guarda, pero no descuenta nada."}
             />
 
+            <label
+              className={`flex items-start gap-2.5 rounded-lg border border-border-subtle bg-surface-2 p-2.5 ${
+                noPortal ? "opacity-60" : "cursor-pointer"
+              }`}
+            >
+              <input type="checkbox" className="mt-0.5 accent-brand"
+                checked={draft.portalPublish && !noPortal} disabled={!!noPortal}
+                onChange={(e) => set({ portalPublish: e.target.checked })} />
+              <span className="min-w-0">
+                <span className="block text-[13px] font-semibold text-text-primary">
+                  Publicar en el portal de pagos en línea
+                </span>
+                <span className="block text-[11.5px] text-text-tertiary">
+                  {noPortal
+                    ? noPortal
+                    : "El cliente ve el descuento al pagar en vestel.com.co. Los estados que la promoción NO alcanza quedan sin descuento — hoy el portal les regala uno por su cuenta."}
+                </span>
+              </span>
+            </label>
+
+            <label
+              className={`flex items-start gap-2.5 rounded-lg border border-border-subtle bg-surface-2 p-2.5 ${
+                noPreaplicar ? "opacity-60" : "cursor-pointer"
+              }`}
+            >
+              <input type="checkbox" className="mt-0.5 accent-brand"
+                checked={draft.portalPreapply && !noPreaplicar} disabled={!!noPreaplicar}
+                onChange={(e) => set({ portalPreapply: e.target.checked })} />
+              <span className="min-w-0">
+                <span className="block text-[13px] font-semibold text-text-primary">
+                  El portal cobra ya con el descuento
+                </span>
+                <span className="block text-[11.5px] text-text-tertiary">
+                  {noPreaplicar
+                    ? noPreaplicar
+                    : "Rebaja la cartera por adelantado para que en vestel.com.co el cliente vea el valor ya con el descuento. Si la promoción vence sin que pague, se le retira."}
+                </span>
+              </span>
+            </label>
+
             {!editing && (
               <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-border-subtle bg-surface-2 p-2.5">
                 <input type="checkbox" className="mt-0.5 accent-brand"
@@ -448,7 +523,11 @@ export function PromocionModal({
               {" a "}
               <V>{contando ? "…" : alcanzados.toLocaleString("es-CO")}</V>
               {" clientes, del "}{fecha(draft.startDate)}{" al "}{fecha(draft.endDate)}
+              {", sobre "}
+              <V>{alcanceFacturas.label.toLowerCase()}</V>
               {sim ? <>. Pagarían <V>{cop(sim.paga)}</V> en vez de {cop(FACTURA_EJEMPLO.total)}.</> : "."}
+              {draft.portalPublish && !noPortal ? " También se aplica sola en el portal de pagos en línea." : ""}
+              {draft.portalPreapply && !noPreaplicar ? " En el portal de pagos verán ya el valor rebajado." : ""}
             </Eco>
           </>
         )}

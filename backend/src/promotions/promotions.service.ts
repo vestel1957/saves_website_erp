@@ -11,6 +11,11 @@ import {
   UpdatePromotionDto,
 } from './dto/promotions.dto';
 import { num, round2 } from '../common/money';
+import {
+  Audience, SubscriberFacts, audienceOfPromo, discountLabel, hasCriteria,
+  isBeforeTaxFmt, isFlatFmt, montoDeDescuento, reaches, subscriberFacts,
+} from './publico';
+import { alcanzaLaFactura, yaRebajadaEnOrigen } from './descuento-al-cobrar';
 
 /** Fecha de hoy sin hora (UTC), para comparar contra los campos @db.Date. */
 function today(): Date {
@@ -30,33 +35,12 @@ const STATUS_LABEL: Record<string, string> = {
   SUSPENDIDO: 'Suspendido', INACTIVO: 'Inactivo',
 };
 
-const isFlatFmt = (f: string) => f === 'flat' || f === 'bflat';
-const isBeforeTaxFmt = (f: string) => f === 'b_p' || f === 'bflat';
-const copFmt = (n: number) => `$${Math.round(n).toLocaleString('es-CO')}`;
 const uniq = (xs: string[]) => Array.from(new Set(xs.filter(Boolean)));
 
-/** Público de una promoción, ya normalizado (sin undefined). */
-type Audience = {
-  allSubscribers: boolean;
-  subscriberStatuses: SubscriberStatusName[];
-  subscriberIds: string[];
-  planIds: string[];
-  branchIds: string[];
-  neighborhoodRefs: string[];
-};
 
 /** Un destinatario concreto del público, para la bitácora y las etiquetas. */
 type TargetRef = { kind: PromotionTargetKind; key: string; label: string };
 
-/** Lo que hace falta saber de un cliente para decidir si una promo lo alcanza. */
-type SubscriberFacts = {
-  id: string;
-  status: string | null;
-  branchId: string | null;
-  neighborhood: string | null;
-  /** Planes que se le están cobrando (servicios contratados o, si no tiene, su última factura). */
-  planIds: string[];
-};
 
 /** Valida y normaliza los campos de descuento según el formato elegido. */
 function resolveDiscount(format: string, percentage?: number | null, flatAmount?: number | null) {
@@ -71,10 +55,6 @@ function resolveDiscount(format: string, percentage?: number | null, flatAmount?
 }
 
 /** Etiqueta legible del descuento (para descripciones de nota crédito). */
-function discountLabel(format: string, percentage: number, flatAmount: number | null): string {
-  const core = isFlatFmt(format) ? copFmt(num(flatAmount)) : `${percentage}%`;
-  return isBeforeTaxFmt(format) ? `${core}, antes de imp.` : core;
-}
 
 /**
  * Promociones de facturación (legacy `settings/promociones`).
@@ -124,34 +104,51 @@ export class PromotionsService {
     };
   }
 
-  /** Público guardado de una promo ya cargada (con sus relaciones). */
-  private audienceOfPromo(p: {
-    allSubscribers: boolean;
-    subscriberStatuses: string[];
-    neighborhoodRefs: string[];
-    subscribers: { id: string }[];
-    plans: { id: string }[];
-    branches: { id: string }[];
-  }): Audience {
-    return {
-      allSubscribers: p.allSubscribers,
-      subscriberStatuses: p.subscriberStatuses as SubscriberStatusName[],
-      subscriberIds: p.subscribers.map((s) => s.id),
-      planIds: p.plans.map((x) => x.id),
-      branchIds: p.branches.map((b) => b.id),
-      neighborhoodRefs: p.neighborhoodRefs,
-    };
+  /**
+   * ¿Se puede publicar esta promoción en el PORTAL DE PAGOS EN LÍNEA?
+   *
+   * El portal descuenta con la tabla `promos` del legacy, que sólo guarda un
+   * porcentaje y un estado de cliente: no sabe de planes, sedes, barrios ni clientes
+   * sueltos, y su cuenta es siempre `total * porcentaje / 100`. Lo que no encaja se
+   * rechaza aquí y no al empujarlo, para que quien arma la campaña se entere en la
+   * pantalla y no quince minutos después en un log del writeback.
+   */
+  private assertPublicableEnPortal(
+    disc: { discountFormat: string; percentage: number },
+    a: Audience,
+  ) {
+    if (disc.discountFormat !== '%')
+      throw new BadRequestException(
+        'El portal de pagos sólo sabe descontar un porcentaje sobre el total: '
+        + 'cambia el descuento a % (después de impuestos) o no lo publiques allá',
+      );
+    if (!disc.percentage)
+      throw new BadRequestException('El descuento del portal necesita un porcentaje mayor que cero');
+    if (a.subscriberIds.length || a.planIds.length || a.branchIds.length || a.neighborhoodRefs.length)
+      throw new BadRequestException(
+        'El portal de pagos sólo distingue a los clientes por su ESTADO: '
+        + 'un público por cliente, plan, sede o barrio no se puede publicar allá',
+      );
+    if (!a.allSubscribers && !a.subscriberStatuses.length)
+      throw new BadRequestException('Elige a qué estados alcanza la promoción para publicarla en el portal');
   }
 
-  private hasCriteria(a: Audience) {
-    return (
-      a.allSubscribers ||
-      a.subscriberStatuses.length > 0 ||
-      a.subscriberIds.length > 0 ||
-      a.planIds.length > 0 ||
-      a.branchIds.length > 0 ||
-      a.neighborhoodRefs.length > 0
-    );
+  /**
+   * Las dos formas de descontar en el portal son EXCLUYENTES.
+   *
+   * `portalPublish` deja una fila en `promos` para que el portal ofrezca el descuento
+   * con la mecánica del legacy (su banner rebaja la última factura). `portalPreapply`
+   * rebaja la cartera por adelantado, así que allá el cliente ya ve el valor con el
+   * descuento. Con las dos a la vez, el banner descontaría otra vez sobre lo ya
+   * rebajado y el cliente se lo llevaría dos veces.
+   */
+  private assertPortalCoherente(portalPublish: boolean, portalPreapply: boolean) {
+    if (portalPublish && portalPreapply)
+      throw new BadRequestException(
+        'Elige una sola forma para el portal: o lo cobra ya con el descuento, '
+        + 'o se publica allá para que el portal lo ofrezca. Las dos a la vez '
+        + 'se lo descontarían dos veces al cliente.',
+      );
   }
 
   /**
@@ -196,7 +193,7 @@ export class PromotionsService {
    */
   private async audienceWhere(a: Audience): Promise<Prisma.SubscriberWhereInput | null> {
     if (a.allSubscribers) return {};
-    if (!this.hasCriteria(a)) return null;
+    if (!hasCriteria(a)) return null;
 
     const and: Prisma.SubscriberWhereInput[] = [];
     if (a.subscriberStatuses.length) and.push({ status: { in: a.subscriberStatuses as any } });
@@ -233,44 +230,6 @@ export class PromotionsService {
   }
 
   /** Datos del cliente que deciden si una promo lo alcanza. */
-  private async subscriberFacts(subscriberId: string): Promise<SubscriberFacts | null> {
-    const s = await this.prisma.subscriber.findUnique({
-      where: { id: subscriberId },
-      select: {
-        id: true, status: true, branchId: true, neighborhood: true,
-        services: { select: { planId: true } },
-      },
-    });
-    if (!s) return null;
-    let planIds = uniq(s.services.map((x) => x.planId ?? ''));
-    // Sin servicios contratados → el plan sale de su última factura (mismo
-    // respaldo que usa la corrida mensual).
-    if (!s.services.length) {
-      const rows = await this.prisma.$queryRaw<{ id: string }[]>`
-        SELECT DISTINCT pl.id
-          FROM "SubInvoiceItem" it
-          JOIN "Plan" pl ON lower(btrim(pl.name)) = lower(btrim(COALESCE(it."productName", it.description)))
-         WHERE it.price > 0
-           AND it."invoiceId" = (SELECT i2.id FROM "SubInvoice" i2 WHERE i2."subscriberId" = ${subscriberId}
-                                  ORDER BY i2."invoiceDate" DESC, i2.tid DESC LIMIT 1)`;
-      planIds = rows.map((r) => r.id);
-    }
-    return { id: s.id, status: s.status, branchId: s.branchId, neighborhood: s.neighborhood, planIds };
-  }
-
-  /** ¿El público de la promo alcanza a este cliente? (Y entre dimensiones, O dentro.) */
-  private reaches(a: Audience, f: SubscriberFacts): boolean {
-    if (a.allSubscribers) return true;
-    if (!this.hasCriteria(a)) return false;
-    if (a.subscriberStatuses.length && !(f.status && a.subscriberStatuses.includes(f.status as SubscriberStatusName)))
-      return false;
-    if (a.branchIds.length && !(f.branchId && a.branchIds.includes(f.branchId))) return false;
-    if (a.neighborhoodRefs.length && !(f.neighborhood && a.neighborhoodRefs.includes(f.neighborhood)))
-      return false;
-    if (a.subscriberIds.length && !a.subscriberIds.includes(f.id)) return false;
-    if (a.planIds.length && !f.planIds.some((p) => a.planIds.includes(p))) return false;
-    return true;
-  }
 
   // ------------------------------------------------------------ Bitácora ----
 
@@ -402,13 +361,17 @@ export class PromotionsService {
       throw new BadRequestException('La fecha final no puede ser anterior a la inicial');
 
     const a = this.audienceOf(dto);
-    if (!this.hasCriteria(a))
+    if (!hasCriteria(a))
       throw new BadRequestException(
         'Define a qué clientes alcanza la promoción (o marca "Todos los clientes")',
       );
     const name = dto.name.trim();
     const disc = resolveDiscount(dto.discountFormat ?? '%', dto.percentage, dto.flatAmount);
     const refs = await this.targetRefs(a);
+    const portalPublish = dto.portalPublish ?? false;
+    if (portalPublish) this.assertPublicableEnPortal(disc, a);
+    const portalPreapply = dto.portalPreapply ?? false;
+    this.assertPortalCoherente(portalPublish, portalPreapply);
 
     return this.prisma.$transaction(async (tx) => {
       const promo = await tx.promotion.create({
@@ -421,6 +384,9 @@ export class PromotionsService {
           startDate: start,
           endDate: end,
           active: dto.active ?? true,
+          invoiceScope: dto.invoiceScope ?? 'MENSUALIDAD_DEL_MES',
+          portalPublish,
+          portalPreapply,
           allSubscribers: a.allSubscribers,
           subscriberStatuses: a.subscriberStatuses as any,
           neighborhoodRefs: a.neighborhoodRefs,
@@ -443,6 +409,7 @@ export class PromotionsService {
           flatAmount: disc.flatAmount,
           startDate: start,
           endDate: end,
+          invoiceScope: dto.invoiceScope ?? 'MENSUALIDAD_DEL_MES',
           createdBy: createdBy ?? null,
         };
         // Mismo nombre = misma plantilla: se actualiza en vez de acumular copias.
@@ -464,6 +431,7 @@ export class PromotionsService {
       select: {
         id: true, name: true, description: true, discountFormat: true,
         percentage: true, flatAmount: true, startDate: true, endDate: true,
+        invoiceScope: true,
       },
     });
   }
@@ -487,10 +455,10 @@ export class PromotionsService {
     if (end < start)
       throw new BadRequestException('La fecha final no puede ser anterior a la inicial');
 
-    const before = this.audienceOfPromo(existing);
+    const before = audienceOfPromo(existing);
     // El público se reemplaza entero: la pantalla siempre manda el estado completo.
     const after = this.audienceOf(dto);
-    if (!this.hasCriteria(after))
+    if (!hasCriteria(after))
       throw new BadRequestException(
         'Define a qué clientes alcanza la promoción (o marca "Todos los clientes")',
       );
@@ -503,6 +471,7 @@ export class PromotionsService {
       startDate: start,
       endDate: end,
       active: dto.active ?? undefined,
+      invoiceScope: dto.invoiceScope ?? undefined,
       allSubscribers: after.allSubscribers,
       subscriberStatuses: after.subscriberStatuses as any,
       neighborhoodRefs: after.neighborhoodRefs,
@@ -512,14 +481,30 @@ export class PromotionsService {
     };
 
     // Descuento: solo se recalcula si el usuario tocó algún campo de descuento.
+    const fmt = dto.discountFormat ?? existing.discountFormat;
+    const pct = dto.percentage ?? existing.percentage;
+    const flat = dto.flatAmount ?? (existing.flatAmount != null ? num(existing.flatAmount) : undefined);
+    const disc = resolveDiscount(fmt, pct, flat);
     if (dto.discountFormat !== undefined || dto.percentage !== undefined || dto.flatAmount !== undefined) {
-      const fmt = dto.discountFormat ?? existing.discountFormat;
-      const pct = dto.percentage ?? existing.percentage;
-      const flat = dto.flatAmount ?? (existing.flatAmount != null ? num(existing.flatAmount) : undefined);
-      const disc = resolveDiscount(fmt, pct, flat);
       data.discountFormat = disc.discountFormat;
       data.percentage = disc.percentage;
       data.flatAmount = disc.flatAmount;
+    }
+
+    // El portal se revalida con lo que queda DESPUÉS de la edición: una promoción ya
+    // publicada a la que se le cambia el público a "por sede" dejaría de ser
+    // publicable, y el legacy no tiene dónde guardar eso.
+    const portalPublish = dto.portalPublish ?? existing.portalPublish;
+    if (portalPublish) this.assertPublicableEnPortal(disc, after);
+    const portalPreapply = dto.portalPreapply ?? existing.portalPreapply;
+    this.assertPortalCoherente(portalPublish, portalPreapply);
+    data.portalPublish = portalPublish;
+    data.portalPreapply = portalPreapply;
+    // Al despublicarla se limpia la huella: las filas de `promos` las retira el
+    // writeback en su siguiente pasada.
+    if (!portalPublish && existing.portalPublish) {
+      data.legacyPromoIds = [];
+      data.portalPublishedAt = null;
     }
 
     const [refsBefore, refsAfter] = await Promise.all([
@@ -605,7 +590,7 @@ export class PromotionsService {
       select: { subscriberId: true },
     });
     if (!inv?.subscriberId) return [];
-    const facts = await this.subscriberFacts(inv.subscriberId);
+    const facts = await subscriberFacts(this.prisma, inv.subscriberId);
     if (!facts) return [];
 
     const t = today();
@@ -615,7 +600,7 @@ export class PromotionsService {
       include: this.targetInclude,
     });
     return vigentes
-      .filter((p) => this.reaches(this.audienceOfPromo(p), facts))
+      .filter((p) => reaches(audienceOfPromo(p), facts))
       .map((p) => ({
         id: p.id,
         name: p.name,
@@ -649,12 +634,33 @@ export class PromotionsService {
 
     const invoice = await this.prisma.subInvoice.findUnique({
       where: { id: dto.invoiceId },
-      select: { id: true, total: true, subtotal: true, tid: true, subscriberId: true },
+      select: {
+        id: true, total: true, subtotal: true, tid: true, subscriberId: true,
+        kind: true, invoiceDate: true, discount: true,
+      },
     });
     if (!invoice) throw new NotFoundException('Factura no encontrada');
 
-    const facts = invoice.subscriberId ? await this.subscriberFacts(invoice.subscriberId) : null;
-    if (!facts || !this.reaches(this.audienceOfPromo(promo), facts))
+    // El alcance lo dice la promoción, también a mano: el pronto pago no rebaja la
+    // mensualidad atrasada ni un cargo suelto, lo aplique quien lo aplique. Ver
+    // `alcanzaLaFactura` en `descuento-al-cobrar.ts`.
+    if (!alcanzaLaFactura(promo, invoice, t)) {
+      throw new BadRequestException(
+        promo.invoiceScope === 'MENSUALIDAD_DEL_MES'
+          ? 'Esta promoción sólo rebaja la mensualidad del mes en curso; esta factura no lo es'
+          : 'Esta promoción sólo rebaja mensualidades; esta factura es un cargo suelto',
+      );
+    }
+    // Ya trae descuento de cabecera (el portal de pagos del legacy se lo puso): no se
+    // apila otro encima, que es como la factura 503819 salió con el 9,75 %.
+    if (yaRebajadaEnOrigen(invoice)) {
+      throw new BadRequestException(
+        `Esta factura ya trae un descuento de ${Math.round(num(invoice.discount)).toLocaleString('es-CO')} puesto por el portal de pagos; no se aplica otra promoción encima`,
+      );
+    }
+
+    const facts = invoice.subscriberId ? await subscriberFacts(this.prisma, invoice.subscriberId) : null;
+    if (!facts || !reaches(audienceOfPromo(promo), facts))
       throw new ForbiddenException(
         'El cliente de esta factura no está dentro del público de la promoción',
       );
@@ -669,10 +675,7 @@ export class PromotionsService {
 
     // Base del descuento: "antes de imp." → subtotal (sin IVA); si no → total (con IVA).
     // Monto fijo → valor tope-limitado a la base; porcentaje → base × %.
-    const base = isBeforeTaxFmt(promo.discountFormat) ? num(invoice.subtotal) : num(invoice.total);
-    const amount = isFlatFmt(promo.discountFormat)
-      ? round2(Math.min(num(promo.flatAmount), base))
-      : round2((base * promo.percentage) / 100);
+    const amount = montoDeDescuento(promo, invoice);
     if (!(amount > 0))
       throw new BadRequestException('El descuento calculado es cero');
     const label = discountLabel(promo.discountFormat, promo.percentage, num(promo.flatAmount));

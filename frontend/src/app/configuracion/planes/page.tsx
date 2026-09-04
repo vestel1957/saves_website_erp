@@ -1,18 +1,21 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Modal } from "@/components/Modal";
 import { Input, Select, Field } from "@/components/ui/Field";
+import { Segmented, Interruptor, InterruptorCompacto } from "@/components/ui/Segmented";
 import { Icon } from "@/components/Icon";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { fullCurrency } from "@/lib/format";
 import { type Plan, type ServiceKind, SERVICE_KIND_LABEL } from "@/lib/plans";
 import { VelocidadOltPlanes } from "@/components/configuracion/VelocidadOltPlanes";
+import { CombosPlanes } from "@/components/configuracion/CombosPlanes";
 
 type Draft = {
   name: string;
@@ -34,10 +37,15 @@ export default function PlanesPage() {
   const [busy, setBusy] = useState(false);
   const [confirmar, setConfirmar] = useState<Plan | null>(null);
   const [borrando, setBorrando] = useState(false);
+  /** Qué se lista: con 64 planes en el catálogo, los ocultos tapan a los vivos. */
+  const [filtro, setFiltro] = useState<"todos" | "visibles" | "ocultos">("todos");
+  /** Planes con el interruptor en vuelo (no se deja pulsar dos veces). */
+  const [cambiando, setCambiando] = useState<Set<string>>(new Set());
   /** Pestaña activa. `?tab=olt` la fija desde fuera (el aviso de la orden enlaza aquí). */
-  const [tab, setTab] = useState<"catalogo" | "olt">("catalogo");
+  const [tab, setTab] = useState<"catalogo" | "combos" | "olt">("catalogo");
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).get("tab") === "olt") setTab("olt");
+    const t = new URLSearchParams(window.location.search).get("tab");
+    if (t === "olt" || t === "combos") setTab(t);
   }, []);
 
   const load = useCallback(() => {
@@ -89,6 +97,39 @@ export default function PlanesPage() {
     }
   }
 
+  /**
+   * Muestra u oculta el plan al resto del sistema sin abrir el formulario: es la
+   * operación del día a día ("este ya no se vende"), y obligar a entrar a editar
+   * un plan para eso es pasear a la gente por el PRECIO con el que se factura.
+   *
+   * Se pinta primero y se corrige si el servidor dice que no: el interruptor
+   * tiene que responder al dedo, no al viaje de red.
+   */
+  async function alternarVisibilidad(p: Plan, next: boolean) {
+    if (cambiando.has(p.id)) return;
+    setCambiando((s) => new Set(s).add(p.id));
+    setPlans((prev) => prev?.map((x) => (x.id === p.id ? { ...x, active: next } : x)) ?? prev);
+    try {
+      const res = await authFetch(`/plans/${p.id}`, { method: "PATCH", body: JSON.stringify({ active: next }) });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.message || "No se pudo cambiar");
+      // Ocultar un plan NO le quita el servicio a quien ya lo tiene: se dice aquí
+      // para que nadie crea que acaba de dejar a 800 abonados sin cobro.
+      toast(
+        next
+          ? `“${p.name}” vuelve a estar disponible`
+          : p.subscribers > 0
+            ? `“${p.name}” oculto · los ${p.subscribers} abonado(s) que ya lo tienen siguen igual`
+            : `“${p.name}” oculto para los demás funcionarios`,
+        next ? "eye" : "eye-off",
+      );
+    } catch (e) {
+      setPlans((prev) => prev?.map((x) => (x.id === p.id ? { ...x, active: !next } : x)) ?? prev);
+      toast((e as Error).message, "alert-circle");
+    } finally {
+      setCambiando((s) => { const n = new Set(s); n.delete(p.id); return n; });
+    }
+  }
+
   async function remove(p: Plan) {
     setBorrando(true);
     try {
@@ -105,6 +146,11 @@ export default function PlanesPage() {
     }
   }
 
+  const visibles = plans?.filter((p) => p.active).length ?? 0;
+  const mostrados = (plans ?? []).filter(
+    (p) => filtro === "todos" || (filtro === "visibles" ? p.active : !p.active),
+  );
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -117,10 +163,11 @@ export default function PlanesPage() {
       </div>
 
       {/* El plan ya no es solo precio + perfil PPP: también dice a qué velocidad
-          se autentica la ONU en la OLT. Son dos configuraciones distintas del
-          mismo catálogo, así que van en la misma pantalla en pestañas. */}
+          se autentica la ONU en la OLT, y con qué otros planes se vende junto.
+          Son configuraciones distintas del mismo catálogo, así que van en la
+          misma pantalla en pestañas. */}
       <div className="flex gap-1 border-b border-border-subtle">
-        {([["catalogo", "Catálogo"], ["olt", "Velocidad en OLT"]] as const).map(([k, label]) => (
+        {([["catalogo", "Catálogo"], ["combos", "Combos"], ["olt", "Velocidad en OLT"]] as const).map(([k, label]) => (
           <button
             key={k}
             type="button"
@@ -134,6 +181,7 @@ export default function PlanesPage() {
         ))}
       </div>
 
+      {tab === "combos" && <CombosPlanes />}
       {tab === "olt" && <VelocidadOltPlanes />}
 
       <div className={`space-y-2 ${tab === "catalogo" ? "" : "hidden"}`}>
@@ -141,32 +189,82 @@ export default function PlanesPage() {
           <p className="text-[13px] text-text-tertiary">Cargando…</p>
         ) : plans.length === 0 ? (
           <p className="text-[13px] text-text-tertiary">Aún no hay planes. Crea el primero con “Nuevo plan”.</p>
-        ) : plans.map((p) => (
-          <div key={p.id} className="flex items-center justify-between gap-3 rounded-xl border border-border-subtle bg-surface p-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="truncate text-[14px] font-semibold text-text-primary">{p.name}</span>
-                <Badge tone="info" label={SERVICE_KIND_LABEL[p.kind]} />
-                {!p.active && <Badge tone="default" label="Inactivo" />}
-              </div>
-              <div className="mt-0.5 flex flex-wrap gap-x-3 text-[12px] text-text-tertiary">
-                <span className="font-mono">{p.pppProfile || "sin perfil"}</span>
-                {p.taxRate > 0 && <span>IVA {p.taxRate}%</span>}
-                {p.megas != null && <span>{p.megas} Mbps</span>}
-                <span>{p.subscribers} abonado(s)</span>
-              </div>
+        ) : (
+          <>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-[12.5px] text-text-tertiary">
+                El interruptor decide si el plan le aparece a los demás funcionarios al dar de alta o
+                cambiar de plan. Ocultarlo no le quita el servicio a quien ya lo tiene.
+              </p>
+              <Segmented
+                ariaLabel="Filtrar planes por visibilidad"
+                value={filtro}
+                onChange={setFiltro}
+                options={[
+                  { value: "todos", label: `Todos (${plans.length})` },
+                  { value: "visibles", label: `Visibles (${visibles})` },
+                  { value: "ocultos", label: `Ocultos (${plans.length - visibles})` },
+                ]}
+              />
             </div>
-            <div className="flex shrink-0 items-center gap-3">
-              <span className="text-[14px] font-bold text-text-primary">{fullCurrency(p.price)}<span className="text-[11px] font-normal text-text-tertiary">/mes</span></span>
-              <button type="button" onClick={() => openEdit(p)} className="tap rounded-md p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-text-primary" title="Editar">
-                <Icon name="pencil" size={15} />
-              </button>
-              <button type="button" onClick={() => setConfirmar(p)} className="tap rounded-md p-1.5 text-text-tertiary hover:bg-error-soft hover:text-error-text" title="Eliminar">
-                <Icon name="trash" size={15} />
-              </button>
-            </div>
-          </div>
-        ))}
+
+            {mostrados.length === 0 ? (
+              <p className="text-[13px] text-text-tertiary">
+                {filtro === "ocultos" ? "No hay planes ocultos." : "No hay planes visibles."}
+              </p>
+            ) : mostrados.map((p) => (
+              <div
+                key={p.id}
+                className={`flex items-center justify-between gap-3 rounded-xl border p-3 ${
+                  p.active ? "border-border-subtle bg-surface" : "border-dashed border-border-subtle bg-surface-2"
+                }`}
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <InterruptorCompacto
+                    checked={p.active}
+                    disabled={cambiando.has(p.id)}
+                    onChange={(next) => void alternarVisibilidad(p, next)}
+                    label={p.active ? `Ocultar “${p.name}” a los demás funcionarios` : `Mostrar “${p.name}” a los demás funcionarios`}
+                  />
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className={`truncate text-[14px] font-semibold ${p.active ? "text-text-primary" : "text-text-tertiary"}`}>{p.name}</span>
+                      <Badge tone="info" label={SERVICE_KIND_LABEL[p.kind]} />
+                      {!p.active && <Badge tone="warning" label="Oculto" />}
+                    </div>
+                    <div className="mt-0.5 flex flex-wrap gap-x-3 text-[12px] text-text-tertiary">
+                      <span className="font-mono">{p.pppProfile || "sin perfil"}</span>
+                      {p.taxRate > 0 && <span>IVA {p.taxRate}%</span>}
+                      {p.megas != null && <span>{p.megas} Mbps</span>}
+                      {/* El número lleva al listado de clientes filtrado por este plan:
+                          saber que son 812 no sirve si no se puede ver quiénes son. */}
+                      {p.subscribers > 0 ? (
+                        <Link
+                          href={`/clientes?planId=${p.id}`}
+                          className="tap font-semibold text-brand underline decoration-dotted underline-offset-2 hover:decoration-solid"
+                          title={`Ver los ${p.subscribers} cliente(s) con “${p.name}”`}
+                        >
+                          {p.subscribers} abonado(s)
+                        </Link>
+                      ) : (
+                        <span>sin abonados</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-3">
+                  <span className={`text-[14px] font-bold ${p.active ? "text-text-primary" : "text-text-tertiary"}`}>{fullCurrency(p.price)}<span className="text-[11px] font-normal text-text-tertiary">/mes</span></span>
+                  <button type="button" onClick={() => openEdit(p)} className="tap rounded-md p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-text-primary" title="Editar">
+                    <Icon name="pencil" size={15} />
+                  </button>
+                  <button type="button" onClick={() => setConfirmar(p)} className="tap rounded-md p-1.5 text-text-tertiary hover:bg-error-soft hover:text-error-text" title="Eliminar">
+                    <Icon name="trash" size={15} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </>
+        )}
       </div>
 
       {draft && (
@@ -198,10 +296,18 @@ export default function PlanesPage() {
                 <Input type="number" min={0} value={draft.megas} onChange={(e) => setDraft({ ...draft, megas: e.target.value })} placeholder="300" />
               </Field>
             </div>
-            <label className="flex items-center gap-2 text-[13px] text-text-secondary">
-              <input type="checkbox" checked={draft.active} onChange={(e) => setDraft({ ...draft, active: e.target.checked })} />
-              Activo (disponible para asignar a abonados)
-            </label>
+            <div className="rounded-lg border border-border-subtle bg-surface-2 p-2.5">
+              <Interruptor
+                checked={draft.active}
+                onChange={(active) => setDraft({ ...draft, active })}
+                title="Visible para los demás funcionarios"
+                detail={
+                  draft.active
+                    ? "Aparece al dar de alta y al cambiar de plan."
+                    : "No aparece en ningún desplegable. Quien ya lo tiene lo conserva."
+                }
+              />
+            </div>
             <div className="flex justify-end gap-2">
               <Button variant="secondary" onClick={() => setDraft(null)}>Cancelar</Button>
               <Button onClick={save} disabled={busy}>{busy ? "Guardando…" : "Guardar"}</Button>
@@ -224,8 +330,9 @@ export default function PlanesPage() {
             confirmar.subscribers > 0 ? (
               <>
                 El plan tiene <b>{confirmar.subscribers} abonado(s)</b> asignados, así que no se
-                borra: queda <b>desactivado</b>. Esos abonados conservan su plan y su cobro, pero
-                el plan dejará de poder asignarse a nuevos abonados.
+                borra: queda <b>oculto</b>. Esos abonados conservan su plan y su cobro, pero
+                el plan dejará de poder asignarse a nuevos abonados. Es lo mismo que hace el
+                interruptor de la lista, y se puede revertir.
               </>
             ) : (
               <>

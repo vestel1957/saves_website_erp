@@ -1,0 +1,1072 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>SAVES — Plataforma integral para ISP</title>
+<style>
+  @page { size: 254mm 142.9mm; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { font-family: "Liberation Sans", "DejaVu Sans", sans-serif; }
+  body { font-size: 9.5pt; color: #0a1730; line-height: 1.42; hyphens: none; }
+
+  /* ============ marca Vestel ============
+     azul profundo #06183f · azul #0f3a80 · azul medio #1663a8 · azul claro #2f8fd0
+     plata #8b98a6 · oro #e4b43c · rojo #cf2c2c · verde #00a854 · naranja #ef7d1f
+     (los acentos son los colores de los arcos del logotipo)                     */
+
+  .slide {
+    position: relative; width: 254mm; height: 142.9mm;
+    page-break-after: always; overflow: hidden;
+    padding: 11mm 13mm 9mm 15mm; background: #ffffff;
+  }
+  .slide:last-child { page-break-after: auto; }
+  .slide::before {
+    content: ""; position: absolute; left: 0; top: 0; width: 3.4mm; height: 142.9mm;
+    background: linear-gradient(180deg, #06183f 0%, #0f3a80 45%, #1663a8 70%, #e4b43c 70%, #e4b43c 100%);
+  }
+
+  .kicker { font-size: 7.5pt; letter-spacing: 0.16em; text-transform: uppercase; color: #1663a8; font-weight: bold; }
+  h1.title { font-size: 19pt; line-height: 1.10; letter-spacing: -0.015em; margin: 1.8mm 0 1.2mm 0; color: #0a1730; }
+  .lede { font-size: 9.3pt; color: #46586b; max-width: 172mm; margin-bottom: 4.2mm; }
+  .rule { height: 1.1mm; width: 24mm; border-radius: 1mm; margin: 0 0 3.8mm 0;
+          background: linear-gradient(90deg, #0f3a80 0%, #1663a8 55%, #e4b43c 55%, #e4b43c 100%); }
+
+  .brandfoot { position: absolute; left: 15mm; bottom: 5mm; }
+  .brandfoot img { width: 25mm; }
+  .pagenum { position: absolute; right: 13mm; bottom: 6mm; font-size: 7.5pt; color: #9aa8b8; letter-spacing: 0.1em; }
+  .pagenum b { color: #0f3a80; font-weight: bold; }
+
+  /* ---------- portada ---------- */
+  .cover { background: #06183f; color: #eef3fa; padding: 0; }
+  .cover::before { display: none; }
+  .cover .wash {
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(circle at 76% 26%, rgba(22,99,168,0.62) 0%, rgba(6,24,63,0) 58%),
+      radial-gradient(circle at 6% 92%, rgba(228,180,60,0.18) 0%, rgba(6,24,63,0) 48%);
+  }
+  .cover .inner { position: absolute; inset: 0; padding: 19mm 18mm; }
+  .cover-logo { position: absolute; right: 18mm; top: 17mm; width: 62mm; }
+  .eyebrow { font-size: 7.5pt; letter-spacing: 0.24em; text-transform: uppercase; color: #e4b43c; font-weight: bold; }
+  .wordmark { font-size: 44pt; font-weight: bold; letter-spacing: 0.16em; color: #ffffff; line-height: 1; margin-top: 7mm; }
+  .wordmark span { color: #e4b43c; }
+  .cover .tag { margin-top: 5mm; font-size: 14.5pt; color: #9cc6e8; font-weight: bold; }
+  .cover .sub { margin-top: 3mm; font-size: 10pt; color: #8ea4bd; max-width: 128mm; line-height: 1.5; }
+  .cover .stripe {
+    position: absolute; left: 18mm; right: 18mm; bottom: 19mm;
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    border-top: 0.4mm solid rgba(255,255,255,0.18); padding-top: 6mm;
+  }
+  .cover .stripe b { display: block; font-size: 15pt; color: #ffffff; }
+  .cover .stripe small { font-size: 7.5pt; color: #7d93ac; letter-spacing: 0.1em; text-transform: uppercase; }
+
+  /* ---------- rejillas ---------- */
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 6mm; align-items: start; }
+  .cols.wide-left { grid-template-columns: 1.12fr 1fr; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 5mm; }
+  .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4.6mm; }
+  .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4mm; }
+
+  .card { border: 0.35mm solid #dde5ef; border-radius: 2.2mm; padding: 3.6mm 4.2mm; background: #ffffff; }
+  .card.soft { background: #f5f8fc; border-color: #e2eaf4; }
+  .card h3 { font-size: 9.4pt; color: #0a1730; margin-bottom: 1.6mm; letter-spacing: -0.01em; }
+  .card p { font-size: 8.1pt; color: #4b5d6e; line-height: 1.36; }
+
+  .badge { display: inline-block; font-size: 7pt; font-weight: bold; letter-spacing: 0.1em;
+           text-transform: uppercase; color: #0f3a80; background: #e6eefa;
+           padding: 1mm 2.2mm; border-radius: 1mm; margin-bottom: 2.5mm; }
+  .badge.gold { color: #8a5b06; background: #fbf0d6; }
+  .badge.red  { color: #a32222; background: #fbe4e4; }
+
+  ul.ticks { list-style: none; }
+  ul.ticks li { font-size: 8.2pt; color: #3c4f60; padding-left: 4.6mm; position: relative;
+                margin-bottom: 1.2mm; line-height: 1.34; }
+  ul.ticks li::before { content: "\25AA"; position: absolute; left: 0; top: -0.2mm; color: #1663a8; font-size: 9pt; }
+  ul.ticks.gold li::before { color: #e4b43c; }
+  ul.ticks li b { color: #0a1730; }
+
+  .num { font-size: 8pt; font-weight: bold; color: #ffffff; background: #0f3a80;
+         width: 5.6mm; height: 5.6mm; border-radius: 50%; display: inline-block;
+         text-align: center; line-height: 5.6mm; margin-right: 2mm; }
+
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4.5mm; }
+  .stat { border-radius: 2.2mm; padding: 3.8mm 4.4mm; background: #f5f8fc; border: 0.35mm solid #e2eaf4; }
+  .stat b { display: block; font-size: 16pt; color: #0f3a80; letter-spacing: -0.02em; line-height: 1.1; }
+  .stat small { display: block; font-size: 7.6pt; color: #5c6f80; margin-top: 1.2mm; line-height: 1.3; }
+
+  .flow { display: flex; align-items: stretch; }
+  .flow .step { flex: 1; border-top: 1.1mm solid #0f3a80; padding: 3.4mm 3.2mm 0 3.2mm; }
+  .flow .step:nth-child(even) { border-top-color: #e4b43c; }
+  .flow .step em { font-style: normal; font-size: 7pt; letter-spacing: 0.12em; color: #9aa8b8; font-weight: bold; }
+  .flow .step h4 { font-size: 9pt; margin: 1.2mm 0 1.4mm 0; color: #0a1730; }
+  .flow .step p { font-size: 7.4pt; color: #56697a; line-height: 1.34; }
+
+  table.cmp { width: 100%; border-collapse: collapse; font-size: 8.1pt; }
+  table.cmp th, table.cmp td { border-bottom: 0.3mm solid #e4ebf3; padding: 2.1mm 2.6mm; text-align: left; vertical-align: top; }
+  table.cmp thead th { font-size: 7.4pt; text-transform: uppercase; letter-spacing: 0.1em; color: #6b7d8d;
+                       border-bottom: 0.6mm solid #0f3a80; background: #f5f8fc; }
+  table.cmp td.f { font-weight: bold; color: #0a1730; width: 27%; }
+  table.cmp td.no { color: #8798a6; }
+  table.cmp tbody tr:nth-child(even) { background: #fafcfe; }
+  .chk { color: #0f3a80; font-weight: bold; }
+
+  .closing { background: #06183f; color: #eef3fa; padding: 0; }
+  .closing::before { display: none; }
+  .closing .wash { position: absolute; inset: 0;
+    background: radial-gradient(circle at 80% 74%, rgba(22,99,168,0.55) 0%, rgba(6,24,63,0) 60%),
+                radial-gradient(circle at 8% 10%, rgba(228,180,60,0.14) 0%, rgba(6,24,63,0) 44%); }
+  .closing .inner { position: absolute; inset: 0; padding: 21mm 18mm; }
+  .closing h2 { font-size: 29pt; line-height: 1.14; letter-spacing: -0.02em; color: #ffffff; }
+  .closing h2 span { color: #e4b43c; }
+  .closing p { margin-top: 6mm; font-size: 10.5pt; color: #9cb2c9; max-width: 148mm; line-height: 1.5; }
+  .closing-logo { position: absolute; right: 18mm; top: 19mm; width: 52mm; }
+
+  .quotebar { border-left: 1.2mm solid #e4b43c; padding: 2mm 0 2mm 5mm; margin-top: 5mm;
+              font-size: 8.8pt; color: #3c4f60; line-height: 1.42; }
+  .quotebar b { color: #0a1730; }
+
+  .layerbox { border-radius: 2.2mm; padding: 3.6mm 4.2mm; color: #ffffff; }
+  .layerbox h3 { font-size: 10pt; margin-bottom: 1.8mm; color: #ffffff; }
+  .layerbox p { font-size: 7.9pt; color: rgba(255,255,255,0.88); line-height: 1.35; }
+  .l1 { background: #0b2f6e; }
+  .l2 { background: #12468f; }
+  .l3 { background: #1663a8; }
+  .l4 { background: #b8801f; }
+
+  .base { margin-top: 5mm; border-radius: 2.2mm; border: 0.5mm dashed #b7c6da;
+          background: #f5f8fc; padding: 3.4mm 5mm; text-align: center; }
+  .base b { font-size: 9.6pt; color: #0a1730; }
+  .base span { display: block; font-size: 8.3pt; color: #56697a; margin-top: 1.2mm; }
+
+  .airy .layerbox { padding: 5.4mm 5mm; min-height: 41mm; }
+  .airy .layerbox h3 { font-size: 11pt; margin-bottom: 2.4mm; }
+  .airy .layerbox p { font-size: 8.7pt; line-height: 1.4; }
+  .airy .base { padding: 5.4mm 6mm; margin-top: 7mm; }
+  .airy .base b { font-size: 10.4pt; }
+  .airy .base span { font-size: 8.8pt; margin-top: 2mm; }
+
+  .tight .card { padding: 3.2mm 3.8mm; }
+  .tight ul.ticks li { font-size: 8pt; margin-bottom: 1mm; line-height: 1.3; }
+  .tight .grid2 { gap: 4.4mm; }
+
+  .dense .card { padding: 2.9mm 3.3mm; }
+  .dense .card h3 { font-size: 8.7pt; margin-bottom: 1.1mm; }
+  .dense ul.ticks li { font-size: 7.5pt; margin-bottom: 0.8mm; line-height: 1.26; padding-left: 3.9mm; }
+  .dense ul.ticks li::before { font-size: 7.5pt; }
+  .dense .grid4 { gap: 3.4mm; }
+</style>
+</head>
+<body>
+
+<!-- 01 · PORTADA -->
+<section class="slide cover">
+  <div class="wash"></div>
+  <div class="inner">
+    <img class="cover-logo" src="vestel-full-white.png" alt="Vestel — Internet y Televisión">
+    <div class="eyebrow">Presentación comercial</div>
+    <div class="wordmark">SAVES<span>.</span></div>
+    <div class="tag">La plataforma que administra un ISP completo.</div>
+    <div class="sub">
+      Abonados, facturación electrónica, cartera, caja, contabilidad, red (Mikrotik · OLT GPON · TR-069),
+      soporte en campo, inventario y atención por WhatsApp con IA. Un solo sistema, una sola base de datos,
+      una sola verdad.
+    </div>
+    <div class="stripe">
+      <div><b>21.861</b><small>abonados gestionados</small></div>
+      <div><b>454.138</b><small>facturas en el sistema</small></div>
+      <div><b>508.833</b><small>pagos registrados</small></div>
+      <div><b>321.718</b><small>órdenes de servicio</small></div>
+    </div>
+  </div>
+</section>
+
+<!-- 02 · EL PROBLEMA -->
+<section class="slide">
+  <div class="kicker">El punto de partida</div>
+  <h1 class="title">Un ISP no se cae por la red. Se cae por la operación.</h1>
+  <div class="rule"></div>
+  <p class="lede">La mayoría de los operadores sostiene su día a día sobre cuatro o cinco herramientas que no se hablan
+    entre sí. Cada frontera entre ellas es plata que se pierde y clientes que se van.</p>
+
+  <div class="grid3" style="margin-top:2mm">
+    <div class="card">
+      <div class="badge red">Facturación</div>
+      <h3>El corte del mes es un evento de riesgo</h3>
+      <p>Corridas manuales, planillas paralelas, combos mal prorrateados, IVA aplicado a ojo y facturas que no cuadran con lo que el cliente realmente tiene contratado.</p>
+    </div>
+    <div class="card">
+      <div class="badge red">Cartera</div>
+      <h3>Se corta tarde y se reconecta a mano</h3>
+      <p>El moroso sigue navegando días de más; el que paga espera a que alguien entre al router. El recaudo depende de que un funcionario se acuerde.</p>
+    </div>
+    <div class="card">
+      <div class="badge red">Red</div>
+      <h3>La red vive en otra pestaña</h3>
+      <p>Mikrotik por WinBox, la OLT por consola, las ONT por otro portal. Nada de eso sabe quién pagó, quién se retiró ni qué plan compró.</p>
+    </div>
+    <div class="card">
+      <div class="badge red">Campo</div>
+      <h3>La orden de servicio termina en WhatsApp</h3>
+      <p>Sin evidencia, sin geolocalización, sin descarga de material del inventario y sin manera de medir al técnico.</p>
+    </div>
+    <div class="card">
+      <div class="badge red">Caja</div>
+      <h3>El cierre no cuadra</h3>
+      <p>Recaudo en ventanilla, pasarela, transferencias y convenios llegan por caminos distintos y se concilian a mano al final del día.</p>
+    </div>
+    <div class="card">
+      <div class="badge red">Gerencia</div>
+      <h3>Los números llegan tarde</h3>
+      <p>ARPU, churn, índice de recaudo y capacidad de red se arman en Excel una vez al mes, cuando ya no se puede hacer nada al respecto.</p>
+    </div>
+  </div>
+  <div class="brandfoot"><img src="vestel-wordmark.png" alt="Vestel"></div><div class="pagenum">SAVES · plataforma ISP · <b>02</b></div>
+</section>
+
+<!-- 03 · LA RESPUESTA -->
+<section class="slide airy">
+  <div class="kicker">La propuesta</div>
+  <h1 class="title">Una sola plataforma, de la venta al cierre contable.</h1>
+  <div class="rule"></div>
+  <p class="lede">SAVES no es un ERP al que se le pegó un módulo de internet, ni un gestor de OLT al que se le pegó
+    una factura. Está construido de raíz alrededor del ciclo de vida del abonado.</p>
+
+  <div class="grid4" style="margin-top:1mm">
+    <div class="layerbox l1">
+      <h3>Comercial</h3>
+      <p>Prospectos, cotizaciones, planes, combos, promociones dirigidas, contratos con permanencia y firma.</p>
+    </div>
+    <div class="layerbox l2">
+      <h3>Financiero</h3>
+      <p>Facturación masiva y recurrente, e-factura DIAN, cartera, recaudo, tesorería multi-caja y contabilidad completa.</p>
+    </div>
+    <div class="layerbox l3">
+      <h3>Red</h3>
+      <p>Mikrotik, OLT GPON multi-marca, GenieACS TR-069, IPs, VLANs, NAPs y mapa geográfico de planta.</p>
+    </div>
+    <div class="layerbox l4">
+      <h3>Operación</h3>
+      <p>Órdenes de servicio, agenda de técnicos, inventario y bodegas, compras, actas firmadas y WhatsApp con IA.</p>
+    </div>
+  </div>
+
+  <div class="base">
+    <b>Todo sobre la misma base de datos: 216 tablas, 627 endpoints, 188 permisos granulares.</b>
+    <span>Cuando el cliente paga en ventanilla, la reconexión en el router, el asiento contable, el cierre de caja
+      y el mensaje de WhatsApp ocurren en la misma transacción. No hay integración que se caiga: no hay integración.</span>
+  </div>
+  <div class="brandfoot"><img src="vestel-wordmark.png" alt="Vestel"></div><div class="pagenum">SAVES · plataforma ISP · <b>03</b></div>
+</section>
+
+<!-- 04 · NO ES UN PROTOTIPO -->
+<section class="slide">
+  <div class="kicker">Madurez</div>
+  <h1 class="title">No es una demo: es un sistema con kilometraje.</h1>
+  <div class="rule"></div>
+  <p class="lede">SAVES se construyó reemplazando, módulo por módulo, el sistema de un operador real con siete sedes
+    y más de una década de historia cargada. Cada regla de negocio salió de una operación viva, no de un tablero.</p>
+
+  <div class="stats" style="margin-top:1mm">
+    <div class="stat"><b>21.861</b><small>abonados en el histórico, 4.817 activos hoy</small></div>
+    <div class="stat"><b>454.138</b><small>facturas migradas y conciliadas</small></div>
+    <div class="stat"><b>508.833</b><small>pagos con su trazabilidad de caja</small></div>
+    <div class="stat"><b>321.718</b><small>órdenes de servicio históricas</small></div>
+  </div>
+  <div class="stats" style="margin-top:4.5mm">
+    <div class="stat"><b>1.720</b><small>ONUs bajo control desde la plataforma</small></div>
+    <div class="stat"><b>1.398</b><small>NAPs georreferenciadas</small></div>
+    <div class="stat"><b>73</b><small>planes y combos vivos en catálogo</small></div>
+    <div class="stat"><b>7</b><small>sedes con caja y bodega propias</small></div>
+  </div>
+
+  <div class="quotebar">
+    <b>Lo que eso significa para usted:</b> los casos raros ya están resueltos. Meses acumulados sin facturar,
+    consecutivos de dos sistemas conviviendo, puntos de TV que no llevan IVA, ONUs ya autenticadas que hay que
+    adoptar sin cortarle el servicio al cliente, nombres con caracteres rotos heredados de la migración.
+    Nada de eso lo va a descubrir usted en producción.
+  </div>
+  <div class="brandfoot"><img src="vestel-wordmark.png" alt="Vestel"></div><div class="pagenum">SAVES · plataforma ISP · <b>04</b></div>
+</section>
+
+<!-- 05 · CICLO DE VIDA -->
+<section class="slide">
+  <div class="kicker">Cómo funciona</div>
+  <h1 class="title">El ciclo de vida del abonado, de punta a punta.</h1>
+  <div class="rule"></div>
+  <p class="lede">Este es el recorrido completo dentro de SAVES. Ningún paso obliga a salir a otra herramienta,
+    y cada paso deja rastro contable y de auditoría.</p>
+
+  <div class="flow" style="margin-top:3mm">
+    <div class="step"><em>01</em><h4>Alta</h4><p>Se crea el cliente con su plan, se le asigna IP fija del pool que el router ya usa, se crea el secret PPPoE, se emite la primera factura y se abre la orden de instalación. Un solo formulario.</p></div>
+    <div class="step"><em>02</em><h4>Instalación</h4><p>La orden va a la agenda del técnico, que la atiende en su turno, descarga el material de su bodega, adjunta fotos con geolocalización y cierra con firma del cliente.</p></div>
+    <div class="step"><em>03</em><h4>Provisión</h4><p>La ONU se autentica en la OLT con el perfil de velocidad que dicta el plan contratado. Si ya estaba autenticada, se adopta sin cortar el servicio.</p></div>
+    <div class="step"><em>04</em><h4>Facturación</h4><p>Corrida mensual masiva, combos facturados línea por línea con su IVA, e-factura timbrada ante la DIAN y entrega por WhatsApp o correo.</p></div>
+  </div>
+  <div class="flow" style="margin-top:6mm">
+    <div class="step"><em>05</em><h4>Recaudo</h4><p>Ventanilla, transferencia, pasarela o importación de archivos bancarios. Todo cae en el cierre de caja del funcionario y en el asiento contable correspondiente.</p></div>
+    <div class="step"><em>06</em><h4>Cobranza</h4><p>El bot de WhatsApp sale a recordar con plantilla aprobada, se registran acuerdos de pago y el sistema corta por monto de deuda, no por capricho.</p></div>
+    <div class="step"><em>07</em><h4>Reconexión</h4><p>Al registrar el pago vuelve internet y TV en el mismo instante: Mikrotik, OLT y TR-069 se ejecutan solos. Sin ticket, sin llamada, sin espera.</p></div>
+    <div class="step"><em>08</em><h4>Retiro</h4><p>Cláusula de permanencia, liquidación, devolución de equipo al inventario con acta firmada y baja ordenada en la red.</p></div>
+  </div>
+  <div class="brandfoot"><img src="vestel-wordmark.png" alt="Vestel"></div><div class="pagenum">SAVES · plataforma ISP · <b>05</b></div>
+</section>
+
+<!-- 06 · MAPA DE MÓDULOS -->
+<section class="slide dense">
+  <div class="kicker">Alcance</div>
+  <h1 class="title">Qué cubre, módulo por módulo.</h1>
+  <div class="rule"></div>
+
+  <div class="grid4" style="margin-top:0mm">
+    <div class="card soft">
+      <h3>Clientes y contratos</h3>
+      <ul class="ticks"><li>Ficha 360 del abonado</li><li>Grupos y multi-sede</li><li>Contratos, anexos y permanencia</li><li>Firma y huella digital</li><li>Documentos adjuntos</li></ul>
+    </div>
+    <div class="card soft">
+      <h3>Facturación</h3>
+      <ul class="ticks"><li>Corrida masiva mensual</li><li>Recurrentes y notas crédito</li><li>Combos internet + TV</li><li>Promociones dirigidas</li><li>Edición blindada con auditoría</li></ul>
+    </div>
+    <div class="card soft">
+      <h3>Factura electrónica</h3>
+      <ul class="ticks"><li>DIAN vía proveedor tecnológico</li><li>Emisión individual y en lote</li><li>Selección por sede y estado</li><li>Reintento de rechazos</li><li>Mapeo de cuentas</li></ul>
+    </div>
+    <div class="card soft">
+      <h3>Cartera y cobranza</h3>
+      <ul class="ticks"><li>Corte por monto de deuda</li><li>Acuerdos y compromisos</li><li>Reconexión automática al pagar</li><li>Recordatorios por WhatsApp</li><li>Índice de recaudo</li></ul>
+    </div>
+    <div class="card soft">
+      <h3>Tesorería</h3>
+      <ul class="ticks"><li>Multi-caja y multi-sede</li><li>Apertura, arqueo y cierre</li><li>Ingresos, egresos, traslados</li><li>Comprobantes adjuntos</li><li>Pagos fijos programados</li></ul>
+    </div>
+    <div class="card soft">
+      <h3>Contabilidad</h3>
+      <ul class="ticks"><li>Plan de cuentas y centros de costo</li><li>Libros y comprobantes</li><li>Cierre de mes con arrastre</li><li>Activos fijos y depreciación</li><li>Conciliación bancaria</li></ul>
+    </div>
+    <div class="card soft">
+      <h3>Red — Mikrotik</h3>
+      <ul class="ticks"><li>Corte y reconexión reales</li><li>Secrets PPPoE</li><li>IP fija automática por pool</li><li>Acciones masivas</li><li>Bitácora de cada comando</li></ul>
+    </div>
+    <div class="card soft">
+      <h3>Red — OLT GPON</h3>
+      <ul class="ticks"><li>Descubrimiento de ONUs</li><li>Autenticación desde la orden</li><li>Velocidad según el plan</li><li>Señal óptica y diagnóstico</li><li>Corte del puerto CATV</li></ul>
+    </div>
+    <div class="card soft">
+      <h3>Red — TR-069 / planta</h3>
+      <ul class="ticks"><li>GenieACS: WiFi, reinicio, corte TV</li><li>NAPs, puertos y VLANs</li><li>Mapa de red y abonados</li><li>Capacidad y ocupación</li><li>Inventario de equipos en campo</li></ul>
+    </div>
+    <div class="card soft">
+      <h3>Soporte y campo</h3>
+      <ul class="ticks"><li>Órdenes por clase y detalle</li><li>Agenda y ruta del técnico</li><li>Turno obligatorio: una visita a la vez</li><li>Fotos con geo-cerca</li><li>Puntaje automático por orden</li></ul>
+    </div>
+    <div class="card soft">
+      <h3>Inventario y compras</h3>
+      <ul class="ticks"><li>Bodegas por sede y por técnico</li><li>Seriales y kardex</li><li>Traspasos con acta y firma OTP</li><li>Órdenes de compra con doble firma</li><li>Devoluciones y bajas</li></ul>
+    </div>
+    <div class="card soft">
+      <h3>Atención e IA</h3>
+      <ul class="ticks"><li>Bandeja de WhatsApp humana</li><li>Agentes IA por audiencia</li><li>Trámites autoservicio 24/7</li><li>Campañas y plantillas</li><li>Búsqueda en lenguaje natural</li></ul>
+    </div>
+  </div>
+  <div class="brandfoot"><img src="vestel-wordmark.png" alt="Vestel"></div><div class="pagenum">SAVES · plataforma ISP · <b>06</b></div>
+</section>
+
+<!-- 07 · FACTURACIÓN -->
+<section class="slide tight">
+  <div class="kicker">Dinero · 1 de 4</div>
+  <h1 class="title">Facturación que cuadra al peso.</h1>
+  <div class="rule"></div>
+  <p class="lede">La corrida mensual es el momento de mayor riesgo de un ISP. SAVES la convierte en un proceso
+    repetible, verificable y reversible.</p>
+
+  <div class="grid2">
+    <div class="card">
+      <div class="badge">Corrida mensual</div>
+      <h3>Miles de facturas en una sola pasada</h3>
+      <ul class="ticks" style="margin-top:2mm">
+        <li><b>Un botón, un mes cerrado.</b> La última corrida generó 4.969 facturas en una ejecución auditable.</li>
+        <li><b>Nadie se queda sin facturar.</b> Si a un abonado le falta el servicio contratado, el sistema lo deduce de su última factura y deja constancia de los casos que no pudo resolver.</li>
+        <li><b>Vista previa antes de emitir</b> y trazabilidad de qué se generó, para quién y por qué.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="badge gold">Promociones</div>
+      <h3>Descuentos dirigidos a quien usted decide</h3>
+      <ul class="ticks gold" style="margin-top:2mm">
+        <li>Público objetivo por estado, plan, sede, barrio o lista concreta de clientes.</li>
+        <li>Asistente de tres pasos con plantillas: nadie improvisa un descuento.</li>
+        <li>Vigencia con fecha de fin: <b>la promoción caduca sola</b>, no se queda regalando margen para siempre.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="badge">Catálogo</div>
+      <h3>Planes, combos y adicionales</h3>
+      <ul class="ticks" style="margin-top:2mm">
+        <li>Combos internet + TV facturados <b>por componente</b>: una línea por servicio con su propio IVA, no un total opaco.</li>
+        <li>Puntos adicionales y cargos únicos con su tratamiento tributario correcto.</li>
+        <li>Planes visibles u ocultos, y precios por sede.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="badge">Correcciones</div>
+      <h3>Editar sin perder el control</h3>
+      <ul class="ticks" style="margin-top:2mm">
+        <li>Conceptos y valores editables sobre factura emitida, con marca de auditoría y responsable.</li>
+        <li>Notas crédito y débito formales cuando el documento ya está timbrado.</li>
+        <li>Anulaciones con motivo, autorización y su reflejo en caja y contabilidad.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="brandfoot"><img src="vestel-wordmark.png" alt="Vestel"></div><div class="pagenum">SAVES · plataforma ISP · <b>07</b></div>
+</section>
+
+<!-- 08 · E-FACTURA -->
+<section class="slide">
+  <div class="kicker">Dinero · 2 de 4</div>
+  <h1 class="title">Facturación electrónica sin depender de nadie más.</h1>
+  <div class="rule"></div>
+  <p class="lede">La obligación tributaria deja de ser un proceso aparte con exportaciones a Excel: el documento
+    electrónico se arma con los mismos datos que ya facturó el sistema.</p>
+
+  <div class="grid3" style="margin-top:1mm">
+    <div class="card">
+      <span class="num">1</span><b>Se arma</b>
+      <p style="margin-top:2.5mm">El documento se construye desde la factura real del abonado: identificación, resolución, conceptos, IVA por línea y totales. Sin re-digitación.</p>
+    </div>
+    <div class="card">
+      <span class="num">2</span><b>Se emite</b>
+      <p style="margin-top:2.5mm">Individual o en lote. Se selecciona por sede y por estado del cliente, con el total facturable a la vista antes de soltar el envío.</p>
+    </div>
+    <div class="card">
+      <span class="num">3</span><b>Se controla</b>
+      <p style="margin-top:2.5mm">Estado documento por documento, causa del rechazo y reintento dirigido. Ninguna factura se pierde entre el ISP y la autoridad tributaria.</p>
+    </div>
+  </div>
+
+  <div class="grid2" style="margin-top:6mm">
+    <div class="card soft">
+      <h3>Configuración que se hace una vez</h3>
+      <ul class="ticks" style="margin-top:2mm">
+        <li>Mapeo de cuentas contables por concepto facturable.</li>
+        <li>Selección persistente de qué servicios entran (internet, TV) por sede.</li>
+        <li>Modo de simulación para validar todo el flujo antes de timbrar el primer documento real.</li>
+      </ul>
+    </div>
+    <div class="card soft">
+      <h3>Y del otro lado, contabilidad</h3>
+      <ul class="ticks" style="margin-top:2mm">
+        <li>Cada factura, pago, egreso y anulación genera su asiento.</li>
+        <li>Libros, balance, estado de resultados y cierre de mes con arrastre de saldos.</li>
+        <li>El contador deja de pedir archivos: entra y consulta.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="brandfoot"><img src="vestel-wordmark.png" alt="Vestel"></div><div class="pagenum">SAVES · plataforma ISP · <b>08</b></div>
+</section>
+
+<!-- 09 · CARTERA -->
+<section class="slide">
+  <div class="kicker">Dinero · 3 de 4</div>
+  <h1 class="title">La cartera se cobra sola, y se reconecta sola.</h1>
+  <div class="rule"></div>
+  <p class="lede">El diferencial más rentable de SAVES: el vínculo directo entre el estado de cuenta del abonado
+    y el equipo que le da servicio.</p>
+
+  <div class="cols wide-left">
+    <div>
+      <div class="card" style="border-color:#0e7490; border-width:0.6mm">
+        <div class="badge">El circuito cerrado</div>
+        <h3>Pago en ventanilla → internet arriba en segundos</h3>
+        <ul class="ticks" style="margin-top:2mm">
+          <li>La cajera registra el pago. <b>Eso es todo lo que hace un humano.</b></li>
+          <li>El abonado pasa de MOROSO a ACTIVO, se levanta el corte en el Mikrotik y vuelve la señal de TV por TR-069 o por el puerto de la OLT.</li>
+          <li>El movimiento entra al cierre de caja de esa ventanilla y al asiento contable del día.</li>
+          <li>Se dispara el mensaje de confirmación al cliente.</li>
+        </ul>
+        <p style="margin-top:3mm; font-size:8.4pt; color:#0e7490"><b>Sin tickets internos, sin llamar al de redes, sin “espere veinte minutos”.</b></p>
+      </div>
+    </div>
+    <div>
+      <div class="card">
+        <h3>Cortar con criterio, no por reloj</h3>
+        <ul class="ticks" style="margin-top:2mm">
+          <li>Corte por <b>monto adeudado</b> —“debe su mensualidad o más”— y no solo por número de facturas o días vencidos.</li>
+          <li>Paso a cartera automático según reglas que define la gerencia.</li>
+          <li>Compromisos de pago con plazo: se reconecta por días y el sistema vuelve a cortar si no cumple.</li>
+        </ul>
+      </div>
+      <div class="card" style="margin-top:5mm">
+        <h3>Cobranza que no depende de la memoria</h3>
+        <ul class="ticks" style="margin-top:2mm">
+          <li>Recordatorios proactivos por WhatsApp con plantilla aprobada, con tope diario configurable.</li>
+          <li>Acuerdos de pago registrados en la ficha del cliente.</li>
+          <li>Reportes de recaudo por funcionario, por sede y por periodo.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <div class="brandfoot"><img src="vestel-wordmark.png" alt="Vestel"></div><div class="pagenum">SAVES · plataforma ISP · <b>09</b></div>
+</section>
+
+<!-- 10 · TESORERÍA -->
+<section class="slide">
+  <div class="kicker">Dinero · 4 de 4</div>
+  <h1 class="title">Caja, tesorería y contabilidad en la misma línea de tiempo.</h1>
+  <div class="rule"></div>
+
+  <div class="grid3">
+    <div class="card">
+      <div class="badge">Ventanilla</div>
+      <h3>La cajera ve lo suyo, y solo lo suyo</h3>
+      <ul class="ticks" style="margin-top:2mm">
+        <li>Alcance acotado a su caja y a su sede; sin selectores que inviten al error.</li>
+        <li>Registra ingresos, egresos y traslados, pero no vuelve sobre el dinero ya registrado.</li>
+        <li>Recibo en rollo de 80 mm o en hoja carta.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="badge">Cierre</div>
+      <h3>Arqueo que cuadra a la primera</h3>
+      <ul class="ticks" style="margin-top:2mm">
+        <li>Apertura con base, arqueo por medio de pago y cierre con informe imprimible.</li>
+        <li>Recaudo de pasarela y convenios incluido para cuadrar contra el extracto.</li>
+        <li>Comprobante fotográfico o PDF adjunto a cada movimiento.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="badge">Bancos</div>
+      <h3>Lo que entra por fuera de la ventanilla</h3>
+      <ul class="ticks" style="margin-top:2mm">
+        <li>Importación de archivos de pagos del banco o del recaudador.</li>
+        <li>Cuentas bancarias, movimientos y conciliación.</li>
+        <li>Pagos fijos programados: contabilidad los define, la caja los ejecuta.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="grid2" style="margin-top:6mm">
+    <div class="card soft">
+      <h3>Contabilidad completa, no un puente a otro software</h3>
+      <ul class="ticks" style="margin-top:2mm">
+        <li>Plan de cuentas, centros de costo, periodos fiscales y comprobantes.</li>
+        <li>Asientos automáticos desde facturación, tesorería, compras y nómina.</li>
+        <li>Cierre mensual con arrastre de saldos y bloqueo del periodo cerrado.</li>
+        <li>Activos fijos con depreciación e integración con inventario.</li>
+      </ul>
+    </div>
+    <div class="card soft">
+      <h3>Egresos con responsable y respaldo</h3>
+      <ul class="ticks" style="margin-top:2mm">
+        <li>Beneficiario elegido de un maestro de terceros, no escrito a mano.</li>
+        <li>Categorías de gasto, centro de costo y soporte adjunto obligatorio.</li>
+        <li>Anulaciones con motivo, autorización y rastro de quién y cuándo.</li>
+        <li>Registro de auditoría inmutable sobre todo lo que toca dinero.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="brandfoot"><img src="vestel-wordmark.png" alt="Vestel"></div><div class="pagenum">SAVES · plataforma ISP · <b>10</b></div>
+</section>
+
+<!-- 11 · RED MIKROTIK -->
+<section class="slide">
+  <div class="kicker">Red · 1 de 3</div>
+  <h1 class="title">Mikrotik operado desde el sistema, no desde WinBox.</h1>
+  <div class="rule"></div>
+  <p class="lede">SAVES habla RouterOS de verdad. El router deja de ser un territorio aparte que solo entiende
+    una persona en la empresa.</p>
+
+  <div class="grid2">
+    <div class="card">
+      <h3>Provisión automática</h3>
+      <ul class="ticks" style="margin-top:2mm">
+        <li>Creación del secret PPPoE con el perfil del plan al dar de alta al cliente.</li>
+        <li><b>IP fija repartida automáticamente</b> desde los rangos que el router ya usa, con censo por sede y candado en base de datos para que nunca se entregue dos veces.</li>
+        <li>Múltiples routers, uno o varios por sede.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Corte y reconexión</h3>
+      <ul class="ticks" style="margin-top:2mm">
+        <li>Corte individual o masivo por selección de cartera.</li>
+        <li>Reconexión disparada por el pago, sin intervención humana.</li>
+        <li><b>Modo de simulación por defecto:</b> se ve exactamente qué se va a ejecutar antes de habilitar la ejecución real.</li>
+        <li>Bitácora de cada comando enviado, con resultado y responsable.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="grid3" style="margin-top:6mm">
+    <div class="card soft"><h3>Direccionamiento</h3><p>Pools por sede, asignaciones vigentes, IPs libres y detección de conflictos. La IP fija deja de ser un archivo de Excel.</p></div>
+    <div class="card soft"><h3>Acciones masivas</h3><p>Cortar, reconectar o cambiar perfil a cientos de abonados en una operación controlada, con confirmación y tope de seguridad.</p></div>
+    <div class="card soft"><h3>Auditoría</h3><p>Cada acción sobre la red queda firmada por usuario, fecha y equipo destino. Si algo se cayó, se sabe quién y cuándo.</p></div>
+  </div>
+  <div class="brandfoot"><img src="vestel-wordmark.png" alt="Vestel"></div><div class="pagenum">SAVES · plataforma ISP · <b>11</b></div>
+</section>
+
+<!-- 12 · OLT -->
+<section class="slide">
+  <div class="kicker">Red · 2 de 3</div>
+  <h1 class="title">Gestión GPON completa, integrada al abonado.</h1>
+  <div class="rule"></div>
+  <p class="lede">Todo lo que hace una herramienta especializada de OLT, con algo que ninguna tiene: sabe quién es
+    el cliente, qué plan compró y si está al día.</p>
+
+  <div class="cols">
+    <div>
+      <div class="card">
+        <div class="badge">Altas</div>
+        <h3>Autenticar una ONU es parte de la orden</h3>
+        <ul class="ticks" style="margin-top:2mm">
+          <li>El técnico ve las ONUs sin autenticar, elige la del cliente y la da de alta desde la misma orden de instalación.</li>
+          <li><b>La velocidad la pone el plan</b>, no el criterio del técnico: el perfil de servicio se deriva del producto contratado.</li>
+          <li>Cola de auto-alta que empareja número de serie con el abonado que lo espera.</li>
+          <li>Si la ONU ya estaba autenticada, se <b>adopta</b> el alta existente sin cortarle el servicio.</li>
+        </ul>
+      </div>
+    </div>
+    <div>
+      <div class="card">
+        <div class="badge">Operación</div>
+        <h3>Diagnóstico y control diario</h3>
+        <ul class="ticks" style="margin-top:2mm">
+          <li>Estado, señal óptica, tiempo en línea y causa de la última caída, por ONU.</li>
+          <li>Ocupación de puertos PON y capacidad disponible por OLT.</li>
+          <li>Corte del puerto CATV por la OLT para los equipos que no exponen TR-069.</li>
+          <li>Reinicio, reprovisión y baja ordenada del equipo.</li>
+        </ul>
+      </div>
+      <div class="card soft" style="margin-top:5mm">
+        <h3>Multi-marca y multi-OLT</h3>
+        <p>Arquitectura de controladores por fabricante sobre sesión SSH real, verificada en producción sobre equipos Huawei, y preparada para sumar otras marcas sin rehacer el módulo.</p>
+      </div>
+    </div>
+  </div>
+  <div class="brandfoot"><img src="vestel-wordmark.png" alt="Vestel"></div><div class="pagenum">SAVES · plataforma ISP · <b>12</b></div>
+</section>
+
+<!-- 13 · TR-069 + PLANTA -->
+<section class="slide">
+  <div class="kicker">Red · 3 de 3</div>
+  <h1 class="title">Hasta dentro de la casa del cliente. Y sobre el mapa.</h1>
+  <div class="rule"></div>
+
+  <div class="grid2">
+    <div class="card">
+      <div class="badge">TR-069 · GenieACS</div>
+      <h3>El equipo del abonado, gestionado en remoto</h3>
+      <ul class="ticks" style="margin-top:2mm">
+        <li><b>Cambio de clave WiFi sin visita:</b> el cliente lo pide por WhatsApp, el sistema lo aplica en el equipo y solo abre una orden si no fue posible.</li>
+        <li>Reinicio remoto y lectura de parámetros para diagnóstico de primer nivel.</li>
+        <li>Corte y restitución del servicio de TV, verificado en operación real.</li>
+        <li>Inventario automático de qué equipo tiene instalado cada abonado.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="badge gold">Planta externa</div>
+      <h3>La red dibujada donde está</h3>
+      <ul class="ticks gold" style="margin-top:2mm">
+        <li>Mapa con abonados, NAPs y técnicos en tiempo real, sobre cartografía abierta y sin licencias por consulta.</li>
+        <li>NAPs con puertos, ocupación y clientes colgados de cada una.</li>
+        <li>VLANs, troncales y equipos activos inventariados.</li>
+        <li>Ruta del día del técnico y reporte de capacidad de red para decidir dónde expandir.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="base" style="margin-top:6mm">
+    <b>Tres capas de red, un solo cliente.</b>
+    <span>Router, OLT y equipo del abonado se operan desde la misma ficha. Cuando alguien llama, quien contesta
+      ve el estado de cuenta, el estado del servicio y la señal óptica en la misma pantalla.</span>
+  </div>
+  <div class="brandfoot"><img src="vestel-wordmark.png" alt="Vestel"></div><div class="pagenum">SAVES · plataforma ISP · <b>13</b></div>
+</section>
+
+<!-- 14 · CAMPO -->
+<section class="slide">
+  <div class="kicker">Operación</div>
+  <h1 class="title">El trabajo de campo, medido y con evidencia.</h1>
+  <div class="rule"></div>
+  <p class="lede">Las órdenes de servicio dejan de ser una lista de pendientes y se convierten en el instrumento
+    con el que se dirige la operación técnica.</p>
+
+  <div class="grid3">
+    <div class="card">
+      <div class="badge">Despacho</div>
+      <h3>La agenda la arma la oficina</h3>
+      <ul class="ticks" style="margin-top:2mm">
+        <li>Reparto del día entre técnicos y orden de las visitas definido por quien despacha.</li>
+        <li>Clases y detalles de orden configurables: instalación, reclamo, incidente, traslado, retiro.</li>
+        <li>Prioridades por rango y separación del rezago histórico.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="badge">Campo</div>
+      <h3>El técnico ve una visita a la vez</h3>
+      <ul class="ticks" style="margin-top:2mm">
+        <li>Turno obligatorio: solo puede abrir la orden que le toca, en el orden asignado.</li>
+        <li>Salida controlada “no se pudo atender” con motivo, que la devuelve a la oficina.</li>
+        <li>Fotos con geolocalización, materiales descargados de su bodega y firma del cliente.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="badge">Medición</div>
+      <h3>Rendimiento sin planillas</h3>
+      <ul class="ticks" style="margin-top:2mm">
+        <li>Puntaje automático de 1 a 5 por tipo de orden, sellado al cerrar y no reescribible.</li>
+        <li>Tablero de re-visita: mide la calidad del trabajo, no el volumen.</li>
+        <li>Reporte de reincidencia por zona, por NAP y por técnico.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="grid2" style="margin-top:6mm">
+    <div class="card soft">
+      <h3>Inventario que se descarga solo</h3>
+      <ul class="ticks" style="margin-top:2mm">
+        <li>Bodega por sede y bodega personal por técnico; cada quien responde por lo suyo.</li>
+        <li>Traspasos con acta en PDF enviada por WhatsApp y cerrada con código del que recibe.</li>
+        <li>Equipos con serial, kardex y transferencias entre sedes con doble firma.</li>
+      </ul>
+    </div>
+    <div class="card soft">
+      <h3>Compras con control real</h3>
+      <ul class="ticks" style="margin-top:2mm">
+        <li>Órdenes de compra con aprobación por umbral y doble firma sobre el PDF.</li>
+        <li>Proveedores, categorías, recepciones parciales y devoluciones.</li>
+        <li>Reglas de reposición y alertas de mínimos.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="brandfoot"><img src="vestel-wordmark.png" alt="Vestel"></div><div class="pagenum">SAVES · plataforma ISP · <b>14</b></div>
+</section>
+
+<!-- 15 · WHATSAPP + IA -->
+<section class="slide">
+  <div class="kicker">Atención</div>
+  <h1 class="title">WhatsApp con agentes de IA que sí resuelven.</h1>
+  <div class="rule"></div>
+  <p class="lede">No es un menú de opciones ni un árbol de respuestas. Son agentes conectados a la operación,
+    con permiso para ejecutar trámites reales sobre el sistema.</p>
+
+  <div class="grid3">
+    <div class="card">
+      <div class="badge">Cliente</div>
+      <h3>Autoservicio 24/7</h3>
+      <ul class="ticks" style="margin-top:2mm">
+        <li>Estado de cuenta, valor a pagar y envío de la factura.</li>
+        <li>Reporte de falla que abre la orden en el sistema.</li>
+        <li>Cambio de clave WiFi aplicado en el equipo.</li>
+        <li>Acuerdos y compromisos de pago.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="badge">Interno</div>
+      <h3>El sistema, por chat</h3>
+      <ul class="ticks" style="margin-top:2mm">
+        <li>Catorce conjuntos de herramientas por área: caja, cartera, red, inventario, tickets, compras, reportes.</li>
+        <li>Cada funcionario solo alcanza lo que su rol le permite: la IA no salta los permisos.</li>
+        <li>Consultas libres sobre los datos, sin programar un informe nuevo.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="badge">Humano</div>
+      <h3>Cuando entra una persona, el bot calla</h3>
+      <ul class="ticks" style="margin-top:2mm">
+        <li>Bandeja de conversaciones para responder a mano.</li>
+        <li>El agente se silencia en ese chat y vuelve al resolverse.</li>
+        <li>Control de la ventana de 24 horas, plantillas aprobadas y campañas masivas.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="grid2" style="margin-top:6mm">
+    <div class="card soft">
+      <h3>Y WhatsApp también es un canal de control</h3>
+      <ul class="ticks" style="margin-top:2mm">
+        <li>Códigos de un solo uso para firmar aprobaciones de compra y actas de traspaso.</li>
+        <li>Cambio de contraseña verificado contra el celular <b>del dueño de la cuenta</b>, no del administrador.</li>
+        <li>Recordatorios de cobro y avisos de corte programados.</li>
+      </ul>
+    </div>
+    <div class="card soft">
+      <h3>Búsqueda en lenguaje natural</h3>
+      <p style="margin-bottom:2mm">Escriba lo que busca como se lo diría a un compañero —“facturas vencidas de la sede norte con más de dos meses”— y el sistema arma el filtro sobre los datos reales, respetando los permisos de quien pregunta.</p>
+    </div>
+  </div>
+  <div class="brandfoot"><img src="vestel-wordmark.png" alt="Vestel"></div><div class="pagenum">SAVES · plataforma ISP · <b>15</b></div>
+</section>
+
+<!-- 16 · REPORTES -->
+<section class="slide">
+  <div class="kicker">Gerencia</div>
+  <h1 class="title">Los números del negocio, todos los días.</h1>
+  <div class="rule"></div>
+  <p class="lede">Veinte reportes de operación y dirección, más un tablero que cambia según quién entra.
+    Sin exportar nada, sin esperar al cierre de mes.</p>
+
+  <div class="grid4">
+    <div class="card soft"><h3>Comercial</h3><ul class="ticks"><li>ARPU por plan y sede</li><li>Altas y retiros</li><li>Estado de clientes</li><li>Ventas por sede</li><li>Permanencia y churn</li></ul></div>
+    <div class="card soft"><h3>Financiero</h3><ul class="ticks"><li>Cartera por edades</li><li>Índice de recaudo</li><li>Recaudo por funcionario</li><li>Ingresos y egresos</li><li>IVA y facturación</li><li>Anulaciones</li></ul></div>
+    <div class="card soft"><h3>Operación</h3><ul class="ticks"><li>Órdenes por tipo y estado</li><li>Rendimiento de técnicos</li><li>Reincidencia de fallas</li><li>Cortes y activaciones</li><li>Actividad de usuarios</li></ul></div>
+    <div class="card soft"><h3>Red</h3><ul class="ticks"><li>Capacidad de red</li><li>Ocupación de NAPs y PON</li><li>Tendencias de crecimiento</li><li>Equipos en campo</li></ul></div>
+  </div>
+
+  <div class="grid2" style="margin-top:6mm">
+    <div class="card">
+      <h3>Tablero según el rol</h3>
+      <p style="margin-bottom:2mm">La gerencia ve el panel ejecutivo con recaudo, cartera, altas y bajas del mes. La cajera ve el estado de su ventanilla y su cierre. El técnico ve su rendimiento. Nadie navega por pantallas que no le sirven.</p>
+    </div>
+    <div class="card">
+      <h3>Histórico que se puede comparar</h3>
+      <p style="margin-bottom:2mm">Foto diaria de los indicadores clave guardada de forma permanente: crecimiento de abonados, recaudo y cartera comparables mes contra mes y año contra año, con más de cuatro años de historia ya cargada.</p>
+    </div>
+  </div>
+  <div class="brandfoot"><img src="vestel-wordmark.png" alt="Vestel"></div><div class="pagenum">SAVES · plataforma ISP · <b>16</b></div>
+</section>
+
+<!-- 17 · SEGURIDAD -->
+<section class="slide">
+  <div class="kicker">Control</div>
+  <h1 class="title">Cada quien ve lo suyo. Y todo queda escrito.</h1>
+  <div class="rule"></div>
+
+  <div class="grid3">
+    <div class="card">
+      <div class="badge">Permisos</div>
+      <h3>188 permisos granulares</h3>
+      <ul class="ticks" style="margin-top:2mm">
+        <li>Constructor de roles: plantillas propias, clonables y editables, sin tocar código.</li>
+        <li>Alcance por sede y por caja: el dato ni siquiera se carga si no le corresponde.</li>
+        <li>Roles del sistema protegidos contra edición accidental.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="badge">Identidad</div>
+      <h3>Acceso verificado</h3>
+      <ul class="ticks" style="margin-top:2mm">
+        <li>Recuperación de contraseña en tres pasos, verificada por código al celular del titular.</li>
+        <li>Firmas críticas —compras, actas, traspasos— confirmadas con código de un solo uso.</li>
+        <li>Funcionarios inactivos ocultos de todo el sistema, sin borrar su historia.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="badge">Auditoría</div>
+      <h3>Rastro completo</h3>
+      <ul class="ticks" style="margin-top:2mm">
+        <li>Registro inmutable de quién hizo qué, cuándo y sobre qué registro.</li>
+        <li>Bitácora aparte para cada acción ejecutada sobre la red.</li>
+        <li>Reporte de actividad por usuario y por módulo.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="grid2" style="margin-top:6mm">
+    <div class="card soft">
+      <h3>Diseñado para trabajar desde el teléfono</h3>
+      <p>Toda la plataforma es responsiva de origen —verificada pantalla por pantalla hasta 320 píxeles de ancho—. El técnico en la calle, el supervisor en la moto y el gerente en el aeropuerto usan el mismo sistema, no una versión recortada.</p>
+    </div>
+    <div class="card soft">
+      <h3>Y con la cara de su empresa</h3>
+      <p>Color de marca y tono de fondo elegibles por usuario con contraste accesible garantizado, logotipo propio en documentos y PDFs, y manuales de uso generados con capturas reales del sistema ya personalizado.</p>
+    </div>
+  </div>
+  <div class="brandfoot"><img src="vestel-wordmark.png" alt="Vestel"></div><div class="pagenum">SAVES · plataforma ISP · <b>17</b></div>
+</section>
+
+<!-- 18 · MIGRACIÓN -->
+<section class="slide">
+  <div class="kicker">Implementación</div>
+  <h1 class="title">Cambiar de sistema sin apagar la empresa.</h1>
+  <div class="rule"></div>
+  <p class="lede">El mayor miedo de un ISP al cambiar de plataforma no es el precio: es el día del corte.
+    SAVES nació resolviendo exactamente ese problema, sobre una operación en vivo.</p>
+
+  <div class="flow" style="margin-top:2mm">
+    <div class="step"><em>Fase 1</em><h4>Migración del histórico</h4><p>Clientes, facturas, pagos, órdenes y equipos se traen completos, no en resumen. Incluye reparación de datos dañados por el sistema anterior.</p></div>
+    <div class="step"><em>Fase 2</em><h4>Operación en paralelo</h4><p>Sincronización bidireccional con el sistema viejo mientras las dos plataformas conviven: lo que se registra en uno aparece en el otro.</p></div>
+    <div class="step"><em>Fase 3</em><h4>Verificación factura a factura</h4><p>Se corre la facturación en paralelo y se compara documento por documento contra el sistema anterior antes de emitir nada real.</p></div>
+    <div class="step"><em>Fase 4</em><h4>Corte controlado</h4><p>El personal ya lleva semanas trabajando en SAVES. El día del cambio se apaga el sistema viejo, no se enciende el nuevo.</p></div>
+  </div>
+
+  <div class="grid2" style="margin-top:7mm">
+    <div class="card">
+      <h3>Cuidados que solo aparecen migrando de verdad</h3>
+      <ul class="ticks" style="margin-top:2mm">
+        <li>Numeración consecutiva separada para que ambos sistemas emitan sin chocar.</li>
+        <li>Propagación de borrados y correcciones en los dos sentidos, para que no queden facturas fantasma inflando la cartera.</li>
+        <li>Los usuarios entran con su misma contraseña de siempre: cero fricción con el personal.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Puesta en marcha acompañada</h3>
+      <ul class="ticks" style="margin-top:2mm">
+        <li>Modo de simulación en todo lo que toca la red o la DIAN: se prueba el flujo completo sin consecuencias.</li>
+        <li>Perfiles de prueba por cargo para capacitar antes del corte.</li>
+        <li>Manuales por rol generados desde el propio sistema, con las capturas de su instalación.</li>
+        <li>Copia de seguridad diaria y migraciones de base de datos versionadas.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="brandfoot"><img src="vestel-wordmark.png" alt="Vestel"></div><div class="pagenum">SAVES · plataforma ISP · <b>18</b></div>
+</section>
+
+<!-- 19 · COMPARATIVA -->
+<section class="slide">
+  <div class="kicker">Por qué SAVES</div>
+  <h1 class="title">Contra lo que hoy usa un ISP.</h1>
+  <div class="rule"></div>
+
+  <table class="cmp">
+    <thead>
+      <tr>
+        <th style="width:26%">Frente</th>
+        <th>Software de gestión ISP genérico</th>
+        <th>Herramienta de red especializada</th>
+        <th style="color:#0e7490">SAVES</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="f">Contabilidad</td>
+        <td class="no">Exporta a un contable externo</td>
+        <td class="no">No aplica</td>
+        <td class="ok"><span class="chk">■</span> Plan de cuentas, libros, cierre y activos fijos adentro</td>
+      </tr>
+      <tr>
+        <td class="f">Red</td>
+        <td class="no">Corte por Mikrotik, poco más</td>
+        <td class="ok">Fuerte en OLT, ciega al negocio</td>
+        <td class="ok"><span class="chk">■</span> Mikrotik + OLT GPON + TR-069, atados al estado de cuenta</td>
+      </tr>
+      <tr>
+        <td class="f">Reconexión al pagar</td>
+        <td class="no">Proceso manual o por lote nocturno</td>
+        <td class="no">No conoce el pago</td>
+        <td class="ok"><span class="chk">■</span> Inmediata, en la misma transacción del recaudo</td>
+      </tr>
+      <tr>
+        <td class="f">Trabajo en campo</td>
+        <td class="no">Ticket sin evidencia ni medición</td>
+        <td class="no">No aplica</td>
+        <td class="ok"><span class="chk">■</span> Agenda, turno, geo-evidencia, material y puntaje</td>
+      </tr>
+      <tr>
+        <td class="f">Atención al cliente</td>
+        <td class="no">Correo y formulario web</td>
+        <td class="no">No aplica</td>
+        <td class="ok"><span class="chk">■</span> WhatsApp con agentes IA que ejecutan trámites reales</td>
+      </tr>
+      <tr>
+        <td class="f">Migración</td>
+        <td class="no">Carga de un CSV y suerte</td>
+        <td class="no">No aplica</td>
+        <td class="ok"><span class="chk">■</span> Histórico completo y convivencia sincronizada con el sistema viejo</td>
+      </tr>
+      <tr>
+        <td class="f">Adaptación</td>
+        <td class="no">Se ajusta usted al software</td>
+        <td class="no">Cerrado</td>
+        <td class="ok"><span class="chk">■</span> Reglas, roles, catálogos y automatizaciones configurables</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="brandfoot"><img src="vestel-wordmark.png" alt="Vestel"></div><div class="pagenum">SAVES · plataforma ISP · <b>19</b></div>
+</section>
+
+<!-- 20 · RAZONES -->
+<section class="slide">
+  <div class="kicker">Por qué SAVES</div>
+  <h1 class="title">Seis razones para decidirse.</h1>
+  <div class="rule"></div>
+
+  <div class="grid3">
+    <div class="card">
+      <span class="num">1</span><b style="font-size:10pt">Está hecho para ISP, no adaptado</b>
+      <p style="margin-top:2.5mm">Cada tabla, cada permiso y cada pantalla existe porque un operador real la necesitó. No hay módulos de otra industria estorbando ni conceptos forzados.</p>
+    </div>
+    <div class="card">
+      <span class="num">2</span><b style="font-size:10pt">Cierra el círculo dinero–red</b>
+      <p style="margin-top:2.5mm">Es la diferencia entre un sistema que informa que el cliente debe y uno que actúa: corta, cobra, recibe el pago y reconecta sin que intervenga nadie.</p>
+    </div>
+    <div class="card">
+      <span class="num">3</span><b style="font-size:10pt">Reemplaza cuatro herramientas</b>
+      <p style="margin-top:2.5mm">Gestión de abonados, software contable, gestor de OLT y mesa de ayuda dejan de ser cuatro contratos, cuatro capacitaciones y cuatro fuentes de verdad distintas.</p>
+    </div>
+    <div class="card">
+      <span class="num">4</span><b style="font-size:10pt">Se implanta sin apagar nada</b>
+      <p style="margin-top:2.5mm">Convivencia sincronizada con el sistema actual, verificación factura a factura y corte cuando usted diga. Sin fin de semana heroico.</p>
+    </div>
+    <div class="card">
+      <span class="num">5</span><b style="font-size:10pt">Prudente por diseño</b>
+      <p style="margin-top:2.5mm">Todo lo que puede dañar algo —red, DIAN, dinero, mensajes masivos— arranca en simulación y se enciende cuando usted lo valide. Los errores caros no se cometen dos veces.</p>
+    </div>
+    <div class="card">
+      <span class="num">6</span><b style="font-size:10pt">Crece con el operador</b>
+      <p style="margin-top:2.5mm">Multi-sede, multi-caja, multi-bodega, multi-router y multi-OLT desde el primer día. Abrir la sede número ocho es configuración, no un proyecto.</p>
+    </div>
+  </div>
+
+  <div class="quotebar" style="margin-top:5mm">
+    <b>El resumen honesto:</b> la mayoría de los ISP no pierde plata por falta de clientes, sino por lo que se
+    escapa entre sistemas —cortes que llegan tarde, cartera que nadie persigue, material que no se descarga,
+    descuentos que no caducan y horas de personal dedicadas a copiar datos de una pantalla a otra.
+    SAVES existe para cerrar esas fugas.
+  </div>
+  <div class="brandfoot"><img src="vestel-wordmark.png" alt="Vestel"></div><div class="pagenum">SAVES · plataforma ISP · <b>20</b></div>
+</section>
+
+<!-- 21 · ARQUITECTURA -->
+<section class="slide">
+  <div class="kicker">Tecnología</div>
+  <h1 class="title">Moderno por dentro, aburrido donde importa.</h1>
+  <div class="rule"></div>
+  <p class="lede">Un ISP no necesita tecnología llamativa: necesita un sistema que no se caiga a fin de mes y
+    que cualquier equipo pueda mantener dentro de cinco años.</p>
+
+  <div class="grid4">
+    <div class="card soft"><h3>Aplicación</h3><ul class="ticks"><li>Interfaz web moderna</li><li>Responsiva de origen</li><li>Modo claro y oscuro</li><li>Sin instalación en equipos</li></ul></div>
+    <div class="card soft"><h3>Servidor</h3><ul class="ticks"><li>API de 627 endpoints</li><li>Procesos supervisados</li><li>Tareas programadas propias</li><li>API pública con llaves</li></ul></div>
+    <div class="card soft"><h3>Datos</h3><ul class="ticks"><li>PostgreSQL, 216 tablas</li><li>Migraciones versionadas</li><li>Índices ajustados a la carga real</li><li>Respaldo diario automático</li></ul></div>
+    <div class="card soft"><h3>Despliegue</h3><ul class="ticks"><li>Servidor propio o nube</li><li>Sus datos, su infraestructura</li><li>Sin costo por consulta a terceros</li><li>Actualizaciones sin cortar servicio</li></ul></div>
+  </div>
+
+  <div class="grid2" style="margin-top:6mm">
+    <div class="card">
+      <h3>Integraciones ya resueltas</h3>
+      <ul class="ticks" style="margin-top:2mm">
+        <li>Proveedor tecnológico de factura electrónica ante la DIAN.</li>
+        <li>Transporte de WhatsApp Business con plantillas aprobadas.</li>
+        <li>Pasarela de pagos en línea y archivos de recaudo bancario.</li>
+        <li>RouterOS, OLT por SSH y GenieACS por su interfaz norte.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Rendimiento medido, no prometido</h3>
+      <ul class="ticks" style="margin-top:2mm">
+        <li>Listados de cientos de miles de facturas con paginación y orden en servidor.</li>
+        <li>Índices compuestos y mantenimiento de base ajustados sobre las tablas grandes de la operación real.</li>
+        <li>Corridas masivas diseñadas para no tumbar la base mientras la gente trabaja.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="brandfoot"><img src="vestel-wordmark.png" alt="Vestel"></div><div class="pagenum">SAVES · plataforma ISP · <b>21</b></div>
+</section>
+
+<!-- 22 · CIERRE -->
+<section class="slide closing">
+  <div class="wash"></div>
+  <div class="inner">
+    <img class="closing-logo" src="vestel-full-white.png" alt="Vestel">
+    <h2>Un ISP.<br>Un solo sistema.<br><span>Una sola verdad.</span></h2>
+    <p>Le proponemos una demostración sobre datos reales: traemos una muestra de su operación, corremos una
+      facturación de prueba y le mostramos el circuito completo —corte, cobro, pago y reconexión— funcionando
+      contra su propia red, en modo simulación.</p>
+    <div class="stripe" style="position:absolute; left:18mm; right:18mm; bottom:20mm; border-top:0.4mm solid rgba(255,255,255,0.16); padding-top:6mm; display:grid; grid-template-columns:1fr 1fr 1fr;">
+      <div><b style="display:block;font-size:12pt;color:#fff">Cobertura</b><small style="font-size:8pt;color:#7e93a4">Comercial · Financiero · Red · Operación</small></div>
+      <div><b style="display:block;font-size:12pt;color:#fff">Implantación</b><small style="font-size:8pt;color:#7e93a4">Sin apagar el sistema actual</small></div>
+      <div><b style="display:block;font-size:12pt;color:#fff">Siguiente paso</b><small style="font-size:8pt;color:#7e93a4">Demostración sobre sus datos</small></div>
+    </div>
+  </div>
+</section>
+
+</body>
+</html>

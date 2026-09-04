@@ -55,6 +55,7 @@ const INV_STATUS_INV = { PAID:'paid', DUE:'due', PARTIAL:'partial', CANCELED:'ca
 const KIND_INV = { RECURRENTE:'Recurrente', FIJA:'Fija', NOTA_CREDITO:'Nota Credito', NOTA_DEBITO:'Nota Debito' };
 const SVC_STATUS_INV = { CORTADO:'Cortado', SUSPENDIDO:'Suspendido' };
 const TX_TYPE_INV = { INCOME:'Income', EXPENSE:'Expense', TRANSFER:'Transfer' };
+const TICKET_STATUS_INV = { REALIZANDO:'Realizando', RESUELTO:'Resuelto', ANULADA:'Anulada', PENDIENTE:'Pendiente' };
 const RET_INV = { RETEFUENTE_SERVICIOS:'Retefuente Servicios', COMPRAS:'Compras',
   PERSONAS_NO_DECLARANTES:'Personas no declarantes', RETEIVA:'Reteiva' };
 const PAY_INV = { CREDITO:'credito', EFECTIVO:'efectivo' };
@@ -112,14 +113,28 @@ const mapItem = (r, iid) => ({
   createdAt: dTime(r.fecha_creacion) || new Date(),
 });
 
-const mapTx = (r, sid, iid) => ({
+/**
+ * `transactions` del legacy → Transaction.
+ *
+ * OJO con `tid`: allá NO siempre es una factura. En los pagos de una orden de compra
+ * (`cat = 'Purchase'`, la misma regla por la que su pantalla busca el comprobante en
+ * `meta_data` type 4) `tid` es el número de la ORDEN, y casarlo a ciegas contra
+ * `invoices.tid` colgaba el egreso de la factura de un cliente que casualmente tenía
+ * ese mismo número: 766 de los 777 pagos de compra estaban así. Por eso el enlace
+ * llega resuelto desde fuera —`oid` = orden— y quien lo resuelve decide cuál de los
+ * dos toca (ver `syncTransactions`).
+ */
+const mapTx = (r, sid, iid, oid) => ({
   legacyId: r.id, cashAccountId: r.acid, accountName: r.account, type: txType(r.type), category: norm(r.cat),
   debit: money(r.debit), credit: money(r.credit), payerName: r.payer,
   subscriberId: sid || null, method: r.method, date: dOnly(r.date) || new Date(0),
-  invoiceId: iid || null, issuerUserId: r.eid || null, note: r.note,
+  invoiceId: iid || null, supplyOrderId: oid || null, issuerUserId: r.eid || null, note: r.note,
   ext: bool(r.ext), bankName: r.nombre_banco, bankId: r.id_banco, status: txStatus(r.estado),
   noShow: bool(r.no_mostrar), payuOrderId: r.id_orden_payu,
 });
+
+/** ¿Este movimiento del legacy es el pago de una orden de compra (y no de una factura)? */
+const esPagoDeCompra = (r) => norm(r.cat) === 'Purchase';
 
 // ---------- filas Prisma → columnas legacy (vuelta) ----------
 /** Subscriber PG → columnas de `customers`. `gid` = Branch.legacyId (sede). */
@@ -199,15 +214,160 @@ const invItem = (it, tid) => ({
   fecha_creacion: toDT(it.createdAt),
 });
 
+/**
+ * Comprobante de un movimiento, para el legacy.
+ *
+ * Allá `transactions` no tiene columna de adjunto NI pantalla que lo muestre (20
+ * columnas, ninguna es un fichero), así que el comprobante que se sube aquí no puede
+ * "reflejarse" tal cual: se le entrega como un ENLACE metido dentro de `note`, que es
+ * el único campo libre que sus vistas sí pintan (views/transactions/view.php).
+ *
+ * El enlace apunta a la ruta pública `/api/treasury/comprobante/:archivo`: quien lo
+ * abre está trabajando en el legacy y no tiene sesión en este sistema. El nombre en
+ * disco es un UUID v4 sorteado al subir, así que la URL no se adivina.
+ */
+const BASE_PUBLICA = (process.env.PUBLIC_BASE_URL || 'https://app.saves.com.co').replace(/\/+$/, '');
+const NOTE_MAX = 255; // `transactions.note` allá es varchar(255)
+
+const urlComprobante = (attach) => `${BASE_PUBLICA}/api/treasury/comprobante/${attach}`;
+
+/** ¿La nota que hay en el legacy ya lleva el enlace de ESTE comprobante? */
+const tieneComprobante = (note, attach) => !!attach && String(note ?? '').includes(urlComprobante(attach));
+
+/**
+ * Nota para el legacy con el enlace pegado al final.
+ *
+ * Si no cabe en los 255 se recorta el TEXTO, nunca el enlace: media URL no abre nada,
+ * mientras que un texto recortado sigue diciendo de qué es el movimiento.
+ */
+const notaConComprobante = (note, attach) => {
+  const base = String(note ?? '').trim();
+  if (!attach) return base.slice(0, NOTE_MAX);
+  const cola = ` | Comprobante: ${urlComprobante(attach)}`;
+  if (cola.length >= NOTE_MAX) return base.slice(0, NOTE_MAX); // enlace absurdamente largo: mejor la nota sola
+  return (base.slice(0, NOTE_MAX - cola.length).trim() + cola).slice(0, NOTE_MAX);
+};
+
 /** Transaction PG → columnas de `transactions`. */
 const invTx = (t, payerid, tid) => ({
   acid: t.cashAccountId ?? 0, account: t.accountName ?? '', type: inv(TX_TYPE_INV)(t.type) ?? 'Income',
   cat: t.category ?? '', debit: Number(t.debit ?? 0), credit: Number(t.credit ?? 0),
   payer: t.payerName ?? '', payerid: payerid ?? 0, method: t.method ?? '', date: toD(t.date),
-  tid: tid ?? 0, eid: t.issuerUserId ?? 0, note: t.note ?? '', ext: t.ext ? 1 : 0,
+  tid: tid ?? 0, eid: t.issuerUserId ?? 0, note: notaConComprobante(t.note, t.attach), ext: t.ext ? 1 : 0,
   nombre_banco: t.bankName ?? '', id_banco: t.bankId ?? 0,
   estado: t.status === 'ANULADA' ? 'Anulada' : null, no_mostrar: t.noShow ? 1 : 0,
   id_orden_payu: t.payuOrderId ?? '',
+});
+
+/**
+ * Orden de servicio (PG) → fila de `tickets` del legacy.
+ *
+ * `cid`, `subject`, `detalle`, `problema`, `section` y `asignado` son NOT NULL allá,
+ * de ahí los `?? ''`. Los textos se recortan a lo que aguanta cada columna: el legacy
+ * es varchar corto (detalle 50, problema 150) y un texto de más aborta el INSERT
+ * entero — perder la cola de un texto es preferible a perder la orden.
+ *
+ * `asignacion_movil` va en 0: las cuadrillas se retiraron del sistema nuevo y allá la
+ * columna sigue existiendo.
+ *
+ * OJO con `asignado`: allá NO es un nombre para leer, es el IDENTIFICADOR por el que el
+ * técnico encuentra su trabajo. El legacy compara `asignado` contra el `username` de
+ * `aauth_users` con igualdad exacta (`Ticket_model::get_ticfiltrado`, y el `where_in`
+ * de los listados), así que empujar el nombre de pila —que es lo que guarda
+ * `Ticket.assigned`, texto libre heredado— deja la orden EN el legacy pero INVISIBLE
+ * para quien tiene que atenderla: 51 órdenes quedaron así. Por eso manda el username
+ * del staff resuelto (`assignedStaff.username`) y sólo cae al texto libre cuando no hay
+ * staff detrás —órdenes viejas importadas, donde ese texto ya ES el username de allá.
+ */
+const corta = (v, n) => { const t = norm(v); return t.length > n ? t.slice(0, n) : t; };
+const invTicket = (t, cid) => ({
+  codigo: t.code ?? 0, subject: corta(t.subject, 255), detalle: corta(t.type, 50),
+  created: toD(t.created), cid, col: t.col ?? null,
+  status: inv(TICKET_STATUS_INV)(t.status) ?? 'Pendiente',
+  problema: corta(t.problem, 150), section: corta(t.section, 1500),
+  fecha_final: toD(t.finalDate), id_invoice: t.invoiceLegacy ?? null, id_factura: t.invoiceBillLegacy ?? null,
+  asignado: corta(t.assignedStaff?.username || t.assigned, 50), par: t.par ?? null, asignacion_movil: 0,
+  nombre_firma: t.signatureName ?? null, cc_firma: t.signatureCc ?? null,
+  parentesco_firma: t.signatureRel ?? null,
+});
+
+// ---------- inventario: PG → legacy ----------
+/**
+ * El inventario baja del legacy desde el 2026-08-25 pero nunca subía: lo que se movía
+ * aquí —una devolución de equipo, el material que gasta un técnico, una orden de compra
+ * aprobada— el legacy no lo veía jamás. Estos mapeos son el camino de vuelta.
+ *
+ * Ojo con los NOT NULL sin `default` de estas tablas (`equipos` los tiene casi todos, y
+ * `purchase` arrastra `eid`/`a2id`/`discstatus`/`term`): MySQL en modo estricto rechaza
+ * el INSERT entero si falta uno, así que aquí se les da valor explícito aunque en Nexus
+ * el concepto no exista.
+ */
+
+/** Los únicos valores que acepta `purchase.status` (es un ENUM allá). */
+const PURCHASE_STATUS = new Set(['pendiente', 'cancelado', 'abonado', 'recibido',
+  'recibido parcial', 'finalizado', 'anulado', 'aprobado']);
+/** Ídem `products.tipo_servicio` y `products.pertence_a_tv_o_net`. */
+const SERVICE_TYPE = new Set(['Fijo', 'Recurrente']);
+const TV_O_NET = new Set(['Tv', 'Internet']);
+/** Ídem `tipo_retencion`, compartido por `purchase` y `purchase_items`. */
+const RETENCION = new Set(['Retefuente Servicios', 'Compras', 'Personas no declarantes', 'Reteiva']);
+/** Un valor fuera del ENUM tumba la fila entera: se manda NULL antes que romper. */
+const enumOnly = (conjunto) => (v) => (conjunto.has(norm(v)) ? norm(v) : null);
+const entero = (v) => Math.round(num(v));
+
+/** Material PG → columnas de `products`. `pcat`/`warehouse` van con el legacyId de allá. */
+const invMaterial = (m) => ({
+  pcat: m.categoryLegacy ?? 1, warehouse: m.warehouseLegacy ?? 1, sede: m.branchRef ?? 0,
+  product_name: corta(m.name, 50) || 'Material', product_code: corta(m.code, 255),
+  product_price: entero(m.price), fproduct_price: entero(m.cost),
+  taxrate: entero(m.taxRate), disrate: entero(m.discRate),
+  qty: entero(m.qty), product_des: norm(m.description), alert: m.alert ?? 0,
+  tipo_servicio: enumOnly(SERVICE_TYPE)(m.serviceType),
+  pertence_a_tv_o_net: enumOnly(TV_O_NET)(m.tvOrNet),
+});
+
+/**
+ * Equipment PG → columnas de `equipos`.
+ *
+ * `llegada` y `final` son DATE NOT NULL allá y aquí pueden venir vacías (un equipo dado
+ * de alta en Nexus no siempre tiene fecha de llegada). Se rellenan con la fecha de hoy:
+ * inventarse un 0000-00-00 rompería cualquier consulta por rango del legacy.
+ */
+const invEquipo = (e, hoy) => ({
+  codigo: e.code ?? 0, proveedor: e.supplierLegacy ?? 0, almacen: e.warehouseLegacy ?? 0,
+  mac: corta(e.mac, 100), serial: corta(e.serial, 100),
+  llegada: toD(e.arrival) || hoy, final: toD(e.endDate) || hoy,
+  marca: corta(e.brand, 20), t_instalacion: corta(e.installType, 10),
+  puerto: e.port ?? null, vlan: e.vlan ?? null, nat: e.nat ?? null,
+  asignado: corta(e.assignedRaw, 50), estado: corta(e.status, 16) || 'Bodega',
+  observacion: corta(e.observation, 200), master: corta(e.master, 150),
+  imagen: corta(e.image, 100), metros: e.meters ?? null, accesorios: corta(e.accessories, 20),
+  id_genieacs: corta(e.genieacsId, 500),
+});
+
+/** SupplyOrder PG → columnas de `purchase`. `csd` = Supplier.legacyId. */
+const invOrden = (o, csd, hoy) => ({
+  tid: o.tid, csd: csd ?? 0,
+  invoicedate: toD(o.orderDate) || hoy, invoiceduedate: toD(o.dueDate) || toD(o.orderDate) || hoy,
+  subtotal: num(o.subtotal), shipping: num(o.shipping), discount: num(o.discount),
+  tax: num(o.tax), total: num(o.total), pamnt: num(o.paidAmount),
+  status: enumOnly(PURCHASE_STATUS)(o.status) || 'pendiente',
+  idcat: corta(o.categoryRef, 50), notes: corta(o.notes, 255), refer: corta(o.branchRef, 20),
+  items: o.itemsCount ?? 0, almacen_seleccionado: o.warehouseRef ?? null,
+  recibe: o.receivedBy ?? 0, fcha_recibido: toDT(o.receivedAt),
+  tipo_retencion: enumOnly(RETENCION)(o.retentionType), retencion: num(o.retention),
+  // Sin equivalente en Nexus, pero NOT NULL allá: el emisor y los dos aprobadores del
+  // flujo del legacy, el descuento por línea y el plazo. Cero es su "sin valor".
+  eid: 0, aid: 0, a2id: 0, discstatus: 0, term: 0,
+});
+
+/** SupplyOrderItem PG → columnas de `purchase_items`. El puente es el `tid` de la orden. */
+const invOrdenItem = (it, tid) => ({
+  tid, pid: it.materialLegacy ?? 0, product: corta(it.product, 255),
+  qty: entero(it.qty), price: num(it.price), tax: num(it.taxRate), discount: num(it.discount),
+  subtotal: num(it.subtotal), totaltax: num(it.taxTotal), totaldiscount: num(it.discountTotal),
+  product_des: norm(it.description), qty_en_almacen: entero(it.receivedQty),
+  tipo_retencion: null,
 });
 
 // ---------- comparación (misma en ambas direcciones) ----------
@@ -232,7 +392,7 @@ function sameVal(a, b) {
   return String(a) === String(b);
 }
 // Decimal de Prisma llega como objeto: compararlo numéricamente
-const MONEY_KEYS = new Set(['balance','debitCache','creditCache','subtotal','shipping','discount','tax','total','paidAmount','debit','credit','price','taxRate','taxTotal','discountTotal','qty']);
+const MONEY_KEYS = new Set(['balance','debitCache','creditCache','subtotal','shipping','discount','tax','total','paidAmount','debit','credit','price','taxRate','taxTotal','discountTotal','qty','cost','discRate']);
 
 /**
  * ¿La única diferencia es que el legacy perdió la Ñ (o una tilde) y nosotros la
@@ -267,7 +427,9 @@ module.exports = {
   norm, bool, dOnly, dTime, money, cleanEmail, toD, toDT,
   subStatus, ron, invStatus, invKind, svcStatus, txType, txStatus, tech, ret, eiType, payMethod,
   SUB_STATUS_INV, RON_INV, INV_STATUS_INV, KIND_INV, SVC_STATUS_INV, TX_TYPE_INV, RET_INV, PAY_INV, inv,
-  mapCustomer, mapInvoice, mapItem, mapTx,
-  invCustomer, CUSTOMER_FIELD2COLS, invInvoice, invItem, invTx,
+  mapCustomer, mapInvoice, mapItem, mapTx, esPagoDeCompra,
+  invCustomer, CUSTOMER_FIELD2COLS, invInvoice, invItem, invTx, invTicket, TICKET_STATUS_INV,
+  invMaterial, invEquipo, invOrden, invOrdenItem,
+  urlComprobante, tieneComprobante, notaConComprobante, NOTE_MAX,
   num, stableJson, sameVal, MONEY_KEYS, diffKeys,
 };

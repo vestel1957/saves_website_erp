@@ -57,6 +57,8 @@ serviceOrderPdf(salida('3-orden-servicio.pdf'), {
   status: 'FINALIZADA', priority: 'Media',
   created: new Date(), finalDate: new Date(),
   technician: 'Luiz Barrera',
+  generadaPor: 'Sonia Marcela Rojas',
+  traslado: null,
   problem: 'El cliente reporta que la television no da senal desde el corte por mora. Se verifica el puerto CATV en la ONT y se restablece el servicio.',
   section: 'Se deja funcionando y se explica al cliente la fecha de pago.',
   subscriber: {

@@ -32,7 +32,7 @@ function toolsets() {
   const cliente = new ClienteToolset(doble(), doble(), doble(), doble(), doble(), doble(), doble());
   const publico = new PublicoToolset(doble(), doble(), doble());
   const comercial = new ComercialToolset(doble(), doble(), doble());
-  const tramites = new TramitesToolset(doble(), doble(), doble());
+  const tramites = new TramitesToolset(doble(), doble(), doble(), doble());
   return { cliente, publico, comercial, tramites };
 }
 

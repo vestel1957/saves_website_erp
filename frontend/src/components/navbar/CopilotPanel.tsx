@@ -72,7 +72,7 @@ export function CopilotPanel() {
 
       {/* panel */}
       <aside
-        className={`fixed right-0 top-0 z-[81] flex h-screen w-full max-w-[88vw] flex-col border-l border-border-subtle bg-surface shadow-2xl transition-transform duration-300 sm:w-[380px] sm:max-w-[380px] ${
+        className={`fixed right-0 top-0 z-[81] flex h-dvh w-full max-w-[88vw] flex-col border-l border-border-subtle bg-surface shadow-2xl transition-transform duration-300 sm:w-[380px] sm:max-w-[380px] ${
           open ? "translate-x-0" : "translate-x-full"
         }`}
       >

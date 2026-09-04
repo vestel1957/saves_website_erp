@@ -77,6 +77,14 @@ export class CronController {
     return this.cron.runLegacyWriteback({ manual: true, user });
   }
 
+  /**
+   * Cuadra la caja de este sistema contra la del legacy y reporta los pagos que allá
+   * se borraron. Disparo manual del mismo trabajo que corre a diario a las 21:00.
+   */
+  runConciliacionCaja(user: AuthUser) {
+    return this.cron.runConciliacionCaja({ manual: true, user });
+  }
+
   /** Deriva entre la BD viva del legacy (MySQL) y este sistema: ¿van de la mano? */
   legacyDrift() {
     return this.cron.legacyDrift();

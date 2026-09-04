@@ -6,6 +6,7 @@ import { Icon } from "../Icon";
 import { commandItems, type CommandItem } from "@/lib/nav";
 import { toast } from "../ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
+import { ubicacionDe } from "@/lib/subscribers";
 
 export const OPEN_COMMAND_EVENT = "nexus:command-palette";
 
@@ -19,6 +20,8 @@ type SubHit = {
   phone: string | null;
   status: string | null;
   branch: string | null;
+  neighborhood: string | null;
+  city: string | null;
 };
 
 /** Un resultado de la búsqueda con IA (lo arma el backend, ya clicable). */
@@ -28,6 +31,8 @@ type AiHit = {
   href: string;
   title: string;
   subtitle: string;
+  /** Dónde vive el cliente (barrio · municipio). Solo lo traen los abonados. */
+  place?: string | null;
   badge?: string | null;
 };
 
@@ -321,6 +326,12 @@ export function CommandPalette() {
                       <span className="flex min-w-0 flex-1 flex-col">
                         <span className="truncate text-[13px] font-medium text-text-primary">{entry.hit.title}</span>
                         <span className="truncate text-[11px] text-text-tertiary">{entry.hit.subtitle}</span>
+                        {entry.hit.place && (
+                          <span className="truncate text-[11px] text-text-tertiary">
+                            <Icon name="map-pin" size={10} className="mr-1 inline align-[-1px]" />
+                            {entry.hit.place}
+                          </span>
+                        )}
                       </span>
                       {entry.hit.badge && (
                         <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-text-tertiary">
@@ -343,6 +354,16 @@ export function CommandPalette() {
                           {entry.sub.docNumber && ` · ${entry.sub.docType ?? ""} ${entry.sub.docNumber}`}
                           {entry.sub.phone && ` · ${entry.sub.phone}`}
                         </span>
+                        {/* Dónde vive, en su propio renglón: quien busca "María
+                            González" y recibe cuatro, distingue por el barrio.
+                            Apilado y no en la línea de arriba porque ésa ya se
+                            trunca con documento y teléfono. */}
+                        {ubicacionDe(entry.sub) && (
+                          <span className="truncate text-[11px] text-text-tertiary">
+                            <Icon name="map-pin" size={10} className="mr-1 inline align-[-1px]" />
+                            {ubicacionDe(entry.sub)}
+                          </span>
+                        )}
                       </span>
                       {entry.sub.status && (
                         <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-text-tertiary">

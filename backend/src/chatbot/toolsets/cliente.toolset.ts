@@ -325,10 +325,16 @@ export class ClienteToolset implements Toolset {
    */
   private async enviarPazYSalvo(id: string, ctx: ToolContext): Promise<string> {
     const doc = await this.docs.pazYSalvo(id);
-    if (!doc.alDia) {
-      return `No se puede expedir el paz y salvo: la cuenta tiene ${cop(doc.saldo)} pendiente(s). ` +
-        'Explícaselo con tacto, dile el monto exacto y ofrécele el estado de cuenta o el PDF de la factura ' +
-        'para que vea el detalle. NO le mandes el certificado.';
+    if (!doc.puedeEmitir) {
+      // Cuatro requisitos: estar al día, haber devuelto el equipo, haber entregado la
+      // carta de retiro o suspensión y que esa orden esté cerrada. El motivo va
+      // literal para que el modelo no se invente cuál falta.
+      return `No se puede expedir el paz y salvo porque ${doc.motivosTexto}. ` +
+        'Explícaselo con tacto y con el dato exacto. Si es plata, ofrécele el estado de cuenta o el PDF '
+        + 'de la factura para que vea el detalle; si es el equipo, dile que lo lleve a la oficina y que '
+        + 'apenas quede registrada la entrega se le expide; si es la carta de retiro o la orden sin '
+        + 'cerrar, dile que eso lo tramita la oficina y que se le expide en cuanto quede listo. '
+        + 'NO le mandes el certificado.';
     }
     return enviarDoc(ctx, doc);
   }

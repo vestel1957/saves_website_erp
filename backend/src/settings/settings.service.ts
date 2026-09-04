@@ -32,6 +32,14 @@ export const SETTING_DEFS: SettingDef[] = [
   { key: 'smtp.from', group: 'smtp', label: 'Remitente (From)', placeholder: 'Vestel <no-reply@vestel.com.co>' },
   { key: 'smtp.secure', group: 'smtp', label: 'Conexión segura TLS/SSL', default: 'false', placeholder: 'true | false' },
   { key: 'billing.dueDay', group: 'billing', label: 'Día de vencimiento de facturas (1-28)', default: '20', placeholder: '20' },
+  // Los días que quedan del mes al devolver un servicio que venía cortado desde antes
+  // de la corrida: las órdenes "…2" del legacy. `informe` calcula y lo deja en el log
+  // sin tocar la factura, para poder contrastarlo antes de cobrar de verdad.
+  { key: 'billing.prorrateoReconexion', group: 'billing', label: 'Al reconectar: cobrar los días que quedan del mes (prorrateo)', default: 'on', placeholder: 'on | informe | off' },
+  // Lo que se le rebaja al que paga en ventanilla un mes que aún no se ha facturado.
+  // No es una promoción: la promo se aplica a una factura y esa factura todavía no
+  // existe. Ver `billing/anticipos.ts` → `concederDescuentosAdelantados`.
+  { key: 'billing.advanceDiscountPct', group: 'billing', label: 'Descuento por pagar un mes por adelantado (%)', default: '5', placeholder: '5' },
   { key: 'network.mikrotikLive', group: 'red', label: 'Ejecutar cortes/reconexiones REALES en Mikrotik', default: 'false', placeholder: 'true | false' },
   { key: 'network.oltLive', group: 'red', label: 'Ejecutar aprovisionamiento REAL en OLT', default: 'false', placeholder: 'true | false' },
   { key: 'network.oltAutoProvision', group: 'red', label: 'Auto-autenticar ONUs de la cola cuando aparezcan (requiere OLT en modo real)', default: 'false', placeholder: 'true | false' },

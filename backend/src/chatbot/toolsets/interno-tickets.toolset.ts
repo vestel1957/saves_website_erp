@@ -254,7 +254,11 @@ export class InternoTicketsToolset implements Toolset {
 
   private async crear(input: Record<string, unknown>, ctx: ToolContext): Promise<string> {
     if (ctx.committing) {
-      const r = await this.write.createTicket(input as any, authUserOf(ctx.user));
+      // Igual que en los trámites del cliente: por chat no hay casillas de dirección
+      // ni catálogo de planes delante, así que un traslado abierto por aquí nace sin
+      // destino y sin cargo, y una orden de megas sin el plan destino — las dos se
+      // completan desde la web, que es donde se capturan.
+      const r = await this.write.createTicket(input as any, authUserOf(ctx.user), { destinoOpcional: true, planOpcional: true });
       await ctx.audit({
         userId: ctx.user.id, action: 'support.ticket.create',
         summary: `Ticket #${r.code} creado por WhatsApp`, detail: { ticketId: r.id },

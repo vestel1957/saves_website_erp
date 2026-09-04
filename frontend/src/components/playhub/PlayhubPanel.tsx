@@ -12,6 +12,7 @@ import { mensajeDeError } from "@/lib/errores";
 
 type CatalogItem = { code: string; name: string; assignable: boolean; category: string };
 type LocalSub = { id: string; productId: string | null; productName: string | null; voucher: string | null; syncedAt: string | null };
+type Elegibilidad = { megas: number; plan: string | null; minMegas: number; elegible: boolean };
 
 /**
  * Panel de PlayHub en la ficha del cliente: suscripciones locales, alta/baja de
@@ -26,16 +27,18 @@ export function PlayhubPanel({ subscriberId, email }: { subscriberId: string; em
   const [product, setProduct] = useState("");
   const [busy, setBusy] = useState(false);
   const [toUnsub, setToUnsub] = useState<LocalSub | null>(null);
+  const [eleg, setEleg] = useState<Elegibilidad | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [st, cat, loc] = await Promise.all([
+      const [st, cat, loc, el] = await Promise.all([
         authFetch("/playhub/status").then((r) => (r.ok ? r.json() : null)),
         authFetch("/playhub/catalog").then((r) => (r.ok ? r.json() : [])),
         authFetch(`/playhub/subscribers/${subscriberId}/local`).then((r) => (r.ok ? r.json() : [])),
+        authFetch(`/playhub/subscribers/${subscriberId}/eligibility`).then((r) => (r.ok ? r.json() : null)),
       ]);
-      setStatus(st); setCatalog(cat); setLocal(loc);
+      setStatus(st); setCatalog(cat); setLocal(loc); setEleg(el);
     } finally { setLoading(false); }
   }, [authFetch, subscriberId]);
   useEffect(() => { void load(); }, [load]);
@@ -88,6 +91,13 @@ export function PlayhubPanel({ subscriberId, email }: { subscriberId: string; em
         </div>
       </div>
 
+      {eleg && !eleg.elegible && (
+        <p className="rounded-lg border border-warning-line bg-warning-soft px-3 py-2 text-[12px] text-warning-text">
+          PlayHub sólo puede asignarse con plan de internet de {eleg.minMegas} Megas en adelante.
+          Plan actual: <b>{eleg.plan ?? "sin internet"}</b>{eleg.megas > 0 ? ` (${eleg.megas} Megas)` : ""}.
+        </p>
+      )}
+
       {!email?.trim() && (
         <p className="rounded-lg border border-warning-line bg-warning-soft px-3 py-2 text-[12px] text-warning-text">
           El cliente no tiene email. El login de PlayHub es el email, así que debes cargarlo antes de suscribir.
@@ -102,7 +112,7 @@ export function PlayhubPanel({ subscriberId, email }: { subscriberId: string; em
             {assignable.map((c) => <option key={c.code} value={c.code}>{c.code} · {c.name}</option>)}
           </Select>
         </div>
-        <Button size="sm" disabled={busy || !product || !email?.trim()} onClick={subscribe}><Icon name="plus" size={13} /> Suscribir</Button>
+        <Button size="sm" disabled={busy || !product || !email?.trim() || (!!eleg && !eleg.elegible)} onClick={subscribe}><Icon name="plus" size={13} /> Suscribir</Button>
       </div>
 
       <div>

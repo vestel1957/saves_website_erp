@@ -48,6 +48,13 @@ const JOB_LABEL: Record<string, string> = {
   // 15 minutos por detrás del legacy. Sólo deja rastro cuando trae algo.
   LEGACY_SYNC_CAJA: "Sincronización de caja (ligera)",
   LEGACY_WRITEBACK: "Retro-sync hacia legacy",
+  // Cuadra nuestra caja contra la del legacy. Existe porque el legacy borra pagos sin
+  // dejar rastro y su cierre queda corto: el 24-ago fueron 2,6 M en Villanueva.
+  CONCILIACION_CAJA: "Conciliación de caja",
+  // La orden de instalación ya no nace en el alta: nace cuando el cliente paga su
+  // factura de afiliación. Lo que se cobra aquí la abre al instante; esta pasada
+  // recoge lo que se cobró en el legacy (llega por el sync, sin evento).
+  INSTALACIONES_PAGADAS: "Instalaciones ya pagadas",
 };
 
 export default function AutomatizacionesPage() {
@@ -108,7 +115,7 @@ export default function AutomatizacionesPage() {
     finally { setBusy(null); }
   }
 
-  async function run(job: "recurring-billing" | "cartera" | "legacy-sync" | "legacy-writeback", body?: object) {
+  async function run(job: "recurring-billing" | "cartera" | "legacy-sync" | "legacy-writeback" | "conciliacion-caja", body?: object) {
     setBusy(job);
     try {
       const res = await authFetch(`/cron/run/${job}`, { method: "POST", body: body ? JSON.stringify(body) : undefined });
@@ -116,7 +123,7 @@ export default function AutomatizacionesPage() {
       if (!res.ok || data?.ok === false) { toast(data?.error ?? data?.message ?? "Error al ejecutar", "x"); return; }
       if (job === "recurring-billing") toast(`Generadas ${data.generated} · omitidas ${data.skipped}`, "check");
       else if (job === "legacy-sync") toast(`Sincronizado: +${data.transactions?.nuevas ?? 0} trans · +${data.recibos?.nuevos ?? 0} recibos · ~${data.invoices?.actualizadas ?? 0} facturas`, "check");
-      else if (job === "legacy-writeback") toast(data.dry ? `Plan (seco): ${(data.customers?.insertados ?? 0) + (data.invoices?.insertadas ?? 0) + (data.transactions?.insertadas ?? 0)} filas por empujar` : `Empujado al legacy: +${data.transactions?.insertadas ?? 0} trans · +${data.invoices?.insertadas ?? 0} facturas`, "check");
+      else if (job === "legacy-writeback") toast(data.dry ? `Plan (seco): ${(data.customers?.insertados ?? 0) + (data.invoices?.insertadas ?? 0) + (data.transactions?.insertadas ?? 0) + (data.tickets?.insertadas ?? 0)} filas por empujar` : `Empujado al legacy: +${data.transactions?.insertadas ?? 0} trans · +${data.invoices?.insertadas ?? 0} facturas · +${data.tickets?.insertadas ?? 0} órdenes`, "check");
       // En modo legacy-activo la tarea no escribe (el sync devolvería el estado):
       // se informa a cuántos les daría, para no leer "0 movidos" como "no hay morosos".
       else if (data.soloInforme) toast(`${data.candidatos} abonados deben más de ${data.maxPendientes} facturas. No se movieron: el estado lo manda el legacy.`, "info");
@@ -153,7 +160,7 @@ export default function AutomatizacionesPage() {
 
       {/* Tarjetas por tarea */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        {["RECURRING_BILLING", "CARTERA", "EXCHANGE_RATE", "LEGACY_SYNC", "LEGACY_WRITEBACK"].map((job) => {
+        {["RECURRING_BILLING", "CARTERA", "EXCHANGE_RATE", "LEGACY_SYNC", "LEGACY_WRITEBACK", "CONCILIACION_CAJA", "INSTALACIONES_PAGADAS"].map((job) => {
           const last = status?.lastRuns?.[job] ?? null;
           return (
             <div key={job} className="rounded-xl border border-border-subtle bg-surface p-4">
@@ -186,6 +193,20 @@ export default function AutomatizacionesPage() {
                   onClick={() => run("legacy-sync")}>
                   {busy === "legacy-sync" ? "Sincronizando…" : "Sincronizar ahora"}
                 </Button>
+              )}
+              {job === "CONCILIACION_CAJA" && (
+                <>
+                  <p className="mt-1 text-[11px] text-text-tertiary">
+                    Busca pagos que el legacy borró de su libro y que aquí siguen contados. Sólo avisa: no toca ninguna de las dos bases.
+                  </p>
+                  <Button className="mt-3 w-full" variant="secondary" disabled={busy !== null}
+                    onClick={() => run("conciliacion-caja")}>
+                    {busy === "conciliacion-caja" ? "Cuadrando…" : "Cuadrar ahora"}
+                  </Button>
+                </>
+              )}
+              {job === "INSTALACIONES_PAGADAS" && (
+                <p className="mt-3 text-[12px] italic text-text-tertiary">Corre sola cada 5 minutos; no hay nada que disparar a mano.</p>
               )}
               {job === "LEGACY_WRITEBACK" && (
                 <>

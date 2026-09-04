@@ -134,7 +134,7 @@ export class InternoFacturacionToolset implements Toolset {
       case 'cartera_por_edades':
         return safe(() => this.edades());
       case 'notas_credito':
-        return safe(() => this.notas(input));
+        return safe(() => this.notas(input, ctx));
       case 'facturacion_recurrente':
         return safe(() => this.recurrente());
       default:
@@ -218,11 +218,13 @@ export class InternoFacturacionToolset implements Toolset {
     ].join('\n');
   }
 
-  private async notas(input: Record<string, unknown>): Promise<string> {
+  private async notas(input: Record<string, unknown>, ctx: ToolContext): Promise<string> {
+    // Con el AuthUser real, para que el listado quede acotado a las sedes de quien
+    // pregunta (igual que `buscar`).
     const res: any = await this.facturas.listNotes({
       search: input.q ? String(input.q) : undefined,
       pageSize: 8,
-    });
+    }, authUserOf(ctx.user));
     if (!res.items?.length) return 'No hay notas crédito o débito con esos criterios.';
     const lineas = res.items.map(
       (n: any) => `• Nota ${n.type} de ${cop(n.amount)} — ${n.subscriber} (factura #${n.tid ?? '—'})` +

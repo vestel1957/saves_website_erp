@@ -262,21 +262,32 @@ export class ChatbotDocsService {
   /**
    * Certificado de paz y salvo.
    *
-   * Devuelve además `alDia`: el generador también sabe redactar el certificado en
-   * negativo ("NO se encuentra a paz y salvo"), y quien pide el documento por chat
-   * decide si eso se manda o si es mejor explicar la deuda con palabras.
+   * Puede NO haber documento: el certificado exige los cuatro requisitos —al día,
+   * equipo devuelto, carta de retiro o suspensión entregada y esa orden ya cerrada
+   * (ver `SubscribersService.statement`)—. En ese caso no se arma ningún PDF y
+   * se devuelven los motivos para que quien llamó se lo explique con palabras — antes
+   * el generador redactaba el certificado en negativo y se acababa mandando por
+   * WhatsApp un papel con membrete diciendo que el cliente debe.
    */
-  async pazYSalvo(subscriberId: string, user?: AuthUser): Promise<ChatDoc & { alDia: boolean; saldo: number }> {
+  async pazYSalvo(subscriberId: string, user?: AuthUser): Promise<
+    | { puedeEmitir: false; motivos: string[]; motivosTexto: string; alDia: boolean; saldo: number; equipos: number }
+    | (ChatDoc & { puedeEmitir: true; motivos: string[]; motivosTexto: string; alDia: boolean; saldo: number; equipos: number })
+  > {
     const st: any = await this.subscribers.statement(subscriberId, user);
-    const data = await pdfToBuffer((res) => pazYSalvoPdf(res, st));
-    return {
-      data,
-      fileName: `paz-y-salvo-${st.subscriber.abonado}.pdf`,
-      caption: st.pazysalvo
-        ? `Paz y salvo · ${st.subscriber.name} (abonado ${st.subscriber.abonado})`
-        : `Estado de cartera · ${st.subscriber.name}: saldo pendiente ${cop(st.balance)}`,
-      alDia: !!st.pazysalvo,
+    const base = {
+      motivos: (st.motivosPazYSalvo ?? []) as string[],
+      motivosTexto: (st.motivosPazYSalvoTexto ?? '') as string,
+      alDia: !!st.alDia,
       saldo: Number(st.balance) || 0,
+      equipos: (st.equiposPendientes ?? []).length as number,
+    };
+    if (!st.puedeEmitirPazYSalvo) return { puedeEmitir: false, ...base };
+    return {
+      puedeEmitir: true,
+      ...base,
+      data: await pdfToBuffer((res) => pazYSalvoPdf(res, st)),
+      fileName: `paz-y-salvo-${st.subscriber.abonado}.pdf`,
+      caption: `Paz y salvo · ${st.subscriber.name} (abonado ${st.subscriber.abonado})`,
     };
   }
 

@@ -5,7 +5,7 @@
  * controlador. Cablea HTTP -> método: extrae los argumentos de `req` y llama.
  * La lógica sigue viviendo en CronController, que ya no lleva decoradores.
  *
- * Endpoints: 10
+ * Endpoints: 11
  */
 import { crearRouter, manejar } from '../core/http/ruta';
 import { validar } from '../core/http/validar';
@@ -40,6 +40,14 @@ cronRouter.post(
   exigirArea('contabilidad', 'sistemas'),
   exigirPermisos(APP_PERMISSIONS.CRON_RUN),
   manejar((req) => cron.runCartera(usuarioDe(req))),
+);
+
+cronRouter.post(
+  '/run/conciliacion-caja',
+  autenticar,
+  exigirArea('contabilidad', 'sistemas'),
+  exigirPermisos(APP_PERMISSIONS.CRON_RUN),
+  manejar((req) => cron.runConciliacionCaja(usuarioDe(req))),
 );
 
 cronRouter.post(

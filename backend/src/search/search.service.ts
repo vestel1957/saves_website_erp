@@ -4,6 +4,7 @@ import { SubscribersService } from '../subscribers/subscribers.service';
 import { BillingService } from '../billing/billing.service';
 import type { AuthUser } from '../auth/current-user.decorator';
 import { SUPERADMIN_PERMISSION } from '../auth/permissions.catalog';
+import { ubicacionDe } from '../common/subscriber-address';
 
 /**
  * Búsqueda con IA para el ⌘K: traduce una frase en español natural
@@ -31,6 +32,8 @@ export type SearchHit = {
   href: string;
   title: string;
   subtitle: string;
+  /** Dónde vive (barrio · municipio). Solo lo llevan los abonados. */
+  place?: string | null;
   badge?: string | null;
 };
 
@@ -206,6 +209,9 @@ export class SearchService {
       ]
         .filter(Boolean)
         .join(' · '),
+      // En renglón aparte y no pegado al de arriba: esa línea ya se trunca con
+      // documento y teléfono, y el barrio es justo lo que desempata homónimos.
+      place: ubicacionDe(s) || null,
       badge: s.status ? String(s.status).toLowerCase() : null,
     }));
   }

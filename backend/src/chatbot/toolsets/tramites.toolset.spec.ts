@@ -24,6 +24,8 @@ function ficha(over: Partial<{ status: string; services: any[]; workOrders: any[
 type Dobles = {
   detalle?: ReturnType<typeof ficha>;
   deuda?: number;
+  /** Qué contesta el ACS al intento de cambiar el WiFi en el equipo del cliente. */
+  wifi?: { ok: boolean; resultado: string; detalle: string; redes?: string[] } | Error;
 };
 
 function armar(d: Dobles = {}) {
@@ -43,8 +45,16 @@ function armar(d: Dobles = {}) {
       return { id: 'tk-2', code: 5002 };
     }),
   };
-  const toolset = new TramitesToolset(subscribers as any, cobranzas as any, write as any);
-  return { toolset, creados, leads, write };
+  const genieacs = {
+    setWifiBySubscriber: jest.fn(async () => {
+      // Por defecto el equipo no está en el ACS: es el caso de 9 de cada 10 abonados.
+      const r = d.wifi ?? { ok: false, resultado: 'SIN_EQUIPO', detalle: 'El equipo del abonado no está en el ACS.' };
+      if (r instanceof Error) throw r;
+      return r;
+    }),
+  };
+  const toolset = new TramitesToolset(subscribers as any, cobranzas as any, write as any, genieacs as any);
+  return { toolset, creados, leads, write, genieacs };
 }
 
 const CLIENTE: ChatIdentity = { kind: 'cliente', subscriberId: 'sub-1', abonado: 1234 };
@@ -417,6 +427,102 @@ describe('el conocimiento comercial sale del catálogo, no de la memoria del mod
     const { ctx: c } = ctx(CLIENTE);
     const r = await registrar(toolset, c, { tipo: 'cancelar_todo', descripcion: 'x' });
     expect(r).toContain('No conozco ese trámite');
+    expect(creados).toHaveLength(0);
+  });
+});
+
+/**
+ * El cambio de WiFi es el único trámite que el bot puede RESOLVER, no solo radicar:
+ * si el equipo del cliente está en el ACS y contesta, la clave cambia en el momento.
+ *
+ * Lo que se fija aquí es que las dos ramas sean honestas. Cuando se aplica, no puede
+ * quedar una orden abierta para que un técnico vaya a hacer algo que ya está hecho.
+ * Y cuando NO se aplica —que es lo normal: solo 605 de 5.097 abonados activos tienen
+ * equipo en el ACS— tiene que quedar la orden de siempre, con el motivo dentro para
+ * que el técnico no repita el intento a ciegas.
+ */
+describe('cambio de WiFi — primero el equipo, y la orden solo si no se pudo', () => {
+  const DATOS = { tipo: 'cambio_wifi', descripcion: 'quiere otra clave', datos: { wifi_clave: 'ClaveNueva2026' } };
+
+  it('si el equipo lo aplica, NO se abre orden y se le explica que debe reconectar sus aparatos', async () => {
+    const { toolset, creados, genieacs } = armar({
+      wifi: { ok: true, resultado: 'APLICADO', detalle: 'Aplicado en el equipo (2 redes).', redes: ['CASA: clave nueva'] },
+    });
+    const { ctx: c } = ctx(CLIENTE, true);
+
+    const r = await registrar(toolset, c, DATOS);
+
+    expect(genieacs.setWifiBySubscriber).toHaveBeenCalledWith(
+      'sub-1', { ssid: '', clave: 'ClaveNueva2026' }, expect.objectContaining({ id: 'chatbot' }),
+    );
+    expect(creados).toHaveLength(0);
+    expect(r).toContain('NO hay orden');
+    expect(r).toContain('volver a conectar');
+  });
+
+  it('si el equipo no está en el ACS, se abre la orden de siempre con el motivo dentro', async () => {
+    const { toolset, creados } = armar({
+      wifi: { ok: false, resultado: 'SIN_EQUIPO', detalle: 'El equipo del abonado no está en el ACS.' },
+    });
+    const { ctx: c } = ctx(CLIENTE, true);
+
+    const r = await registrar(toolset, c, DATOS);
+
+    expect(r).toContain('#5001');
+    expect(creados).toHaveLength(1);
+    expect(creados[0].type).toBe('Cambio de clave');
+    expect(creados[0].section).toContain('SIN_EQUIPO');
+    // Y la clave que pidió el cliente viaja en la orden: es lo que el técnico va a poner.
+    expect(creados[0].section).toContain('ClaveNueva2026');
+  });
+
+  it('si el ACS está caído, el trámite no se cae con él: queda la orden', async () => {
+    const { toolset, creados } = armar({ wifi: new Error('NBI /devices → HTTP 502') });
+    const { ctx: c } = ctx(CLIENTE, true);
+
+    const r = await registrar(toolset, c, DATOS);
+
+    expect(r).toContain('#5001');
+    expect(creados[0].section).toContain('no se pudo contactar el ACS');
+  });
+
+  it('antes de confirmar se le advierte que se le desconectan todos los aparatos', async () => {
+    const { toolset, genieacs } = armar();
+    const { ctx: c, pendientes } = ctx(CLIENTE);
+
+    await registrar(toolset, c, DATOS);
+
+    expect(pendientes[0].summary).toContain('se desconectan TODOS los aparatos');
+    // Y hasta que no confirme no se toca el equipo de nadie.
+    expect(genieacs.setWifiBySubscriber).not.toHaveBeenCalled();
+  });
+
+  it('el resto de trámites ni se asoma al ACS', async () => {
+    const { toolset, genieacs, creados } = armar();
+    const { ctx: c } = ctx(CLIENTE, true);
+
+    await registrar(toolset, c, { tipo: 'falla_tv', descripcion: 'sin señal', datos: { descripcion: 'sin señal' } });
+
+    expect(genieacs.setWifiBySubscriber).not.toHaveBeenCalled();
+    expect(creados).toHaveLength(1);
+  });
+});
+
+describe('cambio de WiFi — una clave que WPA rechaza no se convierte en una orden', () => {
+  it('pide otra clave en vez de mandar al técnico a teclear algo que el equipo no acepta', async () => {
+    const { toolset, creados } = armar({
+      wifi: {
+        ok: false, resultado: 'DATOS_INVALIDOS',
+        detalle: 'La clave del WiFi debe tener al menos 8 caracteres.',
+      },
+    });
+    const { ctx: c } = ctx(CLIENTE, true);
+
+    const r = await registrar(toolset, c, {
+      tipo: 'cambio_wifi', descripcion: 'quiere otra clave', datos: { wifi_clave: 'corta' },
+    });
+
+    expect(r).toContain('al menos 8 caracteres');
     expect(creados).toHaveLength(0);
   });
 });

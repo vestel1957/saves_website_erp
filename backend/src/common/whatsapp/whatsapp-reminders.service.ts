@@ -3,6 +3,8 @@ import { SubscriberStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { normalizePhone } from '../phone.util';
 import { esMovilColombiano, WhatsappCampaignService } from './whatsapp-campaign.service';
+import { whereExigible } from '../../billing/factura-exigible';
+import { hoyEnColombia } from '../fecha-colombia';
 
 const cop = (n: number) =>
   new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(n || 0);
@@ -11,11 +13,17 @@ const cop = (n: number) =>
 export const WA_REMINDERS_ENABLED_KEY = 'whatsapp.remindersEnabled';
 /** Gate de envío real. Apagado ⇒ se calcula a quién se le escribiría, sin escribir. */
 export const WA_REMINDERS_LIVE_KEY = 'whatsapp.remindersLive';
-/** Tope de mensajes por corrida (límite de Meta: hoy 250 clientes únicos/24h). */
+/** Tope de mensajes por corrida (límite de Meta: hoy 2.000 clientes únicos/24h). */
 export const WA_REMINDERS_CAP_KEY = 'whatsapp.remindersDailyCap';
 
-/** Plantilla aprobada en Meta que se usa. Variables: {{1}} nombre, {{2}} deuda. */
-const TEMPLATE = 'recordatorio_pago';
+/**
+ * Plantilla aprobada en Meta que se usa. Variables: {{1}} nombre, {{2}} deuda.
+ * Lleva el sufijo `_hx…` (herencia de los ContentSid de Twilio) porque así se llaman
+ * en la WABA del número +57 322 4478769, a la que se clonaron conservando el nombre:
+ * tiene que ser EXACTO o Meta responde "template name does not exist" y la corrida
+ * entera sale FAILED.
+ */
+const TEMPLATE = 'vestel_mas_del_mes_pendiente_una_vez_por_semana_103_hx1b7a454c9509332e761b476c48c5665e';
 
 /**
  * Estados a los que se les recuerda la deuda: los que siguen siendo clientes.
@@ -40,7 +48,7 @@ const DEDUPE_DIAS = 7;
  */
 const DEUDA_MINIMA = 1000;
 
-/** Tope por corrida si nadie lo configuró. Debajo del TIER_250 actual de la línea. */
+/** Tope por corrida si nadie lo configuró. Muy por debajo del TIER_2K de la línea. */
 const CAP_DEFECTO = 150;
 
 type Candidato = {
@@ -55,7 +63,7 @@ type Candidato = {
  * Recordatorio de cartera por WhatsApp: el bot deja de ser solo reactivo y sale a
  * buscar al moroso.
  *
- * Va por PLANTILLA aprobada (`recordatorio_pago`) porque estos clientes llevan
+ * Va por PLANTILLA aprobada (ver `TEMPLATE`) porque estos clientes llevan
  * meses sin escribir: fuera de la ventana de 24 h de Meta el texto libre se
  * rechaza. Y va montado sobre el motor de campañas que ya existe, en vez de un
  * bucle propio de `sendTemplate`, para heredar el throttle, el reintento con
@@ -70,7 +78,7 @@ type Candidato = {
  *
  * Dos frenos, porque esto le escribe a clientes reales y no se puede deshacer:
  *  1. `remindersLive` apagado ⇒ calcula la lista y no envía nada (dry-run).
- *  2. tope por corrida ⇒ la línea es TIER_250 (250 clientes únicos/24 h) y
+ *  2. tope por corrida ⇒ la línea es TIER_2K (2.000 clientes únicos/24 h) y
  *     pasarse quema la cuota que necesitan las campañas y los avisos de corte.
  * Con ~2.500 morosos y el tope por defecto, la rotación cubre a todos en ~17 días:
  * se atiende primero a quien lleva más tiempo sin recibir aviso.
@@ -198,7 +206,9 @@ export class WhatsappRemindersService {
   private async deudaDe(ids: string[]): Promise<Record<string, number>> {
     const rows = await this.prisma.subInvoice.groupBy({
       by: ['subscriberId'],
-      where: { subscriberId: { in: ids }, status: { in: ['DUE', 'PARTIAL'] } },
+      // La factura del mes que viene NO es deuda todavía: el bot cobraría un mes que
+      // no ha empezado. Ver `factura-exigible`.
+      where: { subscriberId: { in: ids }, status: { in: ['DUE', 'PARTIAL'] }, ...whereExigible(hoyEnColombia()) },
       _sum: { total: true, paidAmount: true },
     });
     const map: Record<string, number> = {};

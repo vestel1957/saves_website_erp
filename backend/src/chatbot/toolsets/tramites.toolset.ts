@@ -3,6 +3,7 @@ import type { Toolset, ToolContext, ToolDef } from '@s4gk/wa-agent';
 import { SubscribersService } from '../../subscribers/subscribers.service';
 import { CobranzasService } from '../../treasury/cobranzas.service';
 import { SupportWriteService } from '../../support/support-write.service';
+import { GenieacsService } from '../../network/genieacs.service';
 import {
   BOT_ACTOR,
   CHAT_CLIENTE_PERMISSION,
@@ -62,6 +63,8 @@ export class TramitesToolset implements Toolset {
     private readonly subscribers: SubscribersService,
     private readonly cobranzas: CobranzasService,
     private readonly write: SupportWriteService,
+    /** Para el atajo del cambio de WiFi: aplicarlo en el equipo antes de abrir orden. */
+    private readonly genieacs: GenieacsService,
   ) {}
 
   /**
@@ -303,16 +306,35 @@ export class TramitesToolset implements Toolset {
     }
 
     if (ctx.committing) {
+      // El atajo: si el equipo del cliente está en el ACS y contesta, el cambio de
+      // WiFi se hace AHORA y no hace falta orden ni técnico. Si no se puede, sigue el
+      // camino de siempre y el motivo viaja DENTRO de la orden, para que quien la
+      // atienda no repita el intento a ciegas.
+      const wifi = slug === 'cambio_wifi' ? await this.aplicarWifi(subscriberId, datos, ctx) : null;
+      if (wifi?.aplicado) return wifi.mensaje;
+      // Una clave que WPA no acepta no se manda al técnico en una orden: la orden
+      // nacería muerta y el cliente se enteraría mañana. Se le pide otra ahora.
+      if (wifi && !wifi.aplicado && wifi.invalido) return wifi.invalido;
+
       const r = await this.write.createTicket(
         {
           subscriberId,
           subject: `${def.label} (WhatsApp)`,
           type: tipo,
           problem: descripcion,
-          section: this.seccion(def, descripcion, datos, ctx),
+          section: this.seccion(def, descripcion, datos, ctx, wifi?.motivo),
           priority: def.prioridad,
         } as any,
         BOT_ACTOR,
+        // Un traslado pedido por WhatsApp trae la dirección dictada en texto libre
+        // (va en la observación), no en las casillas de la ficha: ni se le cambia la
+        // dirección al cliente ni se le cobra desde aquí. Eso lo hace quien atienda
+        // la orden, que es quien confirma que haya cobertura en la casa nueva.
+        //
+        // Con el cambio de plan pasa lo mismo: el cliente dice "quiero más megas" y
+        // el plan concreto —con su precio— lo confirma quien atienda la orden, así
+        // que nace sin plan destino y no se le reprecia nada por WhatsApp.
+        { destinoOpcional: true, planOpcional: true },
       );
       await ctx.audit({
         userId: ctx.user.id,
@@ -326,8 +348,15 @@ export class TramitesToolset implements Toolset {
 
     return ctx.preparePending({
       summary: `${def.label}: ${this.resumen(datos, descripcion)}. ` +
-        `Se abre una orden de servicio a tu nombre${def.costo ? ` · costo: ${def.costo}` : ''}` +
-        `${def.tiempo ? ` · ${def.tiempo}` : ''}.`,
+        (slug === 'cambio_wifi'
+          // Se dice ANTES de que confirme, no después: cambiar la clave le tumba el
+          // WiFi a todo lo que tenga conectado (televisores, cámaras, el celular con
+          // el que está escribiendo) y hay que reconectarlo a mano uno por uno.
+          ? 'Al aplicarlo se desconectan TODOS los aparatos conectados al WiFi (televisores, cámaras, ' +
+            'celulares) y hay que volver a conectarlos con la clave nueva. Si el equipo responde se hace ' +
+            'de una vez; si no, queda una orden para el área técnica.'
+          : `Se abre una orden de servicio a tu nombre${def.costo ? ` · costo: ${def.costo}` : ''}` +
+            `${def.tiempo ? ` · ${def.tiempo}` : ''}.`),
       permission: CHAT_CLIENTE_PERMISSION,
       commitInput: { tipo: slug, descripcion, datos },
     });
@@ -378,7 +407,66 @@ export class TramitesToolset implements Toolset {
     });
   }
 
-  // ── Reglas de negocio ──────────────────────────────────────────────────────
+  /**
+   * El atajo del cambio de WiFi: intentarlo en el equipo del cliente antes de mandar
+   * a nadie.
+   *
+   * Devuelve `aplicado` cuando el CPE ejecutó el cambio de verdad (el ACS lo confirma
+   * con un 200; un 202 es "quedó en cola porque el equipo no contestó" y NO cuenta).
+   * En cualquier otro caso devuelve el motivo en castellano, que se mete dentro de la
+   * orden para que el técnico sepa qué se intentó ya.
+   *
+   * La cobertura manda: hoy solo 605 de los 5.097 abonados activos tienen equipo en el
+   * ACS y unos 420 informan a diario. O sea que esto resuelve en el acto más o menos
+   * uno de cada diez casos y los otros nueve siguen su camino de siempre. Por eso el
+   * fallo no es una excepción: es la rama normal.
+   */
+  private async aplicarWifi(
+    subscriberId: string,
+    datos: Record<string, string>,
+    ctx: ToolContext,
+  ): Promise<
+    | { aplicado: true; mensaje: string }
+    | { aplicado: false; motivo: string; invalido?: string }
+  > {
+    const ssid = (datos.wifi_nombre || '').trim();
+    const clave = (datos.wifi_clave || '').trim();
+    try {
+      const r = await this.genieacs.setWifiBySubscriber(subscriberId, { ssid, clave }, BOT_ACTOR);
+      if (!r.ok) {
+        this.logger.log(`WiFi del abonado ${subscriberId} NO se pudo aplicar (${r.resultado}): abre orden.`);
+        return {
+          aplicado: false,
+          motivo: `${r.resultado} — ${r.detalle}`,
+          invalido: r.resultado === 'DATOS_INVALIDOS'
+            ? `Esa clave no sirve: ${r.detalle} Pídesela de nuevo y vuelve a registrarlo.`
+            : undefined,
+        };
+      }
+      await ctx.audit({
+        userId: ctx.user.id,
+        action: 'network.genieacs.wifi',
+        summary: `Cambio de WiFi aplicado por WhatsApp en el equipo del cliente${ssid ? ` (red «${ssid}»)` : ''}`,
+        // La clave NO se audita: se aplica y se olvida.
+        detail: { subscriberId, deviceId: r.deviceId, ssid: ssid || null, claveCambiada: !!clave, redes: r.redes },
+      });
+      const que = [ssid ? `la red quedó como «${ssid}»` : '', clave ? 'la clave ya es la nueva' : '']
+        .filter(Boolean).join(' y ');
+      return {
+        aplicado: true,
+        mensaje: `Listo: se aplicó en el equipo del cliente, ${que}. NO hay orden ni visita técnica, ya está hecho. ` +
+          'Dile que ahora tiene que volver a conectar sus aparatos (celular, televisor, cámaras) con la clave ' +
+          'nueva, porque el cambio los desconectó a todos. ' +
+          'Si algún aparato sigue mostrando la red vieja, que apague y prenda el WiFi del aparato.',
+      };
+    } catch (e) {
+      // El ACS caído no puede tumbar el trámite: se abre la orden y ya.
+      this.logger.warn(`Intento de cambio de WiFi falló para ${subscriberId}: ${(e as Error).message}`);
+      return { aplicado: false, motivo: `no se pudo contactar el ACS (${(e as Error).message})` };
+    }
+  }
+
+  // ── Reglas de negocio ─────────────────────────────────────────────────────
 
   /**
    * Las condiciones que SAM le contaba al cliente y nadie comprobaba. Devuelve el
@@ -464,6 +552,7 @@ export class TramitesToolset implements Toolset {
     descripcion: string,
     datos: Record<string, string>,
     ctx: ToolContext,
+    nota?: string,
   ): string {
     const capturados = Object.entries(datos)
       .filter(([, v]) => String(v ?? '').trim())
@@ -472,6 +561,7 @@ export class TramitesToolset implements Toolset {
       `[Bot WhatsApp] ${def.label} · ${phoneOf(ctx.user, ctx.convKey)}`,
       descripcion,
       capturados.length ? capturados.join(' | ') : '',
+      nota ? `Intento automático: ${nota}` : '',
     ].filter(Boolean).join('\n').slice(0, 1500);
   }
 

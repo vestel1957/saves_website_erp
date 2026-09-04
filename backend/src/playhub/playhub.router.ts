@@ -5,7 +5,7 @@
  * controlador. Cablea HTTP -> método: extrae los argumentos de `req` y llama.
  * La lógica sigue viviendo en PlayhubController, que ya no lleva decoradores.
  *
- * Endpoints: 9
+ * Endpoints: 11
  */
 import { crearRouter, manejar } from '../core/http/ruta';
 import { validar } from '../core/http/validar';
@@ -31,6 +31,13 @@ playhubRouter.get(
   autenticar,
   exigirArea('administracion', 'tecnicos', 'gerencia', 'sistemas'),
   manejar((req) => playhub.status()),
+);
+
+playhubRouter.get(
+  '/subscribers/:id/eligibility',
+  autenticar,
+  exigirArea('administracion', 'tecnicos', 'gerencia', 'sistemas'),
+  manejar((req) => playhub.eligibility(req.params.id)),
 );
 
 playhubRouter.get(
@@ -80,4 +87,11 @@ playhubRouter.post(
   autenticar,
   exigirArea('administracion', 'tecnicos', 'gerencia', 'sistemas'),
   manejar((req) => playhub.syncAll(req.query.limit as string)),
+);
+
+playhubRouter.get(
+  '/sync-status',
+  autenticar,
+  exigirArea('administracion', 'tecnicos', 'gerencia', 'sistemas'),
+  manejar((req) => playhub.syncStatus()),
 );

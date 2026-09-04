@@ -45,8 +45,22 @@ export class PlayhubController {
     return this.playhub.syncSubscriber(id);
   }
 
-  /** Sincronización masiva (todos los clientes con suscripciones locales). */
+  /** Elegibilidad del cliente (regla del mínimo de Megas, `PLAYHUB_MIN_MEGAS`). */
+  eligibility(id: string) {
+    return this.playhub.eligibility(id);
+  }
+
+  /**
+   * Barrida masiva: arranca en segundo plano y devuelve al momento. `limit` sólo
+   * se usa para probar sobre un puñado de clientes; sin él barre todos los que
+   * tienen email (que es el login de PlayHub).
+   */
   syncAll(limit?: string) {
-    return this.playhub.syncAll(limit ? Number(limit) : 500);
+    return this.playhub.syncAll(limit ? Number(limit) : undefined);
+  }
+
+  /** Progreso de la barrida masiva. */
+  syncStatus() {
+    return this.playhub.syncStatus();
   }
 }

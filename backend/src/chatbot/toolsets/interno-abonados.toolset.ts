@@ -182,9 +182,14 @@ export class InternoAbonadosToolset implements Toolset {
         return enviarDoc(ctx, await this.docs.estadoCuenta(id, user));
       case 'paz_y_salvo': {
         const doc = await this.docs.pazYSalvo(id, user);
-        const aviso = doc.alDia ? '' : ` OJO: el abonado NO está a paz y salvo (debe ${cop(doc.saldo)}), ` +
-          'así que el documento sale como constancia de su cartera, no como certificado.';
-        return (await enviarDoc(ctx, doc)) + aviso;
+        // Ni por dentro se saltan los requisitos: el certificado sólo sale con la
+        // cuenta en cero, el equipo devuelto, la carta de retiro o suspensión
+        // entregada y esa orden cerrada. Ver `SubscribersService.statement`.
+        if (!doc.puedeEmitir) {
+          return `No se puede expedir el paz y salvo de este abonado porque ${doc.motivosTexto}. `
+            + 'Dilo tal cual y ofrece el estado de cuenta si lo que falta es plata.';
+        }
+        return enviarDoc(ctx, doc);
       }
       case 'contrato':
         return enviarDoc(ctx, await this.docs.contrato(id, user));

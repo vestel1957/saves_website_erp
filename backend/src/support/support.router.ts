@@ -5,14 +5,14 @@
  * controlador. Cablea HTTP -> método: extrae los argumentos de `req` y llama.
  * La lógica sigue viviendo en SupportController, que ya no lleva decoradores.
  *
- * Endpoints: 37
+ * Endpoints: 46
  */
 import { crearRouter, manejar } from '../core/http/ruta';
 import { validar } from '../core/http/validar';
 import { autenticar, exigirArea, exigirPermisos, usuarioDe } from '../core/auth/instancias';
 import { ficheroDe, subirUno } from '../core/http/uploads';
-import { SupportController, AutenticarOnuDto, MoverAgendaDto, NoAtendidaDto, SUPPORT_ROOT, SaveOrderScoresDto } from './support.controller';
-import { agendaService, geofenceService, onuProvisionService, orderScoreService, performanceService, supportService, supportWriteService } from '../core/contenedor';
+import { SupportController, AutenticarOnuDto, MoverAgendaDto, MoverLoteAgendaDto, NoAtendidaDto, RecorridoAgendaDto, SUPPORT_ROOT, SaveOrderScoresDto } from './support.controller';
+import { agendaService, cargoOrdenService, geofenceService, onuProvisionService, orderScoreService, performanceService, supportService, supportWriteService } from '../core/contenedor';
 import { BadRequestException } from '../core/http/errores';
 import { IsArray, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -24,14 +24,16 @@ import type { Response } from 'express';
 import * as ExcelJS from 'exceljs';
 import { SupportService } from './support.service';
 import { AgendaService, type FiltrosAgenda } from './agenda.service';
-import { catalogoDeOrdenes } from './order-types';
+import { catalogoDeOrdenes, MOTIVOS_RETIRO } from './order-types';
 import { GeofenceService } from './geofence.service';
 import {
-  SupportWriteService, CreateTicketDto, UpdateStatusDto, AssignDto, PriorityDto, SignatureDto, ThreadDto, AttachDto,
+  SupportWriteService, CreateTicketDto, UpdateTicketDto, UpdateStatusDto, AssignDto, PriorityDto, SignatureDto, ThreadDto, AttachDto,
   AssignEquipmentDto, ConsumeMaterialsDto,
 } from './support-write.service';
 import { OnuProvisionService } from './onu-provision.service';
 import { OrderScoreService } from './order-score.service';
+import { CargoOrdenService } from '../billing/cargo-orden.service';
+import { CARGOS_POR_ORDEN, cargoDeTipoDeOrden, cargoPorClave } from '../billing/cargos-orden';
 import { PUNTAJE_MAX, PUNTAJE_MIN } from './order-score.policy';
 import { PerformanceService } from '../reports/performance.service';
 import { serviceOrderPdf } from '../common/pdf/pdf-docs';
@@ -39,7 +41,7 @@ import { APP_PERMISSIONS } from '../auth/permissions.catalog';
 import { enviarAdjuntoSeguro, mimeAceptado, nombreEnDisco, MIMES_IMAGEN } from '../common/uploads';
 
 /** Instancia única del controlador. Las dependencias salen del contenedor. */
-const support = new SupportController(supportService, supportWriteService, geofenceService, onuProvisionService, performanceService, agendaService, orderScoreService);
+const support = new SupportController(supportService, supportWriteService, geofenceService, onuProvisionService, performanceService, agendaService, orderScoreService, cargoOrdenService);
 
 export const supportRouter = crearRouter();
 supportRouter.get(
@@ -47,6 +49,13 @@ supportRouter.get(
   autenticar,
   exigirArea('caja', 'administracion'),
   manejar((req) => support.agendaTablero(usuarioDe(req), req.query as unknown as Record<string, string>)),
+);
+
+supportRouter.get(
+  '/agenda/calendario',
+  autenticar,
+  exigirArea('caja', 'administracion'),
+  manejar((req) => support.agendaCalendario(usuarioDe(req), req.query as unknown as Record<string, string>)),
 );
 
 supportRouter.get(
@@ -61,6 +70,48 @@ supportRouter.post(
   autenticar,
   exigirArea('caja', 'administracion'),
   manejar((req) => support.agendaMover(validar(MoverAgendaDto, req.body), usuarioDe(req))),
+);
+
+supportRouter.post(
+  '/agenda/mover-lote',
+  autenticar,
+  exigirArea('caja', 'administracion'),
+  manejar((req) => support.agendaMoverLote(validar(MoverLoteAgendaDto, req.body), usuarioDe(req))),
+);
+
+supportRouter.get(
+  '/agenda/recorrido',
+  autenticar,
+  exigirArea('caja', 'administracion'),
+  manejar((req) => support.agendaRecorrido(usuarioDe(req), req.query as unknown as Record<string, string>)),
+);
+
+supportRouter.post(
+  '/agenda/recorrido',
+  autenticar,
+  exigirArea('caja', 'administracion'),
+  manejar((req) => support.agendaAplicarRecorrido(validar(RecorridoAgendaDto, req.body), usuarioDe(req))),
+);
+
+supportRouter.get(
+  '/agenda/semana',
+  autenticar,
+  exigirArea('caja', 'administracion'),
+  manejar((req) => support.agendaSemana(usuarioDe(req), req.query as unknown as Record<string, string>)),
+);
+
+supportRouter.get(
+  '/agenda/zonas',
+  autenticar,
+  exigirArea('caja', 'administracion'),
+  manejar((req) => support.agendaZonas(usuarioDe(req), req.query as unknown as Record<string, string>)),
+);
+
+supportRouter.get(
+  '/cargo-orden',
+  autenticar,
+  exigirArea('tecnicos', 'administracion', 'caja'),
+  manejar((req) => support.cargoDeOrden(req.query.tipo as string)),
 );
 
 supportRouter.get(
@@ -95,7 +146,7 @@ supportRouter.get(
   '/materials/search',
   autenticar,
   exigirArea('tecnicos', 'administracion', 'caja'),
-  manejar((req) => support.searchMaterials(req.query.search as string)),
+  manejar((req) => support.searchMaterials(usuarioDe(req), req.query.search as string)),
 );
 
 supportRouter.get(
@@ -103,6 +154,13 @@ supportRouter.get(
   autenticar,
   exigirArea('tecnicos', 'administracion', 'caja'),
   manejar((req) => support.miAgenda(usuarioDe(req), req.query.fecha as string)),
+);
+
+supportRouter.post(
+  '/mi-agenda/no-atendida',
+  autenticar,
+  exigirArea('tecnicos', 'administracion', 'caja'),
+  manejar((req) => support.noAtendida(validar(NoAtendidaDto, req.body), usuarioDe(req))),
 );
 
 supportRouter.get(
@@ -120,17 +178,17 @@ supportRouter.get(
 );
 
 supportRouter.get(
-  '/mi-turno',
+  '/mis-proximas',
   autenticar,
   exigirArea('tecnicos', 'administracion', 'caja'),
-  manejar((req) => support.miTurno(usuarioDe(req), req.query.fecha as string)),
+  manejar((req) => support.misProximas(usuarioDe(req), req.query.dias as string)),
 );
 
-supportRouter.post(
-  '/mi-turno/no-atendida',
+supportRouter.get(
+  '/motivos-retiro',
   autenticar,
   exigirArea('tecnicos', 'administracion', 'caja'),
-  manejar((req) => support.noAtendida(validar(NoAtendidaDto, req.body), usuarioDe(req))),
+  manejar((req) => support.motivosRetiro()),
 );
 
 supportRouter.post(
@@ -186,7 +244,7 @@ supportRouter.get(
   '/tickets',
   autenticar,
   exigirArea('tecnicos', 'administracion', 'caja'),
-  manejar((req) => support.tickets(req.query.search as string, req.query.status as string, req.query.type as string, req.query.tec as string, req.query.priority as string, req.query.sede as string, req.query.from as string, req.query.to as string, req.query.all as string, req.query.page as string, req.query.pageSize as string, req.query.sortBy as string, req.query.sortDir as string, usuarioDe(req))),
+  manejar((req) => support.tickets(req.query.search as string, req.query.status as string, req.query.type as string, req.query.tec as string, req.query.priority as string, req.query.sede as string, req.query.subscriberId as string, req.query.from as string, req.query.to as string, req.query.all as string, req.query.page as string, req.query.pageSize as string, req.query.sortBy as string, req.query.sortDir as string, usuarioDe(req))),
 );
 
 supportRouter.post(
@@ -210,11 +268,18 @@ supportRouter.get(
   manejar((req) => support.ticketDetail(req.params.id, usuarioDe(req))),
 );
 
+supportRouter.patch(
+  '/tickets/:id',
+  autenticar,
+  exigirArea('tecnicos', 'administracion', 'caja'),
+  manejar((req) => support.updateTicket(req.params.id, validar(UpdateTicketDto, req.body), usuarioDe(req))),
+);
+
 supportRouter.post(
   '/tickets/:id/assign',
   autenticar,
   exigirArea('tecnicos', 'administracion', 'caja'),
-  manejar((req) => support.assign(req.params.id, validar(AssignDto, req.body))),
+  manejar((req) => support.assign(req.params.id, validar(AssignDto, req.body), usuarioDe(req))),
 );
 
 supportRouter.post(

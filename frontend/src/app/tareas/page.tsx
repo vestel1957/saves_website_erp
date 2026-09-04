@@ -22,7 +22,8 @@ import { listaJson, mensajeDeError, objetoJson } from "@/lib/errores";
 type Task = {
   id: string; legacyId: number; name: string | null; status: string; priority: string;
   tdate: string; start: string | null; dueDate: string | null; description: string | null;
-  orderId: number | null; author: string | null; assignee: string | null; overdue: boolean;
+  orderId: number | null; author: string | null; authorSource: string | null;
+  assignee: string | null; overdue: boolean;
 };
 
 const STATUS_LABEL: Record<string, string> = { DUE: "Pendiente", PROGRESS: "En progreso", DONE: "Hecha" };
@@ -33,6 +34,13 @@ const PRIORITY_LABEL: Record<string, string> = { LOW: "Baja", MEDIUM: "Media", H
 const PRIORITY_TONE: Record<string, "default" | "error" | "warning" | "info"> = {
   LOW: "default", MEDIUM: "info", HIGH: "warning", URGENT: "error",
 };
+
+/**
+ * De dónde salió la tarea. Se dice sólo cuando NO la creó un funcionario desde aquí:
+ * "Sistema" o "Bot" a secas se confundirían con el nombre de una persona, y el
+ * histórico del legacy conviene marcarlo para que nadie lo lea como creado en nexus.
+ */
+const SOURCE_LABEL: Record<string, string> = { CHATBOT: "bot", SISTEMA: "automático", LEGACY: "sistema anterior" };
 
 const toDateInput = (d: string | null | undefined) => (d ? new Date(d).toISOString().slice(0, 10) : "");
 
@@ -239,6 +247,17 @@ export default function TareasPage() {
               },
               { key: "assignee", header: "Responsable", sortable: true, render: (r: Task) => <span className="text-text-secondary">{r.assignee ?? "—"}</span> },
               {
+                key: "author", header: "Creada por", sortable: true,
+                render: (r: Task) => (
+                  <div className="flex flex-col leading-tight">
+                    <span className="text-text-secondary">{r.author ?? "—"}</span>
+                    {r.authorSource && SOURCE_LABEL[r.authorSource] && (
+                      <span className="text-[11px] text-text-tertiary">{SOURCE_LABEL[r.authorSource]}</span>
+                    )}
+                  </div>
+                ),
+              },
+              {
                 key: "dueDate", header: "Vence", sortable: true,
                 render: (r: Task) => (
                   <span className={r.overdue ? "font-semibold text-error-text" : "text-text-secondary"}>{fmtDate(r.dueDate)}</span>
@@ -320,6 +339,14 @@ export default function TareasPage() {
             </Field>
           </div>
         </div>
+        {editing && (
+          <div className="mt-3 flex items-center gap-1.5 text-[12px] text-text-tertiary">
+            <Icon name="user" size={13} />
+            Creada por <span className="font-medium text-text-secondary">{editing.author ?? "autor desconocido"}</span>
+            {editing.authorSource && SOURCE_LABEL[editing.authorSource] && ` (${SOURCE_LABEL[editing.authorSource]})`}
+            {" · "}{fmtDate(editing.tdate)}
+          </div>
+        )}
         <div className="mt-4 flex justify-end gap-2">
           <Button variant="secondary" onClick={() => setOpen(false)} disabled={saving}><Icon name="x" size={15} /> Cancelar</Button>
           <Button variant="primary" onClick={submit} disabled={saving}>

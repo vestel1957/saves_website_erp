@@ -31,6 +31,20 @@ export type Ruta = {
 const OSRM = 'https://router.project-osrm.org';
 const TIMEOUT_MS = 6000;
 
+/**
+ * Tope de puntos por matriz.
+ *
+ * Empezó en 12 —la jornada de campo más cargada son 11 visitas— y se subió a 25 el
+ * mismo día: una casilla de agenda trae TODO lo del día, cerradas incluidas, y la
+ * primera prueba real tenía 17. Al pasarse del tope se devolvía `null` y el
+ * recorrido salía en línea recta sin que se rompiera nada, que es justo el fallo
+ * silencioso que hace pensar que la función "no sirve para nada".
+ *
+ * 25 sigue muy por debajo del límite del servidor público (100) y de lo que
+ * cabe en un día de trabajo.
+ */
+const MAX_MATRIZ = 25;
+
 export class RoutingService {
   private readonly log = new Logger(RoutingService.name);
 
@@ -89,6 +103,60 @@ export class RoutingService {
     } catch (e) {
       this.log.warn(`Ruta no calculada, se devuelve línea recta: ${(e as Error).message}`);
       return recta();
+    }
+  }
+
+  /**
+   * Matriz de distancias por carretera entre N puntos, en metros.
+   *
+   * Es lo que convierte "ordenar por línea recta" en "ordenar por camino de
+   * verdad": en una ciudad con un río, una vía férrea o sentidos únicos, dos
+   * puntos a 300 m en recta pueden estar a 2 km de recorrido, y el orden
+   * propuesto al técnico cambia.
+   *
+   * Devuelve `null` —no lanza— cuando OSRM no está: quien la usa se queda con la
+   * línea recta, que ordena razonablemente bien y no depende de nadie. Un
+   * servicio externo caído no puede dejar sin agendar a la cajera.
+   *
+   * Un solo viaje por propuesta, con 12 puntos como mucho: es una consulta
+   * ocasional de unas pocas personas, no un uso que se parezca a un abuso del
+   * servidor público.
+   */
+  async matriz(puntos: { lat: number; lng: number }[]): Promise<number[][] | null> {
+    if (puntos.length < 2 || puntos.length > MAX_MATRIZ) return null;
+    const coords = puntos.map((p) => {
+      const v = assertPoint(p.lat, p.lng);
+      return `${v.lng},${v.lat}`;
+    }).join(';');
+
+    try {
+      const res = await fetch(`${OSRM}/table/v1/driving/${coords}?annotations=distance,duration`, {
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+        headers: { 'User-Agent': 'saves-erp/1.0 (+soporte@vestel.com.co)' },
+      });
+      if (!res.ok) throw new Error(`OSRM respondió ${res.status}`);
+      const body = (await res.json()) as {
+        code?: string;
+        distances?: (number | null)[][];
+        durations?: (number | null)[][];
+      };
+      if (body.code !== 'Ok') throw new Error(`OSRM sin matriz (code=${body.code})`);
+
+      // `distances` es lo que se pide; algunos despliegues sólo devuelven
+      // `durations`. Ordenar por segundos es igual de válido —de hecho es mejor
+      // criterio para un recorrido— así que se acepta en vez de rendirse.
+      const m = body.distances ?? body.durations;
+      if (!m || m.length !== puntos.length) throw new Error('OSRM devolvió una matriz de otro tamaño');
+
+      // Un hueco (`null`) es un punto que OSRM no supo enganchar a ninguna vía.
+      // Se rellena con la línea recta en vez de tirar la matriz entera: se pierde
+      // precisión en esa celda, no la mejora en todas las demás.
+      return m.map((fila, i) =>
+        fila.map((v, j) => (typeof v === 'number' ? Math.round(v) : distMeters(puntos[i].lat, puntos[i].lng, puntos[j].lat, puntos[j].lng))),
+      );
+    } catch (e) {
+      this.log.warn(`Matriz no calculada, se ordenará por línea recta: ${(e as Error).message}`);
+      return null;
     }
   }
 

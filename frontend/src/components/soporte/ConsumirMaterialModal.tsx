@@ -11,7 +11,10 @@ import { cop } from "@/lib/subscribers";
 import { listaJson, mensajeDeError } from "@/lib/errores";
 
 type Mat = { id: string; name: string; code: string | null; price: number; qty: number; warehouse: string | null };
-type Line = { material: Mat; qty: number };
+/** `qty` va como texto para que el campo se pueda dejar vacío mientras se escribe. */
+type Line = { material: Mat; qty: string };
+
+const num = (v: string) => Number(v) || 0;
 
 /** Modal para registrar material consumido en la orden (descuenta stock). */
 export function ConsumirMaterialModal({ open, onClose, onDone, ticketId }: { open: boolean; onClose: () => void; onDone: () => void; ticketId: string }) {
@@ -38,16 +41,21 @@ export function ConsumirMaterialModal({ open, onClose, onDone, ticketId }: { ope
   }, [search, open, authFetch]);
 
   function add(m: Mat) {
-    setLines((prev) => (prev.some((l) => l.material.id === m.id) ? prev : [...prev, { material: m, qty: 1 }]));
+    setLines((prev) => (prev.some((l) => l.material.id === m.id) ? prev : [...prev, { material: m, qty: "1" }]));
   }
-  function setQty(id: string, qty: number) {
-    setLines((prev) => prev.map((l) => (l.material.id === id ? { ...l, qty: Math.max(1, Math.min(l.material.qty, qty || 1)) } : l)));
+  function setQty(id: string, texto: string) {
+    const limpio = texto.replace(/[^0-9]/g, "");
+    setLines((prev) => prev.map((l) => (l.material.id === id ? { ...l, qty: limpio } : l)));
+  }
+  /** Al salir del campo se acota al stock disponible (y nunca queda vacío).*/
+  function ajustarQty(id: string) {
+    setLines((prev) => prev.map((l) => (l.material.id === id ? { ...l, qty: String(Math.max(1, Math.min(l.material.qty, num(l.qty) || 1))) } : l)));
   }
   function remove(id: string) {
     setLines((prev) => prev.filter((l) => l.material.id !== id));
   }
 
-  const total = lines.reduce((s, l) => s + l.material.price * l.qty, 0);
+  const total = lines.reduce((s, l) => s + l.material.price * num(l.qty), 0);
 
   async function submit() {
     setErr(null);
@@ -56,7 +64,7 @@ export function ConsumirMaterialModal({ open, onClose, onDone, ticketId }: { ope
     try {
       const res = await authFetch(`/support/tickets/${ticketId}/materials`, {
         method: "POST",
-        body: JSON.stringify({ items: lines.map((l) => ({ materialId: l.material.id, qty: l.qty })) }),
+        body: JSON.stringify({ items: lines.map((l) => ({ materialId: l.material.id, qty: Math.max(1, Math.min(l.material.qty, num(l.qty) || 1)) })) }),
       });
       const d = await res.json();
       if (!res.ok) throw new Error(d?.message || "No se pudo registrar el material");
@@ -93,8 +101,8 @@ export function ConsumirMaterialModal({ open, onClose, onDone, ticketId }: { ope
             {lines.map((l) => (
               <div key={l.material.id} className="flex items-center gap-2 border-b border-border-subtle px-3 py-2 last:border-0">
                 <span className="min-w-0 flex-1 truncate text-[13px] text-text-primary">{l.material.name}</span>
-                <Input value={String(l.qty)} onChange={(e) => setQty(l.material.id, Number(e.target.value))} inputMode="numeric" className="w-16 text-center" />
-                <span className="w-24 shrink-0 text-right text-[12px] text-text-secondary">{cop(l.material.price * l.qty)}</span>
+                <Input value={l.qty} onChange={(e) => setQty(l.material.id, e.target.value)} onFocus={(e) => e.target.select()} onBlur={() => ajustarQty(l.material.id)} inputMode="numeric" className="w-16 text-center" />
+                <span className="w-24 shrink-0 text-right text-[12px] text-text-secondary">{cop(l.material.price * num(l.qty))}</span>
                 <button type="button" onClick={() => remove(l.material.id)} className="text-error-text hover:opacity-70"><Icon name="trash" size={14} /></button>
               </div>
             ))}

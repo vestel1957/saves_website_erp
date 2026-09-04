@@ -14,12 +14,14 @@ import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { Modal } from "@/components/Modal";
 import { useAuth } from "@/context/AuthProvider";
 import { cop, waLink } from "@/lib/subscribers";
-import { TICKET_STATUS_LABEL, TICKET_STATUS_TONE, TICKET_PRIORITIES, TICKET_PRIORITY_TONE } from "@/lib/support";
+import { esCambioDeMegas, esReconexion, esTecnico, esTraslado, ORIGEN_ORDEN, TICKET_STATUS_LABEL, TICKET_STATUS_TONE, TICKET_PRIORITIES, TICKET_PRIORITY_TONE } from "@/lib/support";
 import { AsignarEquipoModal } from "@/components/soporte/AsignarEquipoModal";
 import { AutenticarOnuOrden } from "@/components/soporte/AutenticarOnuOrden";
 import { ConsumirMaterialModal } from "@/components/soporte/ConsumirMaterialModal";
+import { EditarOrdenModal } from "@/components/soporte/EditarOrdenModal";
 import { SignaturePad } from "@/components/support/SignaturePad";
 import { fmtDate } from "@/lib/format";
+import { ACCEPT_IMAGEN } from "@/lib/adjuntos";
 import { listaJson, mensajeDeError } from "@/lib/errores";
 import { CapturarGps } from "@/components/map/CapturarGps";
 import { MOTIVO_GEO, distMetros, pedirUbicacion } from "@/lib/geo";
@@ -136,11 +138,31 @@ function ThreadImage({ threadId }: { threadId: string }) {
   );
 }
 
+/** Firma dibujada del acta: el endpoint pide token, así que igual que la foto
+    del hilo hay que traerla como blob (un <img src> plano recibe 401). */
+function FirmaImg({ ticketId }: { ticketId: string }) {
+  const { authFetch } = useAuth();
+  const [url, setUrl] = useState<string | null>(null);
+  const [fail, setFail] = useState(false);
+  useEffect(() => {
+    let obj: string | null = null;
+    void authFetch(`/support/tickets/${ticketId}/signature.png`)
+      .then((r) => (r.ok ? r.blob() : Promise.reject()))
+      .then((b) => { obj = URL.createObjectURL(b); setUrl(obj); })
+      .catch(() => setFail(true));
+    return () => { if (obj) URL.revokeObjectURL(obj); };
+  }, [authFetch, ticketId]);
+  if (fail) return <p className="text-[11px] text-error-text">No se pudo cargar la firma.</p>;
+  if (!url) return <div className="h-24 w-48 animate-pulse rounded border border-border-subtle bg-surface-2" />;
+  return <img src={url} alt="Firma de quien recibe" className="h-24 w-auto rounded border border-border-subtle bg-white" />;
+}
+
 export default function OrdenDetallePage() {
   const { id } = useParams<{ id: string }>();
-  const { loading: authLoading, authFetch } = useAuth();
+  const { loading: authLoading, authFetch, user } = useAuth();
   const [t, setT] = useState<any | null>(null);
-  const [err, setErr] = useState(false);
+  /** El motivo por el que no se pudo cargar, tal cual lo dice el backend. */
+  const [err, setErr] = useState("");
   const [techs, setTechs] = useState<any[]>([]);
   const [reply, setReply] = useState("");
   const [solucion, setSolucion] = useState("");
@@ -150,6 +172,7 @@ export default function OrdenDetallePage() {
   const [busy, setBusy] = useState(false);
   const [eqModal, setEqModal] = useState(false);
   const [matModal, setMatModal] = useState(false);
+  const [editModal, setEditModal] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
   /** Firmar una orden ya cerrada es la excepción: el bloque arranca plegado. */
   const [verFirma, setVerFirma] = useState(false);
@@ -172,7 +195,17 @@ export default function OrdenDetallePage() {
   }
 
   const reload = useCallback(() => {
-    void authFetch(`/support/tickets/${id}`).then((r) => (r.ok ? r.json() : Promise.reject())).then((d) => { setT(d); setAssign(d.assigned || ""); }).catch(() => setErr(true));
+    void authFetch(`/support/tickets/${id}`)
+      .then(async (r) => {
+        if (r.ok) return r.json();
+        // El motivo importa: con el turno obligatorio, abrir por URL una orden que no
+        // toca da 403 y decirle "no encontrada" lo manda a buscar una avería que no
+        // existe. Se enseña lo que responde el backend, que ya explica qué hacer.
+        const cuerpo = await r.json().catch(() => null);
+        throw new Error(cuerpo?.message ?? "");
+      })
+      .then((d) => { setT(d); setAssign(d.assigned || ""); })
+      .catch((e) => setErr(e?.message || "Orden no encontrada."));
   }, [authFetch, id]);
 
   useEffect(() => {
@@ -225,7 +258,12 @@ export default function OrdenDetallePage() {
       }
       setCerca(null);
       setMotivo("");
-      toast(`Estado: ${etiqueta}`);
+      // Lo que hicieron (o no pudieron hacer) los equipos al cerrar: si la TV no
+      // volvió, quien cierra tiene que enterarse aquí y no por la llamada del
+      // cliente tres días después. Ver `mensajeDeCascada` en el backend.
+      const aviso: string | undefined = d?.cascade?.mensaje;
+      const falla = !!aviso && aviso.includes("⚠");
+      toast(aviso ? `${etiqueta} · ${aviso}` : `Estado: ${etiqueta}`, falla ? "alert-triangle" : undefined);
       reload();
     } catch (e) {
       toast(mensajeDeError(e), "alert-triangle");
@@ -261,7 +299,7 @@ export default function OrdenDetallePage() {
   }
 
   if (authLoading || (!t && !err)) return <PageSkeleton />;
-  if (err) return <div className="rounded-xl border border-border-subtle bg-surface p-6 text-[13px] text-text-secondary">Orden no encontrada. <Link href="/soporte" className="text-brand">Volver</Link></div>;
+  if (err) return <div className="rounded-xl border border-border-subtle bg-surface p-6 text-[13px] text-text-secondary">{err} <Link href="/soporte" className="text-brand">Volver</Link></div>;
 
   const s = t.subscriber;
   const serviciosStr: string = s?.services?.length ? s.services.map((x: any) => `${SERVICE_LABEL[x.kind] ?? x.kind}: ${x.plan ?? "—"}`).join(" · ") : "";
@@ -269,6 +307,8 @@ export default function OrdenDetallePage() {
   const equipoStr: string = eq ? `${eq.mac ?? "sin MAC"}  ${eq.installType ?? ""}${eq.vlan != null ? ` V:${eq.vlan}` : ""}${eq.nat != null ? ` N:${eq.nat}` : ""}${eq.port != null ? ` PN:${eq.port}` : ""}`.trim() : (s?.macEquipo || "");
   const debt = Number(s?.debt ?? 0);
   const abierta = t.status !== "RESUELTO" && t.status !== "ANULADA";
+  /** Corregir la orden es cosa de quien la abre (caja/administración), no del técnico. */
+  const puedeEditar = !esTecnico(user);
   const paso = SIGUIENTE[t.status];
   const wa = waLink(s?.phone);
   // El barrio NO tapa la falta de dirección: llegar a "Mirador" no es llegar a
@@ -294,6 +334,9 @@ export default function OrdenDetallePage() {
             <Badge label={TICKET_STATUS_LABEL[t.status] ?? t.status} tone={TICKET_STATUS_TONE[t.status] ?? "default"} />
             {t.subject && t.subject !== t.type && <Badge label={t.subject} tone="info" />}
             {t.priority && <Badge label={`Prioridad: ${t.priority}`} tone={TICKET_PRIORITY_TONE[t.priority] ?? "default"} />}
+            {/* El plazo es la razón de ser de esta orden: al cerrarla el cliente
+                queda protegido del corte justo estos días, ni uno más. */}
+            {t.graceDays != null && <Badge label={`Reconexión por ${t.graceDays} día(s)`} tone="warning" />}
             {/* Puntaje del trabajo. Si ya está cerrada muestra lo que se selló;
                 si sigue abierta, lo que va a valer — que es lo que el técnico
                 necesita saber antes de salir, no cuando ya volvió. */}
@@ -304,7 +347,7 @@ export default function OrdenDetallePage() {
             ) : null}
           </>
         }
-        subtitle={<>Creada {fmtDate(t.created)}{t.finalDate ? ` · Finalizada ${fmtDate(t.finalDate)}` : ""}{t.assigned ? ` · Técnico: ${t.assigned}` : " · Sin técnico asignado"}</>}
+        subtitle={<>Creada {fmtDate(t.created)}{t.generadaPor ? ` por ${t.generadaPor.nombre}` : ""}{t.finalDate ? ` · Finalizada ${fmtDate(t.finalDate)}` : ""}{t.assigned ? ` · Técnico: ${t.assigned}` : " · Sin técnico asignado"}</>}
         actions={
           <>
             <Button variant="secondary" size="sm" disabled={pdfBusy} onClick={abrirPdf} className="w-full sm:w-auto">
@@ -349,10 +392,30 @@ export default function OrdenDetallePage() {
         <div className="order-2 flex min-w-0 flex-col gap-3 xl:order-1">
           {/* Trabajo a realizar */}
           <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
-            <CardTitle icon="clipboard-list">Trabajo a realizar</CardTitle>
+            {/* Corregir va AQUÍ, junto a lo que corrige, y no en la cabecera: lo que
+                se arregla es lo que se está leyendo. Al técnico de campo no se le
+                ofrece —el servidor se lo negaría igual— porque él atiende el trabajo,
+                no lo redefine: si la orden está mal, lo dice en el seguimiento. */}
+            <CardTitle
+              icon="clipboard-list"
+              right={
+                !puedeEditar ? undefined : (
+                  <Button variant="secondary" size="sm" onClick={() => setEditModal(true)}>
+                    <Icon name="pencil" size={13} /> Corregir orden
+                  </Button>
+                )
+              }
+            >
+              Trabajo a realizar
+            </CardTitle>
             {t.problem && (
               <div>
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-text-tertiary">Falla reportada</div>
+                {/* En un retiro esta casilla no lleva una avería sino POR QUÉ se va
+                    el cliente (lista cerrada, ver `MOTIVOS_RETIRO`): llamarla "falla
+                    reportada" le hace leer al técnico que hay algo que arreglar. */}
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-text-tertiary">
+                  {(t.type ?? "").trim().toLowerCase() === "retiro voluntario" ? "Razón del retiro" : "Falla reportada"}
+                </div>
                 <p className="whitespace-pre-wrap text-[14px] font-semibold text-text-primary">{t.problem}</p>
               </div>
             )}
@@ -363,6 +426,121 @@ export default function OrdenDetallePage() {
               </div>
             )}
             {!t.problem && !t.section && <p className="mt-1 text-[12px] text-text-tertiary">Sin descripción del problema.</p>}
+            {/* El técnico ya fue y no pudo hacerla. Va aquí, junto a la falla, porque
+                es parte del trabajo a realizar: dice qué le faltó al viaje anterior
+                (material, otro tipo de orden, el cliente ausente). La orden sigue
+                PENDIENTE, así que sin esto parecía que nadie había ido nunca. */}
+            {t.noAtendida && (
+              <div className="mt-3 rounded-lg border border-warning-border bg-warning-soft p-3">
+                <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-warning-text">
+                  <Icon name="alert-triangle" size={12} /> No se pudo atender
+                </div>
+                <p className="mt-1 whitespace-pre-wrap text-[13px] text-text-primary">{t.noAtendida.motivo || "Sin motivo escrito."}</p>
+                <p className="mt-1 text-[11.5px] text-text-tertiary">
+                  {t.noAtendida.por ?? "—"} · {fmtT(t.noAtendida.fecha)} · la visita quedó sin agendar
+                </p>
+              </div>
+            )}
+            {/* Traslado: de dónde a dónde. La ficha del cliente ya quedó con la
+                dirección nueva al abrirse la orden, así que lo que aquí hace falta
+                es la vieja — es donde está el equipo que hay que recoger. */}
+            {t.traslado && (
+              <div className="mt-3 rounded-lg border border-border-default bg-surface-2 p-3">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-text-tertiary">Traslado</div>
+                <p className="mt-1 text-[13px] text-text-secondary">
+                  De <b className="text-text-primary">{t.traslado.desde || "dirección sin registrar"}</b>{" "}
+                  a <b className="text-text-primary">{t.traslado.hasta}</b>
+                </p>
+                <p className="mt-1 text-[12px] text-text-tertiary">
+                  {t.traslado.factura
+                    ? <>Cobrado en la factura Nº {t.traslado.factura}.</>
+                    : <>Sin factura del traslado: cóbralo aparte si corresponde.</>}
+                </p>
+              </div>
+            )}
+            {/* Las MEGAS: de cuánto viene y a cuánto va. El cliente sigue en su plan
+                de hoy —y pagando su precio— hasta que la orden se cierre: es ahí
+                donde se le cambia el plan y se le reprecia la factura del mes. Lo
+                que hace falta aquí es a qué velocidad hay que dejarlo, que es lo
+                que el técnico aplica a la ONU desde el bloque de abajo. */}
+            {t.megas && (
+              <div className="mt-3 rounded-lg border border-border-default bg-surface-2 p-3">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-text-tertiary">Megas</div>
+                <p className="mt-1 text-[13px] text-text-secondary">
+                  De{" "}
+                  <b className="text-text-primary">
+                    {t.megas.de != null ? `${t.megas.de} Megas` : t.megas.planAnterior || "plan sin registrar"}
+                  </b>{" "}
+                  a <b className="text-text-primary">{t.megas.a != null ? `${t.megas.a} Megas` : t.megas.plan}</b>
+                  {t.megas.plan ? <> · plan «{t.megas.plan}»</> : null}
+                </p>
+                <p className="mt-1 text-[12px] text-text-tertiary">
+                  {t.megas.aplicado
+                    ? <>El plan ya está cambiado en la ficha ({fmtT(t.megas.aplicado)}).</>
+                    : t.status === "RESUELTO" || t.status === "ANULADA"
+                      ? <>La orden se cerró y el plan NO llegó a cambiarse: hazlo desde su ficha (Cambiar plan).</>
+                      : <>El cliente sigue en su plan de hoy: pasa a éste —y se le reprecia la factura del mes— al cerrar la orden.</>}
+                  {puedeEditar && <> Si no es el plan que se acordó, corrígelo en «Corregir orden».</>}
+                </p>
+              </div>
+            )}
+            {/* Una orden de megas que no dice cuántas. Es lo que pasa con las que se
+                abren en el sistema viejo —allá el plan destino vive en otra tabla— y
+                con las que entran por el chatbot, donde el cliente pide "más megas"
+                sin elegir plan. Sin este aviso el técnico salía a preguntar por
+                teléfono a qué velocidad tenía que dejar al cliente. */}
+            {!t.megas && esCambioDeMegas(t.type) && (
+              <div className="mt-3 rounded-lg border border-warning-border bg-warning-soft p-3">
+                <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-warning-text">
+                  <Icon name="alert-triangle" size={12} /> Orden de megas sin plan
+                </div>
+                <p className="mt-1 text-[13px] text-text-secondary">
+                  Esta orden no dice a cuántas megas se pasa el cliente: sin eso, el técnico no sabe a qué velocidad
+                  tiene que dejarlo en la red.
+                </p>
+                {puedeEditar && (
+                  <Button variant="secondary" className="mt-2" onClick={() => setEditModal(true)}>
+                    Registrar el plan
+                  </Button>
+                )}
+              </div>
+            )}
+            {/* El cargo de la orden, cuando su tipo se cobra al abrirlo y no es el
+                traslado (que ya lo dice en su bloque, con la dirección). Responde
+                la pregunta de ventanilla: ¿esto ya está facturado o hay que
+                cobrarlo? Ver `billing/cargos-orden.ts`. */}
+            {t.cargo && !t.traslado && (
+              <div className="mt-3 rounded-lg border border-border-default bg-surface-2 p-3">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-text-tertiary">Cargo de la orden</div>
+                <p className="mt-1 text-[13px] text-text-secondary">
+                  <b className="text-text-primary">{t.cargo.concepto || "Cargo"}</b>
+                  {t.cargo.factura
+                    ? <> · cobrado en la factura Nº {t.cargo.factura}</>
+                    : <> · sin factura: cóbralo aparte si corresponde</>}
+                </p>
+              </div>
+            )}
+            {/* Un traslado que no dice a dónde. Es lo que pasa con los que se abren
+                en el sistema viejo —allá no hay columna para el destino— y con los
+                que entran por el chatbot. Sin este aviso la orden se veía como
+                cualquier otra y el técnico salía a preguntar la dirección por
+                teléfono; con él, quien atiende al cliente la registra en el sitio. */}
+            {!t.traslado && esTraslado(t.type) && (
+              <div className="mt-3 rounded-lg border border-warning-border bg-warning-soft p-3">
+                <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-warning-text">
+                  <Icon name="alert-triangle" size={12} /> Traslado sin dirección nueva
+                </div>
+                <p className="mt-1 text-[13px] text-text-secondary">
+                  Esta orden no dice a dónde se muda el cliente
+                  {t.subscriber?.address ? <> · hoy figura en <b className="text-text-primary">{t.subscriber.address}</b></> : null}.
+                </p>
+                {puedeEditar && (
+                  <Button variant="secondary" className="mt-2" onClick={() => setEditModal(true)}>
+                    Registrar la dirección
+                  </Button>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Autenticar la ONU contra la OLT (solo en órdenes que lo requieren).
@@ -395,7 +573,16 @@ export default function OrdenDetallePage() {
                     {e.port != null && <span className="text-text-tertiary">PN:{e.port}</span>}
                     {e.nat != null && <span className="text-text-tertiary">N:{e.nat}</span>}
                     {e.vlan != null && <span className="text-text-tertiary">V:{e.vlan}</span>}
-                    {e.status && <Badge label={e.status} tone="default" />}
+                    {e.status && <Badge label={e.status} tone={e.reservado ? "info" : "default"} />}
+                    {/* Apartado en bodega para ESTA orden al abrirla: es el que el
+                        técnico tiene que llevarse; si instala ese, la ONU se
+                        autentica sola. */}
+                    {e.reservado && (
+                      <span className="text-text-secondary">
+                        <Icon name="bookmark" size={12} className="mr-0.5 inline text-brand" />
+                        reservado para esta orden{e.bodega ? ` · llévelo de la bodega ${e.bodega}` : ""}
+                      </span>
+                    )}
                     {/* El equipo que está autenticado en la OLT, con el plan que le
                         rige: sin esto había que abrir Red › OLT para saberlo. */}
                     {e.esOnu && (
@@ -488,10 +675,19 @@ export default function OrdenDetallePage() {
               <Textarea rows={3} placeholder="Escribe la documentación / avance…" value={reply} onChange={(e) => setReply(e.target.value)} />
               {/* Foto de evidencia (con cámara en móvil; intenta geo-etiquetar al subir) */}
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border-subtle bg-surface-2 px-3 py-1.5 text-[12px] font-medium text-text-secondary hover:border-brand hover:text-text-primary">
-                  <Icon name="camera" size={14} /> {photo ? "Cambiar foto" : "Adjuntar foto"}
-                  <input type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => setPhoto(e.target.files?.[0] ?? null)} />
-                </label>
+                {/* Dos botones a propósito: `capture="environment"` abre la cámara y se
+                    salta el selector, así que con un único botón la galería quedaba
+                    inalcanzable y tocaba "convertir la foto en archivo" para subirla. */}
+                <div className="inline-flex items-center gap-1.5">
+                  <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border-subtle bg-surface-2 px-3 py-1.5 text-[12px] font-medium text-text-secondary hover:border-brand hover:text-text-primary">
+                    <Icon name="camera" size={14} /> Cámara
+                    <input type="file" accept={ACCEPT_IMAGEN} capture="environment" className="hidden" onChange={(e) => setPhoto(e.target.files?.[0] ?? null)} />
+                  </label>
+                  <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border-subtle bg-surface-2 px-3 py-1.5 text-[12px] font-medium text-text-secondary hover:border-brand hover:text-text-primary">
+                    <Icon name="image" size={14} /> Galería
+                    <input type="file" accept={ACCEPT_IMAGEN} className="hidden" onChange={(e) => setPhoto(e.target.files?.[0] ?? null)} />
+                  </label>
+                </div>
                 {photo && (
                   <span className="inline-flex items-center gap-1.5 text-[11px] text-text-tertiary">
                     <Icon name="file-text" size={12} /> {photo.name}
@@ -507,7 +703,12 @@ export default function OrdenDetallePage() {
 
           {/* Acta de recibido / firma. Con la orden cerrada y sin firma el bloque
               va plegado: eran 300 px de lienzo en blanco al pie de cada orden
-              vieja, y firmar a destiempo es la excepción, no lo normal. */}
+              vieja, y firmar a destiempo es la excepción, no lo normal.
+
+              La reconexión no lleva acta: se resuelve desde el sistema y no hay
+              a quién pedirle la firma, así que el bloque ni se pinta (solo si esa
+              orden ya trae una firma vieja, para no esconder lo que se guardó). */}
+          {(t.signature || !esReconexion(t.type)) && (
           <div className="mb-6 rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
             <CardTitle
               icon="user-check"
@@ -524,7 +725,7 @@ export default function OrdenDetallePage() {
             {t.signature ? (
               <div className="flex flex-col gap-2">
                 <p className="text-[12px] text-text-secondary">Firmó: <b>{t.signature.name}</b> {t.signature.cc ? `(CC ${t.signature.cc})` : ""} {t.signature.rel ? `· ${t.signature.rel}` : ""}</p>
-                {t.signature.hasImage && <img src={`${process.env.NEXT_PUBLIC_API_URL ?? ""}/support/tickets/${id}/signature.png`} alt="Firma" className="h-24 w-auto rounded border border-border-subtle bg-white" />}
+                {t.signature.hasImage && <FirmaImg ticketId={id} />}
               </div>
             ) : !abierta && !verFirma ? (
               <p className="text-[12px] text-text-tertiary">Esta orden se cerró sin acta firmada.</p>
@@ -542,6 +743,7 @@ export default function OrdenDetallePage() {
               </div>
             )}
           </div>
+          )}
         </div>
 
         {/* Columna del cliente: a quién se va a ver, dónde y con qué servicio. */}
@@ -645,13 +847,41 @@ export default function OrdenDetallePage() {
               onChange={(e) => post(`/support/tickets/${id}/priority`, { priority: e.target.value }, `Prioridad: ${e.target.value}`)}>
               {TICKET_PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
             </Select>
-            <p className="mt-2 text-[11px] text-text-tertiary">Creada el {fmtT(t.created)}.</p>
+            {/* Las dos puntas de la orden: quién la mandó y quién la hace. Lo
+                primero no se guardaba en ninguna parte y se preguntaba por
+                teléfono; ahora la orden lo dice. Las heredadas del legacy que
+                nacieron sin autor siguen sin poder decirlo (`generadaPor` null). */}
+            <div className="mb-1 mt-3 text-[11px] font-semibold text-text-tertiary">Generada por</div>
+            <p className="text-[13px] font-semibold text-text-primary">
+              {t.generadaPor?.nombre ?? "Sin registro"}
+              {t.generadaPor && ORIGEN_ORDEN[t.generadaPor.origen] && (
+                <span className="ml-1.5 font-normal text-text-tertiary">({ORIGEN_ORDEN[t.generadaPor.origen]})</span>
+              )}
+            </p>
+            <p className="mt-2 text-[11px] text-text-tertiary">
+              Creada el {fmtT(t.created)}
+              {!t.generadaPor && " · las órdenes del sistema viejo no guardaban quién las abría"}.
+            </p>
           </div>
         </aside>
       </div>
 
       <AsignarEquipoModal open={eqModal} onClose={() => setEqModal(false)} onDone={reload} ticketId={id} />
       <ConsumirMaterialModal open={matModal} onClose={() => setMatModal(false)} onDone={reload} ticketId={id} />
+      {puedeEditar && editModal && (
+        <EditarOrdenModal
+          open={editModal}
+          onClose={() => setEditModal(false)}
+          onDone={reload}
+          orden={{
+            id, code: t.code ?? null, subject: t.subject ?? null, type: t.type,
+            problem: t.problem ?? null, section: t.section ?? null, created: t.created,
+            status: t.status, graceDays: t.graceDays ?? null, score: t.score ?? null,
+            subscriberId: t.subscriber?.id ?? null, moveToText: t.traslado?.hasta ?? null,
+            megas: t.megas ?? null,
+          }}
+        />
+      )}
 
       {/* Geo-cerca: la orden NO se cerró. O se acerca al domicilio, o explica por qué no. */}
       <Modal

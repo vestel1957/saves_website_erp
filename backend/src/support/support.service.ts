@@ -8,11 +8,14 @@ import { clavesDe, esTecnicoDeCampo, fichaDelUsuario } from '../common/tecnico-s
 import { hoyEnColombia } from '../common/fecha-colombia';
 import { textoPlano } from '../common/texto-legacy';
 import { orden, paginacion } from '../common/pagination-params';
+import { variosDeQuery } from '../common/filtros-query';
 import { traductorDeTecnicos } from '../staff/nombre-tecnico';
 import { formasDeSerial } from './onu-provision.service';
 import { esTrabajoDeCampo } from './field-work.policy';
-import { puedeAbrirOrden } from './turno';
 import { OrderScoreService } from './order-score.service';
+import { direccionDe, referenciaDe } from '../common/subscriber-address';
+import { ORDEN_CRONOLOGICO, porFecha } from './orden-cronologico';
+import { puedeAbrirOrden } from './turno';
 
 /**
  * Días tras los cuales una orden abierta se marca como vencida en el panel del
@@ -185,11 +188,14 @@ export class SupportService {
     ],
     sede: 'subscriber.branch.name',
     tec: 'assigned',
-    created: 'created',
+    // Ordenar por fecha necesita desempate: `created` no tiene hora y todas las del
+    // mismo día quedaban a merced del `{ id: 'asc' }` por defecto de `orden()`, que
+    // es un cuid —o sea, al azar—. Ver `orden-cronologico.ts`.
+    created: porFecha,
     status: 'status',
   };
 
-  async tickets(params: { search?: string; status?: string; type?: string; tec?: string; priority?: string; sede?: string; from?: string; to?: string; all?: string; page?: number; pageSize?: number; sortBy?: string; sortDir?: string }, user?: AuthUser) {
+  async tickets(params: { search?: string; status?: string; type?: string; tec?: string; priority?: string; sede?: string; subscriberId?: string; from?: string; to?: string; all?: string; page?: number; pageSize?: number; sortBy?: string; sortDir?: string }, user?: AuthUser) {
     const { page, pageSize } = paginacion(params);
     const where: Prisma.TicketWhereInput = {};
     // Acceso por sede: el ticket la hereda de su suscriptor. Un ticket SIN suscriptor
@@ -199,33 +205,53 @@ export class SupportService {
     // `where.OR` ya está reservado para la búsqueda de más abajo: puesto ahí, el
     // primer texto tecleado borraría la restricción.
     const mias = await this.soloMisOrdenes(user);
-    if (mias) where.AND = [mias];
+    // Todo lo que restringe se acumula aquí y se cuelga de `where.AND` al final:
+    // `where.OR` está reservado para la búsqueda de texto y escribir un filtro en la
+    // raíz pisaba al de al lado (así se escapaba el alcance por sede, más abajo).
+    const and: Prisma.TicketWhereInput[] = [];
+    if (mias) and.push(mias);
     // "Es mía" gana sobre "es de mi sede": una orden asignada a él es suya aunque el
     // cliente esté en otra sede (a Miguel le tapaba 38 de sus 966, y su pantalla no
     // tiene filtro de sede con el que enterarse de que le faltaban).
     if (!mias) Object.assign(where, whereSedePorSuscriptor(await sedesDe(this.prisma, user)));
-    if (params.status) where.status = params.status as any;
-    if (params.type) where.type = params.type;
+    // Los filtros de la barra son de selección MÚLTIPLE: viajan separados por comas
+    // ("PENDIENTE,REALIZANDO"). Un solo valor sigue siendo el caso corriente y se
+    // comporta igual que antes, así que los enlaces guardados no se rompen.
+    const estados = variosDeQuery(params.status);
+    if (estados.length) where.status = { in: estados as any };
+    const detalles = variosDeQuery(params.type);
+    if (detalles.length) where.type = { in: detalles };
     // Insensible a mayúsculas: `priority` es texto libre del legacy y "URGENTE"
-    // también tiene que caer cuando se filtra por "Urgente".
-    if (params.priority?.trim()) where.priority = { equals: params.priority.trim(), mode: 'insensitive' };
+    // también tiene que caer cuando se filtra por "Urgente". Con varias elegidas va
+    // como OR de iguales y no como `in`, que en Postgres no respeta el `mode`.
+    const prioridades = variosDeQuery(params.priority);
+    if (prioridades.length) {
+      and.push({ OR: prioridades.map((p) => ({ priority: { equals: p, mode: 'insensitive' as const } })) });
+    }
     // El filtro viaja con el NOMBRE del técnico, pero las órdenes lo tienen escrito
     // con su username del legacy: se buscan todas las formas en que puede estar.
     const tr = await traductorDeTecnicos(this.prisma);
-    if (params.tec?.trim()) {
-      const tec = params.tec.trim();
-      if (tec === '__none__') {
-        // "Sin asignar" tiene que atrapar las dos formas en que viene del legacy:
-        // NULL y cadena vacía — y que tampoco tenga técnico por la FK nueva.
-        where.AND = [
-          ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
-          { assignedStaffId: null, OR: [{ assigned: null }, { assigned: '' }] },
-        ];
-      } else {
-        where.assigned = { in: tr.claves(tec) };
-      }
+    const tecnicos = variosDeQuery(params.tec);
+    if (tecnicos.length) {
+      const clausulas: Prisma.TicketWhereInput[] = tecnicos.map((tec) =>
+        tec === '__none__'
+          // "Sin asignar" tiene que atrapar las dos formas en que viene del legacy:
+          // NULL y cadena vacía — y que tampoco tenga técnico por la FK nueva.
+          ? { assignedStaffId: null, OR: [{ assigned: null }, { assigned: '' }] }
+          : { assigned: { in: tr.claves(tec) } },
+      );
+      and.push(clausulas.length === 1 ? clausulas[0] : { OR: clausulas });
     }
-    if (params.sede?.trim()) where.subscriber = { is: { branchId: params.sede.trim() } };
+    // En `AND` y no en la raíz: puesto en `where.subscriber` machacaba el alcance por
+    // sede que dejó `whereSedePorSuscriptor`, y quien está acotado a una sede podía
+    // ver las de otra mandando su id a mano en la URL.
+    const sedes = variosDeQuery(params.sede);
+    if (sedes.length) and.push({ subscriber: { is: { branchId: { in: sedes } } } });
+    // Filtro por cliente concreto. Lo usa el aviso de "este cliente ya tiene
+    // órdenes abiertas" del formulario de orden nueva. Va en `AND` por lo mismo
+    // que los de arriba: en la raíz pisaría el alcance por sede.
+    if (params.subscriberId?.trim()) and.push({ subscriberId: params.subscriberId.trim() });
+    if (and.length) where.AND = and;
     // Por defecto AÑO ACTUAL (aplica también al buscar; usar all=1 para histórico).
     // El corte existe porque la vista general barre 314.000 órdenes. Las de UNA
     // persona caben enteras, así que a un técnico no se le recorta su historia salvo
@@ -249,13 +275,24 @@ export class SupportService {
         { subscriber: { is: { OR: [{ firstName: { contains: s, mode: 'insensitive' as const } }, { lastName1: { contains: s, mode: 'insensitive' as const } }, ...(n != null ? [{ abonado: n }] : [])] } } },
       ];
     }
-    const include = { subscriber: { select: { ...SUB, neighborhood: true, branch: { select: { name: true } } } } };
+    // Con quién y a dónde: la cédula, los teléfonos y las piezas de la dirección.
+    // No es adorno del listado — es lo que hace utilizable el EXCEL (`exportRows`
+    // sale de aquí), que se imprime y se sale con él a la calle.
+    const include = {
+      subscriber: {
+        select: {
+          ...SUB, neighborhood: true, docType: true, docNumber: true,
+          phone1: true, phone2: true, nomenclature: true, addressLine: true,
+          branch: { select: { name: true } },
+        },
+      },
+    };
     // Ordenar por prioridad no puede ir al SQL directo: es texto libre y el
     // abecedario pone "Urgente" de último. Va por baldes (ver el método).
     const [rows, total] = (params.sortBy || '').trim() === 'priority'
       ? await this.paginaPorPrioridad(where, params.sortDir === 'desc' ? 'desc' : 'asc', page, pageSize, include)
       : await Promise.all([
-          this.prisma.ticket.findMany({ where, orderBy: orden(params, SupportService.ORDEN_TICKETS, { created: 'desc' }), skip: (page - 1) * pageSize, take: pageSize, include }),
+          this.prisma.ticket.findMany({ where, orderBy: orden(params, SupportService.ORDEN_TICKETS, ORDEN_CRONOLOGICO), skip: (page - 1) * pageSize, take: pageSize, include }),
           this.prisma.ticket.count({ where }),
         ]);
     // Resolver barrio: subscriber.neighborhood guarda el id legacy → Neighborhood.name.
@@ -267,7 +304,10 @@ export class SupportService {
       return Number.isFinite(n) ? (barrioByLegacy.get(n) ?? null) : null;
     };
     return {
-      items: rows.map((t) => ({ id: t.id, code: t.code, legacyId: t.legacyId, subject: t.subject, type: t.type, description: t.problem, priority: t.priority, created: t.created, status: t.status, assigned: tr.nombre(t.assigned), client: subName(t.subscriber), subscriberId: t.subscriber?.id ?? null, sede: t.subscriber?.branch?.name ?? null, barrio: barrioOf(t.subscriber?.neighborhood), finalDate: t.finalDate })),
+      // `generadaPor` sale traducido por lo mismo que `assigned`: en las órdenes del
+      // legacy lo que hay escrito es el username de quien la abrió ('SoniaCajera'),
+      // no su nombre. Ver `generadaPorDe`.
+      items: rows.map((t) => ({ id: t.id, code: t.code, legacyId: t.legacyId, subject: t.subject, type: t.type, description: t.problem, priority: t.priority, created: t.created, status: t.status, assigned: tr.nombre(t.assigned), generadaPor: tr.nombre(t.createdByName ?? t.col), client: subName(t.subscriber), subscriberId: t.subscriber?.id ?? null, abonado: t.subscriber?.abonado ?? null, cedula: [t.subscriber?.docType, t.subscriber?.docNumber].filter(Boolean).join(' ') || null, telefono: t.subscriber?.phone1 ?? null, telefono2: t.subscriber?.phone2 ?? null, direccion: direccionDe(t.subscriber?.nomenclature, t.subscriber?.addressLine), referencia: referenciaDe(t.subscriber?.nomenclature), sede: t.subscriber?.branch?.name ?? null, barrio: barrioOf(t.subscriber?.neighborhood), finalDate: t.finalDate })),
       total, page, pageSize, pages: Math.ceil(total / pageSize),
     };
   }
@@ -372,8 +412,8 @@ export class SupportService {
       if (!(await this.prisma.ticket.findFirst({ where: { AND: [{ id }, mias] }, select: { id: true } }))) {
         throw new ForbiddenException('Esta orden no está asignada a ti.');
       }
-      // Ser suya basta: no se le pide además que el cliente sea de su sede (mismo
-      // criterio que la lista, o no podría abrir las 38 que le salen ahí).
+      // Ser suya basta para el alcance: no se le pide además que el cliente sea de su
+      // sede (mismo criterio que la lista, o no podría abrir las 38 que le salen ahí).
 
       // Segunda puerta, la del turno: ser suya ya no alcanza para abrirla si tiene
       // otra visita en turno. Sin esto el turno obligatorio sería de fachada — le
@@ -406,16 +446,18 @@ export class SupportService {
     // El plan de internet vigente: el ACTIVO manda si hay varios.
     const internetes = services.filter((s) => s.kind === 'INTERNET');
     const internet = internetes.find((s) => s.status === 'ACTIVO') ?? internetes[0] ?? null;
-    const equipment = sub ? await this.prisma.equipment.findMany({ where: { subscriberId: sub.id }, select: { code: true, mac: true, serial: true, installType: true, port: true, vlan: true, nat: true, status: true } }) : [];
+    const equipment = sub ? await this.prisma.equipment.findMany({ where: { subscriberId: sub.id }, select: { code: true, mac: true, serial: true, installType: true, port: true, vlan: true, nat: true, status: true, reservedTicketId: true, warehouse: { select: { name: true } } } }) : [];
     // ONUs del abonado en la OLT: sirve para señalar CUÁL de sus equipos es el
     // que está autenticado y con qué plan quedó, sin abrir otra pantalla.
     const onus = sub ? await this.prisma.oltOnu.findMany({ where: { subscriberId: sub.id }, select: { sn: true, runState: true } }) : [];
     const debtRows = sub ? await this.prisma.subInvoice.findMany({ where: { subscriberId: sub.id, status: { in: ['DUE', 'PARTIAL'] } }, select: { total: true, paidAmount: true } }) : [];
     const materials = await this.prisma.ticketMaterial.findMany({ where: { ticketId: t.id }, orderBy: { createdAt: 'asc' } });
     const barrio = await this.resolveBarrio(sub?.neighborhood);
-    // Quién escribió cada renglón del hilo. `TicketThread.employeeId` es el id de
-    // `aauth_users` del legacy, que es el mismo `Staff.legacyId`: sin este cruce la
-    // ficha enseñaba "empleado #68", que no le dice nada a nadie.
+    // Quién escribió cada renglón del hilo. Manda `authorName` —el nombre que se
+    // sella al documentar desde aquí—, y para lo heredado del legacy se cruza
+    // `TicketThread.employeeId` (el id de `aauth_users`, que es el mismo
+    // `Staff.legacyId`): sin ese cruce la ficha enseñaba "empleado #68", que no le
+    // dice nada a nadie.
     const autores = new Map<number, string>();
     const eids = [...new Set(threads.map((h) => h.employeeId).filter((n) => n != null))];
     if (eids.length) {
@@ -431,8 +473,65 @@ export class SupportService {
       id: t.id, code: t.code, subject: t.subject, type: t.type, created: t.created, finalDate: t.finalDate,
       // `problem` y `section` vienen del WYSIWYG del legacy: salen ya en texto plano.
       status: t.status, priority: t.priority, problem: textoPlano(t.problem), section: textoPlano(t.section),
+      graceDays: t.graceDays,
+      /**
+       * "No se pudo atender": el viaje que el técnico hizo y no pudo resolver.
+       * Se documenta al apartar la visita (`AgendaService.noSePudoAtender`) y
+       * hasta ahora solo se veía en la bandeja de la agenda: quien abría la
+       * orden por su ficha la encontraba PENDIENTE y sin rastro del intento, y
+       * creía que no se había documentado nada.
+       */
+      noAtendida: t.skippedAt
+        ? { fecha: t.skippedAt, motivo: t.skippedReason, por: t.skippedByName }
+        : null,
+      /**
+       * El TRASLADO que porta la orden: de dónde a dónde se mudó el cliente y con
+       * qué factura se le cobró. `null` en todo lo demás (y en los traslados
+       * abiertos antes de 2026-08-27, que no llevaban destino).
+       */
+      traslado: t.moveToText
+        ? { desde: t.moveFromText, hasta: t.moveToText, aplicado: t.moveAppliedAt, factura: t.moveInvoiceTid }
+        : null,
+      /**
+       * A CUÁNTAS MEGAS pasa la orden al cliente: de cuánto venía, a cuánto va y si
+       * el plan se le llegó a cambiar (`aplicado`). `null` en todo lo que no sea una
+       * orden de megas — y en las que nacieron sin decirlas: las 2.741 'Subir megas'
+       * del legacy (allá el plan destino vive en su tabla `temporales`, que todavía
+       * no se trae) y las que abre el chatbot con el plan por confirmar.
+       */
+      megas: t.planToName || t.planToMegas != null
+        ? {
+            /** `Plan.id` del destino: es lo que marca el desplegable al corregirla. */
+            planId: t.planToId,
+            plan: t.planToName,
+            a: t.planToMegas,
+            planAnterior: t.planFromName,
+            de: t.planFromMegas,
+            aplicado: t.planAppliedAt,
+          }
+        : null,
+      /**
+       * EL CARGO que se le facturó por abrir la orden, cuando su tipo lleva uno
+       * (traslado, agregar internet — ver `billing/cargos-orden.ts`). `null` en el
+       * resto y en las que no llegaron a cobrarse.
+       *
+       * Va aparte del bloque de arriba porque el traslado no es el único que cobra
+       * y porque la pregunta que responde es otra: la de arriba es "a dónde se
+       * mudó", ésta es "¿esto ya se le facturó o hay que cobrarlo en ventanilla?".
+       */
+      cargo: t.chargeInvoiceTid || t.chargeConcept
+        ? { concepto: t.chargeConcept, factura: t.chargeInvoiceTid }
+        : null,
       // Nombre completo, no el username con el que el legacy escribió la orden.
       assigned: (await traductorDeTecnicos(this.prisma)).nombre(t.assigned),
+      /**
+       * QUIÉN GENERÓ la orden. Una orden es una instrucción de trabajo: hasta ahora
+       * la ficha decía quién la iba a hacer pero no quién la mandó, y eso se
+       * preguntaba por teléfono. `origen` distingue a la persona del proceso: una
+       * "Reconexion Internet" que abrió el sistema al recibir el pago no se le
+       * reclama a nadie. Ver `Ticket.createdBySource`.
+       */
+      generadaPor: await this.generadaPorDe(t),
       signature: t.signatureName ? { name: t.signatureName, cc: t.signatureCc, rel: t.signatureRel, hasImage: !!t.signatureImage } : null,
       /**
        * Puntaje del trabajo. Van los dos números a propósito:
@@ -446,7 +545,11 @@ export class SupportService {
       subscriber: sub
         ? {
             id: sub.id, name: subName(sub), abonado: sub.abonado, doc: sub.docNumber,
-            phone: sub.phone1, phone2: sub.phone2, address: sub.addressLine,
+            // La dirección se arma de las piezas de `nomenclature`, no de
+            // `addressLine`: ese campo está vacío en 21.656 de 21.867 abonados y
+            // lo poco que trae es basura ('0', 'example.png', un pedazo de
+            // coordenada). Es la dirección con la que el técnico sale a la calle.
+            phone: sub.phone1, phone2: sub.phone2, address: direccionDe(sub.nomenclature, sub.addressLine),
             referencia: strOf('referencia'), residencia: strOf('residencia'),
             barrio, branch: sub.branch?.name ?? null,
             gpsLat: sub.gpsLat, gpsLng: sub.gpsLng, profile: sub.pppProfile, macEquipo: sub.macEquipo,
@@ -463,6 +566,10 @@ export class SupportService {
         return {
           code: e.code, mac: e.mac, serial: e.serial, installType: e.installType,
           port: e.port, vlan: e.vlan, nat: e.nat, status: e.status,
+          // Apartado en bodega PARA ESTA orden al abrirla: el técnico tiene que
+          // saber cuál llevarse (ver `EquipoReservaService`).
+          reservado: e.reservedTicketId === t.id,
+          bodega: e.warehouse?.name ?? null,
           // Plan y velocidad con los que quedó autenticado, en la propia línea
           // del equipo: al reabrir la orden se ve de un vistazo.
           esOnu: !!onu,
@@ -474,9 +581,29 @@ export class SupportService {
       materials: materials.map((m) => ({ id: m.id, name: m.materialName, qty: m.qty, price: Number(m.price), total: Number(m.price) * m.qty, warehouse: m.warehouseName, employee: m.employeeName, date: m.createdAt })),
       threads: threads.map((h) => ({
         id: h.id, message: textoPlano(h.message), date: h.date, employeeId: h.employeeId,
-        author: autores.get(h.employeeId) ?? null,
+        author: h.authorName ?? autores.get(h.employeeId) ?? null,
         attach: h.attach, attachName: h.attachName, geoLat: h.geoLat, geoLng: h.geoLng,
       })),
+    };
+  }
+
+  /**
+   * Quién generó la orden, ya legible.
+   *
+   * Tres fuentes, en orden: el nombre que se sella al crearla (`createdByName`), y
+   * para todo lo heredado, `col` —el username con el que la escribió el legacy—, que
+   * se traduce a nombre completo con el mismo censo que `assigned`. Si no hay ninguno
+   * de los dos (135.153 órdenes viejas nacieron con `col` vacío) devuelve `null`: no
+   * se sabe, y decir "Sistema" ahí sería inventarlo.
+   */
+  private async generadaPorDe(t: { createdByName: string | null; createdById: string | null; createdBySource: string | null; col: string | null; legacyId: number | null; createdAt: Date }) {
+    const nombre = (await traductorDeTecnicos(this.prisma)).nombre(t.createdByName ?? t.col);
+    if (!nombre) return null;
+    return {
+      nombre,
+      usuarioId: t.createdById,
+      origen: t.createdBySource ?? (t.legacyId != null ? 'LEGACY' : 'USUARIO'),
+      fecha: t.createdAt,
     };
   }
 
@@ -493,7 +620,18 @@ export class SupportService {
       code: t.code != null ? String(t.code) : '—',
       type: t.type, subject: t.subject, status: t.status, priority: t.priority,
       created: t.created, finalDate: t.finalDate, technician: t.assigned,
+      generadaPor: t.generadaPor?.nombre ?? null,
       problem: t.problem, section: t.section,
+      // Plazo pactado en una "Reconexión Combo por dias". Viaja siempre (null en
+      // el resto) para que la ficha pueda decir por cuántos días se reconectó.
+      graceDays: t.graceDays ?? null,
+      // A dónde se muda, en la orden que el técnico se lleva impresa: es la
+      // dirección a la que tiene que ir a montar el servicio.
+      traslado: t.traslado ? { desde: t.traslado.desde, hasta: t.traslado.hasta } : null,
+      // Y a cuántas megas hay que dejarlo, en la orden que se lleva impresa: el
+      // plan ya está cambiado en la ficha, pero la velocidad la tiene que dejar
+      // puesta él en la red.
+      megas: t.megas ? { de: t.megas.de, a: t.megas.a, plan: t.megas.plan } : null,
       subscriber: s
         ? {
             name: s.name ?? '—', doc: s.doc, abonado: s.abonado, phone: [s.phone, s.phone2].filter(Boolean).join(' · ') || null,
@@ -504,7 +642,7 @@ export class SupportService {
         : null,
       equipment: t.equipment.map((e) => ({ mac: e.mac, installType: e.installType, port: e.port, vlan: e.vlan, nat: e.nat, serial: e.serial })),
       materials: t.materials.map((m) => ({ name: m.name, qty: m.qty, price: m.price, total: m.total })),
-      threads: t.threads.map((h) => ({ message: h.message, date: h.date, hasPhoto: !!h.attach })),
+      threads: t.threads.map((h) => ({ message: h.message, date: h.date, hasPhoto: !!h.attach, author: h.author })),
       signature: t.signature,
     };
   }
@@ -570,7 +708,7 @@ export class SupportService {
     const conAbonado = {
       subscriber: {
         select: {
-          ...SUB, addressLine: true, neighborhood: true, phone1: true, phone2: true,
+          ...SUB, addressLine: true, nomenclature: true, neighborhood: true, phone1: true, phone2: true,
           gpsLat: true, gpsLng: true, branch: { select: { name: true } },
         },
       },
@@ -612,7 +750,7 @@ export class SupportService {
         vencida: diasAbierta != null && diasAbierta > DIAS_VENCIMIENTO,
         campo: esTrabajoDeCampo(t.type),
         client: subName(t.subscriber), subscriberId: t.subscriber?.id ?? null, abonado: t.subscriber?.abonado ?? null,
-        address: t.subscriber?.addressLine ?? null, phone: t.subscriber?.phone1 ?? null, phone2: t.subscriber?.phone2 ?? null,
+        address: direccionDe(t.subscriber?.nomenclature, t.subscriber?.addressLine), phone: t.subscriber?.phone1 ?? null, phone2: t.subscriber?.phone2 ?? null,
         sede: t.subscriber?.branch?.name ?? null,
         // Solo 1 de cada 4 abonados tiene GPS: se manda null en vez de un punto
         // inventado para que la UI no ofrezca un "navegar" que lleva a la nada.

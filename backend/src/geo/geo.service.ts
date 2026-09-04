@@ -6,6 +6,7 @@ import { exigirSedeSuscriptor, sedesDe, whereSedeSuscriptor } from '../common/se
 import { assertPoint, distMeters, parsePoint } from './geo.util';
 import { MapQueryDto, PingDto, RouteDto, SetSubscriberLocationDto } from './dto/geo.dto';
 import { RoutingService } from './routing.service';
+import { direccionDe } from '../common/subscriber-address';
 
 /** Tope de pines devueltos. Ver `points()` para por qué existe. */
 const MAX_PUNTOS = 5000;
@@ -138,7 +139,7 @@ export class GeoService {
         ? this.prisma.subscriber.findMany({
             where: whereSub,
             select: {
-              id: true, abonado: true, ...NOMBRE, addressLine: true, phone1: true,
+              id: true, abonado: true, ...NOMBRE, addressLine: true, nomenclature: true, phone1: true,
               status: true, gpsLat: true, gpsLng: true,
               branch: { select: { name: true, legacyId: true } },
             },
@@ -175,7 +176,7 @@ export class GeoService {
           id: s.id,
           abonado: s.abonado,
           name: nombreDe(s),
-          address: s.addressLine,
+          address: direccionDe(s.nomenclature, s.addressLine),
           phone: s.phone1,
           status: s.status,
           sede: s.branch?.name ?? null,
@@ -315,7 +316,10 @@ export class GeoService {
 
     await this.prisma.subscriber.update({
       where: { id },
-      data: { gpsLat: p.lat.toFixed(6), gpsLng: p.lng.toFixed(6) },
+      // `editedAt`: la coordenada la captura el técnico EN LA PUERTA del cliente y es
+      // mejor dato que el del legacy (donde el 75% de los activos no tiene ninguno).
+      // Sin el sello, la ida se la devolvía al valor viejo en la siguiente pasada.
+      data: { gpsLat: p.lat.toFixed(6), gpsLng: p.lng.toFixed(6), editedAt: new Date() },
     });
 
     if ((dto.source ?? 'campo') === 'campo') {

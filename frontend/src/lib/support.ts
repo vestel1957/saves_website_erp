@@ -64,12 +64,31 @@ export type MiRendimiento = {
   porTipo: { tipo: string; cerradas: number; revisitas: number; revisitaPct: number | null }[];
   casos: { id: string; code: number | null; tipo: string; fecha: string; abonado: string | null; cliente: string | null; queja: string | null; quejaFecha: string | null }[];
 };
-export type TicketRow = { id: string; code: number | null; legacyId: number; subject: string; type: string; description: string | null; priority: string | null; created: string; status: string; assigned: string | null; client: string | null; subscriberId: string | null; sede: string | null; barrio: string | null; finalDate: string | null };
+export type TicketRow = { id: string; code: number | null; legacyId: number; subject: string; type: string; description: string | null; priority: string | null; created: string; status: string; assigned: string | null; generadaPor: string | null; client: string | null; subscriberId: string | null; sede: string | null; barrio: string | null; finalDate: string | null };
 export type SupportStats = { total: number; pendientes: number; resueltos: number; anuladas: number; status: Record<string, number>; topTypes: { type: string; count: number }[]; topTechs: { tec: string; count: number }[]; todosPending: number };
 export type Paged<T> = { items: T[]; total: number; page: number; pageSize: number; pages: number };
 
 export const TICKET_STATUS_LABEL: Record<string, string> = { REALIZANDO: "Realizando", RESUELTO: "Resuelto", ANULADA: "Anulada", PENDIENTE: "Pendiente" };
+
+/**
+ * De dónde salió la orden (`Ticket.createdBySource`). Se muestra junto a quién la
+ * generó porque no es lo mismo un funcionario que un proceso: una "Reconexion
+ * Internet" que abrió el sistema al recibir el pago no se le reclama a nadie.
+ * USUARIO no se rotula — es el caso normal y el nombre ya lo dice todo.
+ */
+export const ORIGEN_ORDEN: Record<string, string> = {
+  SISTEMA: "automática",
+  CHATBOT: "por WhatsApp",
+  LEGACY: "sistema anterior",
+};
 export const TICKET_STATUS_TONE: Record<string, "success" | "warning" | "error" | "default"> = { REALIZANDO: "warning", RESUELTO: "success", ANULADA: "error", PENDIENTE: "warning" };
+
+/**
+ * Los dos estados en los que una orden sigue VIVA (RESUELTO y ANULADA son las
+ * cerradas). Aquí en un solo sitio para que el aviso de "este cliente ya tiene
+ * una orden abierta" y cualquier filtro futuro pregunten por lo mismo.
+ */
+export const TICKET_ESTADOS_ABIERTOS = ["PENDIENTE", "REALIZANDO"] as const;
 
 // Tipos de orden válidos (detalle). Fuente única: usada por Nueva orden y el filtro.
 export const TICKET_TYPES = [
@@ -82,3 +101,32 @@ export const TICKET_TYPES = [
 // Prioridad de la orden (mayor → menor). Un color por nivel para leerla de un vistazo.
 export const TICKET_PRIORITIES = ["Urgente", "Alta", "Media", "Baja"] as const;
 export const TICKET_PRIORITY_TONE: Record<string, "success" | "warning" | "error" | "info" | "default"> = { Urgente: "error", Alta: "warning", Media: "info", Baja: "success" };
+
+/**
+ * ¿La orden es una reconexión? Espejo de `esReconexion` del backend.
+ *
+ * La reconexión no pide la firma de quien recibe al cerrarla: se hace desde el
+ * sistema y no hay nadie enfrente que firme. Aquí sirve para no pintar el acta.
+ */
+export const esReconexion = (tipo?: string | null): boolean =>
+  (tipo ?? "").trim().toLowerCase().startsWith("reconexion");
+
+/**
+ * ¿La orden es un TRASLADO de vivienda? Espejo de `esTraslado` del backend.
+ *
+ * Es 'Traslado' a secas: el 'Traslado interno De Equipos Red en cliente final'
+ * mueve el equipo dentro de la misma casa, no cambia de dirección. Aquí sirve para
+ * reclamar el destino en las órdenes que nacieron sin él.
+ */
+export const esTraslado = (tipo?: string | null): boolean =>
+  (tipo ?? "").trim().toLowerCase() === "traslado";
+
+/**
+ * ¿La orden cambia la velocidad contratada? Espejo de `esCambioDeMegas` del backend.
+ *
+ * Con `includes` y no contra 'Subir megas' / 'Bajar megas' exactos porque el sistema
+ * viejo escribió variantes y todas son el mismo trabajo. Aquí sirve para pedir el
+ * plan destino al abrirla y para señalar las que nacieron sin él.
+ */
+export const esCambioDeMegas = (tipo?: string | null): boolean =>
+  (tipo ?? "").trim().toLowerCase().includes("megas");

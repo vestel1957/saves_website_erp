@@ -298,6 +298,7 @@ export default function ProyectoDetallePage() {
             { key: "start", header: "Inicio", render: (r: any) => fmtDate(r.start) },
             { key: "dueDate", header: "Vence", render: (r: any) => fmtDate(r.dueDate) },
             { key: "priority", header: "Prioridad", render: (r: any) => <span className="text-text-secondary">{PRIORITY_LABEL[r.priority] ?? (r.priority || "—")}</span> },
+            { key: "author", header: "Creada por", render: (r: any) => <span className="text-text-secondary">{r.author ?? "—"}</span> },
           ]}
         />
       </div>

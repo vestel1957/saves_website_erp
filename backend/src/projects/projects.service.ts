@@ -93,12 +93,25 @@ export class ProjectsService {
     const tasks = pr.legacyId != null
       ? await this.prisma.todoTask.findMany({ where: { related: 1, rid: pr.legacyId }, orderBy: { tdate: 'desc' }, take: 100 })
       : [];
+    // `employeeId` es el id legacy del empleado (`aauth_users.id`), no un cuid.
+    const eids = [...new Set(tasks.map((t) => t.employeeId).filter((n) => n > 0))];
+    const autores = new Map(
+      eids.length
+        ? (await this.prisma.staff.findMany({ where: { legacyId: { in: eids } }, select: { legacyId: true, name: true } }))
+            .map((r) => [r.legacyId!, r.name] as const)
+        : [],
+    );
     return {
       id: pr.id, name: pr.name, status: pr.status, priority: pr.priority, progress: pr.progress,
       startDate: pr.startDate, endDate: pr.endDate, tag: pr.tag, phase: pr.phase, note: pr.note, worth: num(pr.worth),
       subscriber: pr.subscriber ? { id: pr.subscriber.id, name: subName(pr.subscriber), abonado: pr.subscriber.abonado } : null,
       milestones: pr.milestones.map((m) => ({ id: m.id, name: m.name, startDate: m.startDate, endDate: m.endDate, detail: m.detail, color: m.color })),
-      tasks: tasks.map((t) => ({ id: t.id, name: t.name, status: t.status, start: t.start, dueDate: t.dueDate, priority: t.priority, description: t.description })),
+      tasks: tasks.map((t) => ({
+        id: t.id, name: t.name, status: t.status, start: t.start, dueDate: t.dueDate,
+        priority: t.priority, description: t.description,
+        // Quién la creó: el nombre sellado, o el del empleado del `eid` heredado.
+        author: t.createdByName ?? autores.get(t.employeeId) ?? null,
+      })),
     };
   }
 

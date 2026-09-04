@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { objetoJson } from "@/lib/errores";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
 import { DataTable } from "@/components/ui/DataTable";
@@ -12,19 +11,25 @@ import { Pagination } from "@/components/ui/Pagination";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { LoadError } from "@/components/ui/LoadError";
 import { ListToolbar } from "@/components/ui/ListToolbar";
-import { Input, Select } from "@/components/ui/Field";
+import { Input } from "@/components/ui/Field";
+import { MultiSelect } from "@/components/ui/MultiSelect";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/Modal";
 import { TecChip } from "@/components/soporte/TecChip";
+import { TarjetaOrden } from "@/components/soporte/TarjetaOrden";
 import { AvisoTurno } from "@/components/soporte/AvisoTurno";
 import { useAuth } from "@/context/AuthProvider";
 import { useRequest } from "@/lib/useRequest";
 import { useOrden } from "@/lib/useOrden";
+import { ordenDeTexto, useFiltrosEnUrl, useFiltrosRecordados } from "@/lib/useFiltrosUrl";
 import {
   type Paged, type TicketRow, type SupportStats,
   TICKET_STATUS_LABEL, TICKET_STATUS_TONE, TICKET_PRIORITY_TONE,
   TICKET_TYPES, TICKET_PRIORITIES,
 } from "@/lib/support";
+
+/** Un filtro múltiple tal como viaja en la URL: "PENDIENTE,REALIZANDO" → ["PENDIENTE","REALIZANDO"]. */
+const listaDeUrl = (crudo?: string): string[] => (crudo ? crudo.split(",").map((v) => v.trim()).filter(Boolean) : []);
 
 /** Atajos de periodo. `created` es una columna `date`, así que "hasta hoy" incluye hoy. */
 function atajosDeFecha(): { label: string; from: string; to: string }[] {
@@ -69,33 +74,56 @@ function atajosDeFecha(): { label: string; from: string; to: string }[] {
  * parámetro de alcance — si esta vista se equivocara, seguiría sin ver nada ajeno.
  */
 export function MisOrdenes() {
-  const router = useRouter();
+  // Sus filtros también se guardan (en la dirección y, entre visitas, en el
+  // navegador): el técnico que está barriendo sus pendientes abre una orden, la
+  // cierra y vuelve a la lista TAL COMO LA DEJÓ. Ver `useFiltrosRecordados`.
+  return (
+    <Suspense fallback={<PageSkeleton />}>
+      <MisOrdenesConFiltros />
+    </Suspense>
+  );
+}
+
+function MisOrdenesConFiltros() {
+  const inicial = useFiltrosRecordados();
+  if (!inicial) return <PageSkeleton />;
+  return <MisOrdenesLista urlInicial={inicial.valores} recordado={inicial.recordado} />;
+}
+
+function MisOrdenesLista({ urlInicial, recordado }: { urlInicial: Record<string, string>; recordado: boolean }) {
   const { loading: authLoading, authFetch } = useAuth();
   const [stats, setStats] = useState<SupportStats | null>(null);
-  const [search, setSearch] = useState("");
-  const [status, setStatus] = useState("");
-  const [type, setType] = useState("");
-  const [priority, setPriority] = useState("");
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
+  const [search, setSearch] = useState(urlInicial.q ?? "");
+  // Selección múltiple: "pendientes Y realizando" en una sola pasada. Viajan a la
+  // API en el mismo parámetro, separadas por comas.
+  const [status, setStatus] = useState<string[]>(listaDeUrl(urlInicial.estado));
+  const [type, setType] = useState<string[]>(listaDeUrl(urlInicial.detalle));
+  const [priority, setPriority] = useState<string[]>(listaDeUrl(urlInicial.prioridad));
+  const [from, setFrom] = useState(urlInicial.desde ?? "");
+  const [to, setTo] = useState(urlInicial.hasta ?? "");
   const [showFechas, setShowFechas] = useState(false);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(25);
-  const orden = useOrden();
+  const [page, setPage] = useState(Number(urlInicial.pag) > 1 ? Number(urlInicial.pag) : 1);
+  const [pageSize, setPageSize] = useState(Number(urlInicial.tam) > 0 ? Number(urlInicial.tam) : 25);
+  const orden = useOrden(ordenDeTexto(urlInicial.ord));
+
+  // Los filtros múltiples ya escritos como viajan (coma): sirven de dependencia
+  // estable, cosa que un array —nuevo en cada render— no puede ser.
+  const kStatus = status.join(","), kType = type.join(","), kPriority = priority.join(",");
 
   const filtrosFecha = (from ? 1 : 0) + (to ? 1 : 0);
-  const filtrosActivos = filtrosFecha + [search, status, type, priority].filter(Boolean).length;
+  // Cuenta filtros PUESTOS, no valores marcados: tres estados son un filtro de estado.
+  const filtrosActivos = filtrosFecha + (search ? 1 : 0) + [status, type, priority].filter((f) => f.length > 0).length;
   const limpiarTodo = () => {
-    setSearch(""); setStatus(""); setType(""); setPriority(""); setFrom(""); setTo("");
+    setSearch(""); setStatus([]); setType([]); setPriority([]); setFrom(""); setTo("");
   };
 
   const { data, cargando, error, refrescar: load } = useRequest<Paged<TicketRow>>(
     () => {
       const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize), ...orden.params });
       if (search.trim()) qs.set("search", search.trim());
-      if (status) qs.set("status", status);
-      if (type) qs.set("type", type);
-      if (priority) qs.set("priority", priority);
+      if (kStatus) qs.set("status", kStatus);
+      if (kType) qs.set("type", kType);
+      if (kPriority) qs.set("priority", kPriority);
       if (from) qs.set("from", from);
       if (to) qs.set("to", to);
       // Sin periodo elegido = TODO su histórico. La vista general recorta al año en
@@ -105,7 +133,7 @@ export function MisOrdenes() {
       if (!from && !to) qs.set("all", "1");
       return `/support/tickets?${qs.toString()}`;
     },
-    [page, pageSize, orden.clave, search, status, type, priority, from, to],
+    [page, pageSize, orden.clave, search, kStatus, kType, kPriority, from, to],
     // Al teclear se espera un poco y se cancela la petición en vuelo, para que una
     // respuesta lenta no pise a otra más nueva (mismo criterio que /soporte).
     { saltar: authLoading, debounceMs: search ? 350 : 0 },
@@ -114,7 +142,21 @@ export function MisOrdenes() {
   const cargarStats = () => { void authFetch("/support/stats").then(objetoJson).then(setStats).catch(() => {}); };
   useEffect(() => { if (!authLoading) cargarStats(); }, [authLoading]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { setPage(1); }, [pageSize, orden.clave, search, status, type, priority, from, to]);
+  // Cambiar un filtro manda a la página 1 — pero no en el primer render, que
+  // borraría la página con la que se volvió de una orden.
+  const primerRender = useRef(true);
+  useEffect(() => {
+    if (primerRender.current) { primerRender.current = false; return; }
+    setPage(1);
+  }, [pageSize, orden.clave, search, kStatus, kType, kPriority, from, to]);
+
+  // Lo que está puesto en pantalla se refleja en la dirección (y queda guardado
+  // para la próxima visita).
+  useFiltrosEnUrl({
+    q: search.trim(), estado: kStatus, detalle: kType, prioridad: kPriority,
+    desde: from, hasta: to,
+    pag: page > 1 ? page : "", tam: pageSize !== 25 ? pageSize : "", ord: orden.clave,
+  });
 
   if (authLoading) return <PageSkeleton />;
 
@@ -167,18 +209,18 @@ export function MisOrdenes() {
         onSearch={setSearch}
         searchPlaceholder="Buscar en tus órdenes: n° de orden, cliente, nº de abonado o asunto…"
       >
-        <Select value={status} onChange={(e) => setStatus(e.target.value)} className="w-auto">
-          <option value="">Todos los estados</option>
-          {Object.entries(TICKET_STATUS_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-        </Select>
-        <Select value={priority} onChange={(e) => setPriority(e.target.value)} className="w-auto">
-          <option value="">Toda prioridad</option>
-          {TICKET_PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
-        </Select>
-        <Select value={type} onChange={(e) => setType(e.target.value)} className="w-auto">
-          <option value="">Todos los detalles</option>
-          {TICKET_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-        </Select>
+        <MultiSelect
+          label="Estado" todos="Todos los estados" value={status} onChange={setStatus}
+          options={Object.entries(TICKET_STATUS_LABEL).map(([value, label]) => ({ value, label }))}
+        />
+        <MultiSelect
+          label="Prioridad" todos="Toda prioridad" value={priority} onChange={setPriority}
+          options={TICKET_PRIORITIES.map((p) => ({ value: p, label: p }))}
+        />
+        <MultiSelect
+          label="Detalles" todos="Todos los detalles" value={type} onChange={setType} width={280}
+          options={TICKET_TYPES.map((t) => ({ value: t, label: t }))}
+        />
         <button
           onClick={() => setShowFechas(true)}
           className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-[12px] font-semibold transition-colors ${filtrosFecha > 0 ? "border-brand bg-brand-soft text-brand" : "border-border-default bg-surface text-text-secondary hover:bg-surface-2"}`}
@@ -228,6 +270,16 @@ export function MisOrdenes() {
         </div>
       </Modal>
 
+      {/* Al entrar por el menú los filtros vuelven puestos: hay que decirlo, o una
+          lista corta parece un sistema roto y no una lista filtrada. */}
+      {recordado && filtrosActivos > 0 && (
+        <p className="mb-2 flex flex-wrap items-center gap-1.5 text-[12px] text-text-tertiary">
+          <Icon name="history" size={13} />
+          Se aplicaron los filtros de tu última visita.
+          <button onClick={limpiarTodo} className="font-semibold text-brand hover:underline">Ver todas tus órdenes</button>
+        </p>
+      )}
+
       {filtrosActivos > 0 && data && (
         <p className="mb-2 text-[12px] text-text-tertiary">
           {data.total.toLocaleString("es-CO")}{" "}
@@ -247,9 +299,13 @@ export function MisOrdenes() {
             empty={filtrosActivos > 0
               ? "Ninguna de tus órdenes coincide con esos filtros."
               : "No tienes órdenes de trabajo asignadas."}
-            onRowClick={(r) => router.push(`/soporte/${r.id}`)}
+            rowHref={(r) => `/soporte/${r.id}`}
             sort={orden.sort}
             onSort={orden.onSort}
+            // En móvil, tarjeta de orden en vez de los ocho renglones
+            // etiqueta/valor que salen de las columnas. Sin el nombre del técnico
+            // —todas son suyas— y sin enlace al cliente: su alcance es la orden.
+            cardRender={(r) => <TarjetaOrden r={r} ocultarTecnico enlazarCliente={false} />}
             columns={[
               { key: "code", header: "N°", sortable: true, render: (r) => <span className="font-mono text-text-secondary">{r.code ?? r.legacyId}</span> },
               { key: "priority", header: "Prioridad", sortable: true, render: (r) => r.priority ? <Badge label={r.priority} tone={TICKET_PRIORITY_TONE[r.priority] ?? "default"} /> : <span className="text-text-tertiary">—</span> },
@@ -273,7 +329,15 @@ export function MisOrdenes() {
               // zanja de un vistazo, y si algún día apareciera otro nombre aquí,
               // sería la señal de que el alcance se rompió.
               { key: "tec", header: "Asignada a", render: (r) => <TecChip name={r.assigned} /> },
-              { key: "created", header: "Creada", sortable: true, render: (r) => <span className="whitespace-nowrap text-[12px] text-text-secondary">{new Date(r.created).toLocaleDateString("es-CO")}</span> },
+              // Debajo de la fecha, QUIÉN se la mandó: al técnico le importa a quién
+              // preguntarle por una visita que no entiende, y hasta ahora la orden
+              // no lo decía. Las heredadas del legacy sin autor no muestran renglón.
+              { key: "created", header: "Creada", sortable: true, render: (r) => (
+                <div className="flex min-w-0 flex-col">
+                  <span className="whitespace-nowrap text-[12px] text-text-secondary">{new Date(r.created).toLocaleDateString("es-CO")}</span>
+                  {r.generadaPor && <span className="max-w-[140px] truncate text-[11px] text-text-tertiary" title={`Generada por ${r.generadaPor}`}>por {r.generadaPor}</span>}
+                </div>
+              ) },
               { key: "status", header: "Estado", sortable: true, render: (r) => <Badge label={TICKET_STATUS_LABEL[r.status] ?? r.status} tone={TICKET_STATUS_TONE[r.status] ?? "default"} /> },
             ]}
           />

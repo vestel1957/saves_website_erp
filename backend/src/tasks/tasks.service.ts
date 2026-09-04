@@ -4,6 +4,7 @@ import { Prisma, TodoStatus, TodoPriority } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { CreateTaskDto, UpdateTaskDto, TaskFilter } from './dto/tasks.dto';
+import { autorDeOrden } from '../support/autor-orden';
 
 /**
  * Tareas / to-do (migrado de `Tools.php` + tabla `todolist` del legacy).
@@ -55,6 +56,7 @@ export class TasksService {
   private static readonly ORDEN_LISTA = {
     name: 'name', status: 'status', priority: 'priority',
     tdate: 'tdate', dueDate: 'dueDate', orderId: 'orderId', assignee: 'assigneeId',
+    author: 'createdByName',
   };
 
   async list(f: TaskFilter, user?: AuthUser) {
@@ -71,10 +73,11 @@ export class TasksService {
 
     if (f.mine) {
       const me = await this.staffOf(user);
-      // Sin ficha de empleado vinculada no hay "mis tareas": devolvemos vacío en vez
-      // de ignorar el filtro y mostrar las de todo el mundo.
+      // Sin ficha de empleado vinculada no hay `eid`, pero desde que la tarea se firma
+      // con la cuenta (`createdById`) sí hay por dónde reconocer las propias. El -1 es
+      // el hueco: sin ficha, esa pata no casa con nada en vez de traerlas todas.
       const legacyId = me?.legacyId ?? -1;
-      where.OR = [{ employeeId: legacyId }, { assigneeId: legacyId }];
+      where.OR = [{ employeeId: legacyId }, { assigneeId: legacyId }, ...(user?.id ? [{ createdById: user.id }] : [])];
     } else if (f.assignee) {
       where.OR = [{ employeeId: Number(f.assignee) }, { assigneeId: Number(f.assignee) }];
     }
@@ -102,7 +105,9 @@ export class TasksService {
         id: r.id, legacyId: r.legacyId, name: r.name, status: r.status, priority: r.priority,
         tdate: r.tdate, start: r.start, dueDate: r.dueDate, description: r.description,
         orderId: r.orderId || null,
-        author: names.get(r.employeeId) ?? null,
+        // El nombre sellado manda; el `eid` es sólo el respaldo de lo heredado.
+        author: r.createdByName ?? names.get(r.employeeId) ?? null,
+        authorSource: r.createdBySource ?? null,
         assignee: names.get(r.assigneeId) ?? null,
         overdue: r.status !== 'DONE' && !!r.dueDate && r.dueDate.toISOString().slice(0, 10) < hoy,
       })),
@@ -114,7 +119,12 @@ export class TasksService {
     const t = await this.prisma.todoTask.findUnique({ where: { id } });
     if (!t) throw new NotFoundException('Tarea no encontrada');
     const names = await this.namesByLegacyId([t.employeeId, t.assigneeId]);
-    return { ...t, author: names.get(t.employeeId) ?? null, assignee: names.get(t.assigneeId) ?? null };
+    return {
+      ...t,
+      author: t.createdByName ?? names.get(t.employeeId) ?? null,
+      authorSource: t.createdBySource ?? null,
+      assignee: names.get(t.assigneeId) ?? null,
+    };
   }
 
   /** Responsables seleccionables: empleados con ficha legacy (los que la tabla referencia). */
@@ -135,6 +145,10 @@ export class TasksService {
 
   async create(dto: CreateTaskDto, user?: AuthUser) {
     const me = await this.staffOf(user);
+    // Quién la crea se sella aquí, con la misma firma que una orden de servicio: el
+    // `eid` sólo lo tiene quien tiene ficha de empleado, así que por sí solo dejaba
+    // sin autor a media plantilla. Ver `support/autor-orden.ts`.
+    const autor = user ? autorDeOrden(user) : null;
     // `legacyId` es obligatorio y único en el modelo (viene del ETL). Para las tareas
     // nacidas en el stack nuevo seguimos la secuencia por encima del máximo legacy,
     // así no chocan con una reejecución del ETL sobre el histórico.
@@ -154,6 +168,9 @@ export class TasksService {
         employeeId: me?.legacyId ?? 0,
         assigneeId: dto.assigneeId ?? me?.legacyId ?? 0,
         related: dto.related ?? null,
+        createdByName: autor?.createdByName ?? null,
+        createdById: autor?.createdById ?? null,
+        createdBySource: autor?.createdBySource ?? 'SISTEMA',
       },
     });
   }

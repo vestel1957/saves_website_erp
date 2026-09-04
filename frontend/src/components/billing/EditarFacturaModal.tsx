@@ -20,6 +20,14 @@ const KINDS: { value: Kind; label: string }[] = [
 ];
 
 const emptyItem = (): Item => ({ description: "", qty: 1, price: 0, taxRate: 0 });
+
+/** Motivos de siempre, a un clic (el campo es opcional, esto es sólo para no teclear). */
+const MOTIVOS = [
+  "Se cobró el plan que no era",
+  "Cobro duplicado",
+  "Ajuste de valor acordado",
+  "Corrección de cantidad",
+];
 const fecha = (d: string | Date) => new Date(d).toISOString().slice(0, 10);
 
 /**
@@ -113,7 +121,6 @@ export function EditarFacturaModal({
     setErr(null);
     const clean = items.filter((it) => it.description.trim());
     if (!clean.length) { setErr("La factura tiene que quedar con al menos un concepto."); return; }
-    if (reason.trim().length < 3) { setErr("Escribe el motivo del cambio: queda en la auditoría de la factura."); return; }
     if (bajoLoPagado) { setErr(`La factura ya tiene ${cop(pagado)} pagados y no puede quedar por debajo de esa cifra.`); return; }
     setSaving(true);
     try {
@@ -121,7 +128,7 @@ export function EditarFacturaModal({
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          invoiceDate, dueDate, kind, notes, reason: reason.trim(),
+          invoiceDate, dueDate, kind, notes, reason: reason.trim() || undefined,
           items: clean.map((it) => ({
             productName: it.productName ?? it.description,
             productId: it.productId,
@@ -228,10 +235,7 @@ export function EditarFacturaModal({
                 <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
               </Field>
               <Field label="Nota de la factura">
-                <Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Opcional" />
-              </Field>
-              <Field label="Motivo del cambio" hint="Queda registrado en la auditoría junto con el antes y el después">
-                <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Ej: se cobró el plan que no era" />
+                <Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Opcional · sale en la factura" />
               </Field>
             </div>
           </div>
@@ -273,6 +277,31 @@ export function EditarFacturaModal({
               anterior siga activo, allá se seguirá viendo el valor viejo.
             </div>
           )}
+          <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
+            <Field
+              label="Motivo del cambio"
+              hint="Opcional: si lo escribes queda en la auditoría, junto con el antes y el después."
+            >
+              <Input
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                placeholder="Opcional · ej: se cobró el plan que no era"
+              />
+            </Field>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {MOTIVOS.map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setReason(m)}
+                  className="rounded-full border border-border-subtle bg-surface-2 px-2.5 py-1 text-[11px] font-medium text-text-secondary hover:border-brand hover:text-brand"
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {err && <p className="text-[12px] text-error-text">{err}</p>}
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={onClose}>Cancelar</Button>

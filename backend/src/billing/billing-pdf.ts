@@ -22,6 +22,8 @@ type InvoiceDetail = {
   period: string | null;
   subtotal: number; tax: number; discount: number; total: number; paid: number; balance: number;
   paymentMethod: string | null;
+  /** Observación de la factura (y, si está anulada, el motivo de la anulación). */
+  notes?: string | null;
   subscriber: { name: string; abonado: number; docType: string | null; docNumber: string | null; email: string | null; phone: string | null; branch: string | null } | null;
   items: { product: string | null; description: string | null; qty: number; price: number; taxRate: number; subtotal: number; taxTotal: number }[];
   payments: { date: Date | string; amount: number; method: string | null; status: string | null }[];
@@ -91,7 +93,11 @@ function renderInvoice(doc: PDFKit.PDFDocument, inv: InvoiceDetail) {
       String(it.qty),
       cop(it.price),
       it.taxRate ? `${it.taxRate}%` : '—',
-      cop(it.subtotal + it.taxTotal),
+      // Total de la línea desde `price` (base sin IVA en AMBAS convenciones) + su
+      // IVA. No se usa `subtotal`: en los ítems importados del legacy ese campo
+      // viene con el IVA YA incluido, y sumarle taxTotal lo cobraba dos veces —
+      // los renglones no cuadraban contra el total del pie de la factura.
+      cop(it.qty * it.price + it.taxTotal),
     ], i);
   });
 
@@ -104,6 +110,13 @@ function renderInvoice(doc: PDFKit.PDFDocument, inv: InvoiceDetail) {
     // llama a preguntar.
     ['Saldo', cop(inv.balance)],
   ]);
+
+  // La observación es lo que explica la factura al que la recibe ("descuento 5 %",
+  // "se corrigió el plan"): estaba en la BD y no salía impresa en ninguna parte.
+  if (inv.notes) {
+    B.section(doc, 'Observación');
+    B.note(doc, inv.notes);
+  }
 
   if (inv.payments?.length) {
     B.section(doc, 'Pagos aplicados');

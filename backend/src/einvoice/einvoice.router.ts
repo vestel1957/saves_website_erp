@@ -5,7 +5,7 @@
  * controlador. Cablea HTTP -> método: extrae los argumentos de `req` y llama.
  * La lógica sigue viviendo en EinvoiceController, que ya no lleva decoradores.
  *
- * Endpoints: 15
+ * Endpoints: 16
  */
 import { crearRouter, manejar } from '../core/http/ruta';
 import { validar } from '../core/http/validar';
@@ -15,7 +15,7 @@ import { einvoiceEmitService, einvoiceService } from '../core/contenedor';
 import { IsInt, IsOptional, IsString, Max, Min, MinLength } from 'class-validator';
 import { EinvoiceService } from './einvoice.service';
 import { EinvoiceEmitService } from './einvoice-emit.service';
-import { BulkEflagsDto, SetEflagsDto, UpdateSiigoAccountDto } from './dto/einvoice.dto';
+import { BranchBulkEflagsDto, BulkEflagsDto, SetEflagsDto, UpdateSiigoAccountDto } from './dto/einvoice.dto';
 
 /** Instancia única del controlador. Las dependencias salen del contenedor. */
 const einvoice = new EinvoiceController(einvoiceService, einvoiceEmitService);
@@ -56,11 +56,18 @@ einvoiceRouter.get(
   manejar((req) => einvoice.branches()),
 );
 
+einvoiceRouter.post(
+  '/branches/:id/eflags-bulk',
+  autenticar,
+  exigirArea('contabilidad'),
+  manejar((req) => einvoice.branchBulkEflags(req.params.id, validar(BranchBulkEflagsDto, req.body))),
+);
+
 einvoiceRouter.get(
   '/branches/:id/subscribers',
   autenticar,
   exigirArea('contabilidad'),
-  manejar((req) => einvoice.branchSubscribers(req.params.id, req.query.search as string, req.query.page as string, req.query.pageSize as string, req.query.sort as string, req.query.dir as string)),
+  manejar((req) => einvoice.branchSubscribers(req.params.id, req.query.search as string, req.query.page as string, req.query.pageSize as string, req.query.sort as string, req.query.dir as string, req.query.estado as string, req.query.marcados as string)),
 );
 
 einvoiceRouter.post(

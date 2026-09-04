@@ -21,6 +21,23 @@ export class BulkEflagsDto {
   value!: boolean;
 }
 
+/**
+ * Marca en lote TODA la sede que cumpla el filtro (no una lista de ids). Los
+ * campos del filtro son los mismos de la lista para que lo que se marca sea
+ * exactamente lo que el usuario está viendo.
+ */
+export class BranchBulkEflagsDto {
+  @IsIn(['tv', 'internet'])
+  service!: 'tv' | 'internet';
+
+  @IsBoolean()
+  value!: boolean;
+
+  @IsOptional() @IsString() search?: string;
+  @IsOptional() @IsIn(['facturables', 'todos']) estado?: string;
+  @IsOptional() @IsIn(['', 'si', 'no']) marcados?: string;
+}
+
 /** Nullable int: acepta undefined (no cambia), null (limpia) o entero. */
 const NullableInt = () => (target: object, key: string) => {
   IsOptional()(target, key);

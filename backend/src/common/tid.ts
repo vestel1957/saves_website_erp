@@ -22,6 +22,16 @@ type Db = Pick<Prisma.TransactionClient, '$queryRaw'>;
  * porque los nombres llevan mayúsculas y Postgres las plegaría a minúsculas sin comillas.
  */
 export const TID_SEQ = {
+  /**
+   * Nº de FACTURA. Misma historia que `ticketCode`: nació en un bloque aparte (500.000)
+   * para no pisar al legacy, y el bloque dejó de estar aparte al empezar a empujarle
+   * facturas — él numera con `MAX(tid)+1` y adoptó nuestro máximo, hasta emitir su
+   * factura 470663 con un tid que ya era nuestro (2026-08-28).
+   *
+   * Mientras el legacy facture, el número de lo que VIAJA lo reparte él: el writeback
+   * pide su `MAX(tid)+1` y renumera la nuestra. Esta secuencia (subida a 900.000 en
+   * `20260828220000_tid_seq_900k`) solo da un número de partida fuera de su alcance.
+   */
   subInvoice: '"SubInvoice_tid_seq"',
   recurringInvoice: '"RecurringInvoice_tid_seq"',
   stockReturn: '"StockReturn_tid_seq"',
@@ -32,6 +42,19 @@ export const TID_SEQ = {
   quote: '"Quote_tid_seq"',
   /** Consecutivo de asiento contable (`JournalEntry.number`, columna @unique). */
   journalEntry: '"JournalEntry_number_seq"',
+  /**
+   * Nº de ORDEN de servicio. Nació en un rango APARTE (desde 500.000) para no pisar el
+   * contador del legacy, y ese rango dejó de estar aparte el día que empezamos a
+   * empujarle órdenes: el legacy numera con `MAX(codigo)+1`, así que adoptó nuestro
+   * máximo y siguió contando desde ahí (llegó a 504.170 con esta secuencia en 500.130).
+   *
+   * Mientras los técnicos trabajen en el legacy, el número LO REPARTE EL LEGACY: esta
+   * secuencia da un número de partida y el writeback lo cambia si allá ya está cogido
+   * (`pushTickets` renumera). Sirve para que la orden nazca con un número aunque el
+   * legacy no responda, no como fuente de verdad de la numeración.
+   * Ver 20260811150000_ticket_code_seq y [[ordenes-viajan-al-legacy]].
+   */
+  ticketCode: '"Ticket_code_seq"',
 } as const;
 
 export type TidSequence = (typeof TID_SEQ)[keyof typeof TID_SEQ];

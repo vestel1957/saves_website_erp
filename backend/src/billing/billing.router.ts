@@ -5,7 +5,7 @@
  * controlador. Cablea HTTP -> método: extrae los argumentos de `req` y llama.
  * La lógica sigue viviendo en BillingController, que ya no lleva decoradores.
  *
- * Endpoints: 23
+ * Endpoints: 27
  */
 import { crearRouter, manejar } from '../core/http/ruta';
 import { validar } from '../core/http/validar';
@@ -19,7 +19,7 @@ import { reciboRolloPdf } from '../common/pdf/recibo-rollo';
 import { FacturasService } from './facturas.service';
 import { RecurringService } from './recurring.service';
 import { CatalogoService } from './catalogo.service';
-import { CreateInvoiceDto, CreateNoteDto, GenerateInvoicesDto, UpdateInvoiceDto, VoidInvoiceDto } from './dto/facturas.dto';
+import { AsignarServicioDto, CreateInvoiceDto, CreateNoteDto, CreateNotesBulkDto, GenerateInvoicesDto, UpdateInvoiceDto, VoidInvoiceDto } from './dto/facturas.dto';
 import { CreateRecurringDto } from './dto/recurring.dto';
 
 /** Instancia única del controlador. Las dependencias salen del contenedor. */
@@ -50,7 +50,7 @@ billingRouter.get(
 billingRouter.post(
   '/invoices',
   autenticar,
-  exigirArea('contabilidad'),
+  exigirArea('contabilidad', 'caja'),
   manejar((req) => billing.create(validar(CreateInvoiceDto, req.body), usuarioDe(req))),
 );
 
@@ -82,6 +82,13 @@ billingRouter.post(
   manejar((req) => billing.sendEmail(req.params.id)),
 );
 
+billingRouter.get(
+  '/invoices/:id/historial',
+  autenticar,
+  exigirArea('contabilidad', 'caja'),
+  manejar((req) => billing.historial(req.params.id, usuarioDe(req))),
+);
+
 billingRouter.post(
   '/invoices/:id/notes',
   autenticar,
@@ -94,6 +101,20 @@ billingRouter.get(
   autenticar,
   exigirArea('contabilidad', 'caja'),
   manejar((req, res) => billing.invoicePdf(req.params.id, res, req.query.formato as string, usuarioDe(req))),
+);
+
+billingRouter.get(
+  '/invoices/:id/servicio',
+  autenticar,
+  exigirArea('contabilidad', 'caja'),
+  manejar((req) => billing.servicioAsignado(req.params.id, usuarioDe(req))),
+);
+
+billingRouter.post(
+  '/invoices/:id/servicio',
+  autenticar,
+  exigirArea('contabilidad'),
+  manejar((req) => billing.asignarServicio(req.params.id, validar(AsignarServicioDto, req.body), usuarioDe(req))),
 );
 
 billingRouter.post(
@@ -114,7 +135,14 @@ billingRouter.get(
   '/notes',
   autenticar,
   exigirArea('contabilidad', 'caja'),
-  manejar((req) => billing.listNotes(req.query.page as string, req.query.pageSize as string, req.query.search as string, req.query.type as string, req.query.sortBy as string, req.query.sortDir as string)),
+  manejar((req) => billing.listNotes(req.query.page as string, req.query.pageSize as string, req.query.search as string, req.query.type as string, req.query.branchId as string, req.query.from as string, req.query.to as string, req.query.authorId as string, req.query.montoMin as string, req.query.montoMax as string, req.query.sortBy as string, req.query.sortDir as string, usuarioDe(req))),
+);
+
+billingRouter.post(
+  '/notes',
+  autenticar,
+  exigirArea('contabilidad'),
+  manejar((req) => billing.createNotes(validar(CreateNotesBulkDto, req.body), usuarioDe(req))),
 );
 
 billingRouter.get(

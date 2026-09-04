@@ -18,7 +18,7 @@ const cobranzas: any = {};
 const user: any = { id: 'smoke', name: 'Prueba Contabilidad', email: 'prueba@vestel.com.co', permissions: ['system.admin'] };
 
 async function main() {
-  const svc = new FacturasService(prisma as any, posting, cobranzas);
+  const svc = new FacturasService(prisma as any, posting, cobranzas, {} as any);
   const antes = await prisma.subInvoice.findUnique({ where: { id: ID }, include: { items: true } });
   console.log('ANTES  total', String(antes!.total), 'items', antes!.items.length, 'status', antes!.status, 'editedAt', antes!.editedAt);
 

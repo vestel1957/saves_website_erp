@@ -38,7 +38,7 @@ const posting = { postSalesInvoice: async () => null };
 const cobranzas = {};
 
 async function main() {
-  const svc = new FacturasService(prisma as never, posting as never, cobranzas as never);
+  const svc = new FacturasService(prisma as never, posting as never, cobranzas as never, {} as never);
   const user = { id: 'u-test', name: 'Smoke', email: 'smoke@test', permissions: ['system.admin'], roles: [] };
 
   await prisma.subInvoiceItem.deleteMany({});

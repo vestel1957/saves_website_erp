@@ -13,6 +13,8 @@ import { listaJson, mensajeDeError } from "@/lib/errores";
 type PlanRow = { subscriberId: string; action: "BILL" | "SKIP" | "FAIL"; reason?: string; error?: string; total?: number; planDeUltimaFactura?: boolean };
 type RunResult = {
   targeted: number; generated: number; skipped: number; failed: number;
+  /** Facturas que nacieron pagadas con el saldo a favor del cliente. */
+  anticipos?: number; anticiposMonto?: number;
   dryRun?: boolean; invoiceDate?: string; dueDate?: string; plan?: PlanRow[];
 };
 
@@ -26,7 +28,15 @@ const REASON_LABEL: Record<string, string> = {
   ERROR: "Error al generar",
 };
 
-const today = () => new Date().toISOString().slice(0, 10);
+/**
+ * Día 1 del mes CORRIENTE: cada mes lleva su factura, con vencimiento el día 20 de ese
+ * mismo mes. La fecha se puede cambiar a mano si hay que rehacer un mes atrasado —es
+ * la vía de la corrida puente cuando un mes queda sin emitir.
+ */
+const primeroDelMesActual = () => {
+  const h = new Date();
+  return new Date(Date.UTC(h.getFullYear(), h.getMonth(), 1)).toISOString().slice(0, 10);
+};
 
 /**
  * Corrida de facturación del mes (POST /billing/invoices/generate).
@@ -43,7 +53,7 @@ export function GenerarFacturasModal({
   const { authFetch, sedeScoped } = useAuth();
   const [branches, setBranches] = useState<{ id: string; name: string }[]>([]);
   const [branchId, setBranchId] = useState("");
-  const [invoiceDate, setInvoiceDate] = useState(today);
+  const [invoiceDate, setInvoiceDate] = useState(primeroDelMesActual);
   const [dueDays, setDueDays] = useState("");
   const [preview, setPreview] = useState<RunResult | null>(null);
   const [busy, setBusy] = useState(false);
@@ -79,6 +89,16 @@ export function GenerarFacturasModal({
         if ((d.generated ?? 0) === 0) toast("La simulación no generaría ninguna factura.", "alert-triangle");
       } else {
         toast(`Corrida terminada: ${d.generated} factura(s) generada(s).`, "check");
+        // Las que nacieron ya pagadas con lo que el cliente había adelantado en
+        // ventanilla: quien corre la facturación tiene que saber que esas no van a
+        // cobranza (ver anticipos.ts).
+        if (d.anticipos > 0) {
+          toast(
+            `${d.anticipos} nacieron pagadas con saldo a favor del cliente ` +
+            `($${(d.anticiposMonto ?? 0).toLocaleString("es-CO")})`,
+            "wallet",
+          );
+        }
         onDone();
         onClose();
       }
@@ -95,8 +115,9 @@ export function GenerarFacturasModal({
     <Modal open={open} onClose={onClose} title="Generar facturas del mes" maxWidth="max-w-2xl">
       <div className="flex flex-col gap-3">
         <p className="text-[12px] text-text-tertiary">
-          Emite una mensualidad por abonado a partir de su plan. Solo alcanza a los abonados
-          <strong className="text-text-secondary"> activos o en compromiso</strong>, y omite a quien ya tenga factura del mes.
+          Emite una mensualidad por abonado a partir de su plan, con fecha del mes que cubre.
+          Solo alcanza a los abonados
+          <strong className="text-text-secondary"> activos o en compromiso</strong>, y omite a quien ya tenga factura de ese mes.
         </p>
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -109,7 +130,7 @@ export function GenerarFacturasModal({
               </Select>
             </Field>
           )}
-          <Field label="Fecha de factura">
+          <Field label="Mes que se factura" hint="Día 1 del mes que cubre">
             <Input type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} />
           </Field>
           <Field label="Días de vencimiento" hint="Vacío = el día configurado">

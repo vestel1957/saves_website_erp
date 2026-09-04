@@ -6,13 +6,18 @@ import { AuthUser } from '../auth/current-user.decorator';
 import { PostingService } from '../accounting/posting.service';
 import { CobranzasService } from '../treasury/cobranzas.service';
 import {
-  CreateInvoiceDto, CreateNoteDto, GenerateInvoicesDto, InvoiceItemDto,
+  AsignarServicioDto, CreateInvoiceDto, CreateNoteDto, CreateNotesBulkDto, GenerateInvoicesDto, InvoiceItemDto,
   RETENTION_LABEL_TO_ENUM, UpdateInvoiceDto, VoidInvoiceDto,
 } from './dto/facturas.dto';
+import type { SubscribersService } from '../subscribers/subscribers.service';
 import { num, round2 } from '../common/money';
+import { aplicarAnticipos } from './anticipos';
+import { aplicarNotaEnTx } from './nota-en-tx';
+import { copHistorial, movimientoDeAuditoria, movimientoDeNota, type Movimiento } from './historial-factura';
 import { nextTid, TID_SEQ } from '../common/tid';
 import { subName } from '../common/subscriber-name';
-import { exigirSedeSuscriptor } from '../common/sede-scope';
+import { exigirSedeSuscriptor, sedesDe } from '../common/sede-scope';
+import { planDeUltimaFactura } from './plan-facturable';
 
 
 function dateOnly(s?: string): Date {
@@ -59,11 +64,12 @@ export type GeneratePlanRow = {
   serviceTv?: string | null;
   /** true = el plan no salió de SubscriberService sino de su última factura. */
   planDeUltimaFactura?: boolean;
+  /** Saldo a favor del cliente imputado a esta factura al nacer (pago adelantado). */
+  anticipo?: number;
   items?: { productName: string | null; qty: number; price: number; taxRate: number; taxTotal: number }[];
 };
 
 /** Línea de servicio derivada (misma forma que SubscriberService en la corrida). */
-type ServicioDerivado = { kind: string; planName: string; price: number; taxRate: number };
 
 /** Escritura de facturación (Cobranza): crear factura, generar en lote y notas C/D. */
 export class FacturasService {
@@ -81,6 +87,12 @@ export class FacturasService {
     private readonly prisma: PrismaService,
     private readonly posting: PostingService,
     private readonly cobranzas: CobranzasService,
+    /**
+     * Para "asignar servicio": el plan del abonado se cambia por el MISMO camino que
+     * desde su ficha (snapshot en `SubscriberService` + perfil al router), no con una
+     * segunda copia de esa lógica que se quedaría atrás a la primera diferencia.
+     */
+    private readonly subscribers: SubscribersService,
   ) {}
 
   /** Consecutivo de factura. Secuencia de Postgres: atómica, sin carrera. Ver common/tid.ts. */
@@ -186,6 +198,10 @@ export class FacturasService {
   /** Crear una factura para un cliente. */
   async createInvoice(dto: CreateInvoiceDto, user: AuthUser) {
     if (!dto.items?.length) throw new BadRequestException('La factura no tiene ítems');
+    // La cajera puede facturar en ventanilla (2026-08-27), pero sólo a clientes de SU
+    // sede: sin esto, el alcance por sede que respetan el listado y el detalle se
+    // puenteaba escribiendo otro `subscriberId` en el cuerpo.
+    await exigirSedeSuscriptor(this.prisma, user, dto.subscriberId);
     const subscriber = await this.prisma.subscriber.findUnique({ where: { id: dto.subscriberId }, select: { id: true, branchId: true, eInvoice: true, status: true } });
     if (!subscriber) throw new NotFoundException('Cliente no encontrado');
 
@@ -223,7 +239,11 @@ export class FacturasService {
           },
         },
       });
-      return { id: inv.id, tid: inv.tid, total, subtotal, tax };
+      // Igual que en la corrida: si el cliente traía saldo a favor, se imputa a esta
+      // factura en el mismo commit. Cubre la factura que se emite a mano (ventanilla,
+      // plantilla recurrente) además de la del día 1.
+      const anticipo = await aplicarAnticipos(tx, subscriber.id, { fecha: invoiceDate });
+      return { id: inv.id, tid: inv.tid, total, subtotal, tax, anticipo: anticipo.total };
     });
     // Contabilización automática (DR cartera, CR ingreso + IVA). Idempotente; no rompe el flujo.
     await this.posting.postSalesInvoice({
@@ -339,7 +359,7 @@ export class FacturasService {
             subtotal, tax, total, status,
             kind: dto.kind ?? inv.kind, invoiceDate, dueDate,
             notes: dto.notes !== undefined ? dto.notes || null : inv.notes,
-            reason: dto.reason,
+            reason: dto.reason?.trim() || null,
             by: user?.name ?? user?.email ?? null,
             items: rows.map((r) => ({
               product: r.productName ?? r.description, description: r.description,
@@ -403,75 +423,14 @@ export class FacturasService {
   }
 
   /**
-   * Plan facturable de los abonados SIN fila en SubscriberService, derivado de sus
-   * facturas — la migración dejó ese hueco (los mismos clientes cuya ficha ya
-   * enseña el plan leído de la factura, ver `subscribers.service.ts`).
-   *
-   * NO es un clon de la última factura, por dos trampas reales de esos datos:
-   *   - La última factura puede ser un PRORRATEO de mes parcial ($8.145 cuando la
-   *     mensualidad es $77.000) y hasta omitir un servicio que sí tiene (la TV no
-   *     aparece en el prorrateo pero sí todos los meses anteriores).
-   *   - Los campos combo/television traen basura del legacy ("Diseno e Importacion
-   *     de Datos" por $476.000 NO es una mensualidad).
-   *
-   * Regla, en una consulta:
-   *   QUÉ planes: los ítems de sus últimas 2 facturas de mensualidad (facturas con
-   *     al menos un ítem que casa con el catálogo `Plan`, que además da el tipo).
-   *     2 y no 1 para que un prorrateo corto no borre un servicio; 2 y no más para
-   *     que un servicio retirado de verdad no reviva.
-   *   A QUÉ precio: el más repetido de ese plan en los últimos 6 meses (empate lo
-   *     gana el mayor: la mensualidad completa siempre supera al prorrateo). Sin
-   *     precio en 6 meses no se factura: cobrar de memoria vieja es peor que omitir.
-   *   Cliente NUEVO (el precio se vio UNA sola vez y por debajo del catálogo): esa
-   *     única vez es el prorrateo del alta, no la mensualidad → manda el precio de
-   *     catálogo del plan (con nombres duplicados en `Plan`, el mayor).
-   *
-   * `before` acota a facturas anteriores al mes (para asIfUnbilled).
+   * Plan facturable de los abonados SIN fila en `SubscriberService`, derivado de sus
+   * facturas. Vive en `plan-facturable.ts` desde 2026-08-25: lo necesita también el
+   * prorrateo de reconexión —y son justo los mismos clientes, porque el hueco de la
+   * migración se quedó en los que NO estaban en ACTIVO— y dos copias de esta consulta
+   * es exactamente cómo se empiezan a cobrar dos precios distintos por el mismo plan.
    */
-  private async planDeUltimaFactura(ids: string[], monthStart: Date, before?: Date): Promise<Map<string, ServicioDerivado[]>> {
-    const porAbonado = new Map<string, ServicioDerivado[]>();
-    if (!ids.length) return porAbonado;
-    const corte = before ? Prisma.sql`AND i."invoiceDate" < ${before}` : Prisma.empty;
-    const corte2 = before ? Prisma.sql`AND i2."invoiceDate" < ${before}` : Prisma.empty;
-    const ventana = new Date(Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() - 6, 1));
-
-    const filas = await this.prisma.$queryRaw<
-      { subscriberId: string; kind: string; name: string; price: Prisma.Decimal; taxRate: Prisma.Decimal | null; veces: bigint; planPrice: Prisma.Decimal | null }[]
-    >`
-      WITH con_plan AS (
-        SELECT i."subscriberId", i.id,
-               dense_rank() OVER (PARTITION BY i."subscriberId" ORDER BY i."invoiceDate" DESC, i.tid DESC) AS rk
-          FROM "SubInvoice" i
-         WHERE i."subscriberId" IN (${Prisma.join(ids)}) ${corte}
-           AND EXISTS (SELECT 1 FROM "SubInvoiceItem" it JOIN "Plan" pl
-                         ON lower(btrim(pl.name)) = lower(btrim(COALESCE(it."productName", it.description)))
-                       WHERE it."invoiceId" = i.id AND it.price > 0)
-      ),
-      candidatos AS (
-        SELECT DISTINCT c."subscriberId", pl.kind::text AS kind, pl.name
-          FROM con_plan c
-          JOIN "SubInvoiceItem" it ON it."invoiceId" = c.id
-          JOIN "Plan" pl ON lower(btrim(pl.name)) = lower(btrim(COALESCE(it."productName", it.description)))
-         WHERE c.rk <= 2 AND it.price > 0
-      )
-      SELECT DISTINCT ON (c."subscriberId", c.kind, c.name)
-             c."subscriberId", c.kind, c.name, it.price, it."taxRate", count(*) AS veces,
-             (SELECT max(p2.price) FROM "Plan" p2
-               WHERE lower(btrim(p2.name)) = lower(btrim(c.name))) AS "planPrice"
-        FROM candidatos c
-        JOIN "SubInvoice" i2 ON i2."subscriberId" = c."subscriberId"
-        JOIN "SubInvoiceItem" it ON it."invoiceId" = i2.id
-         AND lower(btrim(COALESCE(it."productName", it.description))) = lower(btrim(c.name))
-       WHERE it.price > 0 AND i2."invoiceDate" >= ${ventana} ${corte2}
-       GROUP BY c."subscriberId", c.kind, c.name, it.price, it."taxRate"
-       ORDER BY c."subscriberId", c.kind, c.name, count(*) DESC, it.price DESC`;
-    for (const f of filas) {
-      const arr = porAbonado.get(f.subscriberId) ?? [];
-      const esProrrateoDeAlta = Number(f.veces) <= 1 && num(f.planPrice) > num(f.price);
-      arr.push({ kind: f.kind, planName: f.name, price: esProrrateoDeAlta ? num(f.planPrice) : num(f.price), taxRate: num(f.taxRate) });
-      porAbonado.set(f.subscriberId, arr);
-    }
-    return porAbonado;
+  private planDeUltimaFactura(ids: string[], monthStart: Date, before?: Date) {
+    return planDeUltimaFactura(this.prisma, ids, monthStart, before);
   }
 
   /** Cuerpo real de la generación. Se llama SIEMPRE bajo el cerrojo de `generate`. */
@@ -508,7 +467,7 @@ export class FacturasService {
         statusChangedAt: true,  // fecha_cambio
         services: {
           where: { status: 'ACTIVO', price: { gt: 0 } },
-          select: { kind: true, planName: true, price: true, taxRate: true },
+          select: { kind: true, planName: true, price: true, taxRate: true, qty: true },
         },
       },
     });
@@ -553,12 +512,28 @@ export class FacturasService {
     // Respaldo para los abonados sin SubscriberService (hueco de la migración):
     // su plan se deriva de sus facturas, igual que en la ficha. Solo se consulta
     // para quienes de verdad lo necesitan y aún no tienen factura del mes.
+    // Los PUNTOS no cuentan como "tiene plan": son un accesorio que se suma al
+    // servicio, no un servicio en sí. Sin esta distinción, un abonado con solo la
+    // fila de puntos se daba por resuelto y se quedaba sin su TV/internet.
+    const planDe = <T extends { kind: string }>(s: { services: T[] }) => s.services.filter((x) => x.kind !== 'PUNTOS');
     const sinServicio = subs
-      .filter((s) => !s.services.length && !alreadyBilled.has(s.id))
+      .filter((s) => !planDe(s).length && !alreadyBilled.has(s.id))
       .map((s) => s.id);
     const planFactura = await this.planDeUltimaFactura(sinServicio, monthStart, asIfUnbilled ? monthStart : undefined);
 
+    // ¿Quién trae saldo a favor sin imputar? Una sola consulta para todo el lote: son
+    // ~5.000 abonados y preguntarlo uno a uno metía otros 5.000 viajes a la BD en la
+    // corrida del día 1. Los que estén aquí verán su factura recién nacida pagada (del
+    // todo o en parte) con lo que ya habían adelantado. Ver `aplicarAnticipos`.
+    const conAnticipo = subs.length ? new Set(
+      (await this.prisma.customerAdvance.findMany({
+        where: { status: 'ABIERTO', subscriberId: { in: subs.map((s) => s.id) } },
+        select: { subscriberId: true },
+      })).map((r) => r.subscriberId),
+    ) : new Set<string>();
+
     let generated = 0, skipped = 0, failed = 0;
+    let anticiposAplicados = 0, anticiposMonto = 0;
     const plan: GeneratePlanRow[] = [];
     const bill = (row: GeneratePlanRow) => { plan.push(row); return row; };
     const skip = (subscriberId: string, reason: GenerateSkipReason) => {
@@ -574,9 +549,16 @@ export class FacturasService {
       if (s.previousStatus === 'RETIRADO' && ymOf(s.statusChangedAt) === curYm) { skip(s.id, 'REACTIVATED'); continue; }
       // Sin servicios activos con precio → se intenta el plan de sus facturas;
       // si tampoco hay de dónde derivarlo, nada que cobrar este mes.
-      const servicios: { kind: string; planName: string | null; price: Prisma.Decimal | number | null; taxRate: Prisma.Decimal | number | null }[] =
-        s.services.length ? s.services : (planFactura.get(s.id) ?? []);
-      const deUltimaFactura = !s.services.length && servicios.length > 0;
+      // El plan sale de SubscriberService o, si no lo tiene, de sus facturas. Los
+      // puntos adicionales (decos de TV) van aparte y se suman a cualquiera de los
+      // dos caminos: el respaldo por nombre de plan nunca los ve, porque "Punto
+      // Adicional" no es un Plan del catálogo.
+      const conPlan = planDe(s);
+      const puntos = s.services.filter((x) => x.kind === 'PUNTOS');
+      const base = conPlan.length ? conPlan : (planFactura.get(s.id) ?? []);
+      const servicios: { kind: string; planName: string | null; price: Prisma.Decimal | number | null; taxRate: Prisma.Decimal | number | null; qty?: number }[] =
+        [...base, ...puntos];
+      const deUltimaFactura = !conPlan.length && base.length > 0;
       if (!servicios.length) { skip(s.id, 'NO_SERVICES'); continue; }
 
       // ¿Mes de promoción gratis? → no se factura; se descuenta el contador una vez/mes.
@@ -598,11 +580,13 @@ export class FacturasService {
       // del servicio (internet 0, TV 19); precio = base sin IVA (computeTotals lo suma).
       let serviceCombo: string | null = null;
       let serviceTv: string | null = null;
+      // `invoices.puntos` del legacy: la ficha y el recibo lo leen de la cabecera.
+      const nPuntos = puntos.reduce((n, x) => n + (x.qty ?? 1), 0) || null;
       const items: InvoiceItemDto[] = servicios.map((svc) => {
         const name = svc.planName || svc.kind;
         if (svc.kind === 'INTERNET') serviceCombo = svc.planName ?? serviceCombo;
         if (svc.kind === 'TV') serviceTv = svc.planName ?? serviceTv;
-        return { productName: name, description: name, qty: 1, price: num(svc.price), taxRate: num(svc.taxRate) };
+        return { productName: name, description: name, qty: svc.qty ?? 1, price: num(svc.price), taxRate: num(svc.taxRate) };
       });
       const { rows, subtotal, tax, total } = this.computeTotals(items);
       const shape = {
@@ -618,7 +602,7 @@ export class FacturasService {
       try {
         const inv = await this.prisma.$transaction(async (tx) => {
           const tid = await this.nextTid(tx);
-          return tx.subInvoice.create({
+          const creada = await tx.subInvoice.create({
             data: {
               tid, subscriberId: s.id, invoiceDate, dueDate,
               subtotal, tax, total, paidAmount: 0, status: 'DUE', kind: 'RECURRENTE',
@@ -627,7 +611,7 @@ export class FacturasService {
               // solo alcanza ACTIVO/COMPROMISO, así que el mapeo es directo.
               ron: s.status === 'COMPROMISO' ? 'COMPROMISO' : 'ACTIVO',
               itemsCount: rows.length,
-              serviceCombo, serviceTv,
+              serviceCombo, serviceTv, puntos: nPuntos,
               // Alimenta la cola de timbrado DIAN si el abonado factura electrónicamente.
               eInvoiceFlag: s.eInvoice ? 'Crear Factura Electronica' : null,
               items: { create: rows.map((r) => ({
@@ -637,12 +621,21 @@ export class FacturasService {
               })) },
             },
           });
+          // Saldo a favor → a esta factura, en el mismo commit que la crea: si el cliente
+          // ya pagó este mes por adelantado en ventanilla, nace pagada y no aparece
+          // debiendo. Es el `procesar_pagos_adelantados` que el legacy corre al final de
+          // su corrida (`Invoices_model.php:1439`).
+          const anticipo = conAnticipo.has(s.id)
+            ? await aplicarAnticipos(tx, s.id, { fecha: invoiceDate })
+            : null;
+          return { creada, anticipo };
         });
         generated++;
-        bill({ ...shape, tid: inv.tid });
+        if (inv.anticipo?.total) { anticiposAplicados++; anticiposMonto = round2(anticiposMonto + inv.anticipo.total); }
+        bill({ ...shape, tid: inv.creada.tid, ...(inv.anticipo?.total ? { anticipo: inv.anticipo.total } : {}) });
         // Contabilización automática de la factura recurrente (idempotente; no rompe el lote).
         await this.posting.postSalesInvoice({
-          sourceId: inv.id, date: invoiceDate, number: inv.tid,
+          sourceId: inv.creada.id, date: invoiceDate, number: inv.creada.tid,
           subtotal, tax, createdBy: user?.name ?? user?.email ?? null,
         });
       } catch (e) {
@@ -655,8 +648,242 @@ export class FacturasService {
     }
     return {
       targeted: subs.length, generated, skipped, failed,
+      // Cuántas nacieron ya pagadas (del todo o en parte) con saldo a favor del cliente.
+      anticipos: anticiposAplicados, anticiposMonto,
       ...(dryRun ? { dryRun: true, asIfUnbilled, invoiceDate, dueDate, plan } : {}),
     };
+  }
+
+  /**
+   * La factura de la que el LEGACY lee el plan del abonado para su corrida mensual.
+   *
+   * Allá el plan no vive en el cliente: `Invoices_model.php:1130` recorre las facturas
+   * del abonado por `invoicedate DESC` y **se salta las fijas y las notas**; la primera
+   * recurrente que encuentra es la que le dicta `combo`/`television`/`puntos` al mes
+   * siguiente. Por eso "asignar servicio" sobre una factura fija (una instalación, un
+   * traslado) no le cambiaría el plan a nadie: hay que escribir sobre ésta.
+   *
+   * Devuelve null si el abonado todavía no tiene ninguna recurrente (cliente nuevo,
+   * facturado sólo aquí): entonces el legacy no tiene dónde leerlo y basta con dejar
+   * el plan en `SubscriberService`, que es lo que factura este sistema.
+   */
+  private facturaQueDictaElPlan(subscriberId: string) {
+    return this.prisma.subInvoice.findFirst({
+      where: { subscriberId, kind: 'RECURRENTE', status: { not: 'CANCELED' } },
+      orderBy: [{ invoiceDate: 'desc' }, { tid: 'desc' }],
+      select: { id: true, tid: true, invoiceDate: true, legacyId: true, serviceTv: true, serviceCombo: true, puntos: true },
+    });
+  }
+
+  /**
+   * Historial de la factura: qué se le hizo, quién y por qué.
+   *
+   * El motivo del cambio se pedía desde el 27-08-2026 al editar y al anular, pero
+   * moría dentro del JSON de `AuditLog`: en pantalla sólo quedaba el rótulo
+   * "Editada" con la fecha, sin decir qué renglón se tocó ni por qué. Esto lo saca
+   * a la luz, juntando las tres cosas que mueven una factura:
+   *
+   *   · la auditoría (edición, anulación, servicio asignado),
+   *   · las notas crédito/débito (que cambian el total y no pasan por la auditoría:
+   *     las aplica `aplicarNotaEnTx` dentro de la transacción de quien llame),
+   *   · la emisión, que es el punto de partida.
+   *
+   * Sólo lectura. El formato de las frases vive en `historial-factura.ts`.
+   */
+  async historial(id: string, user?: AuthUser): Promise<{ items: Movimiento[] }> {
+    const inv = await this.prisma.subInvoice.findUnique({
+      where: { id },
+      select: {
+        id: true, tid: true, subscriberId: true, createdAt: true, invoiceDate: true,
+        issuerUserId: true, total: true, legacyId: true,
+      },
+    });
+    if (!inv) throw new NotFoundException('Factura no encontrada');
+    await exigirSedeSuscriptor(this.prisma, user, inv.subscriberId);
+
+    const [logs, notas] = await Promise.all([
+      this.prisma.auditLog.findMany({
+        where: { entity: 'SubInvoice', entityId: id },
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.subInvoiceItem.findMany({
+        where: { invoiceId: id, productName: { in: ['Nota Credito', 'Nota Debito'] } },
+        orderBy: { createdAt: 'desc' },
+      }),
+    ]);
+
+    // El autor de una nota y el emisor de la factura son ids de usuario del legacy
+    // (`aauth_users`), no de este sistema: se traducen por `Staff.legacyId`.
+    const legacyIds = [...new Set(
+      [inv.issuerUserId, ...notas.map((n) => n.createdByUserId)].filter((v): v is number => v != null),
+    )];
+    const staff = legacyIds.length
+      ? await this.prisma.staff.findMany({ where: { legacyId: { in: legacyIds } }, select: { legacyId: true, name: true } })
+      : [];
+    const nombreDe = (legacyId: number | null) =>
+      (legacyId != null ? staff.find((s) => s.legacyId === legacyId)?.name ?? null : null);
+
+    const items: Movimiento[] = [
+      ...logs.map(movimientoDeAuditoria),
+      ...notas.map((n) => movimientoDeNota({
+        id: n.id, createdAt: n.createdAt, productName: n.productName,
+        description: n.description, price: num(n.price), autor: nombreDe(n.createdByUserId),
+      })),
+      {
+        id: `emitida-${inv.id}`,
+        // La traída del legacy no tiene fecha de creación fiable (`createdAt` es la de
+        // la importación): para esas manda la fecha de la factura.
+        fecha: inv.legacyId != null ? inv.invoiceDate : inv.createdAt,
+        tipo: 'EMITIDA' as const,
+        titulo: 'Factura emitida',
+        por: nombreDe(inv.issuerUserId),
+        motivo: null,
+        cambios: [`Total ${copHistorial(num(inv.total))}`],
+      },
+    ].sort((a, b) => b.fecha.getTime() - a.fecha.getTime());
+
+    return { items };
+  }
+
+  /**
+   * Qué se le va a cobrar al abonado la próxima facturación, para pintarlo en la ficha
+   * de la factura junto a lo que ESTA cobró.
+   *
+   * Sale de `SubscriberService` —la fuente de la corrida de este sistema—; cuando el
+   * abonado no tiene esas filas (el hueco de la migración: sólo se poblaron los ACTIVO)
+   * se deriva de sus facturas igual que hace la corrida, para no enseñar "sin servicio"
+   * a alguien que lleva años pagando.
+   */
+  async servicioAsignado(invoiceId: string, user?: AuthUser) {
+    const inv = await this.prisma.subInvoice.findUnique({
+      where: { id: invoiceId },
+      select: { id: true, subscriberId: true, kind: true, serviceAssignedAt: true, serviceAssignedBy: true },
+    });
+    if (!inv) throw new NotFoundException('Factura no encontrada');
+    await exigirSedeSuscriptor(this.prisma, user, inv.subscriberId);
+
+    const [contratados, dicta] = await Promise.all([
+      this.prisma.subscriberService.findMany({
+        where: { subscriberId: inv.subscriberId },
+        select: { kind: true, planId: true, planName: true, price: true, taxRate: true, qty: true, status: true },
+      }),
+      this.facturaQueDictaElPlan(inv.subscriberId),
+    ]);
+
+    // Sin filas propias, el plan se deduce de las facturas (mismo criterio que la corrida).
+    let derivado = false;
+    let servicios = contratados.map((s) => ({
+      kind: s.kind as string, planId: s.planId, planName: s.planName,
+      price: num(s.price), taxRate: num(s.taxRate), qty: s.qty, status: s.status as string,
+    }));
+    if (!servicios.filter((s) => s.kind !== 'PUNTOS').length) {
+      const hoy = new Date();
+      const mes = new Date(Date.UTC(hoy.getUTCFullYear(), hoy.getUTCMonth(), 1));
+      const map = await this.planDeUltimaFactura([inv.subscriberId], mes);
+      const dedu = (map.get(inv.subscriberId) ?? []).map((s) => ({
+        kind: s.kind, planId: null as string | null, planName: s.planName,
+        price: s.price, taxRate: s.taxRate, qty: 1, status: 'ACTIVO',
+      }));
+      if (dedu.length) { servicios = [...dedu, ...servicios]; derivado = true; }
+    }
+
+    return {
+      servicios, derivado,
+      assignedAt: inv.serviceAssignedAt, assignedBy: inv.serviceAssignedBy,
+      // Cuál es la factura que manda en el legacy y si es ésta en la que estamos.
+      dicta: dicta ? { id: dicta.id, tid: dicta.tid, date: dicta.invoiceDate, esEsta: dicta.id === inv.id } : null,
+    };
+  }
+
+  /**
+   * "Asignar servicio": deja fijado el plan que se le cobrará al abonado de la próxima
+   * facturación en adelante. Es el `ASIGNAR SERVICIO` del `invoices/edit.php` del legacy,
+   * el sitio donde allá se registra que un cliente cambió de plan.
+   *
+   * NO reprecia esta factura ni ninguna ya emitida: sólo manda de aquí en adelante.
+   *
+   * Escribe en los DOS sitios donde hoy vive esa información, porque los dos sistemas
+   * facturan y cada uno lee el suyo:
+   *   1) `SubscriberService` del abonado — la fuente de la corrida de este sistema, de la
+   *      ficha del cliente y del prorrateo. Pasa por `SubscribersService` para que el
+   *      perfil del plan se empuje al router igual que al cambiar el plan desde la ficha.
+   *   2) `television`/`combo`/`puntos` de la última factura RECURRENTE del abonado — la
+   *      única fuente que tiene el legacy (ver `facturaQueDictaElPlan`). Queda marcada
+   *      con `serviceAssignedAt` para que el writeback empuje esas tres columnas y el
+   *      sync de ida no las devuelva al valor viejo.
+   */
+  async asignarServicio(id: string, dto: AsignarServicioDto, user: AuthUser) {
+    if (dto.internet === undefined && dto.tv === undefined && dto.puntos === undefined) {
+      throw new BadRequestException('No se indicó ningún servicio que cambiar.');
+    }
+
+    const inv = await this.prisma.subInvoice.findUnique({
+      where: { id },
+      select: { id: true, tid: true, subscriberId: true, serviceTv: true, serviceCombo: true, puntos: true },
+    });
+    if (!inv) throw new NotFoundException('Factura no encontrada');
+    await exigirSedeSuscriptor(this.prisma, user, inv.subscriberId);
+
+    // Los planes se resuelven ANTES de tocar nada: un id inventado tiene que dejar el
+    // abonado como estaba, no a medio cambiar.
+    const ids = [dto.internet, dto.tv].filter((v): v is string => !!v && v !== 'no');
+    const planes = ids.length
+      ? await this.prisma.plan.findMany({ where: { id: { in: ids } }, select: { id: true, kind: true, name: true } })
+      : [];
+    if (planes.length !== new Set(ids).size) throw new NotFoundException('Uno o más planes no existen.');
+    const exigirKind = (planId: string | undefined, kind: 'INTERNET' | 'TV', etiqueta: string) => {
+      if (!planId || planId === 'no') return;
+      const p = planes.find((x) => x.id === planId)!;
+      if (p.kind !== kind) throw new BadRequestException(`“${p.name}” no es un plan de ${etiqueta}.`);
+    };
+    exigirKind(dto.internet, 'INTERNET', 'internet');
+    exigirKind(dto.tv, 'TV', 'televisión');
+
+    const antes = await this.servicioAsignado(id, user);
+    const pushRouter = dto.pushRouter !== false;
+
+    // 1) El plan del abonado (lo que factura este sistema).
+    const routers: unknown[] = [];
+    for (const [valor, kind] of [[dto.internet, 'INTERNET'], [dto.tv, 'TV']] as const) {
+      if (valor === undefined) continue;
+      if (valor === 'no') { await this.subscribers.removeService(inv.subscriberId, kind, user); continue; }
+      // `allowInactive`: aquí no se vende, se corrige. El plan que la factura ya cobra
+      // suele ser uno de los ocultos del catálogo (ver `changePlan`).
+      const r = await this.subscribers.changePlan(inv.subscriberId, valor, user, { pushRouter, allowInactive: true });
+      if (r.router) routers.push(r.router);
+    }
+    if (dto.puntos !== undefined) await this.subscribers.setPuntos(inv.subscriberId, dto.puntos, user);
+
+    // 2) El snapshot que lee el legacy. Se escribe SIEMPRE sobre la recurrente que manda,
+    //    esté o no el usuario parado en ella: en una fija esas columnas no las mira nadie.
+    const despues = await this.servicioAsignado(id, user);
+    const nombreDe = (kind: string) => despues.servicios.find((s) => s.kind === kind)?.planName ?? null;
+    const snapshot = {
+      serviceCombo: nombreDe('INTERNET') ?? 'no',
+      serviceTv: nombreDe('TV') ?? 'no',
+      puntos: despues.servicios.find((s) => s.kind === 'PUNTOS')?.qty ?? 0,
+    };
+    const dicta = despues.dicta;
+    if (dicta) {
+      await this.prisma.subInvoice.update({
+        where: { id: dicta.id },
+        data: { ...snapshot, serviceAssignedAt: new Date(), serviceAssignedBy: user?.name ?? user?.email ?? null },
+      });
+    }
+
+    await this.prisma.auditLog.create({
+      data: {
+        action: 'UPDATE', entity: 'SubInvoice', entityId: dicta?.id ?? id,
+        before: { servicios: antes.servicios, desdeFactura: inv.tid },
+        after: {
+          servicios: despues.servicios, snapshot, desdeFactura: inv.tid,
+          facturaQueDicta: dicta?.tid ?? null, pushRouter,
+          reason: dto.reason?.trim() || null, by: user?.name ?? user?.email ?? null,
+        },
+      },
+    });
+
+    return { ok: true, ...despues, snapshot, routers };
   }
 
   /**
@@ -730,85 +957,92 @@ export class FacturasService {
     const amount = round2(dto.amount);
     if (!(amount > 0)) throw new BadRequestException('El monto debe ser mayor a cero');
 
-    // Mapear el usuario logueado a un empleado (Staff) por email para registrar
-    // el autor de la nota (createdByUserId = id_usuario_crea legacy).
-    const staff = user?.email
-      ? await this.prisma.staff.findFirst({ where: { email: user.email }, select: { legacyId: true } })
-      : null;
-    const authorLegacyId = staff?.legacyId ?? null;
+    const authorLegacyId = await this.autorDeNota(user);
 
-    return this.prisma.$transaction(async (tx) => {
-      const inv = await tx.subInvoice.findUnique({ where: { id: invoiceId } });
-      if (!inv) throw new NotFoundException('Factura no encontrada');
+    return this.prisma.$transaction(async (tx) =>
+      aplicarNotaEnTx(tx, invoiceId, { ...dto, amount, authorLegacyId, editedBy: user?.name ?? user?.email ?? null }),
+    );
+  }
 
-      const isCredit = dto.type === 'CREDITO';
-      const product = isCredit ? 'Nota Credito' : 'Nota Debito';
-      const price = isCredit ? -amount : amount;
+  /**
+   * Aplica la MISMA nota a VARIAS facturas de un cliente, en una sola transacción.
+   *
+   * El reparto (qué monto le toca a cada factura) llega ya hecho desde la pantalla,
+   * que es donde se previsualiza; ver `CreateNotesBulkDto`. Aquí se comprueba lo que
+   * el cliente del API no puede garantizar:
+   *   - que las facturas existan (todas: si falta una, no se aplica ninguna),
+   *   - que sean del MISMO abonado — un lote que cruce clientes sería un error de
+   *     quien llama y dejaría notas regadas por cartera ajena,
+   *   - que ese abonado esté dentro del alcance por sede de quien aplica.
+   *
+   * Lo de "todo o nada" no es adorno: media depuración de cartera aplicada es peor
+   * que ninguna, porque nadie sabe dónde se quedó.
+   */
+  async createNotes(dto: CreateNotesBulkDto, user: AuthUser) {
+    const items = dto.items ?? [];
+    if (!items.length) throw new BadRequestException('Elige al menos una factura.');
 
-      let subtotal = num(inv.subtotal);
-      let total = num(inv.total);
-      const paid = num(inv.paidAmount);
-      let status = inv.status;
+    // Una misma factura repetida en el lote se aplicaría dos veces sin que nadie lo
+    // pidiera (dos clics en la misma fila, o un reparto mal armado).
+    const ids = items.map((i) => i.invoiceId);
+    if (new Set(ids).size !== ids.length) throw new BadRequestException('Hay una factura repetida en el lote.');
 
-      if (isCredit) {
-        subtotal = round2(subtotal - amount);
-        total = round2(total - amount);
-        if (subtotal < 0) subtotal = 0;
-        if (total < 0) total = 0;
-        if (round2(total - paid) <= 0) status = 'PAID';
-        else if (paid > 0) status = 'PARTIAL';
-      } else {
-        subtotal = round2(subtotal + amount);
-        total = round2(total + amount);
-        if (paid > 0 && paid < total) status = 'PARTIAL';
-        else if (paid === 0) status = 'DUE';
-      }
+    for (const it of items) {
+      if (!(round2(it.amount) > 0)) throw new BadRequestException('El monto de cada nota debe ser mayor a cero');
+    }
 
-      // Retención (opcional). Paridad legacy: se guarda el TIPO en la línea y también en
-      // el header (`invoices.tipo_retencion`), donde la última nota pisa a la anterior;
-      // el VALOR es el `amount` que digitó el usuario — el legacy no lo calcula, y los
-      // porcentajes sólo se aplican al armar el payload de Siigo.
-      const retention = dto.retentionType ? RETENTION_LABEL_TO_ENUM[dto.retentionType] : null;
-
-      await tx.subInvoiceItem.create({
-        data: {
-          invoiceId, productId: 0, productName: product,
-          description: dto.description ?? product,
-          qty: 1, price, taxRate: 0, subtotal: price, taxTotal: 0, discountTotal: 0,
-          retentionType: retention,
-          createdByUserId: authorLegacyId,
-        },
-      });
-      await tx.subInvoice.update({
-        where: { id: invoiceId },
-        data: {
-          subtotal, total, status, itemsCount: { increment: 1 },
-          ...(retention ? { retentionType: retention } : {}),
-          // Una nota cambia el total, así que la factura queda MODIFICADA aquí y hay
-          // que blindarla del sync igual que una edición. Sin esto, el descuento se
-          // aplicaba, el sync veía el total distinto al del legacy y en la siguiente
-          // pasada (≤15 min) le devolvía el total viejo: la nota quedaba colgada en el
-          // detalle y el cliente seguía debiendo lo mismo. Pasó de verdad con la
-          // factura 470096. `editCount` NO se toca: eso cuenta ediciones, no notas.
-          editedAt: new Date(),
-          editedBy: user?.name ?? user?.email ?? null,
-        },
-      });
-
-      // Recalcular cache de dinero del cliente.
-      if (inv.subscriberId) {
-        const agg = await tx.transaction.aggregate({
-          _sum: { debit: true, credit: true },
-          where: { subscriberId: inv.subscriberId, status: 'VIGENTE', ext: false },
-        });
-        await tx.subscriber.update({
-          where: { id: inv.subscriberId },
-          data: { debitCache: agg._sum.debit ?? 0, creditCache: agg._sum.credit ?? 0 },
-        });
-      }
-
-      return { invoiceId, type: dto.type, amount, newTotal: total, newBalance: round2(total - paid), status };
+    const facturas = await this.prisma.subInvoice.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, tid: true, subscriberId: true },
     });
+    if (facturas.length !== ids.length) throw new NotFoundException('Alguna de las facturas elegidas no existe');
+
+    const subscriberIds = [...new Set(facturas.map((f) => f.subscriberId))];
+    if (subscriberIds.length > 1) throw new BadRequestException('Las facturas del lote son de clientes distintos');
+    const subscriberId = subscriberIds[0];
+    if (!subscriberId) throw new BadRequestException('La factura no tiene cliente');
+    await exigirSedeSuscriptor(this.prisma, user, subscriberId);
+
+    const authorLegacyId = await this.autorDeNota(user);
+    const editedBy = user?.name ?? user?.email ?? null;
+    const tidDe = new Map(facturas.map((f) => [f.id, f.tid]));
+
+    const results = await this.prisma.$transaction(
+      async (tx) => {
+        const salida = [];
+        for (const it of items) {
+          const r = await aplicarNotaEnTx(tx, it.invoiceId, {
+            type: dto.type,
+            amount: round2(it.amount),
+            description: dto.description,
+            retentionType: dto.retentionType,
+            authorLegacyId,
+            editedBy,
+          });
+          salida.push({ ...r, tid: tidDe.get(it.invoiceId) ?? null });
+        }
+        return salida;
+      },
+      // 50 notas son ~250 consultas: el tope de 5 s que Prisma pone por defecto a la
+      // transacción interactiva se queda corto y el lote moriría a la mitad (bien
+      // deshecho, pero sin haber hecho nada).
+      { timeout: 60_000, maxWait: 15_000 },
+    );
+
+    return {
+      count: results.length,
+      total: round2(results.reduce((s, r) => s + r.amount, 0)),
+      type: dto.type,
+      subscriberId,
+      results,
+    };
+  }
+
+  /** Autor (Staff.legacyId) del usuario logueado, para firmar una nota. */
+  async autorDeNota(user?: AuthUser): Promise<number | null> {
+    if (!user?.email) return null;
+    const staff = await this.prisma.staff.findFirst({ where: { email: user.email }, select: { legacyId: true } });
+    return staff?.legacyId ?? null;
   }
 
   /** Listado de notas crédito/débito (ítems pid=0 con producto Nota …). */
@@ -826,7 +1060,22 @@ export class FacturasService {
     desc: 'description', amount: 'price',
   };
 
-  async listNotes(params: { page?: number; pageSize?: number; search?: string; type?: string; sortBy?: string; sortDir?: string }) {
+  /**
+   * Listado de notas crédito/débito, filtrable.
+   *
+   * Filtros: texto (factura/cliente/descripción), tipo, SEDE, rango de fechas,
+   * quién la registró y rango de monto. Todos son opcionales y se combinan.
+   *
+   * Acotado por sede (`sedesDe`): la nota cuelga de una factura, y ésta de un
+   * suscriptor, así que la sede se filtra por la relación. Hasta ahora la vista
+   * no lo aplicaba y una cajera veía las notas de todas las sedes.
+   */
+  async listNotes(params: {
+    page?: number; pageSize?: number; search?: string; type?: string;
+    branchId?: string; from?: string; to?: string; authorId?: string;
+    montoMin?: string; montoMax?: string;
+    sortBy?: string; sortDir?: string;
+  }, user?: AuthUser) {
     const page = Math.max(1, Number(params.page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(params.pageSize) || 25));
 
@@ -838,6 +1087,39 @@ export class FacturasService {
       : { in: ['Nota Credito', 'Nota Debito'] };
 
     const where: Prisma.SubInvoiceItemWhereInput = { productName };
+    const and: Prisma.SubInvoiceItemWhereInput[] = [];
+
+    // Sede + filtro de sede elegido: se MEZCLAN en un único `subscriber` (si se
+    // sobrescribiera, el filtro de la URL puentearía el acotado por sede).
+    const sedes = await sedesDe(this.prisma, user);
+    const sub: Prisma.SubscriberWhereInput = {};
+    if (sedes) sub.branch = { legacyId: { in: sedes } };
+    if (params.branchId) sub.branchId = params.branchId;
+    if (Object.keys(sub).length) where.invoice = { subscriber: sub };
+
+    // Rango de fechas sobre la fecha de la nota. El `hasta` se estira al final del
+    // día: `createdAt` es un timestamp y con la medianoche se perdía ese mismo día.
+    const desde = (params.from || '').trim();
+    const hasta = (params.to || '').trim();
+    if (desde || hasta) {
+      where.createdAt = {
+        ...(desde ? { gte: new Date(`${desde}T00:00:00.000Z`) } : {}),
+        ...(hasta ? { lte: new Date(`${hasta}T23:59:59.999Z`) } : {}),
+      };
+    }
+
+    // Rango de monto. Se compara en VALOR ABSOLUTO porque las notas crédito se
+    // guardan en negativo (y unas pocas viejas del legacy, en positivo): sin las
+    // dos ramas, filtrar "de 10.000 a 50.000" no devolvía ninguna crédito.
+    const min = Number(params.montoMin);
+    const max = Number(params.montoMax);
+    const hayMin = Number.isFinite(min) && String(params.montoMin ?? '').trim() !== '';
+    const hayMax = Number.isFinite(max) && String(params.montoMax ?? '').trim() !== '';
+    if (hayMin || hayMax) {
+      const pos = { ...(hayMin ? { gte: min } : {}), ...(hayMax ? { lte: max } : {}) };
+      const neg = { ...(hayMax ? { gte: -max } : {}), ...(hayMin ? { lte: -min } : {}) };
+      and.push({ OR: [{ price: pos }, { price: neg }] });
+    }
 
     // Búsqueda: por N° de factura (tid), descripción o nombre del cliente.
     const q = (params.search || '').trim();
@@ -851,24 +1133,49 @@ export class FacturasService {
       ];
       const tid = Number(q);
       if (Number.isFinite(tid) && tid > 0) or.push({ invoice: { tid } });
-      where.OR = or;
+      // Va dentro del AND (y no en `where.OR`) para que no compita con el resto de
+      // condiciones compuestas: buscar tiene que ACOTAR, no ensanchar.
+      and.push({ OR: or });
     }
 
-    const [rows, total] = await Promise.all([
+    // El desplegable "Registrada por" se arma con los autores del set SIN ese
+    // filtro (si no, al elegir uno desaparecerían los demás de la lista).
+    // COPIA del array: `and` sigue creciendo abajo con el filtro de autor y, por
+    // referencia, éste se colaría también en el desplegable.
+    const whereSinAutor: Prisma.SubInvoiceItemWhereInput = { ...where, ...(and.length ? { AND: [...and] } : {}) };
+    const autorId = Number(params.authorId);
+    const filtraAutor = Number.isFinite(autorId) && String(params.authorId ?? '').trim() !== '';
+    if (filtraAutor) and.push({ createdByUserId: autorId });
+    if (and.length) where.AND = and;
+
+    const [rows, total, porTipo, autores] = await Promise.all([
       this.prisma.subInvoiceItem.findMany({
         where, orderBy: orden(params, FacturasService.ORDEN_NOTAS, { createdAt: 'desc' }), skip: (page - 1) * pageSize, take: pageSize,
         include: { invoice: { select: { id: true, tid: true, subscriber: { select: { firstName: true, lastName1: true, companyName: true, fullName: true } } } } },
       }),
       this.prisma.subInvoiceItem.count({ where }),
+      // Totales del set filtrado COMPLETO (no sólo de la página), por tipo.
+      this.prisma.subInvoiceItem.groupBy({ by: ['productName'], where, _sum: { price: true }, _count: { _all: true } }),
+      this.prisma.subInvoiceItem.groupBy({ by: ['createdByUserId'], where: whereSinAutor, _count: { _all: true } }),
     ]);
 
     // Resolver el autor (createdByUserId = id_usuario_crea legacy) → nombre del
-    // empleado, en una sola consulta para toda la página.
-    const authorIds = [...new Set(rows.map((it) => it.createdByUserId).filter((v): v is number => v != null))];
+    // empleado. Una sola consulta para la página y para el desplegable.
+    const authorIds = [...new Set([
+      ...rows.map((it) => it.createdByUserId),
+      ...autores.map((a) => a.createdByUserId),
+    ].filter((v): v is number => v != null))];
     const staff = authorIds.length
       ? await this.prisma.staff.findMany({ where: { legacyId: { in: authorIds } }, select: { legacyId: true, name: true } })
       : [];
     const authorById = new Map(staff.map((s) => [s.legacyId, s.name]));
+
+    const sumaDe = (nombre: string) => {
+      const g = porTipo.find((x) => x.productName === nombre);
+      return { monto: Math.abs(num(g?._sum.price)), n: g?._count._all ?? 0 };
+    };
+    const credito = sumaDe('Nota Credito');
+    const debito = sumaDe('Nota Debito');
 
     return {
       items: rows.map((it) => ({
@@ -882,7 +1189,22 @@ export class FacturasService {
         authorId: it.createdByUserId ?? null,
         date: it.createdAt,
       })),
+      // Crédito REBAJA y débito RECARGA: el neto es la diferencia.
+      sum: { credito: credito.monto, debito: debito.monto, neto: debito.monto - credito.monto },
+      count: { credito: credito.n, debito: debito.n },
+      autores: autores
+        .filter((a) => a.createdByUserId != null)
+        .map((a) => ({
+          id: a.createdByUserId as number,
+          name: authorById.get(a.createdByUserId as number) ?? `Usuario ${a.createdByUserId}`,
+          count: a._count._all,
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name, 'es')),
       total, page, pageSize, pages: Math.ceil(total / pageSize),
     };
   }
 }
+
+// `aplicarNotaEnTx` se mudó a `nota-en-tx.ts` (ver allí por qué). Se re-exporta para
+// que sus importadores de siempre —el recaudo, las promociones— no cambien.
+export { aplicarNotaEnTx } from './nota-en-tx';

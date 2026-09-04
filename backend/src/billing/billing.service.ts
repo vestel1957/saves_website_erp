@@ -7,6 +7,7 @@ import { MailService } from '../common/mail/mail.service';
 import { invoicePdfBuffer } from './billing-pdf';
 import { ReciboRolloData } from '../common/pdf/recibo-rollo';
 import { conceptoFactura } from '../common/concepto-factura';
+import { terminoDePago } from '../common/terminos-pago';
 import { num } from '../common/money';
 import { sedesDe, whereSedePorSuscriptor, exigirSedeSuscriptor } from '../common/sede-scope';
 import { AuthUser } from '../auth/current-user.decorator';
@@ -247,6 +248,10 @@ export class BillingService {
       subtotal: num(i.subtotal), tax: num(i.tax), discount: num(i.discount),
       total: num(i.total), paid: num(i.paidAmount), balance: num(i.total) - num(i.paidAmount),
       paymentMethod: i.paymentMethod, branchRef: i.branchRef,
+      // Observación de la factura (`invoices.notes`). Sin devolverla, el editor la
+      // abría vacía y al guardar la borraba: el que corregía un valor se llevaba por
+      // delante la nota que había dejado otro.
+      notes: i.notes,
       period: periodoFacturado(i.kind, i.invoiceDate),
       service: { combo: i.serviceCombo, tv: i.serviceTv, puntos: i.puntos, estadoCombo: i.estadoCombo, estadoTv: i.estadoTv },
       eInvoiceFlag: i.eInvoiceFlag,
@@ -270,6 +275,7 @@ export class BillingService {
         // concepto editable: se muestra aparte y la edición no la toca.
         nota: it.productName === 'Nota Credito' || it.productName === 'Nota Debito',
         price: num(it.price), taxRate: num(it.taxRate), subtotal: num(it.subtotal), taxTotal: num(it.taxTotal),
+        discountTotal: num(it.discountTotal),
       })),
       payments: i.transactions.map((t) => ({
         id: t.id, date: t.date, amount: num(t.credit), method: t.method,
@@ -277,6 +283,8 @@ export class BillingService {
       })),
       electronic: i.electronicInvoices.map((e) => ({
         id: e.id, date: e.date, type: e.type, dianNumber: e.dianNumber, cufe: e.cufe, pdfUrl: e.pdfUrl,
+        // Motivo de la nota crédito electrónica (por qué se anuló la factura).
+        reason: e.reason,
       })),
     };
   }
@@ -292,6 +300,7 @@ export class BillingService {
    */
   async reciboRolloData(id: string, user?: AuthUser): Promise<ReciboRolloData> {
     const inv = await this.detail(id, user);
+    const term = await this.prisma.subInvoice.findUnique({ where: { id }, select: { term: true } });
 
     const pendientes = inv.subscriber
       ? await this.prisma.subInvoice.findMany({
@@ -337,7 +346,10 @@ export class BillingService {
       items: inv.items.map((it) => ({
         tid: inv.tid,
         concept: [it.product, it.description].filter(Boolean).join(' — ') || 'Ítem',
-        amount: it.subtotal + it.taxTotal,
+        // Base (qty×price, SIN IVA en las dos convenciones) + su IVA. `subtotal`
+        // no sirve: en los ítems traídos del legacy ya trae el IVA dentro y el
+        // renglón salía inflado un 19% contra el total del recibo.
+        amount: it.qty * it.price + it.taxTotal - it.discountTotal,
       })),
       // Las demás pendientes, que el legacy imprime en negrita cursiva debajo.
       pending: pendientes
@@ -348,7 +360,9 @@ export class BillingService {
       discount: inv.discount,
       balance,
       status: inv.status,
-      terms: inv.period ? `Servicio de ${inv.period}` : null,
+      // La condición de pago del legacy, que es lo que va al pie del papel; el
+      // periodo del servicio ya sale en el renglón del concepto.
+      terms: terminoDePago(term?.term),
     };
   }
 

@@ -40,15 +40,22 @@ export function NuevaFacturaModal({
   open,
   onClose,
   onDone,
+  fixedSub,
 }: {
   open: boolean;
   onClose: () => void;
   /** Se llama tras crear con éxito para refrescar el listado. */
   onDone?: () => void;
+  /**
+   * Cliente ya decidido: se abre desde SU ficha, así que el selector sobra —y peor,
+   * dejarlo abierto invita a facturarle al cliente equivocado teniendo el correcto
+   * en pantalla. Con esto el modal enseña a quién se le factura y no deja cambiarlo.
+   */
+  fixedSub?: PickedSub;
 }) {
   const { authFetch } = useAuth();
   const router = useRouter();
-  const [sub, setSub] = useState<PickedSub | null>(null);
+  const [sub, setSub] = useState<PickedSub | null>(fixedSub ?? null);
   const [items, setItems] = useState<Item[]>([emptyItem()]);
   const [invoiceDate, setInvoiceDate] = useState(today());
   const [kind, setKind] = useState<Kind>("FIJA");
@@ -59,14 +66,14 @@ export function NuevaFacturaModal({
   // Reset al cerrar para que la próxima apertura arranque limpia.
   useEffect(() => {
     if (open) return;
-    setSub(null);
+    setSub(fixedSub ?? null);
     setItems([emptyItem()]);
     setInvoiceDate(today());
     setKind("FIJA");
     setNotes("");
     setSaving(false);
     setErr(null);
-  }, [open]);
+  }, [open, fixedSub]);
 
   const totals = useMemo(() => {
     let subtotal = 0, tax = 0;
@@ -128,7 +135,15 @@ export function NuevaFacturaModal({
               <span className="text-[13px] font-bold text-text-primary">Cliente</span>
               {sub && <Button variant="secondary" size="sm" onClick={cloneLast}><Icon name="copy" size={13} /> Clonar última factura</Button>}
             </div>
-            <SubscriberPicker value={sub} onChange={setSub} />
+            {fixedSub ? (
+              <div className="flex items-center gap-2 rounded-lg border border-border-subtle bg-surface-2/50 px-3 py-2 text-[13px]">
+                <Icon name="user" size={14} className="text-text-tertiary" />
+                <span className="font-semibold text-text-primary">{fixedSub.name}</span>
+                <span className="font-mono text-text-tertiary">#{fixedSub.abonado}</span>
+              </div>
+            ) : (
+              <SubscriberPicker value={sub} onChange={setSub} />
+            )}
           </div>
 
           {/* Ítems */}

@@ -36,7 +36,7 @@ async function main() {
   writeFileSync(respaldo, JSON.stringify(antes, (_k, v) => (typeof v === 'bigint' ? String(v) : v), 1));
   console.log(`factura #${antes.tid} · total ${antes.total} · ${antes.items.length} renglones · respaldo en ${respaldo}`);
 
-  const svc = new FacturasService(prisma as any, posting, {} as any);
+  const svc = new FacturasService(prisma as any, posting, {} as any, {} as any);
   const res: any = await svc.updateInvoice(ID, {
     reason: 'prueba de blindaje contra el sync',
     items: [{ productName: 'Concepto de prueba', description: 'Concepto de prueba', qty: 1, price: 12345, taxRate: 0 }],

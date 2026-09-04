@@ -5,7 +5,7 @@ import { reciboRolloPdf } from '../common/pdf/recibo-rollo';
 import { FacturasService } from './facturas.service';
 import { RecurringService } from './recurring.service';
 import { CatalogoService } from './catalogo.service';
-import { CreateInvoiceDto, CreateNoteDto, GenerateInvoicesDto, UpdateInvoiceDto, VoidInvoiceDto } from './dto/facturas.dto';
+import { AsignarServicioDto, CreateInvoiceDto, CreateNoteDto, CreateNotesBulkDto, GenerateInvoicesDto, UpdateInvoiceDto, VoidInvoiceDto } from './dto/facturas.dto';
 import { CreateRecurringDto } from './dto/recurring.dto';
 import { AuthUser } from '../auth/current-user.decorator';
 
@@ -92,10 +92,16 @@ export class BillingController {
 
   // --- Escritura (Cobranza) ---
   // Cada escritura lleva su propio @RequireArea('contabilidad'): el de la clase
-  // incluye 'caja' para que la cajera CONSULTE facturas e imprima el recibo, pero
-  // su perfil es de solo lectura aquí — su única escritura sobre una factura es
-  // registrar el pago, y esa va por /treasury/collect. Sin el override, el botón
-  // oculto de la UI era la única barrera y un POST a mano anulaba facturas.
+  // incluye 'caja' para que la cajera CONSULTE facturas e imprima el recibo, y su
+  // perfil sigue siendo de solo lectura sobre las facturas YA emitidas — no las
+  // edita, no las anula y no emite notas. Sin el override, el botón oculto de la
+  // UI era la única barrera y un POST a mano anulaba facturas.
+  //
+  // La ÚNICA escritura que sí se le abrió (2026-08-27) es `create`: cobrar en
+  // ventanilla algo que todavía no está facturado —instalación, traslado, venta de
+  // equipo, reconexión— exigía que contabilidad emitiera la factura primero, y eso
+  // dejaba al cliente esperando en el mostrador. La factura que crea queda acotada
+  // a los clientes de SU sede (`exigirSedeSuscriptor` en `createInvoice`).
 
   /** Última factura del cliente (para clonar en "Nueva factura"). */
   lastInvoice(id: string) {
@@ -120,26 +126,65 @@ export class BillingController {
     return this.facturas.updateInvoice(id, dto, user);
   }
 
+  /** Qué se le hizo a esta factura, quién y por qué (auditoría + notas + emisión). */
+  historial(id: string, user: AuthUser) {
+    return this.facturas.historial(id, user);
+  }
+
+  /**
+   * Qué plan tiene asignado el abonado de esta factura para la próxima facturación,
+   * y cuál es la factura de la que lo lee el legacy.
+   */
+  servicioAsignado(id: string, user: AuthUser) {
+    return this.facturas.servicioAsignado(id, user);
+  }
+
+  /**
+   * "Asignar servicio" (el `ASIGNAR SERVICIO` del legacy): fija el plan que se le
+   * cobrará al abonado desde la próxima facturación. No reprecia esta factura.
+   */
+  asignarServicio(id: string, dto: AsignarServicioDto, user: AuthUser) {
+    return this.facturas.asignarServicio(id, dto, user);
+  }
+
   /** Generar facturas recurrentes en lote. */
   generate(dto: GenerateInvoicesDto, user: AuthUser) {
     return this.facturas.generate(dto, user);
   }
 
-  /** Listado de notas crédito/débito. */
+  /** Listado de notas crédito/débito (filtros: tipo, sede, fechas, autor, monto). */
   listNotes(
     page?: string,
     pageSize?: string,
     search?: string,
     type?: string,
+    branchId?: string,
+    from?: string,
+    to?: string,
+    authorId?: string,
+    montoMin?: string,
+    montoMax?: string,
     sortBy?: string,
     sortDir?: string,
+    user?: AuthUser,
   ) {
-    return this.facturas.listNotes({ page: Number(page), pageSize: Number(pageSize), search, type, sortBy, sortDir });
+    return this.facturas.listNotes(
+      { page: Number(page), pageSize: Number(pageSize), search, type, branchId, from, to, authorId, montoMin, montoMax, sortBy, sortDir },
+      user,
+    );
   }
 
   /** Crear nota crédito/débito sobre una factura. */
   createNote(id: string, dto: CreateNoteDto, user: AuthUser) {
     return this.facturas.createNote(id, dto, user);
+  }
+
+  /**
+   * Crear la MISMA nota sobre VARIAS facturas de un cliente (depuración de cartera).
+   * El monto de cada factura viaja en `items`; todo el lote va en una transacción.
+   */
+  createNotes(dto: CreateNotesBulkDto, user: AuthUser) {
+    return this.facturas.createNotes(dto, user);
   }
 
   /** Anular una factura de venta (motivo obligatorio). */

@@ -372,6 +372,9 @@ export class EinvoiceEmitService {
         cufe: result.cufe ?? null,
         pdfUrl: result.pdfUrl ?? null,
         errorMessage: result.ok ? null : (result.error ?? 'Error desconocido'),
+        // El porqué de la nota, en columna propia: dentro de `payloadJson` no lo leía
+        // nadie y en la factura sólo quedaba el número DIAN.
+        reason: reason.trim() || null,
       } as any,
     });
     if (!result.ok) {

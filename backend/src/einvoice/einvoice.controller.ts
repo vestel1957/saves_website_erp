@@ -2,7 +2,7 @@ import { IsInt, IsOptional, IsString, Max, Min, MinLength } from 'class-validato
 import { EinvoiceService } from './einvoice.service';
 import { EinvoiceEmitService } from './einvoice-emit.service';
 import { AuthUser } from '../auth/current-user.decorator';
-import { BulkEflagsDto, SetEflagsDto, UpdateSiigoAccountDto } from './dto/einvoice.dto';
+import { BranchBulkEflagsDto, BulkEflagsDto, SetEflagsDto, UpdateSiigoAccountDto } from './dto/einvoice.dto';
 
 /** Nota crédito electrónica: motivo + causa DIAN (1=Devolución, 2=Anulación, 3=Rebaja, 4=Otros). */
 export class CreditNoteDto {
@@ -41,11 +41,13 @@ export class EinvoiceController {
 
   // --- Emisión por sede: sedes → clientes → flags TV/Internet ---
   branches() { return this.einvoice.branches(); }
-  branchSubscribers(id: string, search?: string, page?: string, pageSize?: string, sort?: string, dir?: string) {
-    return this.einvoice.branchSubscribers(id, { search, page: Number(page), pageSize: Number(pageSize), sort, dir });
+  branchSubscribers(id: string, search?: string, page?: string, pageSize?: string, sort?: string, dir?: string, estado?: string, marcados?: string) {
+    return this.einvoice.branchSubscribers(id, { search, page: Number(page), pageSize: Number(pageSize), sort, dir, estado, marcados });
   }
   setEflags(id: string, dto: SetEflagsDto) { return this.einvoice.setEflags(id, dto); }
   bulkEflags(dto: BulkEflagsDto) { return this.einvoice.bulkEflags(dto); }
+  /** Marca/desmarca un servicio a todos los clientes filtrados de la sede. */
+  branchBulkEflags(id: string, dto: BranchBulkEflagsDto) { return this.einvoice.branchBulkEflags(id, dto); }
 
   // --- Configuración de cuentas Siigo (mapeo DIAN + credenciales) ---
   accounts() { return this.einvoice.accounts(); }

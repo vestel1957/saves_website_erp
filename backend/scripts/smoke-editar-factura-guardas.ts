@@ -15,7 +15,7 @@ const assert = (cond: boolean, msg: string, extra = '') => {
 
 const posting: any = { postSalesInvoiceAdjustment: async () => null };
 const user: any = { id: 'smoke', name: 'Prueba Contabilidad', email: 'prueba@vestel.com.co', permissions: ['system.admin'] };
-const svc = () => new FacturasService(prisma as any, posting, {} as any);
+const svc = () => new FacturasService(prisma as any, posting, {} as any, {} as any);
 
 /** Corre la edición y devuelve el mensaje de error, o null si pasó. */
 async function intento(id: string, items: any[], reason = 'prueba de guarda') {

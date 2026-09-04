@@ -19,13 +19,34 @@ import { INVOICE_STATUS_LABEL, INVOICE_STATUS_TONE, cop } from "@/lib/subscriber
 import { INVOICE_KIND_LABEL, RON_LABEL } from "@/lib/billing";
 import { type AvailablePromotion, discountLabel, isFlatDiscount, isBeforeTaxDiscount } from "@/lib/promotions";
 import { fmtDate } from "@/lib/format";
+import { abrirPdf, imprimirPdf } from "@/lib/imprimir";
+import { type ServicioAsignado, etiquetaServicio } from "@/lib/servicio-asignado";
+import { type Movimiento, HistorialFactura } from "@/components/billing/HistorialFactura";
 
 const EditarFacturaModal = dynamic(
   () => import("@/components/billing/EditarFacturaModal").then((m) => m.EditarFacturaModal),
   { ssr: false },
 );
 
+const AsignarServicioModal = dynamic(
+  () => import("@/components/billing/AsignarServicioModal").then((m) => m.AsignarServicioModal),
+  { ssr: false },
+);
+
 /** Descuento que aplicaría la promoción sobre esta factura (estimación en pantalla). */
+/* Base e IVA de un renglón.
+   `price` es el valor unitario SIN IVA en las dos convenciones que conviven en la
+   BD, así que la base sale siempre de qty×price. `subtotal`, en cambio, viene con
+   el IVA YA incluido en los ítems importados del legacy y sin él en los que genera
+   nexus: pintarlo tal cual hacía que los renglones de TV no cuadraran contra el
+   pie de la factura y pareciera que no se les aplicaba IVA. */
+function baseLinea(it: any) {
+  return (Number(it.qty) || 0) * (Number(it.price) || 0);
+}
+function totalLinea(it: any) {
+  return baseLinea(it) + (Number(it.taxTotal) || 0) - (Number(it.discountTotal) || 0);
+}
+
 function descuentoEstimado(p: AvailablePromotion, f: any) {
   const base = isBeforeTaxDiscount(p.discountFormat) ? (f.subtotal ?? f.total) : f.total;
   return isFlatDiscount(p.discountFormat) ? Math.min(Number(p.flatAmount ?? 0), base) : (base * p.percentage) / 100;
@@ -44,6 +65,14 @@ export default function FacturaDetallePage() {
   const [eMode, setEMode] = useState<{ live: boolean } | null>(null);
   const [emitting, setEmitting] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  // Servicio asignado: qué se le cobrará al abonado el mes que viene. Va aparte de
+  // la factura porque no es un dato de la factura, es el plan del cliente.
+  const [servicio, setServicio] = useState<ServicioAsignado | null>(null);
+  const [servicioOpen, setServicioOpen] = useState(false);
+  // Historial: qué se le ha hecho a esta factura, quién y por qué. Se recarga con
+  // la factura porque casi todo lo que se hace aquí (editar, anular, una promoción)
+  // le agrega un movimiento.
+  const [historial, setHistorial] = useState<Movimiento[] | null>(null);
   const [voidOpen, setVoidOpen] = useState(false);
   const [voidReason, setVoidReason] = useState("");
   const [voiding, setVoiding] = useState(false);
@@ -69,12 +98,25 @@ export default function FacturaDetallePage() {
             : "Factura no encontrada.",
         );
       })
-      .then((d) => { setF(d); setErr(null); })
+      .then((d) => { setF(d); setErr(null); void loadHistorial(); })
       .catch((e) => setErr(e instanceof Error ? e.message : "No se pudo cargar la factura."));
+
+  const loadHistorial = () =>
+    authFetch(`/billing/invoices/${id}/historial`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setHistorial(d?.items ?? []))
+      .catch(() => setHistorial([]));
+
+  const loadServicio = () =>
+    authFetch(`/billing/invoices/${id}/servicio`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then(setServicio)
+      .catch(() => setServicio(null));
 
   useEffect(() => {
     if (authLoading) return;
     void loadInvoice();
+    void loadServicio();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authLoading, authFetch, id]);
 
@@ -118,10 +160,17 @@ export default function FacturaDetallePage() {
    */
   async function openPdf(formato?: "rollo") {
     const res = await authFetch(`/billing/invoices/${id}/pdf${formato ? `?formato=${formato}` : ""}`);
-    if (!res.ok) return;
-    const url = URL.createObjectURL(await res.blob());
-    window.open(url, "_blank");
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    if (!res.ok) { toast("No se pudo generar el documento", "alert-circle"); return; }
+    const blob = await res.blob();
+    // El rollo va DERECHO a la impresora (es lo que se hace con él) y sin abrir
+    // pestaña: después de esperar al servidor, el navegador ya trata la ventana nueva
+    // como emergente y la bloquea sin decir nada. Ver `lib/imprimir`.
+    if (formato === "rollo") {
+      const r = await imprimirPdf(blob);
+      if (!r.ok) toast("El navegador bloqueó la ventana del recibo. Permite las ventanas emergentes de este sitio.", "alert-circle");
+      return;
+    }
+    abrirPdf(blob, `factura-${f?.tid ?? id}.pdf`);
   }
 
   // Modo de emisión (LIVE/DRY-RUN) — solo para quien puede emitir.
@@ -263,6 +312,11 @@ export default function FacturaDetallePage() {
         <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
           <div className="mb-2 flex items-center gap-2 text-[13px] font-bold text-text-primary"><Icon name="activity" size={15} className="text-brand" />Servicio facturado</div>
           <ServicioFacturado f={f} />
+          <ServicioAsignadoBloque
+            servicio={servicio}
+            puedeAsignar={canEmit && Boolean(f.subscriber)}
+            onAsignar={() => setServicioOpen(true)}
+          />
         </div>
         {/* Facturación electrónica */}
         <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
@@ -284,6 +338,9 @@ export default function FacturaDetallePage() {
                       <Badge label={e.type} tone={e.type === "FACTURADA" ? "success" : e.type === "ERROR" ? "error" : "default"} />
                       {e.dianNumber && <span className="ml-2 text-text-secondary">N° DIAN {e.dianNumber}</span>}
                       {e.cufe && <div className="truncate text-[10px] text-text-tertiary">CUFE {e.cufe}</div>}
+                      {/* El motivo de la nota crédito: se pide al emitirla y hasta ahora
+                          se quedaba dentro del JSON del envío. */}
+                      {e.reason && <div className="mt-0.5 text-[11px] leading-snug text-text-tertiary">Motivo: {e.reason}</div>}
                     </div>
                   ))}
                   {!emitida && canEmit && (
@@ -310,6 +367,16 @@ export default function FacturaDetallePage() {
         </div>
       </div>
 
+      {/* Observación de la factura: lo que escribió quien la emitió o la editó
+          (y, si está anulada, el motivo de la anulación). Antes no se veía en
+          ninguna parte y se perdía al editar. */}
+      {f.notes && (
+        <div className="mb-3 flex items-start gap-2 rounded-xl border border-border-subtle bg-surface p-3 text-[12px] text-text-secondary shadow-sm">
+          <Icon name="file-text" size={15} className="mt-0.5 shrink-0 text-brand" />
+          <span><span className="font-semibold text-text-primary">Observación:</span> {f.notes}</span>
+        </div>
+      )}
+
       {/* Ítems */}
       <div className="mb-2 text-[13px] font-bold text-text-primary">Detalle</div>
       <DataTable
@@ -319,18 +386,28 @@ export default function FacturaDetallePage() {
           {
             key: "product", header: "Concepto",
             render: (r: any) => (
-              <span className="flex items-center gap-2">
-                <span className="font-medium text-text-primary">{r.product}</span>
-                {/* Las notas se ven distinto porque juegan distinto: el editor de la
-                    factura no las toca y sólo se deshacen con la nota contraria. */}
-                {r.nota && <Badge label="Nota" tone="info" />}
+              <span className="flex flex-col gap-0.5">
+                <span className="flex items-center gap-2">
+                  <span className="font-medium text-text-primary">{r.product}</span>
+                  {/* Las notas se ven distinto porque juegan distinto: el editor de la
+                      factura no las toca y sólo se deshacen con la nota contraria. */}
+                  {r.nota && <Badge label="Nota" tone="info" />}
+                </span>
+                {/* La observación del renglón. En una nota crédito/débito es EL DATO:
+                    el porqué de la rebaja (depuración de cartera, descuento autorizado,
+                    retención) que hasta ahora se guardaba pero no se veía en la factura
+                    —había que irse al listado de notas para leerlo—. Los conceptos
+                    normales vienen sin descripción, así que no ensucia la tabla. */}
+                {r.description && r.description !== r.product && (
+                  <span className="whitespace-normal text-[11px] leading-snug text-text-tertiary">{r.description}</span>
+                )}
               </span>
             ),
           },
           { key: "qty", header: "Cant.", align: "right", render: (r: any) => r.qty },
           { key: "price", header: "Precio", align: "right", render: (r: any) => cop(r.price) },
           { key: "tax", header: "IVA", align: "right", render: (r: any) => cop(r.taxTotal) },
-          { key: "subtotal", header: "Subtotal", align: "right", render: (r: any) => cop(r.subtotal) },
+          { key: "subtotal", header: "Subtotal", align: "right", render: (r: any) => cop(baseLinea(r)) },
         ]}
       />
       <div className="mt-2 flex justify-end">
@@ -356,6 +433,10 @@ export default function FacturaDetallePage() {
           { key: "note", header: "Nota", render: (r: any) => <span className="text-text-tertiary">{r.note ?? ""}</span> },
         ]}
       />
+
+      {/* Historial: el "qué se hizo y por qué". El motivo ya se pedía al editar y al
+          anular, pero moría dentro de la auditoría y no lo veía nadie. */}
+      <HistorialFactura items={historial} />
 
       {editOpen && (
         <EditarFacturaModal
@@ -489,7 +570,73 @@ export default function FacturaDetallePage() {
           detail={<FacturaResumen f={f} />}
         />
       )}
+
+      {servicioOpen && (
+        <AsignarServicioModal
+          invoiceId={id}
+          actual={servicio}
+          open={servicioOpen}
+          onClose={() => setServicioOpen(false)}
+          onDone={() => { void loadServicio(); void loadInvoice(); }}
+        />
+      )}
     </>
+  );
+}
+
+/**
+ * "Servicio asignado": lo que se le cobrará al abonado la PRÓXIMA facturación.
+ *
+ * Es el bloque que el legacy tiene al pie de la factura, y su razón de ser es el
+ * cambio de plan: allá el plan no vive en el cliente sino en las columnas
+ * `television`/`combo`/`puntos` de su última factura mensual, y por eso se asigna
+ * desde aquí. Va debajo de lo que ESTA factura cobró, que es un dato distinto y no
+ * cambia nunca.
+ */
+function ServicioAsignadoBloque({
+  servicio, puedeAsignar, onAsignar,
+}: {
+  servicio: ServicioAsignado | null;
+  puedeAsignar: boolean;
+  onAsignar: () => void;
+}) {
+  const lineas = servicio?.servicios ?? [];
+  return (
+    <div className="mt-3 border-t border-border-subtle pt-2">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="text-[11px] font-bold uppercase tracking-wide text-text-tertiary">
+          Servicio asignado
+        </span>
+        {puedeAsignar && (
+          <button
+            onClick={onAsignar}
+            className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-semibold text-brand hover:bg-surface-2"
+          >
+            <Icon name="pencil" size={12} /> Asignar
+          </button>
+        )}
+      </div>
+      {!servicio ? (
+        <span className="text-[12px] text-text-tertiary">Cargando…</span>
+      ) : lineas.length ? (
+        <div className="flex flex-col gap-0.5 text-[12px]">
+          {lineas.map((s) => (
+            <span key={s.kind + (s.planName ?? "")} className="text-text-secondary">
+              <b className="text-text-primary">{etiquetaServicio(s)}</b>
+              {s.price ? ` · ${cop(s.price * (s.qty || 1))}/mes` : ""}
+            </span>
+          ))}
+          <span className="text-[11px] text-text-tertiary">
+            Es lo que se cobrará en la próxima facturación.
+            {servicio.derivado && " Deducido de sus facturas: asígnalo para dejarlo fijo."}
+          </span>
+        </div>
+      ) : (
+        <span className="text-[12px] text-text-tertiary">
+          Sin plan contratado: la facturación mensual no le cobraría nada.
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -523,7 +670,7 @@ function ServicioFacturado({ f }: { f: any }) {
       ) : items.length ? (
         items.map((it) => (
           <span key={it.id} className="text-text-secondary">
-            {it.product || it.description || "Concepto"}{it.qty > 1 ? ` ×${it.qty}` : ""} · <b className="text-text-primary">{cop(it.subtotal + it.taxTotal)}</b>
+            {it.product || it.description || "Concepto"}{it.qty > 1 ? ` ×${it.qty}` : ""} · <b className="text-text-primary">{cop(totalLinea(it))}</b>
           </span>
         ))
       ) : (

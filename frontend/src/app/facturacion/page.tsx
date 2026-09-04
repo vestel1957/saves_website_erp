@@ -243,13 +243,17 @@ export default function FacturacionPage() {
           subtitle={stats ? `${stats.total.toLocaleString("es-CO")} facturas · cartera ${cop(stats.carteraTotal)}` : "Facturas y cartera"}
         />
         <div className="flex items-center gap-2">
-          <Link
-            href="/configuracion/automatizaciones"
-            title="La facturación recurrente se genera automáticamente el día 1 de cada mes"
-            className="inline-flex items-center gap-1.5 rounded-lg border border-border-default bg-surface px-3.5 py-2 text-[13px] font-semibold text-text-secondary transition-colors hover:bg-surface-2"
-          >
-            <Icon name="calendar-clock" size={15} /> Generación automática
-          </Link>
+          {/* Lleva a Configuración ▸ Automatizaciones, que la cajera no puede abrir:
+              sin este gate el enlace la sacaba a una pantalla en 403. */}
+          {canEmit && (
+            <Link
+              href="/configuracion/automatizaciones"
+              title="La facturación recurrente se genera automáticamente el día 1 de cada mes"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border-default bg-surface px-3.5 py-2 text-[13px] font-semibold text-text-secondary transition-colors hover:bg-surface-2"
+            >
+              <Icon name="calendar-clock" size={15} /> Generación automática
+            </Link>
+          )}
           {canEmit && (
             <button
               type="button"

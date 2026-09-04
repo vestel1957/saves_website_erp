@@ -1,0 +1,11 @@
+-- Un tercer alcance, entre los dos que ya había.
+--
+-- Con sólo "la mensualidad del mes" y "cualquier factura pendiente", una campaña de
+-- cartera al 50% también rebajaba a la mitad un traslado facturado ESE MISMO DÍA
+-- (30.000 → 15.000): un cargo por un servicio que se acaba de prestar no es deuda de
+-- cartera, y regalarlo es la misma fuga que ya costó 1,13 M COP en el portal legacy.
+--
+-- 'MENSUALIDADES_PENDIENTES' rebaja toda mensualidad que el cliente deba —la del mes y
+-- las atrasadas— y deja los cargos sueltos completos. Es el alcance de una campaña de
+-- recuperación de cartera.
+ALTER TYPE "PromotionInvoiceScope" ADD VALUE 'MENSUALIDADES_PENDIENTES' BEFORE 'CUALQUIER_PENDIENTE';

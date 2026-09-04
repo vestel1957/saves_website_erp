@@ -276,11 +276,11 @@ model Account {
   isActive   Boolean     @default(true)
   currency   String      @default("USD")
 
-  lines           JournalLine[]
-  taxCodes        TaxCode[]
-  mappings        AccountMapping[]
-  bankAccounts    BankAccount[]
-  periodBalances  FiscalPeriodBalance[]
+  lines          JournalLine[]
+  taxCodes       TaxCode[]
+  mappings       AccountMapping[]
+  bankAccounts   BankAccount[]
+  periodBalances FiscalPeriodBalance[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -306,19 +306,19 @@ model CostCenter {
 
 /// Fiscal periods drive the accounting close (monthly + annual)
 model FiscalPeriod {
-  id        String         @id @default(cuid())
+  id        String                @id @default(cuid())
   name      String
-  type      PeriodType     @default(MONTH)
+  type      PeriodType            @default(MONTH)
   year      Int
   month     Int? // 1-12 for MONTH periods, null for YEAR
   startDate DateTime
   endDate   DateTime
-  status    PeriodStatus   @default(OPEN)
+  status    PeriodStatus          @default(OPEN)
   closedAt  DateTime?
   closedBy  String?
   entries   JournalEntry[]
   balances  FiscalPeriodBalance[]
-  createdAt DateTime       @default(now())
+  createdAt DateTime              @default(now())
 
   @@unique([year, month])
   @@index([status])
@@ -338,11 +338,11 @@ model FiscalPeriod {
 /// acreedor negativo). Una sola convención evita el error clásico de guardar el saldo
 /// "en positivo" y perder de qué lado estaba.
 model FiscalPeriodBalance {
-  id       String @id @default(cuid())
-  periodId String
-  period   FiscalPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  id        String       @id @default(cuid())
+  periodId  String
+  period    FiscalPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
   accountId String
-  account   Account @relation(fields: [accountId], references: [id])
+  account   Account      @relation(fields: [accountId], references: [id])
 
   /// Saldo con el que la cuenta ENTRÓ al periodo (el arrastre del periodo anterior).
   opening Decimal @default(0) @db.Decimal(18, 2)
@@ -2985,11 +2985,14 @@ model Subscriber {
   files               SubscriberFile[]
   notes               SubscriberNote[]
   mikrotikLogs        MikrotikActionLog[]
+  ipAssignments       IpAssignment[]
   oltLogs             OltActionLog[]
   playhubSubs         PlayhubSubscription[]
   waMessages          WhatsappMessage[]
   waConversations     WhatsappConversation[]
   contactos           SubscriberContact[]
+  advances            CustomerAdvance[]
+  pendingInstalls     PendingInstall[]
   verificaciones      ChatAccessVerification[]
   waSends             WhatsappSend[]
   /// Promociones que lo alcanzan por lista cerrada de clientes.
@@ -2997,6 +3000,20 @@ model Subscriber {
   lastEmailReminderAt DateTime? // último recordatorio de cartera por correo (dedupe)
   lastWaReminderAt    DateTime? // último recordatorio de cartera por WhatsApp (dedupe + rotación)
   paymentOrders       PaymentOrder[]
+
+  /// Ficha EDITADA en este sistema: la sincronización deja de pisarle los datos de
+  /// perfil con los del legacy y, al revés, el writeback se los lleva allá.
+  ///
+  /// Mismo blindaje que `SubInvoice.editedAt`, `Equipment.editedAt` y `Material.editedAt`,
+  /// y por el mismo motivo: sin él las dos direcciones comparan los mismos campos con la
+  /// misma regla (`diffKeys`), así que abrir la vuelta pondría a la ida y al writeback a
+  /// reescribirse el uno al otro cada pasada, para siempre.
+  ///
+  /// NO blinda la ficha entera: del legacy se siguen aceptando el ESTADO y los SALDOS
+  /// (ver `CAMPOS_DE_ALLA` en `sync-legacy-vivo.js`), que es lo que allá manda mientras
+  /// los dos sistemas convivan. Lo que se congela es el perfil: nombre, documento,
+  /// dirección, teléfonos, datos de red.
+  editedAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -3006,6 +3023,8 @@ model Subscriber {
   @@index([phone1])
   @@index([status])
   @@index([branchId])
+  /// Fichas editadas aquí: el writeback las relee en cada pasada.
+  @@index([editedAt])
   // Rotación de los recordatorios por WhatsApp: se recorren los morosos por
   // "hace más que no le escribimos" (nulls primero), tope diario por el límite
   // de Meta. Sin este índice el orden se resuelve ordenando todos los candidatos.
@@ -3405,17 +3424,26 @@ model SubscriberService {
   kind         ServiceKind
   planName     String? // "300 Megas ST", plan TV, etc.
   price        Decimal?      @db.Decimal(18, 2)
+  /// Cuántas unidades se facturan de esta línea. Solo PUNTOS la usa (un abonado
+  /// puede tener 25 decos adicionales); internet y TV son siempre 1.
+  qty          Int           @default(1)
   taxRate      Decimal       @default(0) @db.Decimal(9, 2) // IVA% de la mensualidad (TV=19, internet=0)
   status       ServiceStatus @default(ACTIVO)
   megas        Int? // parseado del plan (regex) para elegibilidad PlayHub
   planId       String? // plan del catálogo del que se copió name+price (si aplica)
   plan         Plan?         @relation(fields: [planId], references: [id], onDelete: SetNull)
+  /// Combo del que salió este precio. Sirve para distinguir a quien COMPRÓ un
+  /// combo de quien casualmente tiene internet y TV sueltos, que en la factura
+  /// se ven igual. null = plan suelto.
+  bundleId     String?
+  bundle       PlanBundle?   @relation(fields: [bundleId], references: [id], onDelete: SetNull)
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
 
   @@index([subscriberId])
   @@index([kind])
   @@index([planId])
+  @@index([bundleId])
 }
 
 /// Catálogo de planes de servicio (internet/TV). Es la ÚNICA fuente de precio de
@@ -3439,9 +3467,65 @@ model Plan {
   provisionRequests OltProvisionRequest[]
   /// Promociones cuyo público se definió por este plan.
   promotions        Promotion[]           @relation("PromotionPlans")
+  /// Combos comerciales que incluyen este plan.
+  bundleItems       PlanBundleItem[]
 
   @@index([kind])
   @@index([active])
+}
+
+/// Combo comercial: varios planes que se venden juntos a un precio propio
+/// ("Internet 300 + TV Full por $85.000"). Es SOLO catálogo de venta: al
+/// aplicarlo a un abonado se copian sus precios a `SubscriberService`, que
+/// sigue siendo lo que factura la corrida mensual.
+///
+/// OJO con la palabra: en el legacy `invoices.combo` es el nombre del plan de
+/// INTERNET, no un paquete. Por eso aquí el modelo se llama PlanBundle.
+model PlanBundle {
+  id          String   @id @default(cuid())
+  name        String // "Combo Hogar 300"
+  description String? // gancho comercial que ve el funcionario al venderlo
+  active      Boolean  @default(true) // false = no se ofrece (mismo criterio que Plan.active)
+  /// Aplicaciones (OTT) que el cliente puede ELEGIR con este combo.
+  ///
+  /// Se guardan los CÓDIGOS del catálogo de PlayHub (`PLAYHUB_CATALOG`), no los
+  /// nombres: el nombre comercial cambia ("Disney+ Plan Estándar CO") y el código
+  /// es lo que viaja a la API al suscribir. Lista vacía = el combo no ofrece apps.
+  ///
+  /// Solo códigos NO asignables por API: esos son las apps de verdad. Las
+  /// asignables (Q0x/P0x/S0x/U0x) son el cupo —"02 Servicios a elegir"— que el
+  /// operador le da al cliente para que escoja de esta lista.
+  allowedApps String[] @default([])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  items    PlanBundleItem[]
+  services SubscriberService[]
+
+  @@index([active])
+}
+
+/// Un plan dentro de un combo, con el precio que tiene DENTRO del combo.
+///
+/// El precio vive por componente y no como un total del combo porque la
+/// mensualidad se factura con una línea por servicio y cada una lleva su IVA
+/// (internet 0%, TV 19%): repartir un total a posteriori movería el IVA que se
+/// le cobra al cliente y lo que se reporta a la DIAN. El total del combo es la
+/// suma de sus partes.
+model PlanBundleItem {
+  id       String      @id @default(cuid())
+  bundleId String
+  bundle   PlanBundle  @relation(fields: [bundleId], references: [id], onDelete: Cascade)
+  planId   String
+  plan     Plan        @relation(fields: [planId], references: [id], onDelete: Restrict)
+  /// Copia del `kind` del plan: es lo que hace cumplir "un solo plan por tipo
+  /// de servicio" con una restricción de la BD y no con código.
+  kind     ServiceKind
+  /// Precio base sin IVA de este plan dentro del combo.
+  price    Decimal     @db.Decimal(18, 2)
+
+  @@unique([bundleId, kind])
+  @@index([planId])
 }
 
 /// Historial de transiciones de estado (legacy tabla `estados`).
@@ -3558,12 +3642,53 @@ model SubInvoice {
   editedBy  String? // nombre del funcionario que editó (último)
   editCount Int       @default(0)
 
+  /// "Servicio asignado" puesto A MANO sobre esta factura (el `ASIGNAR SERVICIO` del
+  /// legacy). NO describe lo que esta factura cobró —eso son sus renglones—: dice qué
+  /// plan tiene contratado el abonado de aquí en adelante.
+  ///
+  /// Existe porque el legacy no guarda el plan en el cliente: su corrida mensual lo lee
+  /// de las columnas `television`/`combo`/`puntos` de la ÚLTIMA factura recurrente
+  /// (`Invoices_model.php:1130`, que ordena por invoicedate DESC y se salta las fijas y
+  /// las notas). Mientras el legacy siga facturando, cambiarle el plan a alguien aquí no
+  /// sirve de nada si esas tres columnas no viajan de vuelta.
+  ///
+  /// La marca es lo que hace posible ese viaje sin efectos colaterales:
+  ///   - `writeback-legacy.js` (`pushServicioAsignado`) empuja SOLO esas tres columnas
+  ///     de las facturas marcadas, sin tocar renglones ni montos.
+  ///   - `sync-legacy-vivo.js` deja de traer esas tres columnas del legacy para estas
+  ///     facturas: sin el candado, cualquier otro cambio (un pago, un corte) dispara la
+  ///     actualización completa y restauraría el plan viejo a los 15 minutos.
+  serviceAssignedAt DateTime?
+  serviceAssignedBy String? // nombre del funcionario que asignó el servicio (último)
+
+  /// ESTADO DE SERVICIO puesto DESDE AQUÍ sobre esta factura (`estadoTv`/`estadoCombo`).
+  ///
+  /// Misma idea que `serviceAssignedAt`, pero para el corte y no para el plan: mientras
+  /// el legacy siga siendo la fuente de `estado_tv`/`estado_combo` en la ida, una
+  /// suspensión hecha aquí —cerrar una orden de 'Suspension Television', o el cambio
+  /// manual desde la ficha— dura lo que tarde la siguiente pasada del sync (15 min) y
+  /// después el servicio vuelve a pintarse al aire. Es lo que pasó con la orden #502150
+  /// el 31-08-2026: se cerró la suspensión de TV y el cliente siguió con la televisión
+  /// "activa" en la ficha.
+  ///
+  /// Con la marca puesta:
+  ///   - `sync-legacy-vivo.js` deja de traer esas dos columnas del legacy para esta
+  ///     factura (el resto —cobro, montos, renglones— sigue bajando igual);
+  ///   - `writeback-legacy.js` (`pushEstadoServicio`) las empuja al legacy y, en cuanto
+  ///     los dos lados coinciden, BORRA la marca. A partir de ahí el legacy vuelve a
+  ///     mandar sobre el corte, que es lo correcto: allá se corta por mora todos los meses.
+  serviceStatusAt DateTime?
+  serviceStatusBy String? // nombre del funcionario que movió el estado del servicio (último)
+
   // Relaciones
   items              SubInvoiceItem[]
+  pendingInstalls    PendingInstall[]
   transactions       Transaction[]
   additionalServices AdditionalService[]
   receipts           PaymentReceipt[]
   electronicInvoices ElectronicInvoice[]
+  advancesOrigin     CustomerAdvance[]            @relation("AnticipoOrigen")
+  advancesApplied    CustomerAdvanceApplication[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -3621,6 +3746,45 @@ model AdditionalService {
   @@index([invoiceId])
 }
 
+/// Instalación en espera de que se pague la factura de afiliación.
+///
+/// El alta ya NO abre la orden de instalación: primero se emite la factura de
+/// afiliación y la orden nace sola cuando esa factura queda PAGADA (`AltaClienteService`
+/// —al recaudar por el evento `treasury.pago.aplicado`, y por barrido para los pagos
+/// que entran por el legacy—). Esta fila es lo que queda en medio: guarda el contexto
+/// de la visita (dirección, tecnología, usuario PPPoE, celular) y a quién iba asignada,
+/// porque en el momento del pago esos datos ya no viajan en ninguna petición.
+///
+/// `fulfilledAt` es el candado de idempotencia: el evento y el barrido pueden verse el
+/// mismo pago, y sin él el cliente acabaría con dos órdenes de instalación.
+model PendingInstall {
+  id           String     @id @default(cuid())
+  subscriberId String
+  subscriber   Subscriber @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+  /// Factura de afiliación cuyo pago dispara la orden.
+  invoiceId    String     @unique
+  invoice      SubInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  /// Observación de la orden (dirección, tecnología, PPPoE, celular).
+  context      String?
+  /// Técnico al que iba dirigida, si el alta lo dijo.
+  assigned     String?
+  scheduledFor DateTime? @db.Date
+
+  /// Orden creada al pagar (`Ticket.id`); null mientras siga esperando.
+  ticketId    String?
+  ticketCode  Int?
+  fulfilledAt DateTime?
+  /// Por qué no se pudo abrir la orden en el último intento (se reintenta en el barrido).
+  lastError   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([subscriberId])
+  @@index([fulfilledAt]) // barrido: sólo mira las que siguen pendientes
+}
+
 /// Catálogo de categorías de egreso (legacy `transactions_cat`).
 model TransactionCategory {
   id       String @id @default(cuid())
@@ -3660,6 +3824,11 @@ model Transaction {
   payuOrderId  String? // id_orden_payu
   attach       String? // comprobante/evidencia: nombre almacenado (uuid.ext) en uploads/treasury
   attachName   String? // nombre original del archivo subido
+  // Comprobante que se subió EN EL LEGACY. Allá no vive en `transactions` sino en
+  // `meta_data` (type 77 → col1, y type 4 col2='Pago' para los pagos de compras), y el
+  // binario está en su `userfiles/attach/`. Aquí se guarda sólo el nombre: los 5,8 GB
+  // de ficheros se sirven desde la copia local (LEGACY_ATTACH_DIR) sin duplicarlos.
+  legacyAttach String?
 
   // Enlaces a compras/devoluciones/proveedor (para pagos y estado de cuenta del proveedor)
   supplyOrderId String? // pago/abono a una orden de compra
@@ -3668,6 +3837,8 @@ model Transaction {
 
   receiptLinks ReceiptTransaction[]
   voiding      Voiding?
+  advance      CustomerAdvance?
+  advanceUses  CustomerAdvanceApplication[]
 
   createdAt DateTime @default(now())
 
@@ -3843,6 +4014,33 @@ model CashAccount {
   departmentRef String? // departamento
 }
 
+/// LÁPIDA de una fila borrada AQUÍ que también existía en el legacy.
+///
+/// Sin esto, borrar en Nexus no sirve de nada: la fila sigue viva allá y la ida la
+/// vuelve a crear en la pasada siguiente —el borrado se deshacía solo, en 15 minutos, y
+/// desde la pantalla parecía que "no se guardó"—. La lápida hace dos cosas:
+///   · la IDA no resucita lo que aquí se borró a conciencia;
+///   · el WRITEBACK sabe qué hay que borrar allá (`LEGACY_WRITEBACK_BORRADOS_LIVE`).
+///
+/// Se guarda el `legacyId` porque la fila ya no existe: es el único rastro que queda.
+model LegacyDeletion {
+  id        String    @id @default(cuid())
+  /// Modelo Prisma al que pertenecía: 'material', 'equipment', 'supplyOrder', 'subInvoice', 'supplier'.
+  entity    String
+  legacyId  Int
+  /// Para el rastro: qué era, para que la lista se pueda leer sin ir a buscarlo.
+  label     String?
+  deletedAt DateTime  @default(now())
+  deletedBy String?
+  /// Cuándo se propagó el borrado al legacy. Null = pendiente (o gate cerrado).
+  pushedAt  DateTime?
+  /// Por qué no se pudo propagar, si es el caso.
+  note      String?
+
+  @@unique([entity, legacyId])
+  @@index([pushedAt])
+}
+
 /// Departamento (legacy `departamentos`).
 model Department {
   id       String @id @default(cuid())
@@ -3875,6 +4073,22 @@ model Neighborhood {
   cityLegacy       Int?
   localityLegacy   Int?
   name             String
+
+  // --- Centroide del barrio (2026-09-03) ---
+  /// Punto medio del barrio. NO es la casa de nadie: es lo que permite ordenar
+  /// el recorrido de un técnico cuando el abonado no tiene GPS, que hoy es el
+  /// 75% de los casos (61 de 242 órdenes de campo abiertas lo tenían). A escala
+  /// de ciudad decide bien "esta va de camino y esta no", que es la pregunta que
+  /// se está respondiendo; para la geo-cerca del cierre NO sirve y no se usa.
+  lat       Float?
+  lng       Float?
+  /// De dónde salió: `abonados` (media de los que sí tienen GPS en ese barrio),
+  /// `osm` (geocodificado con Nominatim) o `manual`. Se guarda porque la calidad
+  /// es muy distinta y la pantalla tiene que poder decirlo.
+  geoSource String?
+  /// Cuántos abonados se promediaron. Con 1 o 2 el centroide es un rumor.
+  geoPoints Int?
+  geoAt     DateTime?
 }
 
 /// Datos de la empresa (legacy `app_system`, fila única).
@@ -4031,6 +4245,10 @@ model Staff {
   banned     Boolean    @default(false)
   lastLogin  DateTime?
   sedeAccede String? // CSV de sedes
+  /// Excepción al turno obligatorio del técnico: ve y abre TODA su agenda del día en
+  /// vez de una visita a la vez (2026-09-02, a pedido del usuario, para Oscar
+  /// Rodríguez Fonseca). Ver `src/support/turno.ts`.
+  agendaLibre Boolean  @default(false)
   createdAt  DateTime   @default(now())
   updatedAt  DateTime   @updatedAt
 
@@ -4102,6 +4320,27 @@ model StaffDocument {
 /// Los criterios se combinan con Y (AND) entre dimensiones y con O (OR) dentro de
 /// cada una: "estado Activo + sede Yopal" = activos DE Yopal. Una dimensión vacía
 /// no filtra. Con `allSubscribers` la promo alcanza a todos y se ignoran los demás.
+/// ¿A qué FACTURAS del cliente alcanza el descuento automático de ventanilla?
+///
+/// El descuento se concede AL COBRAR (`promotions/descuento-al-cobrar.ts`) y hasta
+/// el 2026-09-02 sólo sabía rebajar la mensualidad del mes en curso: la regla del
+/// pronto pago, escrita a mano dentro del módulo. Con eso, una campaña de
+/// RECUPERACIÓN DE CARTERA no descontaba nunca —lo que un cliente de cartera debe
+/// es, por definición, de meses anteriores— y en ventanilla no aparecía nada.
+enum PromotionInvoiceScope {
+  /// Sólo la MENSUALIDAD del mes en curso (`kind = RECURRENTE` con fecha de este
+  /// mes). Es el pronto pago: premia pagar el servicio del mes a tiempo, no la mora
+  /// ni los cargos sueltos (traslado, reconexión, instalación).
+  MENSUALIDAD_DEL_MES
+  /// Toda MENSUALIDAD que el cliente deba: la del mes y las atrasadas. Los cargos
+  /// sueltos se cobran completos. Es la campaña de recuperación de cartera —lo que
+  /// se perdona es el servicio no pagado, no un traslado facturado esta mañana—.
+  MENSUALIDADES_PENDIENTES
+  /// CUALQUIER factura pendiente, sea mensualidad o cargo. Perdona también el
+  /// traslado, la reconexión y la instalación: hay que pedirlo a propósito.
+  CUALQUIER_PENDIENTE
+}
+
 model Promotion {
   id             String   @id @default(cuid())
   name           String // pro_nombre
@@ -4116,6 +4355,11 @@ model Promotion {
   startDate      DateTime @db.Date // f_inicio
   endDate        DateTime @db.Date // f_final
   active         Boolean  @default(true)
+
+  /// A qué FACTURAS alcanza el descuento automático de ventanilla (ver
+  /// `PromotionInvoiceScope`). El botón manual de `/facturacion/[id]` no lo mira:
+  /// ahí hay alguien decidiendo factura por factura.
+  invoiceScope   PromotionInvoiceScope @default(MENSUALIDAD_DEL_MES)
 
   // ── ¿A qué clientes alcanza? ────────────────────────────────────────────────
   /// Alcanza a TODOS los clientes (ignora los demás criterios). Es explícito a
@@ -4135,6 +4379,29 @@ model Promotion {
 
   applications PromotionApplication[]
   targetLogs   PromotionTargetLog[]
+
+  // ── Portal de pagos en línea (vestel.com.co/crm) ───────────────────────────
+  /// Publicar esta promoción en el PORTAL DE PAGOS del legacy. El portal no sabe
+  /// de nexus: lee la tabla `promos` del MySQL legacy filtrando por fecha y por el
+  /// ESTADO del cliente, así que sólo son publicables las promos de PORCENTAJE
+  /// cuyo público sea uno o varios estados (o todos). El writeback las refleja
+  /// allá y, de paso, tapa con filas al 0% los estados que no alcanza — si no
+  /// encuentra fila, el PHP del portal regala un porcentaje quemado en el código.
+  portalPublish     Boolean   @default(false)
+  /// El PORTAL cobra ya con el descuento puesto: la rebaja se concede por adelantado
+  /// como nota crédito y el writeback baja el `total` de la factura del legacy, que es
+  /// de donde el portal saca lo que cobra. Es lo ÚNICO que hace que allá se vea el
+  /// valor rebajado —el portal no tiene descuento "de sólo mostrar"— y por eso va
+  /// aparte de `portalPublish`: publicar es ofrecer allá el descuento con la mecánica
+  /// del legacy (que sólo toca la última factura y sólo después del día 20); esto es
+  /// dejar la cartera ya rebajada. Son excluyentes: con las dos, el cliente podría
+  /// llevarse el descuento dos veces. Ver `promotions/descuento-portal.ts`.
+  portalPreapply    Boolean   @default(false)
+  /// `idprom` de las filas que el writeback mantiene en `promos` del legacy por
+  /// cuenta de esta promoción (una por estado alcanzado).
+  legacyPromoIds    Int[]
+  /// Última corrida del writeback que dejó la promoción reflejada en el portal.
+  portalPublishedAt DateTime?
 
   createdBy String? // nombre/email del superusuario que la creó
   createdAt DateTime @default(now())
@@ -4161,6 +4428,10 @@ model PromotionTemplate {
   flatAmount     Decimal? @db.Decimal(18, 2)
   startDate      DateTime @db.Date
   endDate        DateTime @db.Date
+  /// A qué facturas alcanza (mismo juego que `Promotion.invoiceScope`). Va en la
+  /// plantilla porque es parte de la FORMA de la campaña: una de cartera que vuelva
+  /// como "sólo la mensualidad del mes" no descontaría nada, sin decir por qué.
+  invoiceScope   PromotionInvoiceScope @default(MENSUALIDAD_DEL_MES)
 
   createdBy String? // nombre/email del superusuario que la guardó
   createdAt DateTime @default(now())
@@ -4214,6 +4485,10 @@ model PromotionApplication {
   percentage    Int // % aplicado (snapshot)
   amount        Decimal   @db.Decimal(18, 2) // monto descontado
   createdAt     DateTime  @default(now())
+  /// Cuándo se RETIRÓ el descuento por no haberse pagado dentro de la vigencia
+  /// de la promoción. null = sigue en pie. El descuento no se borra: se revierte
+  /// con una nota débito, así que la factura conserva las dos huellas.
+  revertedAt    DateTime?
 
   @@unique([promotionId, invoiceId])
   @@index([invoiceId])
@@ -4268,6 +4543,12 @@ model Milestone {
 model Supplier {
   id           String        @id @default(cuid())
   legacyId     Int?          @unique
+  /// 1 productos · 2 servicios · 3 TERCEROS (2026-08-10).
+  ///
+  /// "Terceros" no compra ni vende nada: es a quién se le paga por caja (nómina,
+  /// arriendos, honorarios, servicios públicos). Se metió aquí, y no en un catálogo
+  /// nuevo, para que el egreso al tercero caiga en el mismo estado de cuenta y el
+  /// desplegable de "Beneficiario" tenga UNA sola fuente.
   category     Int           @default(1)
   name         String
   nit          String?
@@ -4321,9 +4602,19 @@ model MaterialWarehouse {
   /// `technicianRef`, porque el dueño del material es el técnico.
   managerId     String?
   manager       User?      @relation("MaterialWarehouseManager", fields: [managerId], references: [id])
+  /// Sede a la que pertenece la bodega (`Branch.legacyId`), igual que
+  /// `EquipmentWarehouse.branchLegacy`. Es lo que ata una bodega de material con
+  /// las cajeras que responden por ella. `null` = sin sede (bodegas de tránsito
+  /// del legacy: "Clientes", "Servicios", "Productos de compra"...).
+  branchLegacy  Int?
+  /// Bodega PRINCIPAL de esa sede: el destino de lo que el técnico devuelve cuando
+  /// le sobra material. Una por sede (lo comprueba el servicio, no la BD: las de
+  /// una sede sin principal simplemente no reciben devoluciones).
+  isMain        Boolean    @default(false)
   materials     Material[]
 
   @@index([managerId])
+  @@index([branchLegacy])
 }
 
 /// Material / producto de inventario (legacy `products`). Stock = qty por bodega (desnormalizado).
@@ -4354,6 +4645,10 @@ model Material {
   ticketConsumed  TicketMaterial[]
   createdAt       DateTime           @default(now())
   updatedAt       DateTime           @updatedAt
+  // Lo movió nexus (consumo del técnico, traspaso, devolución, recepción de orden).
+  // Mismo blindaje que Equipment.editedAt: el sync trae `products.qty` del legacy,
+  // pero no pisa una fila que ya se movió aquí. Ver sync-legacy-vivo.js.
+  editedAt        DateTime?
 
   @@index([categoryId])
   @@index([warehouseId])
@@ -4376,6 +4671,11 @@ model MaterialActa {
   createdByName       String?
   assignedToId        String? // flujo nuevo: usuario designado para recibir en destino
   assignedToName      String?
+  /// Sede cuya CAJERA firma el recibido, cuando quien recibe no es una persona
+  /// concreta sino "la cajera de turno de esa sede" (devolución de un técnico a la
+  /// bodega principal de su sede). Va en lugar de `assignedToId`: cualquiera de las
+  /// cajeras de esa sede puede firmarla, como en las transferencias de equipos.
+  assignedBranchLegacy Int?
   status              String             @default("Emitida") // Emitida / En tránsito / Recibida
   receivedBy          Int?
   receivedByName      String?
@@ -4451,6 +4751,9 @@ model SupplyOrder {
   approved2At     DateTime?
   events          SupplyOrderEvent[]
   files           SupplyOrderFile[]
+  /// Igual que en `Equipment`: la orden importada del legacy que se edita, recibe
+  /// o paga AQUÍ deja de aceptar el estado del legacy en la sincronización.
+  editedAt        DateTime?
   createdAt       DateTime           @default(now())
   updatedAt       DateTime           @updatedAt
 
@@ -4600,39 +4903,62 @@ model PaymentOrder {
 /// Reemplaza el legacy `files_carga_transaccional` + `datos_archivo_excel_cargue`.
 /// Flujo en dos fases: subir (staging) → procesar (aplica a cartera vía collect).
 model PaymentImportBatch {
-  id            String             @id @default(cuid())
-  fileName      String?
-  uploadedById  String?
-  status        String             @default("Cargado") // Cargado | Procesado
-  totalRows     Int                @default(0)
-  appliedRows   Int                @default(0)
-  errorRows     Int                @default(0)
-  notFoundRows  Int                @default(0)
-  duplicateRows Int                @default(0)
-  totalAmount   Decimal            @default(0) @db.Decimal(18, 2)
-  appliedAmount Decimal            @default(0) @db.Decimal(18, 2)
-  rows          PaymentImportRow[]
-  createdAt     DateTime           @default(now())
+  id             String             @id @default(cuid())
+  /// `files_carga_transaccional.id` del legacy. Los cargues que se hicieron allá se
+  /// traen para que el historial no arranque en cero el día del corte (914 archivos
+  /// desde 2023). Un lote con legacyId es HISTORIA: no se procesa ni se borra desde
+  /// aquí —su plata ya entró y ya viajó por `syncTransactions`—, sólo se consulta.
+  legacyId       Int?               @unique
+  fileName       String?
+  /// Nombre en disco del .xlsx original (uploads/payment-imports). Se guarda para
+  /// poder volver a bajar el archivo tal como se subió, igual que el legacy —que
+  /// enlazaba `userfiles/attach/…` desde la lista de cargues.
+  storedFile     String?
+  uploadedById   String?
+  /// Nombre del funcionario que subió el archivo (columna "Usuario" del legacy).
+  uploadedByName String?
+  /// pagos = cargue de recaudos (lo de siempre) · plan = actualizar el paquete de la
+  /// última factura (tercera opción del selector del legacy).
+  mode           String             @default("pagos")
+  status         String             @default("Cargado") // Cargado | Procesado
+  totalRows      Int                @default(0)
+  appliedRows    Int                @default(0)
+  errorRows      Int                @default(0)
+  notFoundRows   Int                @default(0)
+  duplicateRows  Int                @default(0)
+  totalAmount    Decimal            @default(0) @db.Decimal(18, 2)
+  appliedAmount  Decimal            @default(0) @db.Decimal(18, 2)
+  rows           PaymentImportRow[]
+  createdAt      DateTime           @default(now())
 
   @@index([status])
 }
 
 /// Fila del cargue (una por pago). estado: Inicial | Cargado | Error | Usuario No Existe | Duplicado.
 model PaymentImportRow {
-  id            String             @id @default(cuid())
-  batchId       String
-  batch         PaymentImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
-  rowNumber     Int // fila en el archivo
-  documento     String // columna B (id/abonado/documento del cliente)
-  amount        Decimal            @db.Decimal(18, 2) // columna C (monto)
-  method        String             @default("EFECTY") // columna D (medio de pago)
-  reference     String? // ref_efecty, columna E (idempotencia)
-  date          DateTime?          @db.Date // columna A (fecha del pago)
-  status        String             @default("Inicial")
-  subscriberId  String? // cliente emparejado
-  message       String? // detalle del resultado
-  transactionId String? // primera transacción de recaudo generada
-  createdAt     DateTime           @default(now())
+  id             String             @id @default(cuid())
+  /// `datos_archivo_excel_cargue.id` del legacy (ver PaymentImportBatch.legacyId).
+  legacyId       Int?               @unique
+  batchId        String
+  batch          PaymentImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  rowNumber      Int // fila en el archivo
+  documento      String // columna B (id/abonado/documento del cliente)
+  amount         Decimal            @db.Decimal(18, 2) // columna C (monto)
+  method         String             @default("EFECTY") // columna D (medio de pago)
+  reference      String? // ref_efecty, columna E (idempotencia)
+  date           DateTime?          @db.Date // columna A (fecha del pago)
+  status         String             @default("Inicial")
+  subscriberId   String? // cliente emparejado
+  /// Nombre del cliente emparejado (se resuelve al cargar, para poder revisar el
+  /// archivo ANTES de aplicarlo).
+  subscriberName String?
+  /// Cuenta de tesorería a la que entra la plata, resuelta desde el método de la
+  /// columna D. En el legacy esto es `accounts.holder = metodo_pago`: sin esto el
+  /// recaudo no cae en BANCOLOMBIA TV / TELECOMUNICACIONES y no cuadra el banco.
+  cashAccountId  Int?
+  message        String? // detalle del resultado
+  transactionId  String? // primera transacción de recaudo generada
+  createdAt      DateTime           @default(now())
 
   @@index([batchId])
   @@index([reference])
@@ -4704,6 +5030,11 @@ model ElectronicInvoice {
   xmlUrl         String?
   errorMessage   String? // error estructurado (en vez de substring en json)
 
+  // El POR QUÉ de una NOTA CRÉDITO electrónica. Ya se pedía al emitirla (viaja a la
+  // DIAN dentro del payload), pero moría enterrado en `payloadJson` y en pantalla
+  // sólo quedaba el número DIAN: quien abría la factura no sabía por qué se anuló.
+  reason String?
+
   createdAt DateTime @default(now())
 
   @@index([subscriberId])
@@ -4737,6 +5068,40 @@ model Mikrotik {
   @@index([branchId])
 }
 
+/// IP repartida automáticamente a un abonado (ver `IpAllocatorService`).
+///
+/// Existe SÓLO para cerrar la carrera entre dos altas simultáneas. El backend
+/// corre en cluster_mode, así que un candado en memoria no vale: el candidato se
+/// reserva aquí —la unicidad la impone Postgres— ANTES de escribirlo en el
+/// router. Quien pierda la carrera reintenta con la siguiente IP libre.
+///
+/// La autoridad de qué IP está ocupada sigue siendo el router (`/ppp/secret`);
+/// esta tabla sólo cubre la ventana entre elegir y escribir.
+model IpAssignment {
+  id String @id @default(cuid())
+
+  /// Router FÍSICO (`host:puerto`), NO la fila `Mikrotik`: Villanueva EOC y
+  /// EPON son el mismo equipo dado de alta dos veces (190.14.238.115:5000) y
+  /// comparten espacio de direcciones. Repartir por fila entregaría la misma IP
+  /// dos veces creyendo que son routers distintos.
+  routerHost String
+  ip         String
+
+  subscriberId String?
+  subscriber   Subscriber? @relation(fields: [subscriberId], references: [id], onDelete: SetNull)
+
+  /// RESERVADA = elegida, aún sin escribir en el router.
+  /// CONFIRMADA = ya está en el `/ppp/secret`.
+  state String @default("RESERVADA")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([routerHost, ip])
+  @@index([subscriberId])
+  @@index([state])
+}
+
 /// OLT (legacy `olts`).
 model Olt {
   id                 String                @id @default(cuid())
@@ -4745,6 +5110,9 @@ model Olt {
   brand              String // marca
   ip                 String
   port               String                @default("22")
+  /// Cómo se habla con el equipo: "ssh" o "telnet". Las OLT viejas (y algunas
+  /// Huawei con el servidor SSH deshabilitado) solo exponen telnet en el 23.
+  transport          String                @default("ssh")
   tech               String                @default("GPON")
   branchId           String?
   branch             Branch?               @relation(fields: [branchId], references: [id])
@@ -4995,27 +5363,56 @@ model Equipment {
   serial          String?
   arrival         DateTime?           @db.Date // llegada
   endDate         DateTime?           @db.Date // final
-  brand           String? // marca
-  installType     String? // t_instalacion
-  port            Int?
-  vlan            Int?
-  nat             Int?
-  subscriberId    String?
-  subscriber      Subscriber?         @relation(fields: [subscriberId], references: [id]) // asignado (customer id)
-  assignedRaw     String? // asignado (valor original)
-  status          String? // estado
-  observation     String? // observacion
-  master          String? // master
-  image           String? // imagen
-  meters          Int? // metros
-  accessories     String? // accesorios
-  genieacsId      String? // id_genieacs
+
+  /// Día en que el equipo se recogió del cliente (devolución). Lo escribe
+  /// `SubscribersService.returnEquipment` y por defecto es hoy, pero se puede
+  /// fechar atrás: la recogida física casi siempre es antes de que alguien la
+  /// teclee. Se limpia al volver a asignar el equipo, para que un equipo que
+  /// está en casa de un cliente no arrastre la fecha de la devolución anterior.
+  returnedAt   DateTime?   @db.Date
+  brand        String? // marca
+  installType  String? // t_instalacion
+  port         Int?
+  vlan         Int?
+  nat          Int?
+  subscriberId String?
+  subscriber   Subscriber? @relation(fields: [subscriberId], references: [id]) // asignado (customer id)
+  assignedRaw  String? // asignado (valor original)
+  status       String? // estado
+  observation  String? // observacion
+  master       String? // master
+  image        String? // imagen
+  meters       Int? // metros
+  accessories  String? // accesorios
+  genieacsId   String? // id_genieacs
+
+  /// Marca de "esto lo movió NEXUS, no el legacy". La sincronización de `equipos`
+  /// (ver scripts/sync-legacy-vivo.js) reescribe cada equipo con lo que dice el
+  /// legacy; sin esta marca, una devolución o una asignación hecha aquí duraría
+  /// hasta la siguiente pasada. Con ella el equipo queda de este lado: del legacy
+  /// sólo entran los que nadie ha tocado aquí. Mismo blindaje que `Ticket.editedAt`.
+  editedAt  DateTime?
+  /// Orden de trabajo para la que este equipo quedó RESERVADO al abrirla (2026-09-03):
+  /// el sistema aparta una unidad de la bodega de la sede y la deja a nombre del
+  /// cliente con `status: 'Reservado'`, para que al autenticar la ONU sea "el equipo
+  /// que tiene asignado". Se limpia al confirmarse (autenticación), al cerrarse la
+  /// orden sin confirmarlo o al anularla. Ver `support/equipo-reserva.service.ts`.
+  reservedTicketId String?
+  /// Cuándo se dio de alta EN ESTE SISTEMA. Sirve al corte del writeback de inventario
+  /// (`LEGACY_WRITEBACK_INVENTARIO_DESDE`): abrir el gate no puede volcarle al legacy los
+  /// equipos que Nexus acumuló mientras estuvo cerrado —hay unidades de prueba ahí—. Las
+  /// filas que ya existían se sellaron con 2020-01-01 al crear la columna, que es lo que
+  /// las deja fuera de cualquier corte razonable.
+  createdAt DateTime  @default(now())
 
   transferItems EquipmentTransferItem[]
 
   @@index([warehouseId])
   @@index([subscriberId])
   @@index([status])
+  @@index([editedAt])
+  @@index([returnedAt])
+  @@index([reservedTicketId])
 }
 
 /// Transferencia de equipos entre almacenes (legacy `transfer_equipos`).
@@ -5137,6 +5534,30 @@ model Ticket {
   /// Momento exacto del cierre, por lo mismo que `assignedAt` frente a `finalDate`.
   resolvedAt      DateTime?
 
+  // --- Quién GENERÓ la orden (2026-08-28) ---
+  // Hasta hoy el autor de una orden vivía sólo en `col`, que es texto libre heredado
+  // del legacy: allá guarda el *username* de quien la abrió ('SoniaCajera'), aquí se
+  // le venía escribiendo el nombre de pantalla, y en 135.153 órdenes viejas está
+  // vacío. Con eso no se podía responder la pregunta de siempre —"¿quién mandó esta
+  // visita?"— sin adivinar, y ninguna pantalla lo mostraba.
+  //
+  /// Quién la generó, para leer. Es una INSTANTÁNEA del nombre (como
+  /// `scheduledByName`): si el funcionario se va o le cambian el nombre, la orden
+  /// sigue diciendo quién la abrió.
+  createdByName   String?
+  /// Su id de usuario, cuando la abrió una persona con login (`User.id`). Sin FK, por
+  /// lo mismo que `scheduledById`: es un registro histórico y no debe estorbar el día
+  /// que se borre la cuenta. null en las del sistema y en las heredadas del legacy.
+  createdById     String?
+  /// De dónde salió la orden. Es lo que distingue "la abrió una persona" de "la abrió
+  /// el sistema al fallar un corte" o "la abrió el bot por WhatsApp", que se veían
+  /// todas igual:
+  ///   USUARIO  · un funcionario desde el ERP
+  ///   CHATBOT  · el bot de WhatsApp en nombre de quien escribió
+  ///   SISTEMA  · un proceso automático (reconexión al pagar, fallo de equipo…)
+  ///   LEGACY   · nació en el sistema viejo (el nombre sale de `col`)
+  createdBySource String?
+
   // --- Agendamiento (2026-07-31, ver support/agenda.service.ts) ---
   // Hasta ahora NO existía fecha de agendamiento: `created` es la fecha en que se
   // abrió la orden, no la del día en que se va a atender, y el panel del técnico
@@ -5156,18 +5577,36 @@ model Ticket {
   scheduledById   String?
   scheduledByName String?
   scheduledAt     DateTime?
+  /// De qué día viene ARRASTRADA (2026-09-01). Lo que quedó sin resolver pasa solo
+  /// al día siguiente —la tarea `agenda-arrastre`, cada madrugada, le reescribe
+  /// `scheduledFor` a hoy—, y aquí queda el día para el que la cajera la agendó de
+  /// verdad la primera vez. Sin esta columna el arrastre borraría esa fecha y la
+  /// tarjeta ya no podría decir "atrasada desde el 27": una visita que lleva cinco
+  /// días rodando se vería igual que una recién puesta para hoy.
+  ///
+  /// `null` = está en su día. Se limpia en cuanto una PERSONA la mueve
+  /// (`AgendaService.mover`) o la aparta: ahí hay una decisión nueva detrás y deja
+  /// de ser arrastre.
+  carriedFrom     DateTime?        @db.Date
   /// El técnico llegó y NO pudo hacerla (cliente ausente, dirección errada, falta
   /// material). No es un estado del ticket: la orden sigue PENDIENTE y sigue siendo
-  /// suya; lo que se acabó es su turno de hoy. Al marcarla se desagenda para que la
+  /// suya; lo que se acabó es su intento de hoy. Al marcarla se desagenda para que la
   /// cajera la vea en la bandeja de "sin agendar" y decida cuándo repetirla.
   ///
-  /// Existe para que el turno obligatorio no deje al técnico trancado: sin salida,
-  /// un cliente que no abre la puerta le bloquea el día entero — o le empuja a cerrar
-  /// en falso una visita que no hizo, que es peor porque ensucia el dato de campo.
+  /// Es la alternativa a cerrar en falso una visita que no se hizo, que ensucia el
+  /// dato de campo: la orden no se resuelve, se devuelve a quien la reagenda con el
+  /// motivo escrito.
   skippedAt       DateTime?
   skippedReason   String?
   skippedById     String?
   skippedByName   String?
+  /// Días de gracia de una "Reconexión … por días": se le devuelve el servicio
+  /// por este número de días y al vencer vuelve a ser cortable. Al resolver la
+  /// orden se traduce a `Subscriber.promiseExpiry`, que es lo que de verdad lo
+  /// protege del corte masivo; aquí queda para poder decir CUÁNTOS días se
+  /// pactaron aunque después alguien mueva la fecha a mano.
+  /// null = la orden no es de ese tipo.
+  graceDays       Int?
   signatureName   String? // nombre_firma
   signatureCc     String? // cc_firma
   signatureRel    String? // parentesco_firma
@@ -5203,10 +5642,95 @@ model Ticket {
   /// 5 en vez de 4, el histórico no se reescribe solo: lo que ya se le abonó a un
   /// técnico se queda como se le abonó. Sin esta copia, cualquier ajuste de la
   /// tabla de puntos cambiaría retroactivamente el rendimiento de todo el equipo.
-  score          Int?
+  score    Int?
   /// Cuándo se sellaron los puntos. Distingue "cerrada antes de que existiera el
   /// puntaje" (null) de "cerrada y valió 0 puntos", que no es lo mismo.
-  scoredAt       DateTime?
+  scoredAt DateTime?
+
+  // --- Traslado de domicilio (2026-08-27) ---
+  // Hasta ahora la orden de 'Traslado' no portaba a dónde se muda el cliente: la
+  // cascada de cierre lo decía en su nota ("actualiza la dirección en su ficha"),
+  // o sea que el dato vivía en la cabeza de quien atendió y el técnico salía a la
+  // calle sin la dirección destino. Y el cargo del traslado —30.000, producto
+  // 'Traslado' del catálogo, 3.875 renglones en el histórico— se facturaba a mano
+  // o no se facturaba.
+  //
+  /// Dirección DESTINO tal como se captura: `{ nomenclature: {...}, neighborhood,
+  /// addressLine }`, las mismas casillas de `Subscriber`. Se guarda además de
+  /// escribirla en la ficha porque la ficha solo sabe dónde vive HOY: sin esta
+  /// copia, una orden de traslado de hace un año no dice a dónde se mudó.
+  moveTo         Json?
+  /// La dirección destino ya armada (ver `common/subscriber-address.ts`). Es la que
+  /// se lee en la orden, viaja en la observación al legacy y sale en el PDF.
+  moveToText     String?
+  /// De dónde salió: la dirección que tenía el abonado al abrirse la orden.
+  moveFromText   String?
+  /// Factura del cargo de traslado (`SubInvoice.tid`). null = no se cobró (el cargo
+  /// está apagado, no había producto con precio, o el cobro falló y quedó en el log).
+  moveInvoiceTid Int?
+  /// Cuándo se escribió la dirección nueva en la ficha del abonado.
+  moveAppliedAt  DateTime?
+
+  // --- Cambio de megas (2026-09-02) ---
+  // 'Subir megas' / 'Bajar megas' son órdenes que no decían CUÁNTAS: la cascada de
+  // cierre dejaba la nota "aplica el nuevo plan desde su ficha" y el dato vivía en
+  // la cabeza de quien atendió al cliente. El técnico salía sin saber a qué
+  // velocidad tenía que dejarlo y el cambio de precio se hacía a mano (o no se
+  // hacía). El plan destino ES la velocidad: de él salen las megas, la tarifa de la
+  // próxima factura, el perfil PPP del Mikrotik y el traffic-table de la OLT.
+  //
+  /// Plan al que se pasa el abonado (`Plan.id`). Sin FK a propósito, como
+  /// `createdById`: es un registro histórico y no debe estorbar el día que se borre
+  /// un plan del catálogo. null = la orden no es de megas (o nació sin decirlas: las
+  /// del legacy y las que abre el chatbot con el plan dictado por WhatsApp).
+  planToId       String?
+  /// Copia del nombre y las megas del plan destino. El catálogo se renombra y se
+  /// repreciona; sin la copia, una orden de hace un año no dice a cuánto se subió.
+  planToName     String?
+  planToMegas    Int?
+  /// De cuánto venía: el plan de internet que tenía al abrirse la orden. Es la otra
+  /// mitad de la frase "de 200 a 400 Megas" y lo que permite comprobar después si el
+  /// cambio se aplicó de verdad.
+  planFromName   String?
+  planFromMegas  Int?
+  /// Cuándo se le cambió el plan en la ficha. Se aplica AL ABRIR la orden —misma
+  /// decisión que la dirección del traslado—: el precio y el perfil quedan al día
+  /// desde ese momento y el técnico ya encuentra la velocidad correcta cuando pulsa
+  /// "aplicar velocidad" contra la OLT (que lee el plan VIGENTE del abonado).
+  /// null = se registró el plan pero el cambio no llegó a aplicarse.
+  planAppliedAt  DateTime?
+
+  // --- Cargo de la orden (2026-09-01, ver billing/cargos-orden.ts) ---
+  // El traslado no es el único trabajo que se cobra al abrirlo: 'AgregarInternet'
+  // también lleva un pago único (30.000). Estas dos columnas son las genéricas —
+  // valen para cualquier cargo de la lista— y `moveInvoiceTid` se queda como está
+  // porque es lo que lee la tarjeta del traslado y lo que ya tienen escrito las
+  // órdenes de agosto: en un traslado las dos llevan el MISMO número.
+  //
+  /// Factura del cargo (`SubInvoice.tid`). null = no se cobró (el tipo de orden no
+  /// lleva cargo, el interruptor está apagado, no había producto con precio, o el
+  /// cobro falló y quedó en el log).
+  chargeInvoiceTid Int?
+  /// Con qué concepto se facturó ('Traslado', 'Agregar Internet'). Se guarda junto
+  /// al número porque el precio y el nombre salen del catálogo y pueden cambiar:
+  /// sin esta copia, una orden de hace un año no dice qué se le cobró.
+  chargeConcept    String?
+
+  // --- Propiedad de la orden entre los dos sistemas (2026-08-11) ---
+  /// La orden se TOCÓ en este sistema en algo que el legacy también guarda (estado,
+  /// técnico, cierre, firma). Desde ese momento manda nexus: el sync de ida deja de
+  /// pisarla y el writeback empuja el cambio al legacy.
+  ///
+  /// Existe porque sin esto la vuelta no es bidireccional sino un ping-pong: al
+  /// empujar una orden nacida aquí recibe su `legacyId` y entra en la ventana de la
+  /// ida, que la compara contra el legacy y le devuelve el estado viejo. Un técnico
+  /// cerraba la orden y quince minutos después volvía a estar Pendiente.
+  ///
+  /// Sólo lo sellan los cambios que el legacy entiende. Reordenar la agenda o mover
+  /// la prioridad son cosas de este sistema y no congelan la orden frente al legacy.
+  /// Mismo criterio que `SubInvoice.editedAt`.
+  editedAt DateTime?
+  editedBy String? // funcionario que la tocó (el último)
 
   @@index([subscriberId])
   @@index([code])
@@ -5218,6 +5742,7 @@ model Ticket {
   @@index([status, created]) // listado por defecto (status + orden por fecha): 309ms -> ~1ms
   @@index([priority, created]) // filtro por prioridad + orden
   @@index([closeGeoOk, finalDate]) // informe de cierres fuera de rango
+  @@index([editedAt]) // órdenes editadas AQUÍ: el writeback las cuenta cada 15 min
   // La agenda del día se lee siempre igual: "las de esta fecha, de este técnico, en
   // su orden". El índice cubre las tres, así que la pantalla de la cajera no barre
   // las 314k órdenes cada vez que pasa de un día al siguiente.
@@ -5252,12 +5777,25 @@ model TicketThread {
   message      String?
   subscriberId String?
   subscriber   Subscriber? @relation(fields: [subscriberId], references: [id]) // cid
-  employeeId   Int // eid
+  employeeId   Int // eid (0 = lo escribió el sistema, o quien lo escribió no tiene ficha de empleado)
   date         DateTime // cdate
   attach       String? // nombre almacenado del archivo (uuid.ext) en uploads/support
   attachName   String? // nombre original del archivo (para mostrar/descargar)
   geoLat       String? // coordenadas del técnico al subir (geo-etiquetado de la evidencia)
   geoLng       String?
+
+  /// Quién escribió el renglón, sellado al escribirlo. `employeeId` (el eid del
+  /// legacy) no alcanza: sólo lo tiene quien además de cuenta tiene ficha de
+  /// empleado, así que todo lo documentado desde aquí caía en el 0 y la orden lo
+  /// pintaba como "Sistema" —aunque lo hubiera escrito el técnico con nombre y
+  /// apellido—. Es una instantánea del nombre a propósito: quién documentó una
+  /// orden de hace un año no cambia porque hoy se corrija la ficha.
+  /// `null` = lo escribió de verdad el sistema (un proceso automático).
+  authorName   String?
+  /// `User.id` de quien lo escribió, cuando fue una persona con cuenta. Sin FK, por
+  /// lo mismo que `Ticket.createdById`: el hilo lo llenan también el bot y los
+  /// procesos, que no son cuentas.
+  authorId     String?
 
   @@index([ticketCode])
   @@index([subscriberId])
@@ -5336,6 +5874,19 @@ model TodoTask {
   rid         Int?
   score       Int? // puntuacion
 
+  // --- Quién la creó (2026-09-01, ver support/autor-orden.ts) ---
+  /// El nombre de quien creó la tarea, congelado al crearla. `employeeId` es el `eid`
+  /// del legacy y sólo lo tiene quien además de cuenta tiene ficha de empleado: todo
+  /// lo creado desde el ERP por alguien sin ficha entraba con 0 y la tarea salía sin
+  /// autor. Igual que en `Ticket.createdByName`, aquí queda el nombre pase lo que pase.
+  createdByName   String?
+  /// Su id de usuario (`User.id`), cuando la creó una persona con login. Sin FK: es
+  /// un registro histórico y no debe estorbar el día que se borre la cuenta.
+  createdById     String?
+  /// De dónde salió: USUARIO · CHATBOT · SISTEMA · LEGACY (mismos valores que
+  /// `Ticket.createdBySource`).
+  createdBySource String?
+
   @@index([status])
   @@index([orderId])
   @@index([rid, tdate]) // tareas por proyecto + orden
@@ -5345,6 +5896,9 @@ model TodoTask {
 /// Los binarios viven en disco (uploads/subscribers/<id>/); aquí solo va la metadata.
 model SubscriberFile {
   id             String     @id @default(cuid())
+  /// `meta_data.id` del legacy (type=6). Ancla la sincronización: el archivo que ya
+  /// bajó no se vuelve a bajar ni se duplica. Los que sube nexus lo dejan en null.
+  legacyId       Int?       @unique
   subscriberId   String
   subscriber     Subscriber @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
   originalName   String // nombre original mostrado al usuario
@@ -5352,9 +5906,16 @@ model SubscriberFile {
   mimeType       String
   size           Int // bytes
   uploadedByName String? // nombre/email de quien lo subió
+  /// Para qué es el adjunto. `null` = adjunto suelto (lo que había hasta ahora y lo
+  /// que baja del legacy); `VIVIENDA` = foto de la casa del abonado, la que la ficha
+  /// enseña arriba. No es un enum de Prisma a propósito: el legacy no distingue
+  /// tipos y una columna suelta se puede ampliar sin migrar el enum.
+  kind           String?
   createdAt      DateTime   @default(now())
 
   @@index([subscriberId])
+  /// La ficha pide "la última foto de la vivienda de este cliente" en cada carga.
+  @@index([subscriberId, kind, createdAt])
 }
 
 /// Cláusula de permanencia mínima del contrato (legacy `clausula`).
@@ -5385,10 +5946,21 @@ model Clausula {
 }
 
 /// Nota/observación libre sobre un suscriptor (bitácora con autor y fecha).
+///
+/// Es el equivalente del bloque OBSERVACIONES que el legacy pinta al pie del perfil
+/// del cliente (tabla `historiales`): fecha, tipo, detalle y quién lo hizo. De ahí
+/// vienen `legacyId` y `kind` — el legacy clasifica cada observación (Compromiso,
+/// Traslado, Devolucion Equipo, Cambio Titular…) y esa etiqueta es la que le da
+/// sentido al texto suelto.
 model SubscriberNote {
   id           String     @id @default(cuid())
+  /// `historiales.idn`. Ancla de la sincronización (una observación del legacy entra
+  /// una sola vez). Las notas escritas en nexus lo dejan en null.
+  legacyId     Int?       @unique
   subscriberId String
   subscriber   Subscriber @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+  /// Tipo de observación del legacy (`historiales.tipos`). Null = nota escrita aquí.
+  kind         String?
   body         String
   authorName   String?
   createdAt    DateTime   @default(now())
@@ -5701,4 +6273,110 @@ model MetricPoint {
   @@unique([fecha, periodo, metrica, sede])
   @@index([metrica, fecha])
   @@index([fecha])
+}
+
+/// Estado de un anticipo (saldo a favor) del cliente.
+enum AdvanceStatus {
+  /// Queda plata por aplicar a facturas futuras.
+  ABIERTO
+  /// Se consumió entero.
+  APLICADO
+  /// Se anuló el pago que lo originó.
+  ANULADO
+}
+
+/// ANTICIPO / SALDO A FAVOR del cliente: la plata que entró de más en un recaudo y
+/// todavía no tiene factura contra la que aplicarse (paga el mes que aún no se ha
+/// emitido).
+///
+/// Por qué una tabla propia y no `pamnt > total` como el legacy: allá el sobrepago se
+/// queda dentro de la factura sobrepagada y lo reparte `procesar_pagos_adelantados`.
+/// Aquí esa columna la manda el legacy —el sync de ida copia `invoices.pamnt` encima
+/// de la nuestra en cada pasada, incluso en las facturas blindadas con `editedAt`—, así
+/// que un excedente guardado ahí no sobrevive 15 minutos ni se puede consumir sin que
+/// el legacy lo devuelva. El anticipo vive en una tabla que el sync no toca.
+///
+/// La PLATA sí queda en el libro de caja como cualquier recaudo (`transaction`, que
+/// viaja al legacy con `tid = 0`): el arqueo y el cierre del día cuadran con el efectivo
+/// del cajón. Lo que esta tabla guarda es a qué se le debe imputar todavía.
+model CustomerAdvance {
+  id String @id @default(cuid())
+
+  subscriberId String
+  subscriber   Subscriber @relation(fields: [subscriberId], references: [id])
+
+  /// Recibido de más.
+  amount  Decimal       @default(0) @db.Decimal(18, 2)
+  /// Ya trasladado a facturas (ver `CustomerAdvanceApplication`).
+  applied Decimal       @default(0) @db.Decimal(18, 2)
+  status  AdvanceStatus @default(ABIERTO)
+
+  /// Día en que entró la plata (el del recaudo, no el de la aplicación).
+  date   DateTime @db.Date
+  method String?
+
+  /// Factura que se estaba pagando cuando sobró (contexto; no se le imputa nada).
+  sourceInvoiceId String?
+  sourceInvoice   SubInvoice? @relation("AnticipoOrigen", fields: [sourceInvoiceId], references: [id])
+
+  /// Movimiento de caja que trajo la plata. Es el que se anula si se reversa el pago.
+  transactionId String?      @unique
+  transaction   Transaction? @relation(fields: [transactionId], references: [id])
+
+  receiptId String?
+  note      String?
+
+  /// ── Mes adelantado con descuento ──────────────────────────────────────────
+  /// Cuando en ventanilla se marca "pagar también el mes siguiente", el cliente
+  /// paga ese mes YA REBAJADO. La factura todavía no existe (nace el día 1 con la
+  /// corrida), así que el descuento viaja PROMETIDO aquí y se concede como nota
+  /// crédito cuando la factura nace, dentro de `aplicarAnticipos`.
+  ///
+  /// No se registra como `PromotionApplication` a propósito: `revertirDescuentosVencidos`
+  /// retiraría en el siguiente cobro un descuento que el cliente ya pagó.
+  /// Porcentaje pactado al cobrar (`billing.advanceDiscountPct`), sólo informativo.
+  discountPct     Decimal? @db.Decimal(5, 2)
+  /// Descuento total prometido y lo que de él ya se concedió.
+  discountAmount  Decimal  @default(0) @db.Decimal(18, 2)
+  discountApplied Decimal  @default(0) @db.Decimal(18, 2)
+  /// Meses adelantados y valor NETO de cada uno: es lo que imprime el recibo.
+  months          Int?
+  monthlyNet      Decimal? @db.Decimal(18, 2)
+
+  applications CustomerAdvanceApplication[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([subscriberId, status])
+  @@index([status])
+}
+
+/// Un traslado de anticipo a una factura concreta.
+model CustomerAdvanceApplication {
+  id String @id @default(cuid())
+
+  advanceId String
+  advance   CustomerAdvance @relation(fields: [advanceId], references: [id], onDelete: Cascade)
+
+  invoiceId String
+  invoice   SubInvoice @relation(fields: [invoiceId], references: [id])
+
+  amount Decimal  @db.Decimal(18, 2)
+  date   DateTime @db.Date
+
+  /// Movimiento de venta creado para que la factura quede pagada con respaldo (y para
+  /// que el legacy la vea pagada). Su pareja al débito descuenta el anticipo, así que
+  /// la caja y el acumulado del cliente no se mueven.
+  transactionId      String?
+  transaction        Transaction? @relation(fields: [transactionId], references: [id])
+  /// Movimiento al débito que consume el anticipo.
+  debitTransactionId String?
+
+  revertedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([advanceId])
+  @@index([invoiceId])
 }

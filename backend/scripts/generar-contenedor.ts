@@ -51,6 +51,12 @@ const SUSTITUIDOS = new Set([
 ]);
 
 const EXTERNAS: Record<string, string | null> = {
+  // El bus propio (`core/eventos.ts`) y el `EventEmitter2` de Nest al que sustituyó.
+  // Faltaba el nombre nuevo y los 5 servicios que emiten eventos salían cableados a
+  // `undefined`: `this.events.emit(...)` reventaba con TypeError DESPUÉS de haber
+  // guardado en la base — media operación hecha y un 500 en pantalla. Asignar un
+  // técnico a una orden fallaba así.
+  EmisorDeEventos: 'eventos',
   EventEmitter2: 'eventos',
   Reflector: null,
   ConfigService: null,

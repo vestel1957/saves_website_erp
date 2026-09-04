@@ -17,12 +17,18 @@ import {
   avisosProactivosService,
   savesTransport,
   ticketConfirmacionService,
+  cronService,
   whatsappCampaignService,
   whatsappInternalAlertListener,
   whatsappLogService,
+  altaClienteService,
+  avisoTecnicoService,
+  equipoReservaService,
 } from './contenedor';
-import { TICKET_ASIGNADO_EVENT, TICKET_RESUELTO_EVENT } from '../support/support.events';
-import { PAGO_APLICADO_EVENT } from '../treasury/treasury.events';
+import { BAJA_APLICADA_EVENT, TICKET_ANULADA_EVENT, TICKET_ASIGNADO_EVENT, TICKET_CREADO_EVENT, TICKET_RESUELTO_EVENT } from '../support/support.events';
+import { CAJA_ABIERTA_EVENT, PAGO_APLICADO_EVENT } from '../treasury/treasury.events';
+import { RECONEXION_APLICADA_EVENT } from '../network/network.events';
+import { ESTADO_SERVICIO_EVENT } from '../subscribers/subscribers.events';
 import {
   INTERNAL_ALERT_EVENT,
   WHATSAPP_INBOUND_EVENT,
@@ -36,10 +42,55 @@ export function registrarSuscripciones(): void {
   eventos.on(TICKET_RESUELTO_EVENT, (e) => ticketConfirmacionService.alResolver(e as never), 'ticketConfirmacion');
   // Al asignar, se avisa por WhatsApp a quien corresponda.
   eventos.on(TICKET_ASIGNADO_EVENT, (e) => avisosProactivosService.alAsignar(e as never), 'avisosProactivos');
+  // ...y al TÉCNICO le queda el aviso en su campanita: es lo único que se le notifica
+  // de órdenes, y por eso cuelga del evento y no de los cuatro sitios que asignan.
+  eventos.on(TICKET_ASIGNADO_EVENT, (e) => avisoTecnicoService.alAsignar(e as never), 'avisoTecnico');
+  // La orden y su técnico salen hacia el legacy EN EL ACTO, sin esperar al cron de los
+  // 5 minutos: los técnicos atienden desde allá, así que hasta que la orden no viaja no
+  // existe para quien tiene que hacer la visita.
+  eventos.on(TICKET_CREADO_EVENT, () => cronService.empujarOrdenesAlLegacy(), 'writebackOrdenes');
+  eventos.on(TICKET_ASIGNADO_EVENT, () => cronService.empujarOrdenesAlLegacy(), 'writebackOrdenes');
+  // Y si al cerrarla el abonado quedó RETIRADO o SUSPENDIDO, la baja sale en el acto:
+  // el estado lo manda el legacy en la ida (cada 15 min), así que una baja que no llegue
+  // antes se deshace sola y el cliente retirado vuelve a aparecer ACTIVO.
+  eventos.on(BAJA_APLICADA_EVENT, () => cronService.empujarBajaAlLegacy(), 'writebackBajas');
+  // Al abrir una instalación/cambio de equipo/migración/agregar internet/traslado se
+  // aparta una unidad de la bodega de la sede a nombre del cliente, para que al
+  // autenticar la ONU sea "el equipo que tiene asignado". Al cerrar o anular sin
+  // haberla confirmado, vuelve a la bodega.
+  eventos.on(TICKET_CREADO_EVENT, async (e: any) => { await equipoReservaService.reservarParaOrden(e.ticketId); }, 'reservaEquipo');
+  eventos.on(TICKET_RESUELTO_EVENT, async (e: any) => { await equipoReservaService.liberarPorCierre(e.ticketId, 'RESUELTO'); }, 'reservaEquipo');
+  eventos.on(TICKET_ANULADA_EVENT, async (e: any) => { await equipoReservaService.liberarPorCierre(e.ticketId, 'ANULADA'); }, 'reservaEquipo');
 
   // --- Tesorería -------------------------------------------------------------
   // Al aplicar un pago, el abonado recibe su confirmación.
   eventos.on(PAGO_APLICADO_EVENT, (e) => avisosProactivosService.alPagar(e as never), 'avisosProactivos');
+  // ...y el cobro sale hacia el legacy EN EL ACTO, sin esperar al cron de los 5 minutos.
+  // Mientras los dos sistemas convivan, un pago que aquí está y allá no es un abonado
+  // que allá sigue debiendo: expuesto a corte y a que le vuelvan a cobrar en ventanilla.
+  eventos.on(PAGO_APLICADO_EVENT, () => cronService.empujarCajaAlLegacy(), 'writebackCaja');
+  // ...y si con ese pago quedó saldada la factura de AFILIACIÓN, nace la orden de
+  // instalación: el técnico no va hasta que el cliente paga, y en cuanto paga no hay
+  // que acordarse de abrirla a mano. Lo que se recauda en el legacy no pasa por aquí:
+  // a esos los recoge el barrido de los 5 minutos (`instalaciones-pagadas`).
+  eventos.on(PAGO_APLICADO_EVENT, async (e) => { await altaClienteService.alPagarAfiliacion((e as { subscriberId: string }).subscriberId); }, 'ordenInstalacion');
+  // Abrir la caja aquí la abre también allá. Es la misma pasada corta del cobro (ya
+  // lleva el paso de aperturas), por eso no hace falta un empuje propio.
+  eventos.on(CAJA_ABIERTA_EVENT, () => cronService.empujarCajaAlLegacy(), 'writebackCaja');
+
+  // --- Red -------------------------------------------------------------------
+  // Al devolverle el servicio a un abonado, el legacy tiene que enterarse EN EL ACTO:
+  // su ida vuelve a traer `customers.usu_estado` cada 15 minutos y, si llega antes que
+  // el writeback, deshace la reconexión —el cliente navegando y las dos pantallas
+  // diciendo "Cortado"—. Es lo que le pasó a 35 de las 37 primeras reconexiones
+  // automáticas (24-26 de agosto de 2026).
+  eventos.on(RECONEXION_APLICADA_EVENT, () => cronService.empujarReconexionAlLegacy(), 'writebackReconexion');
+
+  // --- Ficha del abonado -----------------------------------------------------
+  // Mover a mano el estado de un servicio (su TV o su internet) tiene la misma prisa:
+  // `invoices.estado_tv`/`estado_combo` los trae la ida cada 15 minutos, así que lo que
+  // no llegue antes al legacy se borra solo y el servicio vuelve a pintarse al aire.
+  eventos.on(ESTADO_SERVICIO_EVENT, () => cronService.empujarEstadoServicioAlLegacy(), 'writebackEstadoServicio');
 
   // --- WhatsApp --------------------------------------------------------------
   // Un mensaje entrante tiene DOS destinos, y los dos importan: el bot que lo

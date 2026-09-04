@@ -158,7 +158,10 @@ function middlewaresDe(e: Endpoint): string[] {
     );
   }
   if (e.permisosFuente.length) lista.push(`exigirPermisos(${e.permisosFuente.join(', ')})`);
-  if (e.guards.includes('ModuloRedGuard')) lista.push('moduloRed');
+  // Lista blanca del módulo de Red frente al técnico de campo: la marca se escribe
+  // en la ruta (`abiertoAlTecnico`) en vez de omitir el middleware, para que se lea
+  // que fue una decisión y no un olvido. Ver `core/auth/middlewares.ts`.
+  if (e.guards.includes('ModuloRedGuard')) lista.push(e.abiertoAlTecnico ? 'abiertoAlTecnico' : 'moduloRed');
 
   return lista;
 }
@@ -333,6 +336,19 @@ for (const e of endpoints) {
 const avisosGlobales: string[] = [];
 /** Routers generados, para construir el índice de rutas al final. */
 const indice: Array<{ varRouter: string; prefijo: string; fichero: string }> = [];
+
+/**
+ * Routers ESCRITOS A MANO que también van al índice.
+ *
+ * El índice se reescribe entero en cada corrida a partir del contrato, así que
+ * un módulo nacido después del port (que por definición no está en
+ * `contrato-http.json`) desaparecía de `rutas.ts` al regenerar y sus endpoints
+ * devolvían 404 aunque el router existiera. Se apuntan aquí para que
+ * sobrevivan.
+ */
+const A_MANO: Array<{ varRouter: string; prefijo: string; fichero: string }> = [
+  { varRouter: 'bundlesRouter', prefijo: 'plan-bundles', fichero: 'src/plans/bundles.router.ts' },
+];
 let generados = 0;
 let rutasGeneradas = 0;
 
@@ -418,7 +434,8 @@ for (const [controlador, lista] of porControlador) {
     ...(lista.some((e) => e.areas.length && !e.orPermission.length) ? ['exigirArea'] : []),
     ...(lista.some((e) => e.areas.length && e.orPermission.length) ? ['exigirAreaCon'] : []),
     ...(lista.some((e) => e.permisos.length) ? ['exigirPermisos'] : []),
-    ...(lista.some((e) => e.guards.includes('ModuloRedGuard')) ? ['moduloRed'] : []),
+    ...(lista.some((e) => e.guards.includes('ModuloRedGuard') && !e.abiertoAlTecnico) ? ['moduloRed'] : []),
+    ...(lista.some((e) => e.guards.includes('ModuloRedGuard') && e.abiertoAlTecnico) ? ['abiertoAlTecnico'] : []),
     ...(usados.usuarioDe ? ['usuarioDe'] : []),
     ...(usados.abonadoDe ? ['abonadoDe'] : []),
     ...(usados.frenoDeLogin ? ['crearFrenoDeLogin'] : []),
@@ -516,7 +533,10 @@ for (const [controlador, lista] of porControlador) {
 // pedir que los dos cálculos se separen y que el índice importe un fichero que no
 // existe — que es exactamente lo que pasó al hacerlo por separado.
 if (ESCRIBIR) {
-  const filas = indice.sort(
+  const filas = [
+    ...indice,
+    ...A_MANO.map((r) => ({ ...r, fichero: path.join(RAIZ, r.fichero) })),
+  ].sort(
     (a, b) => a.prefijo.localeCompare(b.prefijo) || a.varRouter.localeCompare(b.varRouter),
   );
   const rutaIndice = path.join(SRC, 'core', 'rutas.ts');

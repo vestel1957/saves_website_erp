@@ -112,5 +112,9 @@
   "src/subscribers/subscriber-notes.service.ts#SubscriberNotesService": "subscriberNotesService",
   "src/support/onu-provision.service.ts#OnuProvisionService": "onuProvisionService",
   "src/tasks/tasks.service.ts#TasksService": "tasksService",
-  "src/treasury/pagos-fijos.service.ts#PagosFijosService": "pagosFijosService"
+  "src/treasury/pagos-fijos.service.ts#PagosFijosService": "pagosFijosService",
+  "src/network/ip-allocator.service.ts#IpAllocatorService": "ipAllocatorService",
+  "src/online-payments/online-payments.service.ts#OnlinePaymentsService": "onlinePaymentsService",
+  "src/subscribers/alta.service.ts#AltaClienteService": "altaClienteService",
+  "src/billing/cargo-orden.service.ts#CargoOrdenService": "cargoOrdenService"
 }

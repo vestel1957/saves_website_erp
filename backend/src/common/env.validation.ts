@@ -37,7 +37,17 @@ const INTEGRACIONES: { nombre: string; gate: string; requiere: string[] }[] = [
 ];
 
 /** Interruptores peligrosos: no bloquean, pero deben quedar dichos en el log. */
-const GATES_PELIGROSOS = ['MIKROTIK_LIVE', 'OLT_LIVE', 'EINVOICE_LIVE', 'GENIEACS_LIVE', 'CRONS_ENABLED'];
+const GATES_PELIGROSOS = ['MIKROTIK_LIVE', 'OLT_LIVE', 'EINVOICE_LIVE', 'GENIEACS_LIVE', 'CRONS_ENABLED',
+  // El puente con el portal de pagos no mueve plata, pero sale a reconectar contra
+  // routers y OLTs sin que nadie lo pida: pertenece a esta lista, no a la de ajustes.
+  'PORTAL_PAGOS_ENABLED',
+  // Escribe en la tabla `promos` del legacy, que es de donde el portal de pagos saca
+  // el descuento que le hace al cliente: es plata que se deja de cobrar.
+  'LEGACY_WRITEBACK_PROMOS_LIVE',
+  // Concede por adelantado el descuento de las promociones marcadas para que el portal
+  // de pagos cobre ya rebajado: escribe notas crédito sobre la cartera ENTERA que la
+  // campaña alcance, antes de que nadie pague. Es el gate que más plata mueve de golpe.
+  'PROMO_PORTAL_PRECONCEDER_LIVE'];
 
 const encendido = (v: string | undefined) => v === 'true' || v === '1';
 

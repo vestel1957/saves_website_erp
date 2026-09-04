@@ -32,18 +32,19 @@ export type Handler<T = unknown> = (req: Request, res: Response) => T | Promise<
  * Envuelve un handler "que devuelve" en uno de Express.
  *
  * - Serializa el valor devuelto a JSON con el código que usaba Nest.
- * - Si el handler ya escribió en la respuesta (PDFs, Excel, streams: las 30 rutas
- *   que usaban `@Res`), no toca nada. Ahí el handler manda.
+ * - Si el handler se hizo cargo de la respuesta (PDFs, Excel, descargas: las 30
+ *   rutas que usaban `@Res`), no toca nada. Ahí el handler manda.
  * - Propaga cualquier throw al manejador global de errores. Sin este `.catch`,
  *   Express 4 se traga las promesas rechazadas y la petición queda colgada hasta el
  *   timeout en vez de responder 500.
  */
 export function manejar<T>(handler: Handler<T>): RequestHandler {
   return (req: Request, res: Response, next: NextFunction) => {
+    const tomada = vigilarTomaDeControl(res);
     Promise.resolve(handler(req, res))
       .then((resultado) => {
         // El handler escribió él mismo (stream/descarga): no hay nada que serializar.
-        if (res.headersSent) return;
+        if (res.headersSent || tomada()) return;
 
         if (resultado === undefined || resultado === null) {
           // Nest devolvía 200/201 con cuerpo vacío, no un 204. Mantenerlo: hay
@@ -55,6 +56,59 @@ export function manejar<T>(handler: Handler<T>): RequestHandler {
       })
       .catch(next);
   };
+}
+
+/**
+ * ¿El handler se hizo cargo de escribir la respuesta él mismo?
+ *
+ * `res.headersSent` NO basta para saberlo, y ésa fue la trampa: en Nest un handler
+ * con `@Res` se quedaba con la respuesta por el solo hecho de pedirla —el framework
+ * no volvía a tocarla—, mientras que aquí `manejar` decide DESPUÉS, mirando el
+ * estado de `res`. Y los tres generadores de ficheros del ERP tardan en llegar a ese
+ * estado:
+ *
+ *   · `doc.pipe(res)` (los 9 PDF de PDFKit) y `createReadStream(f).pipe(res)`: las
+ *     cabeceras se mandan con el PRIMER chunk, y PDFKit lo emite en un tick
+ *     posterior. Al resolver el handler `headersSent` sigue en false.
+ *   · `res.sendFile`/`res.download` (fotos, firmas, adjuntos): hacen antes un `stat`
+ *     del fichero, así que al devolver el handler no han escrito ni empezado a pipear.
+ *   · `res.setHeader(...)` no cuenta como enviar: deja la cabecera preparada, nada más.
+ *
+ * Resultado del fallo: `manejar` daba por vacío un handler que estaba a medio
+ * arrancar y cerraba la respuesta con `res.end()`. Los PDF salían con 200 y
+ * `Content-Type: application/pdf`… y CERO bytes —un fichero que ningún visor abre—,
+ * y las descargas por `sendFile` se quedaban colgadas hasta el timeout.
+ *
+ * `res.send(buffer)`/`res.end(buffer)` (los Excel y algún PDF en memoria) sí escriben
+ * en el acto, y por eso ésos eran los únicos que funcionaban.
+ *
+ * Se vigila el momento de la TOMA DE CONTROL, no el de la escritura: el evento 'pipe'
+ * lo emite el destino en la propia llamada a `.pipe()`, y `sendFile`/`download` se
+ * marcan al invocarse. Ambas cosas ocurren antes de que el handler resuelva, que es
+ * justo lo que hay que saber.
+ */
+function vigilarTomaDeControl(res: Response): () => boolean {
+  let tomada = false;
+  const marcar = () => {
+    tomada = true;
+  };
+
+  res.once('pipe', marcar);
+
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  const sendFile = res.sendFile.bind(res) as any;
+  (res as any).sendFile = (...args: any[]) => {
+    marcar();
+    return sendFile(...args);
+  };
+  const download = res.download.bind(res) as any;
+  (res as any).download = (...args: any[]) => {
+    marcar();
+    return download(...args);
+  };
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+
+  return () => tomada;
 }
 
 /** 201 en POST, 200 en el resto: el mismo criterio que aplicaba Nest. */

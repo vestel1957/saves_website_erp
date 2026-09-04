@@ -131,10 +131,15 @@ async function main() {
       continue;
     }
 
-    if (status === 404 && TOKEN && !esLiteral(e.ruta)) {
-      // Ruta PARAMÉTRICA con token: el 404 es la respuesta correcta, porque el id
-      // que se manda es inventado y no existe en la base. Contarlo como fallo haría
-      // que la verificación gritara en 60 rutas sanas y nadie volviera a mirarla.
+    if (status === 404 && !esLiteral(e.ruta) && (TOKEN || e.publico)) {
+      // Ruta PARAMÉTRICA: el 404 es la respuesta correcta, porque el id que se manda
+      // es inventado y no existe en la base. Contarlo como fallo haría que la
+      // verificación gritara en 60 rutas sanas y nadie volviera a mirarla.
+      //
+      // Con token vale para cualquiera; SIN token sólo para las públicas — en una
+      // protegida el guard habría contestado 401 antes de mirar la base, así que ahí
+      // un 404 sí delata que la ruta no está montada. La pública llega al handler y
+      // el 404 no distingue nada (lo destapó GET /treasury/comprobante/:archivo).
       ok++;
     } else if (status === 404) {
       fallos.push({

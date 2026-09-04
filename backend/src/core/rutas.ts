@@ -8,7 +8,7 @@
  * Varios routers comparten prefijo a propósito (`network`, `whatsapp`, `admin`):
  * Express los prueba en orden y cada uno responde a las suyas.
  *
- * Routers: 48
+ * Routers: 50
  */
 import { accountingRouter } from '../accounting/accounting.router';
 import { auditRouter } from '../common/audit/audit.router';
@@ -36,8 +36,10 @@ import { networkRouter } from '../network/network.router';
 import { oltRouter } from '../network/olt.router';
 import { notificationsRouter } from '../common/notifications/notifications.router';
 import { omniRouter } from '../omni/omni.router';
+import { onlinePaymentsRouter } from '../online-payments/online-payments.router';
 import { ordersRouter } from '../orders/orders.router';
 import { paymentImportsRouter } from '../payment-imports/payment-imports.router';
+import { bundlesRouter } from '../plans/bundles.router';
 import { plansRouter } from '../plans/plans.router';
 import { playhubRouter } from '../playhub/playhub.router';
 import { portalRouter } from '../portal/portal.router';
@@ -86,8 +88,10 @@ export const RUTAS = [
   { prefijo: 'network', router: oltRouter },
   { prefijo: 'notifications', router: notificationsRouter },
   { prefijo: 'omni', router: omniRouter },
+  { prefijo: 'online-payments', router: onlinePaymentsRouter },
   { prefijo: 'orders', router: ordersRouter },
   { prefijo: 'payment-imports', router: paymentImportsRouter },
+  { prefijo: 'plan-bundles', router: bundlesRouter },
   { prefijo: 'plans', router: plansRouter },
   { prefijo: 'playhub', router: playhubRouter },
   { prefijo: 'portal', router: portalRouter },

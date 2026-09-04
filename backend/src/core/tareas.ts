@@ -1,8 +1,8 @@
 /**
  * Tareas programadas (sustituyen al decorador `@Cron`).
  *
- * Diez automatizaciones que facturan a 21.000 abonados, pasan gente a Cartera y
- * sincronizan con el legacy. Antes eran diez decoradores sueltos dentro de
+ * Catorce automatizaciones que facturan a 21.000 abonados, pasan gente a Cartera,
+ * sincronizan con el legacy y cuadran su caja contra la nuestra. Antes eran diez decoradores sueltos dentro de
  * `CronService`; aquí son una lista, con su horario y su porqué al lado.
  *
  * Las expresiones son EXACTAMENTE las que había, incluida la de `exchange-rate`, que
@@ -22,6 +22,14 @@ export const TAREAS: TareaProgramada[] = [
     nombre: 'recurring-billing',
     expresion: '0 2 1 * *', // día 1 de cada mes, 02:00
     ejecutar: () => cronService.scheduledRecurringBilling(),
+  },
+  {
+    nombre: 'agenda-arrastre',
+    // Diario 00:05 — lo que un técnico no alcanzó a resolver pasa al día siguiente.
+    // La primera de la madrugada: la agenda tiene que estar puesta antes de que
+    // alguien abra su panel, y no toca dinero (no compite con la facturación).
+    expresion: '5 0 * * *',
+    ejecutar: () => cronService.scheduledAgendaArrastre(),
   },
   {
     nombre: 'metrics-snapshot',
@@ -60,12 +68,51 @@ export const TAREAS: TareaProgramada[] = [
   },
   {
     nombre: 'legacy-sync-caja',
-    expresion: '5,10,20,25,35,40,50,55 * * * *',
+    // Cada 20 SEGUNDOS (expresión de 6 campos). Sólo lee `transactions` por encima del
+    // watermark: 200 ms de trabajo, 0,45 s de proceso. A 5 minutos, un cobro hecho en el
+    // legacy tardaba hasta 5 minutos en verse aquí; así se ve en 20 segundos. Comparte
+    // el cerrojo `legacySyncRunning` con la completa, así que nunca se pisan.
+    expresion: '*/20 * * * * *',
     ejecutar: () => cronService.scheduledLegacyCajaSync(),
   },
   {
+    nombre: 'conciliacion-caja',
+    // Diaria a las 21:00, cuando las cajas del día ya cerraron. Mira 7 días hacia
+    // atrás a propósito: un borrado del legacy puede ocurrir días después del cobro.
+    expresion: '0 21 * * *',
+    ejecutar: () => cronService.scheduledConciliacionCaja(),
+  },
+  {
+    nombre: 'instalaciones-pagadas',
+    // Cada 5 min. La orden de instalación de quien pagó AQUÍ ya nació con el recaudo
+    // (evento `treasury.pago.aplicado`); esto recoge a quien pagó EN EL LEGACY —su
+    // pago llega por el sync, sin evento— y los intentos que fallaron.
+    expresion: '*/5 * * * *',
+    ejecutar: () => cronService.scheduledInstalacionesPagadas(),
+  },
+  {
+    nombre: 'pagos-en-linea',
+    // Cada 5 min, en los minutos impares que dejan libres las dos idas del legacy.
+    // Trae del portal (`vestel.com.co/crm`) los pagos en línea y le devuelve el
+    // servicio a quien pagó por ahí: el legacy solo reconecta internet —y solo si la
+    // factura es del mes corriente—, la TV la deja siempre para una visita.
+    expresion: '3,8,13,18,23,28,33,38,43,48,53,58 * * * *',
+    ejecutar: () => cronService.scheduledPagosEnLinea(),
+  },
+  {
+    nombre: 'descuento-portal',
+    // Cada hora, en el minuto 40 (libre entre las dos idas y el writeback). Deja la
+    // cartera ya rebajada para que el PORTAL DE PAGOS cobre con el descuento puesto, y
+    // lo retira cuando la promoción vence sin pago. Gate propio
+    // `PROMO_PORTAL_PRECONCEDER_LIVE`: cerrado, sólo calcula.
+    expresion: '40 * * * *',
+    ejecutar: () => cronService.scheduledDescuentoPortal(),
+  },
+  {
     nombre: 'legacy-writeback',
-    expresion: '7,22,37,52 * * * *',
+    // Cada 5 min, en los minutos que las dos idas dejan libres (ver el porqué en
+    // `CronService.scheduledLegacyWriteback`).
+    expresion: '2,7,12,17,22,27,32,37,42,47,52,57 * * * *',
     ejecutar: () => cronService.scheduledLegacyWriteback(),
   },
 ];

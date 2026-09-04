@@ -48,6 +48,14 @@ export interface Endpoint {
   fichero: string;
   handler: string;
   guards: string[];
+  /**
+   * `@AbiertoAlTecnico()`: la ruta lleva `ModuloRedGuard` pero el técnico de campo SÍ
+   * pasa. Es metadato del método, no un guard, así que sin este campo el contrato lo
+   * perdía y el router salía cerrado para él — que fue exactamente lo que ocurrió al
+   * migrar a Express (`quitar-decoradores.ts` se llevó la marca por delante y las dos
+   * lecturas de "Mis equipos" empezaron a responder 403).
+   */
+  abiertoAlTecnico?: boolean;
   areas: string[];
   permisos: string[];
   orPermission: string[];
@@ -265,6 +273,7 @@ for (const fichero of ficheros) {
             const dec = buscarDecorador(miembro, 'RequireScopes') ?? buscarDecorador(nodo, 'RequireScopes');
             return dec ? argsFuente(dec) : [];
           })(),
+          abiertoAlTecnico: Boolean(buscarDecorador(miembro, 'AbiertoAlTecnico')),
           dto,
           params,
           query,

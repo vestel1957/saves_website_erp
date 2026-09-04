@@ -102,11 +102,27 @@ module.exports = {
         WHATSAPP_WEBHOOK_VERIFY_TOKEN: env.WHATSAPP_WEBHOOK_VERIFY_TOKEN ?? '',
         KAPSO_API_KEY: env.KAPSO_API_KEY ?? '',
         KAPSO_PHONE_NUMBER_ID: env.KAPSO_PHONE_NUMBER_ID ?? '',
+        // WABA dueña de las plantillas: sin ella el panel no puede leer su estado
+        // en Meta ni crear plantillas nuevas (el envío sí funciona sin ella).
+        KAPSO_WABA_ID: env.KAPSO_WABA_ID ?? '',
         WHATSAPP_ALERT_TO: env.WHATSAPP_ALERT_TO ?? '',
+        // Apagado aquí a propósito: el chatbot vive en /home/dev/saves_vestel y este
+        // backend solo le reenvía el webhook (WHATSAPP_WEBHOOK_FORWARD_URL).
         WA_AGENT_ENABLED: env.WA_AGENT_ENABLED ?? 'false',
+        WHATSAPP_WEBHOOK_FORWARD_URL: env.WHATSAPP_WEBHOOK_FORWARD_URL ?? '',
         OPENAI_API_KEY: env.OPENAI_API_KEY ?? '',
         WHATSAPP_BOT_MODEL: env.WHATSAPP_BOT_MODEL ?? '',
         WHATSAPP_STT_MODEL: env.WHATSAPP_STT_MODEL ?? '',
+        // PlayHub (OTT/IPTV). Sin ApiKey/ApiSecret el módulo se declara "no
+        // configurado" y no llama a la API: faltaban aquí, así que el panel de la
+        // ficha no podía suscribir a nadie aunque las credenciales estuvieran en
+        // backend/.env. Son las mismas que usa el legacy.
+        PLAYHUB_BASE_URL: env.PLAYHUB_BASE_URL ?? '',
+        PLAYHUB_API_KEY: env.PLAYHUB_API_KEY ?? '',
+        PLAYHUB_API_SECRET: env.PLAYHUB_API_SECRET ?? '',
+        // Mínimo de Megas del plan de internet para poder asignar PlayHub
+        // (0 = sin regla). Desde 2026-09-03 son 100; antes eran 300.
+        PLAYHUB_MIN_MEGAS: env.PLAYHUB_MIN_MEGAS ?? '100',
       },
     },
     {

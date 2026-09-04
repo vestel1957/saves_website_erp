@@ -3908,12 +3908,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "contabilidad"
+      "contabilidad",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'contabilidad'"
+      "'contabilidad'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -4026,6 +4028,154 @@
         "clase": "Body",
         "llave": null,
         "tipo": "UpdateInvoiceDto",
+        "nombre": "dto"
+      },
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "GET",
+    "ruta": "/api/billing/invoices/:id/historial",
+    "controlador": "BillingController",
+    "fichero": "src/billing/billing.controller.ts",
+    "handler": "historial",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "contabilidad",
+      "caja"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'contabilidad'",
+      "'caja'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [
+      "id"
+    ],
+    "query": [],
+    "parametros": [
+      {
+        "clase": "Param",
+        "llave": "id",
+        "tipo": "string",
+        "nombre": "id"
+      },
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "GET",
+    "ruta": "/api/billing/invoices/:id/servicio",
+    "controlador": "BillingController",
+    "fichero": "src/billing/billing.controller.ts",
+    "handler": "servicioAsignado",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "contabilidad",
+      "caja"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'contabilidad'",
+      "'caja'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [
+      "id"
+    ],
+    "query": [],
+    "parametros": [
+      {
+        "clase": "Param",
+        "llave": "id",
+        "tipo": "string",
+        "nombre": "id"
+      },
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "POST",
+    "ruta": "/api/billing/invoices/:id/servicio",
+    "controlador": "BillingController",
+    "fichero": "src/billing/billing.controller.ts",
+    "handler": "asignarServicio",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "contabilidad"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'contabilidad'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": "AsignarServicioDto",
+    "params": [
+      "id"
+    ],
+    "query": [],
+    "parametros": [
+      {
+        "clase": "Param",
+        "llave": "id",
+        "tipo": "string",
+        "nombre": "id"
+      },
+      {
+        "clase": "Body",
+        "llave": null,
+        "tipo": "AsignarServicioDto",
         "nombre": "dto"
       },
       {
@@ -4365,6 +4515,12 @@
       "pageSize",
       "search",
       "type",
+      "branchId",
+      "from",
+      "to",
+      "authorId",
+      "montoMin",
+      "montoMax",
       "sortBy",
       "sortDir"
     ],
@@ -4395,6 +4551,42 @@
       },
       {
         "clase": "Query",
+        "llave": "branchId",
+        "tipo": "string",
+        "nombre": "branchId"
+      },
+      {
+        "clase": "Query",
+        "llave": "from",
+        "tipo": "string",
+        "nombre": "from"
+      },
+      {
+        "clase": "Query",
+        "llave": "to",
+        "tipo": "string",
+        "nombre": "to"
+      },
+      {
+        "clase": "Query",
+        "llave": "authorId",
+        "tipo": "string",
+        "nombre": "authorId"
+      },
+      {
+        "clase": "Query",
+        "llave": "montoMin",
+        "tipo": "string",
+        "nombre": "montoMin"
+      },
+      {
+        "clase": "Query",
+        "llave": "montoMax",
+        "tipo": "string",
+        "nombre": "montoMax"
+      },
+      {
+        "clase": "Query",
         "llave": "sortBy",
         "tipo": "string",
         "nombre": "sortBy"
@@ -4404,6 +4596,56 @@
         "llave": "sortDir",
         "tipo": "string",
         "nombre": "sortDir"
+      },
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "POST",
+    "ruta": "/api/billing/notes",
+    "controlador": "BillingController",
+    "fichero": "src/billing/billing.controller.ts",
+    "handler": "createNotes",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "contabilidad"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'contabilidad'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": "CreateNotesBulkDto",
+    "params": [],
+    "query": [],
+    "parametros": [
+      {
+        "clase": "Body",
+        "llave": null,
+        "tipo": "CreateNotesBulkDto",
+        "nombre": "dto"
+      },
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
       }
     ],
     "usaRes": false,
@@ -6163,8 +6405,37 @@
     "scopesFuente": [],
     "dto": null,
     "params": [],
-    "query": [],
-    "parametros": [],
+    "query": [
+      "from",
+      "to",
+      "sede"
+    ],
+    "parametros": [
+      {
+        "clase": "Query",
+        "llave": "from",
+        "tipo": "string",
+        "nombre": "from"
+      },
+      {
+        "clase": "Query",
+        "llave": "to",
+        "tipo": "string",
+        "nombre": "to"
+      },
+      {
+        "clase": "Query",
+        "llave": "sede",
+        "tipo": "string",
+        "nombre": "sede"
+      },
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      }
+    ],
     "usaRes": false,
     "subeFichero": false,
     "subidaFuente": null,
@@ -6627,7 +6898,9 @@
       "page",
       "pageSize",
       "sort",
-      "dir"
+      "dir",
+      "estado",
+      "marcados"
     ],
     "parametros": [
       {
@@ -6665,6 +6938,18 @@
         "llave": "dir",
         "tipo": "string",
         "nombre": "dir"
+      },
+      {
+        "clase": "Query",
+        "llave": "estado",
+        "tipo": "string",
+        "nombre": "estado"
+      },
+      {
+        "clase": "Query",
+        "llave": "marcados",
+        "tipo": "string",
+        "nombre": "marcados"
       }
     ],
     "usaRes": false,
@@ -7038,7 +7323,7 @@
     ],
     "usaRes": false,
     "subeFichero": true,
-    "subidaFuente": "'file', {\n      storage: diskStorage({\n        destination: (_req, _file, cb) => { if (!existsSync(DOC_ROOT)) mkdirSync(DOC_ROOT, { recursive: true }); cb(null, DOC_ROOT); },\n        filename: (_req, file, cb) => cb(null, `${randomUUID()}${extname(file.originalname).toLowerCase()}`),\n      }),\n      limits: { fileSize: 25 * 1024 * 1024 },\n      // No tenía NINGÚN filtro: aceptaba cualquier extensión. Se sirve siempre como\n      // descarga (`res.download`), así que no era ejecutable en el navegador, pero\n      // no hay razón para dejar que el repositorio documental acepte binarios.\n      fileFilter: (_req, file, cb) => {\n        const ok = EXT_DOCUMENTO.has(extname(file.originalname).toLowerCase());\n        cb(ok ? null : new BadRequestException('Tipo de archivo no permitido'), ok);\n      },\n    }",
+    "subidaFuente": "'file', {\n      storage: diskStorage({\n        destination: (_req, _file, cb) => { if (!existsSync(DOC_ROOT)) mkdirSync(DOC_ROOT, { recursive: true }); cb(null, DOC_ROOT); },\n        filename: (_req, file, cb) => cb(null, `${randomUUID()}${extensionDeAdjunto(file, EXT_DOCUMENTO) ?? '.bin'}`),\n      }),\n      limits: { fileSize: 25 * 1024 * 1024 },\n      // No tenía NINGÚN filtro: aceptaba cualquier extensión. Se sirve siempre como\n      // descarga (`res.download`), así que no era ejecutable en el navegador, pero\n      // no hay razón para dejar que el repositorio documental acepte binarios.\n      fileFilter: (_req, file, cb) => {\n        const ok = extensionDeAdjunto(file, EXT_DOCUMENTO) !== null;\n        cb(ok ? null : new BadRequestException('Tipo de archivo no permitido'), ok);\n      },\n    }",
     "httpCode": null,
     "publico": false
   },
@@ -7695,6 +7980,12 @@
         "llave": "sortDir",
         "tipo": "string",
         "nombre": "sortDir"
+      },
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
       }
     ],
     "usaRes": false,
@@ -8064,6 +8355,39 @@
     "controlador": "InventoryController",
     "fichero": "src/inventory/inventory.controller.ts",
     "handler": "runAlerts",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "administracion",
+      "tecnicos"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'administracion'",
+      "'tecnicos'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [],
+    "query": [],
+    "parametros": [],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "GET",
+    "ruta": "/api/inventory/branches",
+    "controlador": "InventoryController",
+    "fichero": "src/inventory/inventory.controller.ts",
+    "handler": "branches",
     "guards": [
       "JwtAuthGuard",
       "AreaGuard"
@@ -8618,7 +8942,14 @@
     "dto": null,
     "params": [],
     "query": [],
-    "parametros": [],
+    "parametros": [
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      }
+    ],
     "usaRes": false,
     "subeFichero": false,
     "subidaFuente": null,
@@ -9259,7 +9590,8 @@
     "subeFichero": false,
     "subidaFuente": null,
     "httpCode": null,
-    "publico": false
+    "publico": false,
+    "abiertoAlTecnico": true
   },
   {
     "metodo": "POST",
@@ -9349,7 +9681,8 @@
     "subeFichero": false,
     "subidaFuente": null,
     "httpCode": null,
-    "publico": false
+    "publico": false,
+    "abiertoAlTecnico": true
   },
   {
     "metodo": "POST",
@@ -11562,57 +11895,13 @@
     "scopesFuente": [],
     "dto": null,
     "params": [],
-    "query": [
-      "search",
-      "branchId",
-      "sort",
-      "page",
-      "pageSize",
-      "sortBy",
-      "sortDir"
-    ],
+    "query": [],
     "parametros": [
       {
         "clase": "Query",
-        "llave": "search",
-        "tipo": "string",
-        "nombre": "search"
-      },
-      {
-        "clase": "Query",
-        "llave": "branchId",
-        "tipo": "string",
-        "nombre": "branchId"
-      },
-      {
-        "clase": "Query",
-        "llave": "sort",
-        "tipo": "string",
-        "nombre": "sort"
-      },
-      {
-        "clase": "Query",
-        "llave": "page",
-        "tipo": "string",
-        "nombre": "page"
-      },
-      {
-        "clase": "Query",
-        "llave": "pageSize",
-        "tipo": "string",
-        "nombre": "pageSize"
-      },
-      {
-        "clase": "Query",
-        "llave": "sortBy",
-        "tipo": "string",
-        "nombre": "sortBy"
-      },
-      {
-        "clase": "Query",
-        "llave": "sortDir",
-        "tipo": "string",
-        "nombre": "sortDir"
+        "llave": null,
+        "tipo": "ListNapsQueryDto",
+        "nombre": "q"
       }
     ],
     "usaRes": false,
@@ -14077,13 +14366,15 @@
     ],
     "areas": [
       "tecnicos",
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
       "'tecnicos'",
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -16338,7 +16629,7 @@
     ],
     "usaRes": false,
     "subeFichero": true,
-    "subidaFuente": "'file', {\n      storage: diskStorage({\n        destination: (req, _file, cb) => {\n          const dir = join(UPLOAD_ROOT, (req.params as { id: string }).id);\n          mkdirSync(dir, { recursive: true });\n          cb(null, dir);\n        },\n        filename: (_req, file, cb) => cb(null, `${randomUUID()}${extname(file.originalname).toLowerCase()}`),\n      }),\n      limits: { fileSize: MAX_FILE_BYTES },\n      fileFilter: (_req, file, cb) => {\n        const ok = ALLOWED_EXT.has(extname(file.originalname).toLowerCase());\n        cb(ok ? null : new BadRequestException('Tipo de archivo no permitido'), ok);\n      },\n    }",
+    "subidaFuente": "'file', {\n      storage: diskStorage({\n        destination: (req, _file, cb) => {\n          const dir = join(UPLOAD_ROOT, (req.params as { id: string }).id);\n          mkdirSync(dir, { recursive: true });\n          cb(null, dir);\n        },\n        filename: (_req, file, cb) => cb(null, `${randomUUID()}${extensionDeAdjunto(file, ALLOWED_EXT) ?? '.bin'}`),\n      }),\n      limits: { fileSize: MAX_FILE_BYTES },\n      // Se valida con `extensionDeAdjunto`, no con `extname(originalname)` a secas:\n      // desde la galería del móvil el nombre puede llegar sin extensión y la foto\n      // se rechazaba. La lista blanca es la misma; sólo cambia de dónde se deduce.\n      fileFilter: (_req, file, cb) => {\n        const ok = extensionDeAdjunto(file, ALLOWED_EXT) !== null;\n        cb(ok ? null : new BadRequestException('Tipo de archivo no permitido'), ok);\n      },\n    }",
     "httpCode": null,
     "publico": false
   },
@@ -17450,13 +17741,21 @@
     "params": [
       "id"
     ],
-    "query": [],
+    "query": [
+      "limit"
+    ],
     "parametros": [
       {
         "clase": "Param",
         "llave": "id",
         "tipo": "string",
         "nombre": "id"
+      },
+      {
+        "clase": "Query",
+        "llave": "limit",
+        "tipo": "string | undefined",
+        "nombre": "limit"
       },
       {
         "clase": "CurrentUser",
@@ -17509,6 +17808,12 @@
         "nombre": "date"
       },
       {
+        "clase": "Body",
+        "llave": "mode",
+        "tipo": "string | undefined",
+        "nombre": "mode"
+      },
+      {
         "clase": "CurrentUser",
         "llave": null,
         "tipo": "AuthUser",
@@ -17517,7 +17822,7 @@
     ],
     "usaRes": false,
     "subeFichero": true,
-    "subidaFuente": "'file', { limits: { fileSize: 20 * 1024 * 1024 } }",
+    "subidaFuente": "'file', {\n      storage: diskStorage({\n        destination: (_req, _file, cb) => { if (!existsSync(PAYMENT_IMPORTS_ROOT)) mkdirSync(PAYMENT_IMPORTS_ROOT, { recursive: true }); cb(null, PAYMENT_IMPORTS_ROOT); },\n        filename: (_req, _file, cb) => cb(null, `${randomUUID()}.xlsx`),\n      }),\n      limits: { fileSize: 20 * 1024 * 1024 },\n      fileFilter: (_req, file, cb) => cb(/\\.xlsx$/i.test(file.originalname) ? null : new BadRequestException('Solo se aceptan archivos .xlsx'), /\\.xlsx$/i.test(file.originalname)),\n    }",
     "httpCode": null,
     "publico": false
   },
@@ -18106,6 +18411,89 @@
         "llave": "limit",
         "tipo": "string",
         "nombre": "limit"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "GET",
+    "ruta": "/api/playhub/sync-status",
+    "controlador": "PlayhubController",
+    "fichero": "src/playhub/playhub.controller.ts",
+    "handler": "syncStatus",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "administracion",
+      "tecnicos",
+      "gerencia",
+      "sistemas"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'administracion'",
+      "'tecnicos'",
+      "'gerencia'",
+      "'sistemas'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [],
+    "query": [],
+    "parametros": [],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "GET",
+    "ruta": "/api/playhub/subscribers/:id/eligibility",
+    "controlador": "PlayhubController",
+    "fichero": "src/playhub/playhub.controller.ts",
+    "handler": "eligibility",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "administracion",
+      "tecnicos",
+      "gerencia",
+      "sistemas"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'administracion'",
+      "'tecnicos'",
+      "'gerencia'",
+      "'sistemas'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [
+      "id"
+    ],
+    "query": [],
+    "parametros": [
+      {
+        "clase": "Param",
+        "llave": "id",
+        "tipo": "string",
+        "nombre": "id"
       }
     ],
     "usaRes": false,
@@ -22645,6 +23033,7 @@
       "pageSize",
       "withPlan",
       "servicio",
+      "planId",
       "tecnologia",
       "cuenta",
       "deuda",
@@ -22693,6 +23082,12 @@
         "llave": "servicio",
         "tipo": "string",
         "nombre": "servicio"
+      },
+      {
+        "clase": "Query",
+        "llave": "planId",
+        "tipo": "string",
+        "nombre": "planId"
       },
       {
         "clase": "Query",
@@ -23171,6 +23566,12 @@
         "nombre": "file"
       },
       {
+        "clase": "Body",
+        "llave": "kind",
+        "tipo": "string | undefined",
+        "nombre": "kind"
+      },
+      {
         "clase": "CurrentUser",
         "llave": null,
         "tipo": "AuthUser",
@@ -23179,7 +23580,125 @@
     ],
     "usaRes": false,
     "subeFichero": true,
-    "subidaFuente": "'file', {\n      storage: diskStorage({\n        destination: (req, _file, cb) => {\n          const dir = join(UPLOAD_ROOT, (req.params as { id: string }).id);\n          mkdirSync(dir, { recursive: true });\n          cb(null, dir);\n        },\n        filename: (_req, file, cb) => cb(null, `${randomUUID()}${extname(file.originalname).toLowerCase()}`),\n      }),\n      limits: { fileSize: MAX_FILE_BYTES },\n      fileFilter: (_req, file, cb) => {\n        const ok = ALLOWED_EXT.has(extname(file.originalname).toLowerCase());\n        cb(ok ? null : new BadRequestException('Tipo de archivo no permitido'), ok);\n      },\n    }",
+    "subidaFuente": "'file', {\n      storage: diskStorage({\n        destination: (req, _file, cb) => {\n          const dir = join(UPLOAD_ROOT, (req.params as { id: string }).id);\n          mkdirSync(dir, { recursive: true });\n          cb(null, dir);\n        },\n        filename: (_req, file, cb) => cb(null, `${randomUUID()}${extensionDeAdjunto(file, ALLOWED_EXT) ?? '.bin'}`),\n      }),\n      limits: { fileSize: MAX_FILE_BYTES },\n      // Se valida con `extensionDeAdjunto`, no con `extname(originalname)` a secas:\n      // desde la galería del móvil el nombre puede llegar sin extensión y la foto\n      // se rechazaba. La lista blanca es la misma; sólo cambia de dónde se deduce.\n      fileFilter: (_req, file, cb) => {\n        const ok = extensionDeAdjunto(file, ALLOWED_EXT) !== null;\n        cb(ok ? null : new BadRequestException('Tipo de archivo no permitido'), ok);\n      },\n    }",
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "POST",
+    "ruta": "/api/subscribers/:id/house-photo",
+    "controlador": "SubscribersController",
+    "fichero": "src/subscribers/subscribers.controller.ts",
+    "handler": "uploadHousePhoto",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard",
+      "PermissionsGuard"
+    ],
+    "areas": [
+      "administracion",
+      "contabilidad",
+      "tecnicos",
+      "caja"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'administracion'",
+      "'contabilidad'",
+      "'tecnicos'",
+      "'caja'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [
+      "id"
+    ],
+    "query": [],
+    "parametros": [
+      {
+        "clase": "Param",
+        "llave": "id",
+        "tipo": "string",
+        "nombre": "id"
+      },
+      {
+        "clase": "UploadedFile",
+        "llave": null,
+        "tipo": "MulterFile",
+        "nombre": "file"
+      },
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": true,
+    "subidaFuente": "'file', {\n      storage: diskStorage({\n        destination: (req, _file, cb) => {\n          const dir = join(UPLOAD_ROOT, (req.params as { id: string }).id);\n          mkdirSync(dir, { recursive: true });\n          cb(null, dir);\n        },\n        filename: (_req, file, cb) => cb(null, `${randomUUID()}${extensionDeAdjunto(file, EXT_FOTO_VIVIENDA) ?? '.jpg'}`),\n      }),\n      limits: { fileSize: MAX_FILE_BYTES },\n      // Sólo imágenes que el navegador sepa pintar: esta foto se enseña dentro de\n      // la ficha, no se descarga. Un PDF o un .heic dejarían el hueco roto.\n      fileFilter: (_req, file, cb) => {\n        const ok = extensionDeAdjunto(file, EXT_FOTO_VIVIENDA) !== null;\n        cb(ok ? null : new BadRequestException('La foto de la vivienda debe ser JPG, PNG o WEBP'), ok);\n      },\n    }",
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "POST",
+    "ruta": "/api/subscribers/:id/carta-retiro",
+    "controlador": "SubscribersController",
+    "fichero": "src/subscribers/subscribers.controller.ts",
+    "handler": "uploadCartaRetiro",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard",
+      "PermissionsGuard"
+    ],
+    "areas": [
+      "administracion",
+      "contabilidad",
+      "tecnicos",
+      "caja"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'administracion'",
+      "'contabilidad'",
+      "'tecnicos'",
+      "'caja'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [
+      "id"
+    ],
+    "query": [],
+    "parametros": [
+      {
+        "clase": "Param",
+        "llave": "id",
+        "tipo": "string",
+        "nombre": "id"
+      },
+      {
+        "clase": "UploadedFile",
+        "llave": null,
+        "tipo": "MulterFile",
+        "nombre": "file"
+      },
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": true,
+    "subidaFuente": "'file', {\n      storage: diskStorage({\n        destination: (req, _file, cb) => {\n          const dir = join(UPLOAD_ROOT, (req.params as { id: string }).id);\n          mkdirSync(dir, { recursive: true });\n          cb(null, dir);\n        },\n        filename: (_req, file, cb) => cb(null, `${randomUUID()}${extensionDeAdjunto(file, EXT_CARTA_RETIRO) ?? '.pdf'}`),\n      }),\n      limits: { fileSize: MAX_FILE_BYTES },\n      // La carta llega escaneada o fotografiada desde la ventanilla: PDF o imagen.\n      fileFilter: (_req, file, cb) => {\n        const ok = extensionDeAdjunto(file, EXT_CARTA_RETIRO) !== null;\n        cb(ok ? null : new BadRequestException('La carta de retiro debe ser PDF o una imagen'), ok);\n      },\n    }",
     "httpCode": null,
     "publico": false
   },
@@ -23641,7 +24160,7 @@
     ],
     "usaRes": false,
     "subeFichero": true,
-    "subidaFuente": "'file', {\n      storage: diskStorage({\n        destination: (req, _file, cb) => {\n          const dir = join(UPLOAD_ROOT, (req.params as { id: string }).id);\n          mkdirSync(dir, { recursive: true });\n          cb(null, dir);\n        },\n        filename: (_req, file, cb) => cb(null, `huella-${Date.now()}${extname(file.originalname).toLowerCase()}`),\n      }),\n      limits: { fileSize: 8 * 1024 * 1024 },\n      fileFilter: (_req, file, cb) => {\n        // Solo imagen: la huella se incrusta en el PDF del contrato, y un PDF o un\n        // Word dentro de ese hueco no se puede dibujar.\n        const ok = ['.jpg', '.jpeg', '.png', '.webp'].includes(extname(file.originalname).toLowerCase());\n        cb(ok ? null : new BadRequestException('La huella debe ser una imagen (JPG o PNG)'), ok);\n      },\n    }",
+    "subidaFuente": "'file', {\n      storage: diskStorage({\n        destination: (req, _file, cb) => {\n          const dir = join(UPLOAD_ROOT, (req.params as { id: string }).id);\n          mkdirSync(dir, { recursive: true });\n          cb(null, dir);\n        },\n        filename: (_req, file, cb) => cb(null, `huella-${Date.now()}${extensionDeAdjunto(file, EXT_HUELLA) ?? '.bin'}`),\n      }),\n      limits: { fileSize: 8 * 1024 * 1024 },\n      fileFilter: (_req, file, cb) => {\n        // Solo imagen: la huella se incrusta en el PDF del contrato, y un PDF o un\n        // Word dentro de ese hueco no se puede dibujar. HEIC queda fuera por lo\n        // mismo (el PDF no sabe dibujarlo), y por eso el mensaje dice cuáles sirven.\n        const ok = extensionDeAdjunto(file, EXT_HUELLA) !== null;\n        cb(ok ? null : new BadRequestException('La huella debe ser una imagen JPG, PNG o WEBP'), ok);\n      },\n    }",
     "httpCode": null,
     "publico": false
   },
@@ -24050,6 +24569,59 @@
     "publico": false
   },
   {
+    "metodo": "GET",
+    "ruta": "/api/subscribers/:id/plan",
+    "controlador": "SubscribersController",
+    "fichero": "src/subscribers/subscribers.controller.ts",
+    "handler": "currentPlans",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard",
+      "PermissionsGuard"
+    ],
+    "areas": [
+      "administracion",
+      "contabilidad",
+      "tecnicos",
+      "caja"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'administracion'",
+      "'contabilidad'",
+      "'tecnicos'",
+      "'caja'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [
+      "id"
+    ],
+    "query": [],
+    "parametros": [
+      {
+        "clase": "Param",
+        "llave": "id",
+        "tipo": "string",
+        "nombre": "id"
+      },
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
     "metodo": "POST",
     "ruta": "/api/subscribers/:id/plan",
     "controlador": "SubscribersController",
@@ -24281,6 +24853,65 @@
   },
   {
     "metodo": "PATCH",
+    "ruta": "/api/subscribers/:id/servicios/estado",
+    "controlador": "SubscribersController",
+    "fichero": "src/subscribers/subscribers.controller.ts",
+    "handler": "cambiarEstadoDeServicio",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard",
+      "PermissionsGuard"
+    ],
+    "areas": [
+      "administracion",
+      "contabilidad",
+      "tecnicos",
+      "caja"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'administracion'",
+      "'contabilidad'",
+      "'tecnicos'",
+      "'caja'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": "ChangeServiceStatusDto",
+    "params": [
+      "id"
+    ],
+    "query": [],
+    "parametros": [
+      {
+        "clase": "Param",
+        "llave": "id",
+        "tipo": "string",
+        "nombre": "id"
+      },
+      {
+        "clase": "Body",
+        "llave": null,
+        "tipo": "ChangeServiceStatusDto",
+        "nombre": "dto"
+      },
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "PATCH",
     "ruta": "/api/subscribers/:id/status",
     "controlador": "SubscribersController",
     "fichero": "src/subscribers/subscribers.controller.ts",
@@ -24332,6 +24963,44 @@
         "nombre": "user"
       }
     ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "GET",
+    "ruta": "/api/subscribers/afiliaciones",
+    "controlador": "SubscribersController",
+    "fichero": "src/subscribers/subscribers.controller.ts",
+    "handler": "afiliaciones",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard",
+      "PermissionsGuard"
+    ],
+    "areas": [
+      "administracion",
+      "contabilidad",
+      "tecnicos",
+      "caja"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'administracion'",
+      "'contabilidad'",
+      "'tecnicos'",
+      "'caja'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [],
+    "query": [],
+    "parametros": [],
     "usaRes": false,
     "subeFichero": false,
     "subidaFuente": null,
@@ -25315,6 +25984,12 @@
     ],
     "parametros": [
       {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      },
+      {
         "clase": "Query",
         "llave": "search",
         "tipo": "string",
@@ -25477,58 +26152,8 @@
     "publico": false
   },
   {
-    "metodo": "GET",
-    "ruta": "/api/support/mi-turno",
-    "controlador": "SupportController",
-    "fichero": "src/support/support.controller.ts",
-    "handler": "miTurno",
-    "guards": [
-      "JwtAuthGuard",
-      "AreaGuard"
-    ],
-    "areas": [
-      "tecnicos",
-      "administracion",
-      "caja"
-    ],
-    "permisos": [],
-    "orPermission": [],
-    "areasFuente": [
-      "'tecnicos'",
-      "'administracion'",
-      "'caja'"
-    ],
-    "permisosFuente": [],
-    "orPermissionFuente": [],
-    "scopesFuente": [],
-    "dto": null,
-    "params": [],
-    "query": [
-      "fecha"
-    ],
-    "parametros": [
-      {
-        "clase": "CurrentUser",
-        "llave": null,
-        "tipo": "AuthUser",
-        "nombre": "user"
-      },
-      {
-        "clase": "Query",
-        "llave": "fecha",
-        "tipo": "string",
-        "nombre": "fecha"
-      }
-    ],
-    "usaRes": false,
-    "subeFichero": false,
-    "subidaFuente": null,
-    "httpCode": null,
-    "publico": false
-  },
-  {
     "metodo": "POST",
-    "ruta": "/api/support/mi-turno/no-atendida",
+    "ruta": "/api/support/mi-agenda/no-atendida",
     "controlador": "SupportController",
     "fichero": "src/support/support.controller.ts",
     "handler": "noAtendida",
@@ -25651,6 +26276,85 @@
     "params": [],
     "query": [],
     "parametros": [],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "GET",
+    "ruta": "/api/support/motivos-retiro",
+    "controlador": "SupportController",
+    "fichero": "src/support/support.controller.ts",
+    "handler": "motivosRetiro",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "tecnicos",
+      "administracion",
+      "caja"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'tecnicos'",
+      "'administracion'",
+      "'caja'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [],
+    "query": [],
+    "parametros": [],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "GET",
+    "ruta": "/api/support/cargo-orden",
+    "controlador": "SupportController",
+    "fichero": "src/support/support.controller.ts",
+    "handler": "cargoDeOrden",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "tecnicos",
+      "administracion",
+      "caja"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'tecnicos'",
+      "'administracion'",
+      "'caja'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [],
+    "query": [
+      "tipo"
+    ],
+    "parametros": [
+      {
+        "clase": "Query",
+        "llave": "tipo",
+        "tipo": "string",
+        "nombre": "tipo"
+      }
+    ],
     "usaRes": false,
     "subeFichero": false,
     "subidaFuente": null,
@@ -25903,6 +26607,7 @@
       "tec",
       "priority",
       "sede",
+      "subscriberId",
       "from",
       "to",
       "all",
@@ -25947,6 +26652,12 @@
         "llave": "sede",
         "tipo": "string",
         "nombre": "sede"
+      },
+      {
+        "clase": "Query",
+        "llave": "subscriberId",
+        "tipo": "string",
+        "nombre": "subscriberId"
       },
       {
         "clase": "Query",
@@ -26143,6 +26854,12 @@
         "llave": null,
         "tipo": "AssignDto",
         "nombre": "dto"
+      },
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
       }
     ],
     "usaRes": false,
@@ -28902,92 +29619,13 @@
     "scopesFuente": [],
     "dto": null,
     "params": [],
-    "query": [
-      "search",
-      "type",
-      "category",
-      "status",
-      "from",
-      "to",
-      "all",
-      "cashAccountId",
-      "page",
-      "pageSize",
-      "sortBy",
-      "sortDir"
-    ],
+    "query": [],
     "parametros": [
       {
         "clase": "Query",
-        "llave": "search",
-        "tipo": "string",
-        "nombre": "search"
-      },
-      {
-        "clase": "Query",
-        "llave": "type",
-        "tipo": "string",
-        "nombre": "type"
-      },
-      {
-        "clase": "Query",
-        "llave": "category",
-        "tipo": "string",
-        "nombre": "category"
-      },
-      {
-        "clase": "Query",
-        "llave": "status",
-        "tipo": "string",
-        "nombre": "status"
-      },
-      {
-        "clase": "Query",
-        "llave": "from",
-        "tipo": "string",
-        "nombre": "from"
-      },
-      {
-        "clase": "Query",
-        "llave": "to",
-        "tipo": "string",
-        "nombre": "to"
-      },
-      {
-        "clase": "Query",
-        "llave": "all",
-        "tipo": "string",
-        "nombre": "all"
-      },
-      {
-        "clase": "Query",
-        "llave": "cashAccountId",
-        "tipo": "string",
-        "nombre": "cashAccountId"
-      },
-      {
-        "clase": "Query",
-        "llave": "page",
-        "tipo": "string",
-        "nombre": "page"
-      },
-      {
-        "clase": "Query",
-        "llave": "pageSize",
-        "tipo": "string",
-        "nombre": "pageSize"
-      },
-      {
-        "clase": "Query",
-        "llave": "sortBy",
-        "tipo": "string",
-        "nombre": "sortBy"
-      },
-      {
-        "clase": "Query",
-        "llave": "sortDir",
-        "tipo": "string",
-        "nombre": "sortDir"
+        "llave": null,
+        "tipo": "ListTxQueryDto",
+        "nombre": "q"
       },
       {
         "clase": "CurrentUser",
@@ -29846,5 +30484,1401 @@
     "subidaFuente": null,
     "httpCode": null,
     "publico": true
+  },
+  {
+    "metodo": "GET",
+    "ruta": "/api/collections/catalog",
+    "controlador": "CollectionsController",
+    "fichero": "src/collections/collections.controller.ts",
+    "handler": "catalog",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "administracion",
+      "caja"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'administracion'",
+      "'caja'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [],
+    "query": [],
+    "parametros": [],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "POST",
+    "ruta": "/api/cron/run/conciliacion-caja",
+    "controlador": "CronController",
+    "fichero": "src/cron/cron.controller.ts",
+    "handler": "runConciliacionCaja",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard",
+      "PermissionsGuard"
+    ],
+    "areas": [
+      "contabilidad",
+      "sistemas"
+    ],
+    "permisos": [
+      "APP_PERMISSIONS.CRON_RUN"
+    ],
+    "orPermission": [],
+    "areasFuente": [
+      "'contabilidad'",
+      "'sistemas'"
+    ],
+    "permisosFuente": [
+      "APP_PERMISSIONS.CRON_RUN"
+    ],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [],
+    "query": [],
+    "parametros": [
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "POST",
+    "ruta": "/api/einvoice/branches/:id/eflags-bulk",
+    "controlador": "EinvoiceController",
+    "fichero": "src/einvoice/einvoice.controller.ts",
+    "handler": "branchBulkEflags",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "contabilidad"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'contabilidad'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": "BranchBulkEflagsDto",
+    "params": [
+      "id"
+    ],
+    "query": [],
+    "parametros": [
+      {
+        "clase": "Param",
+        "llave": "id",
+        "tipo": "string",
+        "nombre": "id"
+      },
+      {
+        "clase": "Body",
+        "llave": null,
+        "tipo": "BranchBulkEflagsDto",
+        "nombre": "dto"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "POST",
+    "ruta": "/api/network/genieacs/wifi",
+    "controlador": "GenieacsController",
+    "fichero": "src/network/genieacs.controller.ts",
+    "handler": "setWifi",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard",
+      "ModuloRedGuard"
+    ],
+    "areas": [
+      "tecnicos",
+      "administracion"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'tecnicos'",
+      "'administracion'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": "WifiDto",
+    "params": [],
+    "query": [],
+    "parametros": [
+      {
+        "clase": "Body",
+        "llave": null,
+        "tipo": "WifiDto",
+        "nombre": "dto"
+      },
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "GET",
+    "ruta": "/api/network/nap-addresses",
+    "controlador": "NetworkController",
+    "fichero": "src/network/network.controller.ts",
+    "handler": "napAddresses",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard",
+      "ModuloRedGuard"
+    ],
+    "areas": [
+      "tecnicos",
+      "administracion"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'tecnicos'",
+      "'administracion'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [],
+    "query": [
+      "branchId"
+    ],
+    "parametros": [
+      {
+        "clase": "Query",
+        "llave": "branchId",
+        "tipo": "string",
+        "nombre": "branchId"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "POST",
+    "ruta": "/api/network/olt/:id/onu/adoptar",
+    "controlador": "OltController",
+    "fichero": "src/network/olt.controller.ts",
+    "handler": "adoptar",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard",
+      "PermissionsGuard",
+      "ModuloRedGuard"
+    ],
+    "areas": [
+      "tecnicos",
+      "administracion"
+    ],
+    "permisos": [
+      "APP_PERMISSIONS.NETWORK_OLT_MANAGE"
+    ],
+    "orPermission": [],
+    "areasFuente": [
+      "'tecnicos'",
+      "'administracion'"
+    ],
+    "permisosFuente": [
+      "APP_PERMISSIONS.NETWORK_OLT_MANAGE"
+    ],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": "AdoptarDto",
+    "params": [
+      "id"
+    ],
+    "query": [],
+    "parametros": [
+      {
+        "clase": "Param",
+        "llave": "id",
+        "tipo": "string",
+        "nombre": "id"
+      },
+      {
+        "clase": "Body",
+        "llave": null,
+        "tipo": "AdoptarDto",
+        "nombre": "dto"
+      },
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "GET",
+    "ruta": "/api/payment-imports/:id/file",
+    "controlador": "PaymentImportsController",
+    "fichero": "src/payment-imports/payment-imports.controller.ts",
+    "handler": "file",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "administracion"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'administracion'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [
+      "id"
+    ],
+    "query": [],
+    "parametros": [
+      {
+        "clase": "Param",
+        "llave": "id",
+        "tipo": "string",
+        "nombre": "id"
+      },
+      {
+        "clase": "Res",
+        "llave": null,
+        "tipo": "Response",
+        "nombre": "res"
+      }
+    ],
+    "usaRes": true,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "POST",
+    "ruta": "/api/payment-imports/:id/retry",
+    "controlador": "PaymentImportsController",
+    "fichero": "src/payment-imports/payment-imports.controller.ts",
+    "handler": "retry",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "administracion"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'administracion'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [
+      "id"
+    ],
+    "query": [],
+    "parametros": [
+      {
+        "clase": "Param",
+        "llave": "id",
+        "tipo": "string",
+        "nombre": "id"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "GET",
+    "ruta": "/api/subscribers/export.xlsx",
+    "controlador": "SubscribersController",
+    "fichero": "src/subscribers/subscribers.controller.ts",
+    "handler": "listXlsx",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "administracion",
+      "contabilidad",
+      "tecnicos",
+      "caja"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'administracion'",
+      "'contabilidad'",
+      "'tecnicos'",
+      "'caja'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [],
+    "query": [
+      "search",
+      "status",
+      "branchId",
+      "servicio",
+      "planId",
+      "tecnologia",
+      "cuenta",
+      "deuda",
+      "sortBy",
+      "sortDir"
+    ],
+    "parametros": [
+      {
+        "clase": "Res",
+        "llave": null,
+        "tipo": "Response",
+        "nombre": "res"
+      },
+      {
+        "clase": "Query",
+        "llave": "search",
+        "tipo": "string",
+        "nombre": "search"
+      },
+      {
+        "clase": "Query",
+        "llave": "status",
+        "tipo": "string",
+        "nombre": "status"
+      },
+      {
+        "clase": "Query",
+        "llave": "branchId",
+        "tipo": "string",
+        "nombre": "branchId"
+      },
+      {
+        "clase": "Query",
+        "llave": "servicio",
+        "tipo": "string",
+        "nombre": "servicio"
+      },
+      {
+        "clase": "Query",
+        "llave": "planId",
+        "tipo": "string",
+        "nombre": "planId"
+      },
+      {
+        "clase": "Query",
+        "llave": "tecnologia",
+        "tipo": "string",
+        "nombre": "tecnologia"
+      },
+      {
+        "clase": "Query",
+        "llave": "cuenta",
+        "tipo": "string",
+        "nombre": "cuenta"
+      },
+      {
+        "clase": "Query",
+        "llave": "deuda",
+        "tipo": "string",
+        "nombre": "deuda"
+      },
+      {
+        "clase": "Query",
+        "llave": "sortBy",
+        "tipo": "string",
+        "nombre": "sortBy"
+      },
+      {
+        "clase": "Query",
+        "llave": "sortDir",
+        "tipo": "string",
+        "nombre": "sortDir"
+      },
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      }
+    ],
+    "usaRes": true,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "POST",
+    "ruta": "/api/subscribers/:id/equipment/:equipmentId/return",
+    "controlador": "SubscribersController",
+    "fichero": "src/subscribers/subscribers.controller.ts",
+    "handler": "returnEquipment",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "administracion",
+      "caja"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'administracion'",
+      "'caja'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": "ReturnEquipmentDto",
+    "params": [
+      "id",
+      "equipmentId"
+    ],
+    "query": [],
+    "parametros": [
+      {
+        "clase": "Param",
+        "llave": "id",
+        "tipo": "string",
+        "nombre": "id"
+      },
+      {
+        "clase": "Param",
+        "llave": "equipmentId",
+        "tipo": "string",
+        "nombre": "equipmentId"
+      },
+      {
+        "clase": "Body",
+        "llave": null,
+        "tipo": "ReturnEquipmentDto",
+        "nombre": "dto"
+      },
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "POST",
+    "ruta": "/api/subscribers/:id/puntos",
+    "controlador": "SubscribersController",
+    "fichero": "src/subscribers/subscribers.controller.ts",
+    "handler": "setPuntos",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "administracion",
+      "contabilidad",
+      "tecnicos",
+      "caja"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'administracion'",
+      "'contabilidad'",
+      "'tecnicos'",
+      "'caja'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": "SetPuntosDto",
+    "params": [
+      "id"
+    ],
+    "query": [],
+    "parametros": [
+      {
+        "clase": "Param",
+        "llave": "id",
+        "tipo": "string",
+        "nombre": "id"
+      },
+      {
+        "clase": "Body",
+        "llave": null,
+        "tipo": "SetPuntosDto",
+        "nombre": "dto"
+      },
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "GET",
+    "ruta": "/api/support/agenda/calendario",
+    "controlador": "SupportController",
+    "fichero": "src/support/support.controller.ts",
+    "handler": "agendaCalendario",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "caja",
+      "administracion"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'caja'",
+      "'administracion'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [],
+    "query": [],
+    "parametros": [
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      },
+      {
+        "clase": "Query",
+        "llave": null,
+        "tipo": "Record<string, string>",
+        "nombre": "q"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "POST",
+    "ruta": "/api/support/agenda/mover-lote",
+    "controlador": "SupportController",
+    "fichero": "src/support/support.controller.ts",
+    "handler": "agendaMoverLote",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "caja",
+      "administracion"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'caja'",
+      "'administracion'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": "MoverLoteAgendaDto",
+    "params": [],
+    "query": [],
+    "parametros": [
+      {
+        "clase": "Body",
+        "llave": null,
+        "tipo": "MoverLoteAgendaDto",
+        "nombre": "dto"
+      },
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "GET",
+    "ruta": "/api/support/agenda/recorrido",
+    "controlador": "SupportController",
+    "fichero": "src/support/support.controller.ts",
+    "handler": "agendaRecorrido",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "caja",
+      "administracion"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'caja'",
+      "'administracion'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [],
+    "query": [
+      "(objeto)"
+    ],
+    "parametros": [
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      },
+      {
+        "clase": "Query",
+        "llave": null,
+        "tipo": "Record<string, string>",
+        "nombre": "q"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "POST",
+    "ruta": "/api/support/agenda/recorrido",
+    "controlador": "SupportController",
+    "fichero": "src/support/support.controller.ts",
+    "handler": "agendaAplicarRecorrido",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "caja",
+      "administracion"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'caja'",
+      "'administracion'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": "RecorridoAgendaDto",
+    "params": [],
+    "query": [],
+    "parametros": [
+      {
+        "clase": "Body",
+        "llave": null,
+        "tipo": "RecorridoAgendaDto",
+        "nombre": "dto"
+      },
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "GET",
+    "ruta": "/api/support/agenda/zonas",
+    "controlador": "SupportController",
+    "fichero": "src/support/support.controller.ts",
+    "handler": "agendaZonas",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "caja",
+      "administracion"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'caja'",
+      "'administracion'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [],
+    "query": [
+      "(objeto)"
+    ],
+    "parametros": [
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      },
+      {
+        "clase": "Query",
+        "llave": null,
+        "tipo": "Record<string, string>",
+        "nombre": "q"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "GET",
+    "ruta": "/api/support/agenda/semana",
+    "controlador": "SupportController",
+    "fichero": "src/support/support.controller.ts",
+    "handler": "agendaSemana",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "caja",
+      "administracion"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'caja'",
+      "'administracion'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [],
+    "query": [],
+    "parametros": [
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      },
+      {
+        "clase": "Query",
+        "llave": null,
+        "tipo": "Record<string, string>",
+        "nombre": "q"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "GET",
+    "ruta": "/api/support/mis-proximas",
+    "controlador": "SupportController",
+    "fichero": "src/support/support.controller.ts",
+    "handler": "misProximas",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "tecnicos",
+      "administracion",
+      "caja"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'tecnicos'",
+      "'administracion'",
+      "'caja'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [],
+    "query": [
+      "dias"
+    ],
+    "parametros": [
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      },
+      {
+        "clase": "Query",
+        "llave": "dias",
+        "tipo": "string",
+        "nombre": "dias"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "PATCH",
+    "ruta": "/api/support/tickets/:id",
+    "controlador": "SupportController",
+    "fichero": "src/support/support.controller.ts",
+    "handler": "updateTicket",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "tecnicos",
+      "administracion",
+      "caja"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'tecnicos'",
+      "'administracion'",
+      "'caja'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": "UpdateTicketDto",
+    "params": [
+      "id"
+    ],
+    "query": [],
+    "parametros": [
+      {
+        "clase": "Param",
+        "llave": "id",
+        "tipo": "string",
+        "nombre": "id"
+      },
+      {
+        "clase": "Body",
+        "llave": null,
+        "tipo": "UpdateTicketDto",
+        "nombre": "dto"
+      },
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "GET",
+    "ruta": "/api/treasury/beneficiaries",
+    "controlador": "TreasuryController",
+    "fichero": "src/treasury/treasury.controller.ts",
+    "handler": "beneficiaries",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "contabilidad",
+      "administracion",
+      "caja"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'contabilidad'",
+      "'administracion'",
+      "'caja'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [],
+    "query": [
+      "search",
+      "category"
+    ],
+    "parametros": [
+      {
+        "clase": "Query",
+        "llave": "search",
+        "tipo": "string",
+        "nombre": "search"
+      },
+      {
+        "clase": "Query",
+        "llave": "category",
+        "tipo": "string",
+        "nombre": "category"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "POST",
+    "ruta": "/api/treasury/beneficiaries",
+    "controlador": "TreasuryController",
+    "fichero": "src/treasury/treasury.controller.ts",
+    "handler": "createBeneficiary",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "contabilidad",
+      "administracion"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'contabilidad'",
+      "'administracion'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": "BeneficiaryDto",
+    "params": [],
+    "query": [],
+    "parametros": [
+      {
+        "clase": "Body",
+        "llave": null,
+        "tipo": "BeneficiaryDto",
+        "nombre": "dto"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "GET",
+    "ruta": "/api/treasury/comprobante/:archivo",
+    "controlador": "TreasuryController",
+    "fichero": "src/treasury/treasury.controller.ts",
+    "handler": "comprobantePublico",
+    "guards": [],
+    "areas": [],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [
+      "archivo"
+    ],
+    "query": [],
+    "parametros": [
+      {
+        "clase": "Param",
+        "llave": "archivo",
+        "tipo": "string",
+        "nombre": "archivo"
+      },
+      {
+        "clase": "Res",
+        "llave": null,
+        "tipo": "Response",
+        "nombre": "res"
+      }
+    ],
+    "usaRes": true,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": true
+  },
+  {
+    "controlador": "OnlinePaymentsController",
+    "fichero": "src/online-payments/online-payments.controller.ts",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [],
+    "query": [],
+    "parametros": [
+      {
+        "clase": "Query",
+        "llave": null,
+        "tipo": null,
+        "nombre": "query"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false,
+    "metodo": "GET",
+    "ruta": "/api/online-payments",
+    "handler": "list",
+    "areas": [
+      "contabilidad",
+      "administracion",
+      "gerencia"
+    ],
+    "areasFuente": [
+      "'contabilidad'",
+      "'administracion'",
+      "'gerencia'"
+    ]
+  },
+  {
+    "controlador": "OnlinePaymentsController",
+    "fichero": "src/online-payments/online-payments.controller.ts",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [],
+    "query": [],
+    "parametros": [
+      {
+        "clase": "Query",
+        "llave": null,
+        "tipo": null,
+        "nombre": "query"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false,
+    "metodo": "GET",
+    "ruta": "/api/online-payments/summary",
+    "handler": "summary",
+    "areas": [
+      "contabilidad",
+      "administracion",
+      "gerencia"
+    ],
+    "areasFuente": [
+      "'contabilidad'",
+      "'administracion'",
+      "'gerencia'"
+    ]
+  },
+  {
+    "controlador": "OnlinePaymentsController",
+    "fichero": "src/online-payments/online-payments.controller.ts",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": "RunPuenteDto",
+    "params": [],
+    "query": [],
+    "parametros": [
+      {
+        "clase": "Body",
+        "llave": null,
+        "tipo": "RunPuenteDto",
+        "nombre": "dto"
+      },
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false,
+    "metodo": "POST",
+    "ruta": "/api/online-payments/run",
+    "handler": "run",
+    "areas": [
+      "administracion"
+    ],
+    "areasFuente": [
+      "'administracion'"
+    ]
+  },
+  {
+    "controlador": "OnlinePaymentsController",
+    "fichero": "src/online-payments/online-payments.controller.ts",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [
+      "id"
+    ],
+    "query": [],
+    "parametros": [
+      {
+        "clase": "Param",
+        "llave": "id",
+        "tipo": "string",
+        "nombre": "id"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false,
+    "metodo": "GET",
+    "ruta": "/api/online-payments/:id",
+    "handler": "detail",
+    "areas": [
+      "contabilidad",
+      "administracion",
+      "gerencia"
+    ],
+    "areasFuente": [
+      "'contabilidad'",
+      "'administracion'",
+      "'gerencia'"
+    ]
+  },
+  {
+    "controlador": "OnlinePaymentsController",
+    "fichero": "src/online-payments/online-payments.controller.ts",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [
+      "subscriberId"
+    ],
+    "query": [],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false,
+    "parametros": [
+      {
+        "clase": "Param",
+        "llave": "subscriberId",
+        "tipo": "string",
+        "nombre": "subscriberId"
+      },
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      }
+    ],
+    "metodo": "GET",
+    "ruta": "/api/online-payments/clave/:subscriberId",
+    "handler": "credencial",
+    "areas": [
+      "contabilidad",
+      "administracion",
+      "gerencia",
+      "caja"
+    ],
+    "areasFuente": [
+      "'contabilidad'",
+      "'administracion'",
+      "'gerencia'",
+      "'caja'"
+    ]
+  },
+  {
+    "controlador": "OnlinePaymentsController",
+    "fichero": "src/online-payments/online-payments.controller.ts",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": "ClavePortalDto",
+    "params": [
+      "subscriberId"
+    ],
+    "query": [],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false,
+    "parametros": [
+      {
+        "clase": "Param",
+        "llave": "subscriberId",
+        "tipo": "string",
+        "nombre": "subscriberId"
+      },
+      {
+        "clase": "Body",
+        "llave": null,
+        "tipo": "ClavePortalDto",
+        "nombre": "dto"
+      },
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      }
+    ],
+    "metodo": "POST",
+    "ruta": "/api/online-payments/clave/:subscriberId",
+    "handler": "cambiarClave",
+    "areas": [
+      "contabilidad",
+      "administracion",
+      "caja"
+    ],
+    "areasFuente": [
+      "'contabilidad'",
+      "'administracion'",
+      "'caja'"
+    ]
   }
 ]

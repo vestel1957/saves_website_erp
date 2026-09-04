@@ -11,7 +11,8 @@ import { AuthUser } from '../auth/current-user.decorator';
  * bodegas por sede): cada quien ve su parcela.
  *
  *   · Equipos  → los que están A SU NOMBRE (`Equipment.assignedRaw` = su username).
- *   · Material → SU bodega personal (`MaterialWarehouse.technicianRef` = su username).
+ *   · Material → SU bodega personal (`MaterialWarehouse.technicianRef` = su username
+ *                 o su nombre, según se creara en el legacy o aquí).
  *   · Soporte  → las órdenes asignadas a él (por FK o por el texto libre del legacy).
  *
  * Tres trampas que conviene conocer antes de tocar esto:
@@ -45,7 +46,7 @@ export function esTecnicoDeCampo(user?: AuthUser | null): boolean {
 }
 
 /** La ficha de empleado del usuario logueado (lo que ata su sesión con el legacy). */
-export type FichaTecnico = { id: string; name: string; username: string | null };
+export type FichaTecnico = { id: string; name: string; username: string | null; legacyId: number | null };
 
 /**
  * Empleado detrás del usuario logueado. Se casa por correo y, como respaldo, por
@@ -58,7 +59,7 @@ export function fichaDelUsuario(prisma: PrismaService, user: AuthUser): Promise<
       banned: false,
       OR: [{ email: { equals: user.email, mode: 'insensitive' } }, { name: { equals: user.name, mode: 'insensitive' } }],
     },
-    select: { id: true, name: true, username: true },
+    select: { id: true, name: true, username: true, legacyId: true },
   });
 }
 
@@ -84,11 +85,55 @@ export async function bodegaMaterialDelTecnico(
   user: AuthUser,
 ): Promise<{ id: string; title: string } | null> {
   const ficha = await fichaDelUsuario(prisma, user);
-  if (!ficha?.username?.trim()) return null;
+  if (!ficha) return null;
+  // Se casa contra sus dos llaves —username y nombre— y no sólo contra el username:
+  // las bodegas heredadas del legacy lo guardan así, pero las que se crean aquí
+  // apuntan al empleado por su nombre. Exigir username dejaba sin bodega (y sin
+  // poder gastar material) a todo técnico dado de alta en nexus.
+  const claves = clavesDe(ficha).map(norm);
+  if (!claves.length) return null;
   const bodegas = await prisma.materialWarehouse.findMany({
     where: { technicianRef: { not: null } },
     select: { id: true, title: true, technicianRef: true },
   });
-  const suya = bodegas.find((b) => norm(b.technicianRef) === norm(ficha.username));
+  const suya = bodegas.find((b) => claves.includes(norm(b.technicianRef)));
   return suya ? { id: suya.id, title: suya.title } : null;
+}
+
+/**
+ * La CUENTA del técnico a partir de su nombre en una orden (`Ticket.assigned`), o
+ * `null` si no se le encuentra login.
+ *
+ * Es el camino inverso de `fichaDelUsuario`: allí se va de la sesión a la ficha,
+ * aquí del texto libre de la orden a la cuenta con la que entra. Se resuelve en dos
+ * saltos —texto → `Staff` → `User`— porque son las mismas tres columnas sucias de
+ * siempre: la orden guarda el nombre completo (las nuevas) o el username (las del
+ * legacy), y `User` y `Staff` sólo se casan por correo o por nombre exacto.
+ *
+ * Devolver `null` es normal y no es un error: hay técnicos del legacy sin login.
+ */
+export async function usuarioDelTecnico(
+  prisma: PrismaService,
+  tecnico: string | null | undefined,
+): Promise<{ id: string; name: string } | null> {
+  const clave = norm(tecnico);
+  if (!clave) return null;
+  const ficha = await prisma.staff.findFirst({
+    where: {
+      banned: false,
+      OR: [{ name: { equals: tecnico!.trim(), mode: 'insensitive' } }, { username: { equals: tecnico!.trim(), mode: 'insensitive' } }],
+    },
+    select: { name: true, email: true },
+  });
+  if (!ficha) return null;
+  return prisma.user.findFirst({
+    where: {
+      isActive: true,
+      OR: [
+        ...(ficha.email ? [{ email: { equals: ficha.email, mode: 'insensitive' as const } }] : []),
+        { name: { equals: ficha.name, mode: 'insensitive' as const } },
+      ],
+    },
+    select: { id: true, name: true },
+  });
 }

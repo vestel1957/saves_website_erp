@@ -9,6 +9,7 @@ import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { fmtDate } from "@/lib/format";
 import { mensajeDeError } from "@/lib/errores";
+import { ACCEPT_DOCUMENTO } from "@/lib/adjuntos";
 
 /** Mismos valores que `StaffDocumentKind` en el backend. */
 const TIPOS = [
@@ -164,7 +165,7 @@ export function DocumentosEmpleado({ staffId, puedeEditar }: { staffId: string; 
             </Field>
             <Field label="Archivo">
               <input ref={inputRef} type="file" disabled={subiendo}
-                accept=".pdf,.jpg,.jpeg,.png,.gif,.webp,.heic,.doc,.docx"
+                accept={ACCEPT_DOCUMENTO}
                 onChange={(e) => { const f = e.target.files?.[0]; if (f) void subir(f); }}
                 className="block w-full text-[12px] text-text-secondary file:mr-3 file:rounded-lg file:border-0 file:bg-brand file:px-3 file:py-2 file:text-[12px] file:font-semibold file:text-on-brand hover:file:opacity-90 disabled:opacity-50" />
             </Field>

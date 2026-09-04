@@ -26,6 +26,13 @@ export type AuthUser = {
    * sesión (`resolveUser`) uniendo las sedes marcadas con la sede de su caja.
    */
   sedes?: number[];
+  /**
+   * Caja asignada (`CashAccount.legacyId`), o `null`. La resuelve la sesión desde
+   * `User.cajaLegacyId`. Sirve para saber si a este usuario hay que ofrecerle SU caja
+   * —abrirla, ver su recaudo— aunque no sea cajera pura: ver `tieneCaja()` en
+   * `lib/treasury.ts`.
+   */
+  caja?: number | null;
 };
 
 /**

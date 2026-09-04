@@ -388,11 +388,17 @@ export const SCREENS: ScreenDef[] = [
   { href: '/reportes/anulaciones', label: 'Anulaciones (control)', module: 'Reportes', areas: ['gerencia'] },
   { href: '/reportes/actividad', label: 'Actividad en el sistema', module: 'Reportes', areas: ['gerencia'] },
 
-  // FACTURACIÓN es de contabilidad, NO de la cajera (decisión 2026-07-29): ella
-  // recauda sobre facturas que ya existen. Sigue llegando al DETALLE de una factura
-  // desde la ficha del cliente y desde su arqueo (`/facturacion/[id]` no es una
-  // pantalla del menú, se gatea por área), pero no administra ni emite notas.
-  { href: '/facturacion', label: 'Administrar facturas', module: 'Facturación', areas: ['contabilidad'] },
+  // FACTURACIÓN era de contabilidad y NO de la cajera (decisión 2026-07-29): ella
+  // recaudaba sobre facturas que ya existían. Se revisó el 2026-08-27: cobrar en
+  // ventanilla algo aún no facturado —instalación, traslado, venta de equipo,
+  // reconexión— la obligaba a pedirle la factura a contabilidad con el cliente
+  // delante, así que la pantalla pasa a ser suya también.
+  //
+  // Lo que ve NO es lo mismo que ve contabilidad: el listado ya venía acotado por
+  // sede (`whereSedePorSuscriptor`), y emitir el mes / anular / e-factura siguen
+  // gateados por `AREA_CONTABILIDAD` dentro de la propia pantalla. Notas de crédito
+  // y débito siguen fuera de su menú.
+  { href: '/facturacion', label: 'Administrar facturas', module: 'Facturación', areas: ['contabilidad', 'caja'] },
   { href: '/facturacion/notas', label: 'Notas crédito/débito', module: 'Facturación', areas: ['contabilidad'] },
   { href: '/facturacion/electronica', label: 'Facturas electrónicas', module: 'Facturación', areas: ['contabilidad'] },
   { href: '/cotizaciones', label: 'Cotizaciones', module: 'Facturación', areas: ['contabilidad'] },
@@ -425,6 +431,11 @@ export const SCREENS: ScreenDef[] = [
   // Importar pagos (Efecty) es un cargue masivo de corresponsal: aplica cientos de
   // pagos de golpe y dispara reconexiones. Queda en administración (2026-07-29).
   { href: '/tesoreria/importar-pagos', label: 'Importar pagos (Efecty)', module: 'Caja / Cobranza', areas: ['administracion'] },
+  // Pagos en línea: lo que entra por el portal del abonado (vestel.com.co/crm). Es
+  // consulta —el pago lo procesa el portal, aquí no se aplica un peso—, así que la
+  // ve quien ve el dinero. Forzar la pasada, que sí sale a tocar equipos, va con
+  // área administración en la propia ruta (ver OnlinePaymentsController).
+  { href: '/tesoreria/pagos-en-linea', label: 'Pagos en línea (portal)', module: 'Caja / Cobranza', areas: ['contabilidad', 'administracion', 'gerencia'] },
 
   { href: '/contabilidad', label: 'Resumen contable', module: 'Contabilidad', areas: ['contabilidad'] },
   { href: '/contabilidad/plan-de-cuentas', label: 'Plan de cuentas', module: 'Contabilidad', areas: ['contabilidad'] },
@@ -492,12 +503,23 @@ export const SCREENS: ScreenDef[] = [
   // técnico tiene su bodega (`MaterialWarehouse.technicianRef`)— y el acta queda
   // firmada cuando él la recibe. No ve el catálogo de material, ni bodegas, ni
   // categorías: sólo mueve lo que ya existe.
-  { href: '/inventario/traspasos', label: 'Traspasos', module: 'Inventario / Compras', areas: ['administracion', 'caja'] },
+  // Y el TÉCNICO desde 2026-09-03: la misma pantalla le sirve para DEVOLVER a la
+  // bodega principal de su sede el material que le sobró, que hasta ahora se le
+  // quedaba en el almacén porque sólo la cajera podía emitir traspasos.
+  { href: '/inventario/traspasos', label: 'Traspasos', module: 'Inventario / Compras', areas: ['administracion', 'caja', 'tecnicos'] },
   // "Bodegas de material" faltaba en el catálogo pese a llevar tiempo en el menú: sin
   // llave de pantalla sólo la veía el superusuario. Se le da al técnico porque es SU
   // bodega la que abre —el backend le devuelve una sola, la suya
   // (`InventoryService.warehouses`)— y a administración, que es la dueña del módulo.
   { href: '/inventario/bodegas', label: 'Bodegas de material', module: 'Inventario / Compras', areas: ['administracion', 'tecnicos'] },
+  // "Actas" NO estaba en el catálogo pese a llevar tiempo en el menú: sin llave de
+  // pantalla sólo la veía el superusuario, y el técnico —que es justo quien tiene
+  // que FIRMAR el recibido— no tenía por dónde entrar. Las tres áreas son las
+  // mismas que ya acepta la API (`InventoryController.TRASPASOS`): administración
+  // lleva el módulo, la cajera emite la entrega y el técnico firma que la recibió.
+  // Cada quien ve lo suyo: al técnico el backend le devuelve sólo las actas de su
+  // almacén (`InventoryService.actas`).
+  { href: '/inventario/actas', label: 'Actas de traspaso', module: 'Inventario / Compras', areas: ['administracion', 'tecnicos', 'caja'] },
   // COMPRAS fuera del perfil de caja (2026-07-29): quien recauda no ordena compras.
   { href: '/ordenes', label: 'Órdenes de compra', module: 'Inventario / Compras', areas: ['administracion'] },
   { href: '/ordenes/historial', label: 'Historial de órdenes', module: 'Inventario / Compras', areas: ['administracion'] },
@@ -635,8 +657,9 @@ export const ALL_ROLES: RoleDef[] = [
   {
     // Cajera (legacy "Caja y ventas", roleid=3). Rol acotado a la operación de SU
     // caja: apertura/cierre, ingresos, egresos, nueva transacción y transferencia,
-    // + clientes, tickets, agenda y la entrega de material a técnicos (traspasos).
-    // NO ve facturación (ni notas), ni la vista transversal de movimientos, ni el
+    // + clientes, tickets, agenda, la entrega de material a técnicos (traspasos) y,
+    // desde 2026-08-27, emitir facturas de ventanilla (Administrar facturas).
+    // NO ve las notas crédito/débito, ni la vista transversal de movimientos, ni el
     // cargue de Efecty, ni compras, ni e-factura, ni config. Su sección propia en
     // el sidebar se gatea con `area.caja`.
     key: 'area-caja',

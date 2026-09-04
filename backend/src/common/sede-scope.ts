@@ -181,3 +181,36 @@ export async function exigirSedeSuscriptor(
     throw new ForbiddenException('No tienes acceso a los datos de esta sede.');
   }
 }
+
+/**
+ * Las cajeras de una sede: quiénes pueden FIRMAR lo que llega a esa sede.
+ *
+ * Es el reverso de `sedesDe` —de la sede a las personas, y no al revés— y lo
+ * necesitan los dos flujos en los que quien recibe no es una persona concreta sino
+ * "la cajera de turno": la transferencia de equipos entre sedes
+ * (`network-write.service.ts`) y la devolución de material del técnico a la bodega
+ * principal de su sede (`inventory.service.ts`). Cualquiera de ellas puede firmar.
+ *
+ * OJO con la semántica de la lista vacía, que aquí se invierte respecto al resto
+ * del fichero: una cajera sin sede resuelta NO entra (no se le puede atribuir la
+ * sede de nadie), igual que en `network/bodega-scope.ts`. Es el lado seguro: se
+ * prefiere que no haya quién firme —el acta lo dice y queda el superusuario— a que
+ * la firme quien no responde por esa bodega.
+ */
+export async function cajerasDeSede(
+  prisma: PrismaService,
+  branchLegacy: number,
+): Promise<{ id: string; name: string }[]> {
+  const cajeras = await prisma.user.findMany({
+    where: { isActive: true, roles: { some: { role: { key: 'area-caja' } } } },
+    select: { id: true, name: true, sedesAccede: true, cajaLegacyId: true },
+  });
+  const suyas: { id: string; name: string }[] = [];
+  for (const c of cajeras) {
+    // `[P_CAJA]` a propósito: se resuelven como cajeras puras para que valga el
+    // respaldo por caja asignada, que es de donde sale la sede de la mitad de ellas.
+    const sedes = await resolverSedes(prisma, c, [P_CAJA]);
+    if (sedes.includes(branchLegacy)) suyas.push({ id: c.id, name: c.name });
+  }
+  return suyas;
+}

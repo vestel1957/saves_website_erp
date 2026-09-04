@@ -4,9 +4,11 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from './current-user.decorator';
 import { hashPassword, isLegacyHash, signToken, verifyPassword } from './crypto.util';
+import { normalizarCorreo } from './correo.util';
 import { ROLE_AREA_BY_KEY, SUPERADMIN_PERMISSION, SCREENS, screenKey, ALL_PERMISSIONS } from './permissions.catalog';
 import { PasswordOtpService } from '../common/signature/password-otp.service';
 import { resolverSedes } from '../common/sede-scope';
+import { csvSedesLegacy, sedesDeCsvLegacy } from './sedes-staff';
 
 export class AuthService {
   constructor(
@@ -75,11 +77,30 @@ export class AuthService {
       roles,
       permissions: [...permissions],
       sedes,
+      // Cuál es SU caja (si tiene). Va en la sesión para que la pantalla pueda
+      // ofrecerle abrir/mirar su caja sin preguntar por `/treasury/mi-caja` en cada
+      // pantalla — y sobre todo a quien no es cajera pura (un superusuario que
+      // atiende ventanilla), a quien hasta ahora no se le pintaba ese panel.
+      caja: user.cajaLegacyId ?? null,
     };
   }
 
+  /**
+   * Cuenta por correo SIN distinguir mayúsculas. El legacy guardaba el correo tal
+   * como lo tecleó cada quien ('DAVIDFUENTES752@GMAIL.COM' vs el mismo en minúsculas),
+   * y comparar exacto partía a la misma persona en dos: no entraba con su correo de
+   * siempre y su ficha la veía "sin cuenta", así que le creaban una segunda sin roles.
+   * Si por lo viejo hubiera dos filas, manda la activa más antigua (la del legacy).
+   */
+  private cuentaPorCorreo(email: string) {
+    return this.prisma.user.findFirst({
+      where: { email: { equals: normalizarCorreo(email), mode: 'insensitive' } },
+      orderBy: [{ isActive: 'desc' }, { createdAt: 'asc' }],
+    });
+  }
+
   async login(email: string, password: string, meta?: { ip?: string }) {
-    const user = await this.prisma.user.findUnique({ where: { email } });
+    const user = await this.cuentaPorCorreo(email);
     if (!user || !user.isActive || !verifyPassword(password, user.passwordHash)) {
       // Auditar el intento fallido: con quién (si el correo existe) y desde dónde.
       // NUNCA se guarda la contraseña; sólo el correo tecleado. Best-effort: un
@@ -101,28 +122,45 @@ export class AuthService {
     const perms = resolved?.permissions ?? [];
     const areas = perms.filter((p) => p.startsWith('area.')).map((p) => p.slice('area.'.length));
     const sa = perms.includes('system.admin');
-    const token = signToken({ id: user.id, email: user.email, name: user.name }, { areas, sa });
+    // El jefe de bodega no tiene área ninguna y aun así la API le abre las rutas de
+    // equipos (`@OrPermission(INV_PERMISSIONS.ADMIN)`): viaja como claim propio para
+    // que el edge pueda dejarlo pasar a su pantalla sin regalarle un área entera.
+    const inv = perms.includes('inventory.admin');
+    const token = signToken({ id: user.id, email: user.email, name: user.name }, { areas, sa, inv });
     return { token, user: resolved };
   }
 
   async createUser(input: { email: string; name: string; password: string; roleKeys?: string[]; sedesAccede?: number[] }) {
-    const exists = await this.prisma.user.findUnique({ where: { email: input.email } });
+    // El correo es la llave con la que se entra Y con la que la ficha del empleado
+    // encuentra su cuenta, así que se compara y se guarda normalizado: si no, el
+    // mismo correo escrito en mayúsculas nacía como una cuenta aparte, sin roles.
+    const email = normalizarCorreo(input.email);
+    const exists = await this.cuentaPorCorreo(email);
     if (exists) throw new BadRequestException('Ya existe un usuario con ese correo.');
 
     const roles = input.roleKeys?.length
       ? await this.prisma.role.findMany({ where: { key: { in: input.roleKeys } } })
       : [];
 
-    return this.prisma.user.create({
-      data: {
-        email: input.email,
-        name: input.name,
-        passwordHash: hashPassword(input.password),
-        sedesAccede: await this.validarSedes(input.sedesAccede),
-        roles: { create: roles.map((r) => ({ roleId: r.id })) },
-      },
-      select: { id: true, email: true, name: true, isActive: true, createdAt: true },
-    });
+    const sedes = await this.validarSedes(input.sedesAccede);
+    const [user] = await this.prisma.$transaction([
+      this.prisma.user.create({
+        data: {
+          email,
+          name: input.name,
+          passwordHash: hashPassword(input.password),
+          sedesAccede: sedes,
+          roles: { create: roles.map((r) => ({ roleId: r.id })) },
+        },
+        select: { id: true, email: true, name: true, isActive: true, createdAt: true },
+      }),
+      // Si la cuenta nace para un empleado que ya tiene ficha, su sede queda dicha
+      // en los dos sitios desde el primer día (ver `reflejarSedesEnStaff`). Sólo
+      // con sedes marcadas: al alta se dejan en blanco por omisión, y propagar ese
+      // vacío le borraría a la ficha la sede que ya traía del legacy.
+      ...(sedes.length ? [this.reflejarSedesEnStaff(email, sedes)] : []),
+    ]);
+    return user;
   }
 
   /**
@@ -149,6 +187,41 @@ export class AuthService {
       throw new BadRequestException(`No existe la sede: ${desconocidas.join(', ')}.`);
     }
     return unicas.sort((a, b) => a - b);
+  }
+
+  /**
+   * Refleja las sedes de la cuenta en la ficha del empleado (`Staff.sedeAccede`).
+   *
+   * La sede de una persona vive en dos columnas y sólo se escribía una: ver
+   * `sedes-staff.ts`. Sin esto, mover a un técnico de sede le cambia lo que ÉL ve
+   * pero no de qué sede ES, así que la cajera de su sede nueva no lo encuentra
+   * para asignarle órdenes ni entregarle material.
+   *
+   * Se casa por correo sin distinguir mayúsculas —el mismo enganche Staff↔User que
+   * usa la ficha— y con `updateMany`, que no se queja si el empleado no tiene ficha
+   * (usuarios que no son personal) o si el correo no casa con ninguna.
+   */
+  private reflejarSedesEnStaff(email: string, sedes: number[]) {
+    return this.prisma.staff.updateMany({
+      where: { email: { equals: email, mode: 'insensitive' } },
+      data: { sedeAccede: csvSedesLegacy(sedes) },
+    });
+  }
+
+  /**
+   * El camino inverso de `reflejarSedesEnStaff`: la ficha del empleado
+   * (`StaffService.update`, PATCH /staff/:id) también puede editar la sede
+   * directamente, y esa edición tiene que llegar igual a la cuenta de acceso — si
+   * no, queda el mismo hueco que dejó sin ver a Cristhian Mahecha, sólo que en el
+   * sentido contrario. `sedeAccede` llega ya en formato legacy ('-3-,-4-') porque
+   * así lo guarda `Staff`.
+   */
+  reflejarSedesDesdeStaff(email: string, sedeAccedeCsv: string | null) {
+    if (!email) return Promise.resolve();
+    return this.prisma.user.updateMany({
+      where: { email: { equals: email, mode: 'insensitive' } },
+      data: { sedesAccede: sedesDeCsvLegacy(sedeAccedeCsv) },
+    });
   }
 
   /** Sedes disponibles, para el selector de acceso por sede. */
@@ -478,21 +551,27 @@ export class AuthService {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new NotFoundException('Usuario no encontrado.');
 
-    const email = input.email?.trim();
+    const email = input.email ? normalizarCorreo(input.email) : '';
     if (email && email !== user.email) {
-      const taken = await this.prisma.user.findUnique({ where: { email } });
-      if (taken) throw new BadRequestException('Ya existe un usuario con ese correo.');
+      const taken = await this.cuentaPorCorreo(email);
+      if (taken && taken.id !== userId) throw new BadRequestException('Ya existe un usuario con ese correo.');
     }
 
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        name: input.name?.trim() || undefined,
-        email: email || undefined,
-        // `undefined` = no tocar; `[]` = quitar la restricción (ve todas las sedes).
-        sedesAccede: input.sedesAccede === undefined ? undefined : await this.validarSedes(input.sedesAccede),
-      },
-    });
+    // `undefined` = no tocar; `[]` = quitar la restricción (ve todas las sedes).
+    const sedes = input.sedesAccede === undefined ? undefined : await this.validarSedes(input.sedesAccede);
+
+    const cambios: Prisma.PrismaPromise<unknown>[] = [
+      this.prisma.user.update({
+        where: { id: userId },
+        data: { name: input.name?.trim() || undefined, email: email || undefined, sedesAccede: sedes },
+      }),
+    ];
+    // En la misma transacción que la cuenta: si la ficha se quedara sin actualizar,
+    // el empleado volvería a ser invisible para la cajera de su sede y nadie lo
+    // sabría hasta que alguien lo echara en falta.
+    if (sedes) cambios.push(this.reflejarSedesEnStaff(email || user.email, sedes));
+
+    await this.prisma.$transaction(cambios);
     return this.listUsers();
   }
 

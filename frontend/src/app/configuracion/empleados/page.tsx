@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
 import { Button } from "@/components/ui/Button";
@@ -35,7 +34,6 @@ const emptyForm = {
 };
 
 export default function EmpleadosPage() {
-  const router = useRouter();
   const { loading: authLoading, authFetch, isSuperadmin } = useAuth();
   const [stats, setStats] = useState<any>(null);
   const [areas, setAreas] = useState<any[]>([]);
@@ -163,7 +161,7 @@ export default function EmpleadosPage() {
             onSort={orden.onSort}
             rows={data?.items ?? []}
             empty={verInhabilitados ? "No hay empleados inhabilitados." : "No se encontraron empleados con esos criterios."}
-            onRowClick={(r: any) => router.push(`/configuracion/empleados/${r.id}`)}
+            rowHref={(r: any) => `/configuracion/empleados/${r.id}`}
             columns={[
               { key: "name", header: "Nombre", sortable: true, render: (r: any) => <span className="font-medium text-text-primary">{r.name}</span> },
               { key: "docNumber", header: "Documento", sortable: true, render: (r: any) => <span className="text-text-secondary">{r.docNumber ?? "—"}</span> },

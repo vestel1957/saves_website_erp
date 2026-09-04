@@ -85,6 +85,16 @@ describe('resolverSedes — respaldo por la caja asignada', () => {
     const prisma = prismaConCaja([5], 12, 3);
     expect(await sedesDe(prisma, usuario(['area.caja']))).toEqual([5]);
   });
+
+  // El caso que rompió el agendamiento (2026-08-28): hay superusuarios que además
+  // atienden ventanilla y tienen caja asignada. `agenda.service.ts` tenía su propia
+  // copia de esta regla, sin la exención del superusuario, y los dejaba viendo sólo
+  // la sede de su caja — pero sólo en la agenda: las mismas órdenes sí les salían en
+  // /soporte. Delegar aquí es lo que mantiene los dos alcances hablando igual.
+  it('al superusuario con caja asignada tampoco lo acota su caja', async () => {
+    const prisma = prismaConCaja([], 3, 2);
+    expect(await sedesDe(prisma, usuario(['system.admin', 'area.caja']))).toBeNull();
+  });
 });
 
 describe('esCajeraPura', () => {

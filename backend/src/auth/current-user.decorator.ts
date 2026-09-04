@@ -26,4 +26,14 @@ export interface AuthUser {
    * de pagos, chatbot) se arman a mano y no pasan por el middleware.
    */
   sedes?: number[];
+  /**
+   * Caja asignada (`CashAccount.legacyId`), o `null` si no tiene. Sale tal cual de
+   * `User.cajaLegacyId`: la sesión ya carga esa fila, así que no cuesta una consulta.
+   *
+   * NO es el alcance —quién puede ver qué caja lo decide `treasury/caja-scope.ts`—,
+   * es sólo "cuál es la suya". La pantalla lo necesita para ofrecerle su caja (abrirla,
+   * ver su recaudo) a quien la tiene aunque NO sea cajera pura: hay superusuarios que
+   * atienden ventanilla, y para ellos el panel de caja no se pintaba nunca.
+   */
+  caja?: number | null;
 }

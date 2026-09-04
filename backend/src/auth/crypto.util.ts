@@ -68,11 +68,19 @@ export interface TokenPayload {
   areas?: string[];
   /** true si el usuario es superadministrador (ve/accede a todo). */
   sa?: boolean;
+  /**
+   * true si es JEFE DE BODEGA (`inventory.admin`). Va aparte de `areas` porque no
+   * es un área: el rol no tiene ninguna, y sin embargo la API le abre las rutas de
+   * equipos con `@OrPermission(INV_PERMISSIONS.ADMIN)`. Sin este claim el edge lo
+   * rebotaba antes de cargar la única pantalla que tiene (Transferencias de
+   * equipos), que es justo la que él y nadie más puede armar.
+   */
+  inv?: boolean;
 }
 
 export function signToken(
   user: { id: string; email: string; name: string },
-  claims?: { areas?: string[]; sa?: boolean },
+  claims?: { areas?: string[]; sa?: boolean; inv?: boolean },
 ): string {
   const header = b64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
   const now = Math.floor(Date.now() / 1000);
@@ -85,7 +93,7 @@ export function signToken(
       exp: now + TOKEN_TTL_SECONDS,
       // Si se pasan claims, `areas` se emite SIEMPRE (aunque sea []) para que el
       // middleware distinga un token nuevo (enforce) de uno viejo sin el claim.
-      ...(claims ? { areas: claims.areas ?? [], sa: !!claims.sa } : {}),
+      ...(claims ? { areas: claims.areas ?? [], sa: !!claims.sa, inv: !!claims.inv } : {}),
     }),
   );
   const signature = createHmac('sha256', getSecret())

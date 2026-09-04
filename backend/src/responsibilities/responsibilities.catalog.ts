@@ -74,7 +74,13 @@ export const POSTS: PostDef[] = [
     group: 'Operación técnica',
     purpose: 'Reparte las órdenes de servicio entre los técnicos y responde por que se cierren.',
     alerts: ['Se creó una orden de servicio y nació sin técnico asignado'],
-    fallbackPermission: 'area.tecnicos',
+    // El respaldo es quien REPARTE, no el técnico de campo. Estaba en
+    // `area.tecnicos` y, con el cargo sin titular, cada orden sin asignar le sonaba
+    // a los 16 técnicos —justo a quienes no les toca hacer nada con ella: ellos
+    // atienden lo que les agendan, no lo reparten (`AgendaService.mover` se lo
+    // niega por escrito)—. `screen.soporte.agenda` es el tablero donde se reparte:
+    // caja y administración.
+    fallbackPermission: 'screen.soporte.agenda',
   },
   {
     slug: 'red-isp',
@@ -118,7 +124,11 @@ export const POSTS: PostDef[] = [
     label: 'Cartera y cobranza',
     group: 'Dinero',
     purpose: 'Persigue la deuda: morosos, acuerdos de pago y suspensiones por no pago.',
-    alerts: [],
+    alerts: ['Un cliente pidió un descuento al registrar una llamada de cobranza'],
+    // El legacy mandaba la solicitud de descuento a una persona por sede
+    // (`asignaciones.detalle = 'descuentos'`). Aquí se nombra un encargado; el
+    // respaldo evita que, mientras nadie lo esté, la petición no le llegue a nadie.
+    fallbackPermission: 'area.contabilidad',
   },
   // Tesorería/caja y facturación NO son cargos aparte: los tres frentes responden a
   // la misma persona (2026-07-30, decisión del negocio), así que se nombra una vez y
@@ -129,7 +139,11 @@ export const POSTS: PostDef[] = [
     group: 'Dinero',
     purpose:
       'Libros, impuestos y cierres contables. Responde también por la facturación (incluida la electrónica ante la DIAN) y por las cajas.',
-    alerts: [],
+    alerts: ['Aparecieron pagos borrados en el legacy: su cierre de caja quedó corto'],
+    // Sin respaldo, el aviso de caja no le llegaba a NADIE: la tabla de encargados
+    // está vacía y este cargo no tenía `fallbackPermission`. Un detector que no avisa
+    // no es un detector.
+    fallbackPermission: 'area.contabilidad',
   },
 
   // ── Administración ────────────────────────────────────────────────────────

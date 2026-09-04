@@ -8,6 +8,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ALL_PERMISSIONS, SUPERADMIN_PERMISSION } from '../auth/permissions.catalog';
 import { AuthService } from '../auth/auth.service';
 import { AuthUser } from '../auth/current-user.decorator';
+import { normalizarCorreo } from '../auth/correo.util';
+import { sedesDeCsvLegacy } from '../auth/sedes-staff';
 import { AuditService } from '../common/audit/audit.service';
 import { num } from '../common/money';
 import { CARGO_TECNICO, cargoLegacy } from './cargos-legacy';
@@ -189,12 +191,48 @@ export class StaffService {
 
   areas() { return this.prisma.staffArea.findMany({ orderBy: { name: 'asc' } }); }
 
-  create(dto: CreateStaffDto) {
+  /**
+   * Alta de empleado.
+   *
+   * El `username` se genera aquí y NO se pide en el formulario. No es un capricho
+   * heredado: media plataforma ata a la persona por ese texto —la bodega personal
+   * del técnico (`MaterialWarehouse.technicianRef`), los equipos a su nombre
+   * (`Equipment.assignedRaw`), el técnico de las órdenes viejas (`Ticket.assigned`)
+   * y la lista de quién puede recibir un traspaso—, porque en el legacy era la
+   * única llave que había. Un empleado creado aquí nacía sin él y quedaba invisible
+   * para todo eso: entraba al sistema, veía su agenda... y no podía gastar material
+   * ni tener un equipo asignado (le pasó al primer técnico dado de alta en nexus).
+   */
+  async create(dto: CreateStaffDto) {
     return this.prisma.staff.create({ data: {
       name: dto.name, docNumber: dto.docNumber ?? null, email: dto.email ?? null,
+      username: await this.usernameLibre(dto.name),
       role: dto.role ?? 2, areaId: dto.areaId ?? null, phone: dto.phone ?? null, eps: dto.eps ?? null, pension: dto.pension ?? null,
       rh: dto.rh ?? null, address: dto.address ?? null, city: dto.city ?? null,
     } });
+  }
+
+  /**
+   * Un `username` con el estilo del legacy ('DarwinVillamizar'): primer nombre y
+   * último apellido pegados, sin tildes ni espacios. Si ya existe se numera, porque
+   * la columna no es única en la base y dos homónimos compartiéndolo se robarían la
+   * bodega y los equipos el uno al otro.
+   */
+  private async usernameLibre(nombre: string): Promise<string> {
+    const partes = nombre
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^A-Za-z ]/g, ' ')
+      .split(/\s+/).filter(Boolean);
+    const cap = (w: string) => w[0].toUpperCase() + w.slice(1).toLowerCase();
+    const elegidas = partes.length > 1 ? [partes[0], partes[partes.length - 1]] : partes;
+    const raiz = elegidas.length ? elegidas.map(cap).join('') : `Empleado${Date.now()}`;
+    const parecidos = await this.prisma.staff.findMany({
+      where: { username: { startsWith: raiz, mode: 'insensitive' } },
+      select: { username: true },
+    });
+    const usados = new Set(parecidos.map((s) => (s.username ?? '').trim().toLowerCase()));
+    if (!usados.has(raiz.toLowerCase())) return raiz;
+    for (let n = 2; ; n++) if (!usados.has(`${raiz}${n}`.toLowerCase())) return `${raiz}${n}`;
   }
   /**
    * Edición parcial del empleado. Los campos ausentes en el DTO llegan como
@@ -227,6 +265,12 @@ export class StaffService {
     // Las órdenes viejas muestran al técnico traduciendo el username al nombre:
     // si acaban de corregirle el nombre, esa traducción ya está vieja.
     olvidarNombres();
+    // Esta pantalla también puede tocar la sede directamente (no sólo la de
+    // Usuarios): que llegue igual a la cuenta de acceso, o el mismo hueco que dejó
+    // sin ver a Cristhian Mahecha reaparece al revés (ver `auth/sedes-staff.ts`).
+    if (dto.sedeAccede !== undefined && after.email) {
+      void this.auth.reflejarSedesDesdeStaff(after.email, after.sedeAccede);
+    }
     void this.audit.record({
       userId: actor?.id, action: 'staff.update', entity: 'staff', entityId: id,
       before: { name: before.name, docNumber: before.docNumber, email: before.email, role: before.role, areaId: before.areaId },
@@ -257,9 +301,13 @@ export class StaffService {
   private async linkedUser(staffId: string) {
     const e = await this.prisma.staff.findUnique({ where: { id: staffId } });
     if (!e) throw new NotFoundException('Empleado no encontrado');
+    // Sin distinguir mayúsculas: el correo del legacy viene como lo tecleó cada quien
+    // y comparándolo exacto la ficha decía "sin cuenta" a quien sí la tenía (y le
+    // creaban una segunda, sin roles). Ver `normalizarCorreo`.
     const user = e.email
-      ? await this.prisma.user.findUnique({
-          where: { email: e.email },
+      ? await this.prisma.user.findFirst({
+          where: { email: { equals: normalizarCorreo(e.email), mode: 'insensitive' } },
+          orderBy: [{ isActive: 'desc' }, { createdAt: 'asc' }],
           include: {
             roles: { include: { role: { include: { permissions: { include: { permission: true } } } } } },
             permissionOverrides: { include: { permission: true } },
@@ -423,7 +471,11 @@ export class StaffService {
     if (!email) throw new BadRequestException('El empleado no tiene correo. Agrégale un correo antes de crear el acceso.');
 
     const tempPassword = dto.password?.trim() || genTempPassword();
-    await this.auth.createUser({ email, name: staff.name, password: tempPassword, roleKeys: dto.roleKeys ?? [] });
+    // La ficha puede traer sede de antes (importada del legacy o puesta a mano): si
+    // la cuenta nueva no la hereda, nace sin restricción y ve todas las sedes hasta
+    // que alguien se la marque a mano en Usuarios (ver `auth/sedes-staff.ts`).
+    const sedesAccede = sedesDeCsvLegacy(staff.sedeAccede);
+    await this.auth.createUser({ email, name: staff.name, password: tempPassword, roleKeys: dto.roleKeys ?? [], sedesAccede });
     this.logAccess(staffId, 'Creó el acceso al sistema', actor, { email, roleKeys: dto.roleKeys ?? [] });
 
     const perms = await this.permissions(staffId);
@@ -447,7 +499,12 @@ export class StaffService {
     if (!staff) throw new NotFoundException('Empleado no encontrado');
     if (staff.banned === banned) return this.detail(staffId);
 
-    const user = staff.email ? await this.prisma.user.findUnique({ where: { email: staff.email } }) : null;
+    const user = staff.email
+      ? await this.prisma.user.findFirst({
+          where: { email: { equals: normalizarCorreo(staff.email), mode: 'insensitive' } },
+          orderBy: [{ isActive: 'desc' }, { createdAt: 'asc' }],
+        })
+      : null;
     if (user && user.isActive === banned) await this.auth.setUserActive(user.id, !banned);
 
     await this.prisma.staff.update({ where: { id: staffId }, data: { banned } });

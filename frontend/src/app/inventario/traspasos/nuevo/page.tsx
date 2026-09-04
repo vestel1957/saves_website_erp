@@ -22,18 +22,24 @@ import { mensajeDeError } from "@/lib/errores";
  * de qué técnico y permitía designar a cualquiera. Ahora se elige el modo:
  *
  *  · A TÉCNICO   — se escoge la persona, no su bodega. Es lo que hace la cajera.
+ *    El material puede salir de una bodega general o —bodega/admin— del almacén
+ *    de otro técnico, que es como se pasa material de un técnico a otro.
  *  · ENTRE BODEGAS — el movimiento clásico de almacén, sólo para bodega/admin.
+ *  · DEVOLVER (2026-09-03) — el del TÉCNICO, y el único que él ve: lo que le sobró
+ *    vuelve de su bodega a la bodega principal de su sede, y la firma la cajera de
+ *    esa sede. Aquí no se elige origen (es su bodega) ni quién recibe.
  *
  * Quién recibe NO se elige: es el técnico, o el encargado de la bodega destino.
  * Todo lo que se puede ver y hacer lo decide el backend (`/inventory/transfer/context`)
  * y lo vuelve a validar al emitir; aquí no hay reglas de negocio duplicadas.
  */
 
-type Modo = "tecnico" | "bodega";
+type Modo = "tecnico" | "bodega" | "devolucion";
 
 type Bodega = {
   id: string; title: string; extra: string | null;
-  isTechnician: boolean; managerId: string | null; managerName: string | null; materials: number;
+  isTechnician: boolean; technicianName: string | null; technicianRetired: boolean;
+  managerId: string | null; managerName: string | null; materials: number;
 };
 
 type Tecnico = {
@@ -42,9 +48,18 @@ type Tecnico = {
   sedes: number[]; sedeNames: string[]; materials: number;
 };
 
+/** Bodega principal de una sede: a donde el técnico devuelve, y quién la firma. */
+type Destino = { id: string; title: string; branchLegacy: number; branchName: string; receivers: string[] };
+
 type Contexto = {
   restricted: boolean;
+  canTechnicianMode: boolean;
   canWarehouseMode: boolean;
+  canReturnMode: boolean;
+  returnFrom?: { id: string; title: string } | null;
+  returnTargets?: Destino[];
+  /** Por qué este técnico no puede devolver (sin bodega, sin sede, sede sin principal). */
+  returnBlocked?: string | null;
   onlyConsumable: boolean;
   mySedeNames: string[];
   warehouses: Bodega[];
@@ -76,7 +91,17 @@ export default function NuevoTraspasoPage() {
     if (authLoading) return;
     void (async () => {
       try {
-        setCtx(await (await authFetch("/inventory/transfer/context")).json());
+        const d: Contexto = await (await authFetch("/inventory/transfer/context")).json();
+        setCtx(d);
+        // El modo inicial es el primero que pueda usar: el técnico sólo devuelve, la
+        // cajera sólo entrega, bodega tiene los dos de siempre.
+        setModo(d.canReturnMode ? "devolucion" : d.canTechnicianMode ? "tecnico" : "bodega");
+        // Devolver no tiene nada que elegir salvo el material: el origen es su bodega
+        // y el destino, si su sede es una sola, ya queda puesto.
+        if (d.canReturnMode && d.returnFrom) {
+          setFromWarehouseId(d.returnFrom.id);
+          if (d.returnTargets?.length === 1) setToWarehouseId(d.returnTargets[0].id);
+        }
       } catch (e) {
         toast(mensajeDeError(e, "No se pudo cargar el formulario de traspaso"), "alert-triangle");
       }
@@ -98,9 +123,25 @@ export default function NuevoTraspasoPage() {
     }
   }, [authFetch, ctx]);
 
+  // El material de su bodega se carga solo (el selector de origen no se le pinta).
+  useEffect(() => {
+    if (ctx?.canReturnMode && ctx.returnFrom) void loadMaterials(ctx.returnFrom.id);
+    // `loadMaterials` depende de `ctx`: se dispara justo cuando llega el contexto.
+  }, [ctx, loadMaterials]);
+
   // Cambiar de modo invalida el destino (son listas distintas) pero conserva el
   // origen y lo ya marcado: es normal dudar entre entregarlo o moverlo de bodega.
-  const cambiarModo = (m: Modo) => { setModo(m); setToWarehouseId(""); };
+  const cambiarModo = (m: Modo) => {
+    setModo(m);
+    setToWarehouseId("");
+    // Devolver no se elige: al entrar en ese modo el origen vuelve a ser su bodega
+    // (y el destino, si sólo tiene una sede, queda puesto).
+    if (m === "devolucion" && ctx?.returnFrom) {
+      setFromWarehouseId(ctx.returnFrom.id);
+      if (ctx.returnTargets?.length === 1) setToWarehouseId(ctx.returnTargets[0].id);
+      void loadMaterials(ctx.returnFrom.id);
+    }
+  };
 
   const onFromChange = (v: string) => {
     setFromWarehouseId(v);
@@ -125,8 +166,8 @@ export default function NuevoTraspasoPage() {
     setSelected((s) => ({ ...s, [m.id]: val === "" ? "" : String(n) }));
   };
 
-  // Bodegas ofrecidas como origen: en modo técnico sólo las generales (no se saca
-  // material del almacén personal de otro técnico para dárselo a un tercero).
+  // Bodegas ofrecidas como origen; quién puede sacar de dónde lo decide el backend
+  // (a la cajera sólo le llegan las generales) y lo revalida al emitir.
   const origenes = useMemo(
     () => (!ctx ? [] : modo === "tecnico" ? ctx.originWarehouses : ctx.warehouses),
     [ctx, modo],
@@ -141,10 +182,53 @@ export default function NuevoTraspasoPage() {
     () => ctx?.warehouses.find((w) => w.id === toWarehouseId) ?? null,
     [ctx, toWarehouseId],
   );
+  // La bodega principal elegida en el modo devolución (y quién la firma).
+  const destinoDevolucion = useMemo(
+    () => ctx?.returnTargets?.find((t) => t.id === toWarehouseId) ?? null,
+    [ctx, toWarehouseId],
+  );
+
   const recibe = useMemo(() => {
+    if (modo === "devolucion") {
+      if (!destinoDevolucion) return null;
+      // No es una persona designada: firma la cajera que esté en esa sede.
+      return {
+        nombre: `Cajera de ${destinoDevolucion.branchName}`,
+        rol: destinoDevolucion.receivers.length
+          ? destinoDevolucion.receivers.join(", ")
+          : "Nadie tiene esa sede asignada: sólo el superusuario podría firmarla",
+      };
+    }
     if (modo === "tecnico") return tecnicoElegido ? { nombre: tecnicoElegido.name, rol: "Técnico" } : null;
     return bodegaDestino?.managerName ? { nombre: bodegaDestino.managerName, rol: "Encargado de la bodega" } : null;
-  }, [modo, tecnicoElegido, bodegaDestino]);
+  }, [modo, tecnicoElegido, bodegaDestino, destinoDevolucion]);
+
+  // Los almacenes de técnico se llaman “Almacen Omar” o “Depurados”: sin el nombre
+  // de su dueño no hay forma de dar con el técnico del que se quiere sacar material.
+  const etiquetaBodega = (w: Bodega) =>
+    w.isTechnician
+      ? `${w.technicianName ?? w.title}${w.technicianName ? ` · ${w.title}` : ""}${w.technicianRetired ? " · ya no trabaja aquí" : ""}`
+      : w.title;
+
+  // Separadas en dos grupos: en una lista de 61 entradas, las 38 de técnico
+  // sepultaban a las bodegas generales (y viceversa).
+  const opcionesBodega = (lista: Bodega[], deshabilitar: string) => {
+    const porEtiqueta = (a: Bodega, b: Bodega) => etiquetaBodega(a).localeCompare(etiquetaBodega(b), "es");
+    const generales = lista.filter((w) => !w.isTechnician).sort(porEtiqueta);
+    // Ordenados por el nombre del técnico, que es lo que se lee (y no por el
+    // título del almacén, con el que el backend los devuelve).
+    const tecnicos = lista.filter((w) => w.isTechnician).sort(porEtiqueta);
+    const opcion = (w: Bodega) => (
+      <option key={w.id} value={w.id} disabled={w.id === deshabilitar}>{etiquetaBodega(w)}</option>
+    );
+    return (
+      <>
+        <option value="">Seleccionar…</option>
+        {generales.length > 0 && <optgroup label="Bodegas">{generales.map(opcion)}</optgroup>}
+        {tecnicos.length > 0 && <optgroup label="Almacenes de técnico">{tecnicos.map(opcion)}</optgroup>}
+      </>
+    );
+  };
 
   const shownMaterials = useMemo(() => {
     const q = matFilter.trim().toLowerCase();
@@ -163,7 +247,10 @@ export default function NuevoTraspasoPage() {
 
   const submit = async () => {
     if (!fromWarehouseId) { toast("Selecciona la bodega de donde sale el material"); return; }
-    if (!toWarehouseId) { toast(modo === "tecnico" ? "Selecciona el técnico que recibe" : "Selecciona la bodega destino"); return; }
+    if (!toWarehouseId) {
+      toast(modo === "tecnico" ? "Selecciona el técnico que recibe" : modo === "devolucion" ? "Selecciona la sede a la que devuelves" : "Selecciona la bodega destino");
+      return;
+    }
     if (fromWarehouseId === toWarehouseId) { toast("El origen y el destino no pueden ser el mismo"); return; }
     const items = Object.entries(selected).filter(([, q]) => Number(q) > 0).map(([materialId, q]) => ({ materialId, qty: Number(q) }));
     if (items.length === 0) { toast("Agrega al menos un ítem con cantidad"); return; }
@@ -175,7 +262,12 @@ export default function NuevoTraspasoPage() {
       });
       const d = await res.json();
       if (!res.ok) throw new Error(d?.message || "Error");
-      toast(`Traspaso emitido · ${d?.items ?? items.length} ítem(s) en tránsito`, "check");
+      toast(
+        modo === "devolucion"
+          ? `Devolución enviada · ${d?.items ?? items.length} ítem(s); la firma la cajera de ${destinoDevolucion?.branchName ?? "tu sede"}`
+          : `Traspaso emitido · ${d?.items ?? items.length} ítem(s) en tránsito`,
+        "check",
+      );
       router.push("/inventario/traspasos");
     } catch (e) {
       toast(mensajeDeError(e, "No se pudo realizar el traspaso"), "alert-triangle");
@@ -187,45 +279,84 @@ export default function NuevoTraspasoPage() {
   if (authLoading || !ctx) return <PageSkeleton />;
 
   const tabs = [
-    { key: "tecnico" as Modo, label: "A técnico", icon: "user", count: ctx.technicians.length },
+    ...(ctx.canTechnicianMode ? [{ key: "tecnico" as Modo, label: "A técnico", icon: "user", count: ctx.technicians.length }] : []),
     ...(ctx.canWarehouseMode ? [{ key: "bodega" as Modo, label: "Entre bodegas", icon: "warehouse", count: ctx.warehouses.length }] : []),
+    ...(ctx.canReturnMode ? [{ key: "devolucion" as Modo, label: "Devolver material", icon: "package-x" }] : []),
   ];
+  const destinos = ctx.returnTargets ?? [];
 
   return (
     <>
       <PageHeading
         icon="receipt"
-        title="Nuevo traspaso"
-        subtitle={modo === "tecnico" ? "Entrega de material a un técnico" : "Movimiento de material entre bodegas"}
+        title={modo === "devolucion" ? "Devolver material" : "Nuevo traspaso"}
+        subtitle={
+          modo === "devolucion" ? "Lo que te sobró vuelve a la bodega de tu sede"
+            : modo === "tecnico" ? "Entrega de material a un técnico"
+            : "Movimiento de material entre bodegas"
+        }
         showBack
       />
 
-      {/* Con un solo modo disponible (caja) la tira sobra: se dice en texto. */}
+      {/* Con un solo modo disponible (caja, técnico) la tira sobra: se dice en texto. */}
       {tabs.length > 1
         ? <TabStrip tabs={tabs} active={modo} onChange={cambiarModo} className="mb-4" />
-        : (
+        : modo === "devolucion" ? (
+          <p className="mb-4 flex flex-wrap items-center gap-1.5 rounded-lg bg-surface-2 px-3 py-2 text-[12px] text-text-secondary">
+            <Icon name="info" size={14} className="text-text-tertiary" />
+            <span>Devuelves lo que te sobró de <strong>{ctx.returnFrom?.title ?? "tu bodega"}</strong>; lo recibe y firma la cajera de tu sede.</span>
+          </p>
+        ) : (
           <p className="mb-4 flex flex-wrap items-center gap-1.5 rounded-lg bg-surface-2 px-3 py-2 text-[12px] text-text-secondary">
             <Icon name="info" size={14} className="text-text-tertiary" />
             Entregas material <strong>consumible</strong> a los técnicos de {ctx.mySedeNames.length ? <strong>{ctx.mySedeNames.join(", ")}</strong> : "tu sede"}.
           </p>
         )}
 
+      {/* Sin bodega, sin sede o sin bodega principal no hay devolución posible: se
+          dice con el porqué y a quién pedírselo, en vez de un selector vacío. */}
+      {modo === "devolucion" && ctx.returnBlocked && (
+        <p className="mb-4 flex items-start gap-2 rounded-lg bg-warning-soft px-3 py-2 text-[12px] text-warning-text">
+          <Icon name="alert-triangle" size={14} className="mt-0.5 shrink-0" />
+          {ctx.returnBlocked}
+        </p>
+      )}
+
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
         {/* ── Columna izquierda: qué se mueve ───────────────────────────────── */}
         <div className="flex flex-col gap-3">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <Field label="Sale de la bodega" required>
-              <Select value={fromWarehouseId} onChange={(e) => onFromChange(e.target.value)}>
-                <option value="">Seleccionar…</option>
-                {origenes.map((w) => (
-                  <option key={w.id} value={w.id} disabled={w.id === toWarehouseId}>
-                    {w.title}{w.isTechnician ? " · almacén de técnico" : ""}
-                  </option>
-                ))}
-              </Select>
-            </Field>
+            {/* Devolver no tiene origen que elegir: sale de SU bodega y punto. */}
+            {modo === "devolucion" ? (
+              <Field label="Sale de tu bodega">
+                <div className="flex h-10 items-center gap-2 rounded-lg border border-border-subtle bg-surface-2 px-3 text-[13px] text-text-secondary">
+                  <Icon name="warehouse" size={14} className="text-text-tertiary" />
+                  <span className="truncate">{ctx.returnFrom?.title ?? "—"}</span>
+                </div>
+              </Field>
+            ) : (
+              <Field label="Sale de la bodega" required>
+                <Select value={fromWarehouseId} onChange={(e) => onFromChange(e.target.value)}>
+                  {opcionesBodega(origenes, toWarehouseId)}
+                </Select>
+              </Field>
+            )}
 
-            {modo === "tecnico" ? (
+            {modo === "devolucion" ? (
+              <Field label="Vuelve a la bodega de" required hint={destinos.length > 1 ? "Trabajas en varias sedes" : undefined}>
+                {destinos.length > 1 ? (
+                  <Select value={toWarehouseId} onChange={(e) => setToWarehouseId(e.target.value)}>
+                    <option value="">Seleccionar sede…</option>
+                    {destinos.map((t) => <option key={t.id} value={t.id}>{t.branchName} · {t.title}</option>)}
+                  </Select>
+                ) : (
+                  <div className="flex h-10 items-center gap-2 rounded-lg border border-border-subtle bg-surface-2 px-3 text-[13px] text-text-secondary">
+                    <Icon name="map-pin" size={14} className="text-text-tertiary" />
+                    <span className="truncate">{destinos[0] ? `${destinos[0].branchName} · ${destinos[0].title}` : "—"}</span>
+                  </div>
+                )}
+              </Field>
+            ) : modo === "tecnico" ? (
               <Field label="Se le entrega a" required hint={ctx.restricted ? "Técnicos de tu sede" : undefined}>
                 <Select value={toWarehouseId} onChange={(e) => setToWarehouseId(e.target.value)}>
                   <option value="">Seleccionar técnico…</option>
@@ -239,12 +370,7 @@ export default function NuevoTraspasoPage() {
             ) : (
               <Field label="Entra a la bodega" required>
                 <Select value={toWarehouseId} onChange={(e) => setToWarehouseId(e.target.value)}>
-                  <option value="">Seleccionar…</option>
-                  {ctx.warehouses.map((w) => (
-                    <option key={w.id} value={w.id} disabled={w.id === fromWarehouseId}>
-                      {w.title}{w.isTechnician ? " · almacén de técnico" : ""}
-                    </option>
-                  ))}
+                  {opcionesBodega(ctx.warehouses, fromWarehouseId)}
                 </Select>
               </Field>
             )}
@@ -374,13 +500,13 @@ export default function NuevoTraspasoPage() {
           </Field>
 
           <p className="text-[11px] text-text-tertiary">
-            El material sale del origen y queda <strong>en tránsito</strong> hasta que {recibe?.nombre ?? "el destino"} confirme la recepción.
+            El material sale {modo === "devolucion" ? "de tu bodega" : "del origen"} y queda <strong>en tránsito</strong> hasta que {recibe?.nombre ?? "el destino"} confirme la recepción.
           </p>
 
           <div className="flex items-center gap-2">
             <Button variant="ghost" size="sm" onClick={() => router.push("/inventario/traspasos")} disabled={submitting}>Cancelar</Button>
             <Button variant="primary" size="md" onClick={submit} disabled={submitting || summary.items === 0} className="flex-1">
-              <Icon name="check" size={14} />{submitting ? "Procesando…" : "Emitir traspaso"}
+              <Icon name="check" size={14} />{submitting ? "Procesando…" : modo === "devolucion" ? "Devolver material" : "Emitir traspaso"}
             </Button>
           </div>
         </div>

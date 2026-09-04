@@ -105,6 +105,8 @@ export default function OrdenesServiciosPage() {
             onSort={orden.onSort}
             rows={data?.items ?? []}
             empty="No se encontraron órdenes de servicio."
+            // La fila entera abre la orden, no sólo el N°.
+            rowHref={(r: any) => `/ordenes/${r.id}`}
             columns={[
               { key: "tid", header: "N°", sortable: true, render: (r: any) => <Link href={`/ordenes/${r.id}`} className="font-mono font-medium text-brand hover:underline">{r.tid}</Link> },
               { key: "supplier", header: "Proveedor", sortable: true, render: (r: any) => <span className="font-medium text-text-primary">{r.supplier}</span> },

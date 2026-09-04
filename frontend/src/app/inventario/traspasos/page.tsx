@@ -13,6 +13,7 @@ import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { Modal } from "@/components/Modal";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
+import { esTecnico } from "@/lib/support";
 import { useOrden } from "@/lib/useOrden";
 import { cop } from "@/lib/subscribers";
 import { mensajeDeError } from "@/lib/errores";
@@ -32,7 +33,10 @@ function fmtDate(v: string | null | undefined): string {
 
 export default function TraspasosPage() {
   const router = useRouter();
-  const { loading: authLoading, authFetch } = useAuth();
+  const { loading: authLoading, authFetch, user } = useAuth();
+  // Al técnico esta pantalla le sirve para UNA cosa: devolver a la bodega de su sede
+  // lo que le sobró (el backend le sirve ese único modo), y sólo ve sus actas.
+  const devuelve = esTecnico(user);
 
   const [actas, setActas] = useState<any>(null);
   const [actaPage, setActaPage] = useState(1);
@@ -151,11 +155,15 @@ export default function TraspasosPage() {
   return (
     <>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <PageHeading icon="receipt" title="Traspasos" subtitle="Movimiento de materiales entre bodegas" />
+        <PageHeading
+          icon="receipt"
+          title={devuelve ? "Devoluciones de material" : "Traspasos"}
+          subtitle={devuelve ? "Lo que devuelves a la bodega de tu sede" : "Movimiento de materiales entre bodegas"}
+        />
         {/* El formulario vive en su propia pantalla desde 2026-07-30: elegir modo
             (a técnico / entre bodegas) más el picker de material no cabía en un modal. */}
         <Button variant="primary" size="sm" onClick={() => router.push("/inventario/traspasos/nuevo")}>
-          <Icon name="plus" size={14} />Nuevo traspaso
+          <Icon name="plus" size={14} />{devuelve ? "Devolver material" : "Nuevo traspaso"}
         </Button>
       </div>
 

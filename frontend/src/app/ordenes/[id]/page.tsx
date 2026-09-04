@@ -18,6 +18,8 @@ import { useAuth } from "@/context/AuthProvider";
 import { PERM } from "@/lib/auth";
 import { cop } from "@/lib/subscribers";
 import { mensajeDeError } from "@/lib/errores";
+import { ACCEPT_ADJUNTO, ACCEPT_IMAGEN_PDF } from "@/lib/adjuntos";
+import { ComprobanteCell } from "@/components/treasury/ComprobanteCell";
 
 type EditRow = { product: string; qty: string; price: string; taxRate: string };
 
@@ -45,6 +47,14 @@ export default function OrdenDetallePage() {
   const [payAmount, setPayAmount] = useState("");
   const [payMethod, setPayMethod] = useState("Cash");
   const [payCash, setPayCash] = useState("");
+  // Fecha del pago y motivo. La fecha manda sobre en qué día (y en qué cierre)
+  // entra el egreso, así que hay que poder registrar el de ayer sin que caiga hoy.
+  const [payDate, setPayDate] = useState("");
+  const [payDesc, setPayDesc] = useState("");
+  // Soporte del pago (opcional). No es un adjunto de la orden: se guarda en el EGRESO
+  // que crea el pago, que es donde tesorería lo revisa. Antes había que subirlo dos
+  // veces —aquí y en el movimiento de caja— para verlo en los dos sitios.
+  const [payFile, setPayFile] = useState<File | null>(null);
   const [cashAccounts, setCashAccounts] = useState<{ id: number; name: string }[]>([]);
   const [paying, setPaying] = useState(false);
   // Notas / retenciones
@@ -67,6 +77,11 @@ export default function OrdenDetallePage() {
   const [editNotes, setEditNotes] = useState("");
   const [editSaving, setEditSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  // Adjunto elegido que TODAVÍA no se ha subido: mientras esté aquí se pregunta si es
+  // el soporte de un pago (ver `elegirAdjunto`). `adjuntoPago` es el pago escogido,
+  // "" = va sólo a la orden.
+  const [adjuntoPendiente, setAdjuntoPendiente] = useState<File | null>(null);
+  const [adjuntoPago, setAdjuntoPago] = useState("");
   const puedeAprobar = can(PERM.PURCHASES_APPROVE);
 
   const load = useCallback(async () => {
@@ -97,6 +112,9 @@ export default function OrdenDetallePage() {
 
   function openPay() {
     setPayAmount(String(saldo || ""));
+    setPayDate(new Date().toISOString().slice(0, 10));
+    setPayDesc("");
+    setPayFile(null);
     setPayOpen(true);
     void authFetch("/treasury/cash-accounts").then((r) => (r.ok ? r.json() : [])).then((a) => { setCashAccounts(a); if (a[0]) setPayCash(String(a[0].id)); }).catch(() => {});
   }
@@ -104,14 +122,36 @@ export default function OrdenDetallePage() {
   async function submitPay() {
     const amount = Number(payAmount) || 0;
     if (amount <= 0) { toast("Ingresa un monto mayor a cero", "alert-triangle"); return; }
+    if (!payDate) { toast("Indica la fecha del pago", "alert-triangle"); return; }
     setPaying(true);
     try {
       const res = await authFetch(`/orders/${id}/pay`, {
         method: "POST",
-        body: JSON.stringify({ amount, method: payMethod, cashAccountId: payCash ? Number(payCash) : undefined, accountName: cashAccounts.find((c) => String(c.id) === payCash)?.name }),
+        body: JSON.stringify({
+          amount, method: payMethod,
+          cashAccountId: payCash ? Number(payCash) : undefined,
+          accountName: cashAccounts.find((c) => String(c.id) === payCash)?.name,
+          date: payDate || undefined,
+          // El servidor le antepone el N° de orden: aquí va sólo el motivo.
+          note: payDesc.trim() || undefined,
+        }),
       });
       const d = await res.json();
       if (!res.ok) throw new Error(d?.message || "No se pudo registrar el pago");
+      // Crear -> adjuntar (el mismo patrón del egreso y de la transferencia): el pago
+      // devuelve el id del movimiento y el soporte se cuelga de él. Si falla la subida
+      // el pago YA está hecho, así que se avisa sin tumbar nada — el comprobante se
+      // puede volver a subir desde la fila del pago.
+      if (payFile && d.transactionId) {
+        try {
+          const fd = new FormData();
+          fd.append("file", payFile);
+          const up = await authFetch(`/treasury/transactions/${d.transactionId}/attach`, { method: "POST", body: fd });
+          if (!up.ok) throw new Error((await up.json().catch(() => null))?.message || "No se pudo subir el comprobante");
+        } catch (e) {
+          toast(mensajeDeError(e, "El pago quedó registrado, pero el comprobante no se subió"), "alert-triangle");
+        }
+      }
       toast(`Pago registrado · saldo ${cop(d.balance)}`, "check");
       setPayOpen(false); void load();
     } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setPaying(false); }
@@ -125,9 +165,12 @@ export default function OrdenDetallePage() {
   async function submitNote() {
     const amount = Number(noteAmount) || 0;
     if (amount <= 0) { toast("Ingresa un monto mayor a cero", "alert-triangle"); return; }
+    // La observación es obligatoria: la nota cambia el total de la orden y sin el
+    // porqué queda un ajuste de plata sin explicación.
+    if (noteDesc.trim().length < 5) { toast("Escribe la observación: por qué se aplica esta nota", "alert-triangle"); return; }
     setNotesaving(true);
     try {
-      const body: any = { type: noteType, amount, description: noteDesc || undefined };
+      const body: any = { type: noteType, amount, description: noteDesc.trim() };
       if (noteType === "Retencion") body.retentionType = noteRetType;
       const res = await authFetch(`/orders/${id}/notes`, { method: "POST", body: JSON.stringify(body) });
       const d = await res.json();
@@ -247,7 +290,17 @@ export default function OrdenDetallePage() {
     } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setEditSaving(false); }
   };
 
-  const subirAdjunto = async (file: File) => {
+  /**
+   * Sube un adjunto de la orden y, si se indicó un pago, lo deja además como
+   * comprobante de ESE EGRESO en tesorería.
+   *
+   * El soporte de un pago se sube una sola vez: aquí. Antes había que cargarlo dos
+   * veces —en la orden y otra vez en el movimiento de caja— para que se viera en los
+   * dos sitios. Se manda el mismo fichero a los dos endpoints (el patrón de las dos
+   * patas de la transferencia); el egreso es *best-effort*: si esa segunda subida
+   * falla, el adjunto de la orden YA está y sólo se avisa.
+   */
+  const subirAdjunto = async (file: File, pagoId?: string) => {
     setUploading(true);
     try {
       const fd = new FormData();
@@ -255,9 +308,42 @@ export default function OrdenDetallePage() {
       const res = await authFetch(`/orders/${id}/files`, { method: "POST", body: fd });
       const d = await res.json();
       if (!res.ok) throw new Error(d?.message || "No se pudo subir el archivo");
-      toast(`Adjunto subido: ${d.name}`, "check");
+      if (pagoId) {
+        try {
+          const fdTx = new FormData();
+          fdTx.append("file", file);
+          const up = await authFetch(`/treasury/transactions/${pagoId}/attach`, { method: "POST", body: fdTx });
+          if (!up.ok) throw new Error((await up.json().catch(() => null))?.message || "No se pudo cargar el comprobante en el egreso");
+          toast(`Adjunto subido: ${d.name} · cargado también en el egreso`, "check");
+        } catch (e) {
+          toast(mensajeDeError(e, "El adjunto quedó en la orden, pero no se cargó en el egreso"), "alert-triangle");
+        }
+      } else {
+        toast(`Adjunto subido: ${d.name}`, "check");
+      }
       void load();
     } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setUploading(false); }
+  };
+
+  /** Pagos a los que se les puede colgar un soporte (una anulada ya no se soporta). */
+  const pagosConSoporte = useMemo(
+    () => ((order?.payments ?? []) as any[]).filter((p) => p.status !== "ANULADA"),
+    [order],
+  );
+
+  /** ¿El fichero sirve como comprobante de caja? Allá sólo entran imagen o PDF. */
+  const esComprobante = (f: File) =>
+    f.type.startsWith("image/") || f.type === "application/pdf" || /\.pdf$/i.test(f.name);
+
+  /**
+   * Al elegir el fichero se pregunta a dónde va: sólo a la orden (cotización, factura
+   * del proveedor) o también al egreso del pago. Si la orden no tiene pagos, o el
+   * fichero no puede ser un comprobante (un .xlsx, un .zip), no hay nada que preguntar.
+   */
+  const elegirAdjunto = (file: File) => {
+    if (pagosConSoporte.length === 0 || !esComprobante(file)) { void subirAdjunto(file); return; }
+    setAdjuntoPago(pagosConSoporte.find((p) => !p.attach)?.id ?? "");
+    setAdjuntoPendiente(file);
   };
 
   const verAdjunto = async (f: any) => {
@@ -412,6 +498,33 @@ export default function OrdenDetallePage() {
         />
       </div>
 
+      {/* Pagos: los egresos que ha generado esta orden, con su soporte.
+          El comprobante NO se guarda como adjunto de la orden — vive en el movimiento
+          de caja, que es el sitio donde tesorería lo revisa. Subirlo desde aquí lo deja
+          puesto en los dos sitios de una sola vez. */}
+      <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="flex items-center gap-1.5 text-[13px] font-bold text-text-primary"><Icon name="hand-coins" size={16} /> Pagos</h2>
+          {saldo > 0 && !terminal && !awaiting && <Button variant="secondary" size="sm" onClick={openPay}><Icon name="plus" size={14} /> Registrar pago</Button>}
+        </div>
+        <DataTable
+          rows={order.payments ?? []}
+          empty="Esta orden todavía no tiene pagos registrados."
+          columns={[
+            { key: "date", header: "Fecha", render: (r: any) => fmtDate(r.date) },
+            { key: "amount", header: "Monto", align: "right", render: (r: any) => <span className="font-semibold text-text-primary">{cop(r.amount)}</span> },
+            { key: "method", header: "Método", render: (r: any) => (r.method === "Bank" ? "Consignación" : r.method === "Cash" ? "Efectivo" : (r.method ?? "—")) },
+            { key: "account", header: "Caja / cuenta", render: (r: any) => r.account || "—" },
+            { key: "note", header: "Descripción", render: (r: any) => <span className="text-text-secondary">{r.note || "—"}</span> },
+            { key: "status", header: "Estado", render: (r: any) => (r.status === "ANULADA" ? <Badge tone="error" label="Anulada" /> : <Badge tone="success" label="Vigente" />) },
+            {
+              key: "comprobante", header: "Comprobante",
+              render: (r: any) => <ComprobanteCell id={r.id} attach={r.attach} attachName={r.attachName} onChange={() => void load()} />,
+            },
+          ]}
+        />
+      </div>
+
       <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="flex items-center gap-1.5 text-[13px] font-bold text-text-primary"><Icon name="file-text" size={16} /> Notas y retenciones</h2>
@@ -471,12 +584,12 @@ export default function OrdenDetallePage() {
           <label className={`inline-flex cursor-pointer items-center gap-1 rounded-lg border border-border-default px-3 py-1.5 text-[12px] font-semibold text-text-secondary hover:bg-surface-2 ${uploading ? "pointer-events-none opacity-60" : ""}`}>
             <Icon name={uploading ? "loader" : "upload"} size={14} className={uploading ? "animate-spin" : ""} />
             {uploading ? "Subiendo…" : "Subir archivo"}
-            <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png,.gif,.webp,.heic,.doc,.docx,.xls,.xlsx,.csv,.txt,.zip"
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) void subirAdjunto(f); e.target.value = ""; }} />
+            <input type="file" className="hidden" accept={ACCEPT_ADJUNTO}
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) elegirAdjunto(f); e.target.value = ""; }} />
           </label>
         </div>
         {(order.files ?? []).length === 0 ? (
-          <p className="text-[12px] text-text-tertiary">Sin adjuntos. Suba aquí la factura del proveedor o la cotización.</p>
+          <p className="text-[12px] text-text-tertiary">Sin adjuntos. Suba aquí la factura del proveedor, la cotización o el soporte de un pago: si es de un pago, se carga también como comprobante del egreso en tesorería y no hay que volver a subirlo allá.</p>
         ) : (
           <div className="flex flex-col gap-2">
             {(order.files ?? []).map((f: any) => (
@@ -557,11 +670,64 @@ export default function OrdenDetallePage() {
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Monto" required><Input type="number" min={0} value={payAmount} onChange={(e) => setPayAmount(e.target.value)} autoFocus /></Field>
           <Field label="Método"><Select value={payMethod} onChange={(e) => setPayMethod(e.target.value)}><option value="Cash">Efectivo</option><option value="Bank">Consignación</option></Select></Field>
-          <div className="sm:col-span-2"><Field label="Caja / cuenta"><Select value={payCash} onChange={(e) => setPayCash(e.target.value)}><option value="">— Sin caja —</option>{cashAccounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</Select></Field></div>
+          <Field label="Fecha del pago" required>
+            <Input type="date" value={payDate} onChange={(e) => setPayDate(e.target.value)} />
+          </Field>
+          <Field label="Caja / cuenta">
+            <Select value={payCash} onChange={(e) => setPayCash(e.target.value)}>
+              <option value="">— Sin caja —</option>
+              {cashAccounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+            </Select>
+          </Field>
+          <div className="sm:col-span-2">
+            <Field label="Descripción" hint="Por qué se paga. Queda en el movimiento de caja y en el historial de la orden.">
+              <Textarea rows={2} value={payDesc} onChange={(e) => setPayDesc(e.target.value)} placeholder="Ej.: abono acordado con el proveedor, saldo contra entrega…" />
+            </Field>
+          </div>
+          <div className="sm:col-span-2">
+            <Field label="Comprobante (opcional)" hint="Imagen o PDF del soporte. Queda en el egreso de tesorería: no hay que volver a subirlo allá.">
+              <Input type="file" accept={ACCEPT_IMAGEN_PDF} onChange={(e) => setPayFile(e.target.files?.[0] ?? null)} />
+            </Field>
+          </div>
         </div>
         <div className="mt-3 flex justify-end gap-2">
           <Button variant="secondary" onClick={() => setPayOpen(false)} disabled={paying}>Cancelar</Button>
           <Button variant="primary" onClick={submitPay} disabled={paying}>{paying ? "Guardando…" : "Registrar pago"}</Button>
+        </div>
+      </Modal>
+
+      {/* ¿Este archivo es el soporte de un pago? Se pregunta —en vez de decidirlo solo—
+          porque en Adjuntos también entran cotizaciones y facturas del proveedor, y un
+          comprobante equivocado sale luego en el cierre de caja. */}
+      <Modal open={!!adjuntoPendiente} onClose={() => setAdjuntoPendiente(null)} title="¿Dónde va este archivo?" maxWidth="max-w-md">
+        <p className="truncate text-[13px] font-medium text-text-primary"><Icon name="paperclip" size={14} className="mr-1 inline" />{adjuntoPendiente?.name}</p>
+        <div className="mt-3 flex flex-col gap-2">
+          <label className={`flex cursor-pointer gap-2 rounded-lg border p-3 ${adjuntoPago === "" ? "border-brand bg-surface-2" : "border-border-subtle"}`}>
+            <input type="radio" name="destino-adjunto" className="mt-0.5" checked={adjuntoPago === ""} onChange={() => setAdjuntoPago("")} />
+            <span>
+              <span className="block text-[13px] font-semibold text-text-primary">Solo adjunto de la orden</span>
+              <span className="block text-[12px] text-text-tertiary">Factura del proveedor, cotización, remisión…</span>
+            </span>
+          </label>
+          {pagosConSoporte.map((p: any) => (
+            <label key={p.id} className={`flex cursor-pointer gap-2 rounded-lg border p-3 ${adjuntoPago === p.id ? "border-brand bg-surface-2" : "border-border-subtle"}`}>
+              <input type="radio" name="destino-adjunto" className="mt-0.5" checked={adjuntoPago === p.id} onChange={() => setAdjuntoPago(p.id)} />
+              <span>
+                <span className="block text-[13px] font-semibold text-text-primary">Soporte del pago del {fmtDate(p.date)} · {cop(p.amount)}</span>
+                <span className="block text-[12px] text-text-tertiary">
+                  {p.method === "Bank" ? "Consignación" : p.method === "Cash" ? "Efectivo" : (p.method ?? "—")}{p.account ? ` · ${p.account}` : ""}
+                  {p.attach ? " · ya tiene comprobante: se reemplaza" : ""}
+                </span>
+              </span>
+            </label>
+          ))}
+        </div>
+        <p className="mt-2 text-[12px] text-text-tertiary">Si eliges un pago, el archivo queda en la orden <strong>y</strong> como comprobante de su egreso en tesorería. Se sube una sola vez.</p>
+        <div className="mt-3 flex justify-end gap-2">
+          <Button variant="secondary" onClick={() => setAdjuntoPendiente(null)} disabled={uploading}>Cancelar</Button>
+          <Button variant="primary" disabled={uploading} onClick={() => { const f = adjuntoPendiente; const pago = adjuntoPago; setAdjuntoPendiente(null); if (f) void subirAdjunto(f, pago || undefined); }}>
+            {uploading ? "Subiendo…" : "Subir archivo"}
+          </Button>
         </div>
       </Modal>
 
@@ -585,12 +751,12 @@ export default function OrdenDetallePage() {
             </Field>
           )}
           <Field label="Monto" required><Input type="number" min={0} value={noteAmount} onChange={(e) => setNoteAmount(e.target.value)} autoFocus /></Field>
-          <div className="sm:col-span-2"><Field label="Descripción"><Input value={noteDesc} onChange={(e) => setNoteDesc(e.target.value)} placeholder="Opcional" /></Field></div>
+          <div className="sm:col-span-2"><Field label="Observación (por qué se aplica)" required><Input value={noteDesc} onChange={(e) => setNoteDesc(e.target.value)} maxLength={500} placeholder="Ej.: descuento pactado con el proveedor por faltante en la entrega" /></Field></div>
         </div>
         <p className="mt-2 text-[12px] text-text-tertiary">Crédito y retención <strong>restan</strong> del total; débito <strong>suma</strong>. El total no puede quedar por debajo de lo ya pagado.</p>
         <div className="mt-3 flex justify-end gap-2">
           <Button variant="secondary" onClick={() => setNoteOpen(false)} disabled={notesaving}>Cancelar</Button>
-          <Button variant="primary" onClick={submitNote} disabled={notesaving}>{notesaving ? "Guardando…" : "Aplicar nota"}</Button>
+          <Button variant="primary" onClick={submitNote} disabled={notesaving || noteDesc.trim().length < 5}>{notesaving ? "Guardando…" : "Aplicar nota"}</Button>
         </div>
       </Modal>
 

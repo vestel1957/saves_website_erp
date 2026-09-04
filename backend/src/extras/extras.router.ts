@@ -19,6 +19,7 @@ import { extname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Response } from 'express';
 import { ExtrasService } from './extras.service';
+import { extensionDeAdjunto } from '../common/uploads';
 
 /** Instancia única del controlador. Las dependencias salen del contenedor. */
 const extras = new ExtrasController(extrasService);
@@ -38,14 +39,14 @@ extrasRouter.post(
   subirUno('file', {
       storage: diskStorage({
         destination: (_req, _file, cb) => { if (!existsSync(DOC_ROOT)) mkdirSync(DOC_ROOT, { recursive: true }); cb(null, DOC_ROOT); },
-        filename: (_req, file, cb) => cb(null, `${randomUUID()}${extname(file.originalname).toLowerCase()}`),
+        filename: (_req, file, cb) => cb(null, `${randomUUID()}${extensionDeAdjunto(file, EXT_DOCUMENTO) ?? '.bin'}`),
       }),
       limits: { fileSize: 25 * 1024 * 1024 },
       // No tenía NINGÚN filtro: aceptaba cualquier extensión. Se sirve siempre como
       // descarga (`res.download`), así que no era ejecutable en el navegador, pero
       // no hay razón para dejar que el repositorio documental acepte binarios.
       fileFilter: (_req, file, cb) => {
-        const ok = EXT_DOCUMENTO.has(extname(file.originalname).toLowerCase());
+        const ok = extensionDeAdjunto(file, EXT_DOCUMENTO) !== null;
         cb(ok ? null : new BadRequestException('Tipo de archivo no permitido'), ok);
       },
     }),

@@ -18,6 +18,17 @@ type Row = { product: string; qty: string; price: string; taxRate: string };
 
 const emptyRow = (): Row => ({ product: "", qty: "1", price: "0", taxRate: "0" });
 
+/**
+ * Hoy en Colombia, en el formato de <input type="date">.
+ *
+ * Con `toISOString()` —que es lo que había— el día salía en UTC: entre las 7 PM y
+ * la medianoche de Colombia el formulario proponía MAÑANA, y la orden nacía con
+ * fecha de un día que todavía no llegaba.
+ */
+const hoy = () =>
+  new Intl.DateTimeFormat("en-CA", { timeZone: "America/Bogota", year: "numeric", month: "2-digit", day: "2-digit" })
+    .format(new Date());
+
 export default function NuevaOrdenPage() {
   const { loading: authLoading, authFetch } = useAuth();
   const router = useRouter();
@@ -28,7 +39,7 @@ export default function NuevaOrdenPage() {
   const [supplier, setSupplier] = useState<any>(null);
 
   const [rows, setRows] = useState<Row[]>([emptyRow()]);
-  const [orderDate, setOrderDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [orderDate, setOrderDate] = useState(hoy);
   const [notes, setNotes] = useState("");
   const [category, setCategory] = useState("");
   const [cats, setCats] = useState<{ id: string; name: string }[]>([]);
@@ -149,6 +160,14 @@ export default function NuevaOrdenPage() {
             )}
           </div>
         )}
+        {/* La fecha va aquí arriba y no al final: la orden es muchas veces de un día
+            anterior (llegó la factura del proveedor de ayer), y escondida detrás de
+            los ítems se quedaba con la de hoy sin que nadie la mirara. */}
+        <div className="mt-4 border-t border-border-subtle pt-4 sm:max-w-xs">
+          <Field label="Fecha de la orden" hint={orderDate !== hoy() ? "Con fecha de otro día" : "Cámbiala si la orden es de otro día"}>
+            <Input type="date" value={orderDate} onChange={(e) => setOrderDate(e.target.value)} />
+          </Field>
+        </div>
       </div>
 
       <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
@@ -199,9 +218,6 @@ export default function NuevaOrdenPage() {
       </div>
 
       <div className="grid gap-4 rounded-xl border border-border-subtle bg-surface p-4 shadow-sm sm:grid-cols-2">
-        <Field label="Fecha de la orden">
-          <Input type="date" value={orderDate} onChange={(e) => setOrderDate(e.target.value)} />
-        </Field>
         <Field label="Categoría de compra" hint="Opcional · se gestionan en Categorías de compra">
           <Select value={category} onChange={(e) => setCategory(e.target.value)}>
             <option value="">Sin categoría</option>

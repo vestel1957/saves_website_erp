@@ -25,7 +25,7 @@ export class InventoryController {
     private readonly alertsSvc: InventoryAlertsService,
   ) {}
 
-  stats() { return this.inv.stats(); }
+  stats(user?: AuthUser) { return this.inv.stats(user); }
 
   // ── Alertas de stock (campana del TopNav) ──────────────────────────────────
   // Van antes de `materials/:id` y compañía por claridad; no colisionan porque
@@ -35,6 +35,13 @@ export class InventoryController {
   readAllAlerts() { return this.alertsSvc.readAll(); }
 
   categories() { return this.inv.categories(); }
+  /**
+   * Sedes, para decir de cuál es cada bodega (y cuál es la principal, a donde el
+   * técnico devuelve). Va aquí y no se toma prestada de otro módulo porque
+   * `/auth/branches` exige administrar usuarios y `/network/branches` no trae el
+   * `legacyId`, que es justo la llave que guarda `MaterialWarehouse.branchLegacy`.
+   */
+  branches() { return this.inv.branches(); }
   /** Bodegas: las necesita el selector origen/destino del traspaso. */
   warehouses(user?: AuthUser) { return this.inv.warehouses(user); }
   createCategory(dto: SimpleCatalogDto) { return this.inv.createCategory(dto); }
@@ -76,7 +83,7 @@ export class InventoryController {
    */
   transferContext(user: AuthUser) { return this.inv.transferContext(user); }
   transfer(dto: TransferDto, user: AuthUser) { return this.inv.transfer(dto, user); }
-  actas(page?: string, pageSize?: string, search?: string, status?: string, sortBy?: string, sortDir?: string) { return this.inv.actas({ page: Number(page), pageSize: Number(pageSize), search, status, sortBy, sortDir }); }
+  actas(page?: string, pageSize?: string, search?: string, status?: string, sortBy?: string, sortDir?: string, user?: AuthUser) { return this.inv.actas({ page: Number(page), pageSize: Number(pageSize), search, status, sortBy, sortDir }, user); }
   actaDetail(id: string, user: AuthUser) { return this.inv.actaDetail(id, user); }
   receiveActaItem(id: string, itemId: string, user: AuthUser) { return this.inv.receiveActaItem(id, itemId, user); }
   // El acta en PDF: la misma que se le manda por WhatsApp a quien debe firmarla.

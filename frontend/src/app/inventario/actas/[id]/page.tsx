@@ -19,6 +19,8 @@ type ActaDetail = {
   createdBy: string | null; assignedTo: string | null; assignedToId: string | null;
   receivedBy: string | null; receivedAt: string | null; createdAt: string | null;
   units: number; receivedCount: number; itemsTotal: number; receivable: boolean; isReceiver: boolean;
+  /** ¿El recibido va con código? Lo manda `signature.otpRequired` en el backend. */
+  otpRequired: boolean;
   /** Cómo firmó quien recibió (a qué WhatsApp salió su código) y si le llegó el acta. */
   receivedSignature: string | null; notifiedAt: string | null; notifiedTo: string | null;
   /** Todo marcado pero sin firmar: solo falta su código. */
@@ -73,16 +75,24 @@ export default function ActaDetallePage() {
   }, [authFetch, id]);
 
   /** Firma el recibido: acredita lo pendiente en el destino y cierra el acta. */
-  const firmarRecibido = useCallback(async (code: string) => {
+  const firmarRecibido = useCallback(async (code?: string) => {
     const res = await authFetch(`/inventory/actas/${id}/receive`, {
       method: "POST",
-      body: JSON.stringify({ code }),
+      body: JSON.stringify(code ? { code } : {}),
     });
     const d = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(d?.message || "No se pudo recibir el acta");
-    toast("Acta firmada y recibida: stock acreditado en el destino", "check");
+    toast(code ? "Acta firmada y recibida: stock acreditado en el destino" : "Acta recibida: stock acreditado en el destino", "check");
     await load();
   }, [authFetch, id, load]);
+
+  /** Recibir sin código: el mismo cierre, con el botón directo. */
+  const recibirSinCodigo = useCallback(async () => {
+    setReceiving(true);
+    try { await firmarRecibido(); }
+    catch (e) { toast(mensajeDeError(e, "No se pudo recibir el acta"), "alert-triangle"); }
+    finally { setReceiving(false); }
+  }, [firmarRecibido]);
 
   /** Abre el acta en PDF (la misma que se manda por WhatsApp). */
   const verPdf = async () => {
@@ -228,18 +238,25 @@ export default function ActaDetallePage() {
         </div>
       )}
 
-      {/* Firma del recibido: cerrar el acta es firmarla, y eso va con código. */}
+      {/* Cerrar el acta. Con `otpRequired` va con código; sin él, el recibido es el
+          botón y queda sellado con el nombre y la hora de quien pulsó. */}
       {detail.receivable && detail.isReceiver && (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border-default bg-surface-2 p-3">
           <p className="text-[12px] text-text-secondary">
             {detail.faltaFirma ? (
-              <>Ya marcaste todo el material. <strong>Falta tu firma</strong> para cerrar el acta.</>
+              <>Ya marcaste todo el material. Falta <strong>cerrar el acta</strong>.</>
             ) : (
-              <>Al firmar se acredita en <strong>{detail.to}</strong> todo lo que quede pendiente y el acta queda cerrada a tu nombre.</>
+              <>Al recibir se acredita en <strong>{detail.to}</strong> todo lo que quede pendiente y el acta queda cerrada a tu nombre.</>
             )}
           </p>
-          <Button variant="primary" size="sm" disabled={receiving || !!receivingItem} onClick={() => setFirmarOpen(true)}>
-            <Icon name="file-signature" size={14} /> Firmar y recibir
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={receiving || !!receivingItem}
+            onClick={() => (detail.otpRequired ? setFirmarOpen(true) : void recibirSinCodigo())}
+          >
+            <Icon name={detail.otpRequired ? "file-signature" : "check"} size={14} />{" "}
+            {receiving ? "Recibiendo…" : detail.otpRequired ? "Firmar y recibir" : "Confirmar recibido"}
           </Button>
         </div>
       )}

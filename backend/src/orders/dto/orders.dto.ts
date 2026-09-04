@@ -1,5 +1,5 @@
-import { Type } from 'class-transformer';
-import { IsArray, IsIn, IsInt, IsNumber, IsOptional, IsString, Min, MinLength, ValidateNested } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
+import { IsArray, IsDateString, IsIn, IsInt, IsNumber, IsOptional, IsString, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
 
 /** Tipos de retención colombianos (legacy `purchase.tipo_retencion`). */
 export const RETENTION_TYPES = ['Retefuente Servicios', 'Compras', 'Personas no declarantes', 'Reteiva'] as const;
@@ -57,7 +57,12 @@ export class AddNoteDto {
   @IsString() @IsIn(NOTE_TYPES as unknown as string[]) type!: string; // Nota Credito | Nota Debito | Retencion
   @IsOptional() @IsString() @IsIn(RETENTION_TYPES as unknown as string[]) retentionType?: string; // requerido si type=Retencion
   @IsNumber() @Min(0.01) amount!: number; // monto absoluto (el signo lo pone el tipo)
-  @IsOptional() @IsString() description?: string;
+  /** Observación: por qué se aplica la nota. Obligatoria, igual que en las notas de factura. */
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString({ message: 'Escribe la observación de la nota: por qué se aplica.' })
+  @MinLength(5, { message: 'La observación debe explicar el motivo de la nota (mínimo 5 caracteres).' })
+  @MaxLength(500, { message: 'La observación no puede pasar de 500 caracteres.' })
+  description!: string;
 }
 
 export class CategoryNameDto {
@@ -75,7 +80,7 @@ export class ReceiveOrderDto {
 
 export class CreateSupplierDto {
   @IsString() @MinLength(1) name!: string;
-  @IsOptional() @IsInt() category?: number; // 1 productos, 2 servicios
+  @IsOptional() @IsInt() category?: number; // 1 productos, 2 servicios, 3 terceros
   @IsOptional() @IsString() nit?: string;
   @IsOptional() @IsString() phone?: string;
   @IsOptional() @IsString() email?: string;
@@ -93,6 +98,8 @@ export class PayOrderDto {
   @IsOptional() @IsInt() cashAccountId?: number;
   @IsOptional() @IsString() accountName?: string;
   @IsOptional() @IsString() bankName?: string;
-  @IsOptional() @IsString() date?: string;
+  /** Fecha del pago (YYYY-MM-DD). Decide en qué día —y en qué cierre— entra el egreso. */
+  @IsOptional() @IsDateString() date?: string;
+  /** Motivo del pago. El servidor lo cuelga de la referencia "Pago orden de compra #tid". */
   @IsOptional() @IsString() note?: string;
 }

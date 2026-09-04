@@ -18,7 +18,14 @@ import { useRequest } from "@/lib/useRequest";
 import { useOrden } from "@/lib/useOrden";
 import { mensajeDeError } from "@/lib/errores";
 
-const CATEGORY_LABEL: Record<number, string> = { 1: "Productos", 2: "Servicios" };
+/**
+ * Categorías del directorio. "Terceros" (3) se añadió el 2026-08-10: no compra ni
+ * vende nada, es a quién se le paga por caja —nómina, arriendos, honorarios,
+ * servicios públicos—. Vive aquí y no en un catálogo aparte para que el egreso
+ * caiga en su estado de cuenta y el desplegable de Beneficiario tenga una sola
+ * fuente.
+ */
+const CATEGORY_LABEL: Record<number, string> = { 1: "Productos", 2: "Servicios", 3: "Terceros" };
 
 const EMPTY_FORM = {
   name: "",
@@ -35,7 +42,7 @@ const EMPTY_FORM = {
 
 export default function ProveedoresPage() {
   const { loading: authLoading, authFetch } = useAuth();
-  const [tab, setTab] = useState<1 | 2>(1);
+  const [tab, setTab] = useState<1 | 2 | 3>(1);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
@@ -124,11 +131,11 @@ export default function ProveedoresPage() {
 
   return (
     <>
-      <PageHeading icon="user" title="Proveedores" subtitle="Directorio de proveedores de productos y servicios" />
+      <PageHeading icon="user" title="Proveedores" subtitle="Directorio de proveedores de productos, de servicios y de terceros a los que se les paga" />
 
       {/* Tabs categoría */}
       <div className="flex items-center gap-2">
-        {([1, 2] as const).map((c) => (
+        {([1, 2, 3] as const).map((c) => (
           <button
             key={c}
             type="button"
@@ -148,8 +155,10 @@ export default function ProveedoresPage() {
         onSearch={setSearch}
         searchPlaceholder="Buscar por nombre, NIT o ciudad…"
         actions={
-          <Button variant="primary" onClick={() => { setForm(EMPTY_FORM); setOpen(true); }}>
-            <Icon name="plus" size={15} /> Nuevo proveedor
+          // Nace en la categoría de la pestaña donde se está: quien está en
+          // Terceros va a crear un tercero, no un proveedor de productos.
+          <Button variant="primary" onClick={() => { setForm({ ...EMPTY_FORM, category: String(tab) }); setOpen(true); }}>
+            <Icon name="plus" size={15} /> {tab === 3 ? "Nuevo tercero" : "Nuevo proveedor"}
           </Button>
         }
       />
@@ -203,6 +212,7 @@ export default function ProveedoresPage() {
             <Select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
               <option value="1">Productos</option>
               <option value="2">Servicios</option>
+              <option value="3">Terceros</option>
             </Select>
           </Field>
           <Field label="NIT">

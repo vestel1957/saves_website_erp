@@ -24,6 +24,7 @@ import { OrdersService } from './orders.service';
 import { AddNoteDto, ApproveOrderDto, CancelOrderDto, CategoryNameDto, CreateOrderDto, CreateSupplierDto, PayOrderDto, ReceiveOrderDto, UpdateOrderDto } from './dto/orders.dto';
 import { APP_PERMISSIONS } from '../auth/permissions.catalog';
 import { purchaseOrderPdf } from '../common/pdf/pdf-docs';
+import { enviarAdjuntoSeguro, extensionDeAdjunto } from '../common/uploads';
 
 /** Instancia única del controlador. Las dependencias salen del contenedor. */
 const orders = new OrdersController(ordersService);
@@ -182,11 +183,14 @@ ordersRouter.post(
           mkdirSync(dir, { recursive: true });
           cb(null, dir);
         },
-        filename: (_req, file, cb) => cb(null, `${randomUUID()}${extname(file.originalname).toLowerCase()}`),
+        filename: (_req, file, cb) => cb(null, `${randomUUID()}${extensionDeAdjunto(file, ALLOWED_EXT) ?? '.bin'}`),
       }),
       limits: { fileSize: MAX_FILE_BYTES },
+      // Se valida con `extensionDeAdjunto`, no con `extname(originalname)` a secas:
+      // desde la galería del móvil el nombre puede llegar sin extensión y la foto
+      // se rechazaba. La lista blanca es la misma; sólo cambia de dónde se deduce.
       fileFilter: (_req, file, cb) => {
-        const ok = ALLOWED_EXT.has(extname(file.originalname).toLowerCase());
+        const ok = extensionDeAdjunto(file, ALLOWED_EXT) !== null;
         cb(ok ? null : new BadRequestException('Tipo de archivo no permitido'), ok);
       },
     }),

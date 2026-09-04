@@ -5,11 +5,13 @@ import { extname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Response } from 'express';
 import { ExtrasService } from './extras.service';
+// Lo usa el `fileFilter` de la subida, que vive en el router generado.
+import { extensionDeAdjunto } from '../common/uploads';
 
 export const DOC_ROOT = join(process.cwd(), 'uploads', 'documents');
 /** Extensiones que admite el repositorio documental. */
 export const EXT_DOCUMENTO = new Set([
-  '.pdf', '.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic',
+  '.pdf', '.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif',
   '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.csv', '.txt', '.zip',
 ]);
 

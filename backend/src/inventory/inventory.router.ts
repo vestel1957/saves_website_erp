@@ -5,7 +5,7 @@
  * controlador. Cablea HTTP -> método: extrae los argumentos de `req` y llama.
  * La lógica sigue viviendo en InventoryController, que ya no lleva decoradores.
  *
- * Endpoints: 27
+ * Endpoints: 28
  */
 import { crearRouter, manejar } from '../core/http/ruta';
 import { validar } from '../core/http/validar';
@@ -29,7 +29,7 @@ inventoryRouter.get(
   '/actas',
   autenticar,
   exigirArea(...TRASPASOS),
-  manejar((req) => inventory.actas(req.query.page as string, req.query.pageSize as string, req.query.search as string, req.query.status as string, req.query.sortBy as string, req.query.sortDir as string)),
+  manejar((req) => inventory.actas(req.query.page as string, req.query.pageSize as string, req.query.search as string, req.query.status as string, req.query.sortBy as string, req.query.sortDir as string, usuarioDe(req))),
 );
 
 inventoryRouter.get(
@@ -93,6 +93,13 @@ inventoryRouter.post(
   autenticar,
   exigirArea('administracion', 'tecnicos'),
   manejar((req) => inventory.runAlerts()),
+);
+
+inventoryRouter.get(
+  '/branches',
+  autenticar,
+  exigirArea('administracion', 'tecnicos'),
+  manejar((req) => inventory.branches()),
 );
 
 inventoryRouter.get(
@@ -174,7 +181,7 @@ inventoryRouter.get(
   '/stats',
   autenticar,
   exigirArea('administracion', 'tecnicos'),
-  manejar((req) => inventory.stats()),
+  manejar((req) => inventory.stats(usuarioDe(req))),
 );
 
 inventoryRouter.post(

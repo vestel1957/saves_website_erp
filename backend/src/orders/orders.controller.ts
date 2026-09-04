@@ -10,13 +10,15 @@ import { AddNoteDto, ApproveOrderDto, CancelOrderDto, CategoryNameDto, CreateOrd
 import { APP_PERMISSIONS } from '../auth/permissions.catalog';
 import { AuthUser } from '../auth/current-user.decorator';
 import { purchaseOrderPdf } from '../common/pdf/pdf-docs';
+// Lo usa el `fileFilter` de la subida, que vive en el router generado.
+import { enviarAdjuntoSeguro, extensionDeAdjunto } from '../common/uploads';
 
 /** Forma mínima del archivo que entrega multer (evita depender de @types/multer). */
 type MulterFile = { originalname: string; filename: string; mimetype: string; size: number; path: string };
 
 export const UPLOAD_ROOT = join(process.cwd(), 'uploads', 'orders');
 export const MAX_FILE_BYTES = 20 * 1024 * 1024; // 20 MB
-export const ALLOWED_EXT = new Set(['.pdf', '.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.doc', '.docx', '.xls', '.xlsx', '.csv', '.txt', '.zip']);
+export const ALLOWED_EXT = new Set(['.pdf', '.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif', '.doc', '.docx', '.xls', '.xlsx', '.csv', '.txt', '.zip']);
 
 /** Órdenes de compra / servicio + proveedores (migrado de saves-vestel). */
 // Compras salió del perfil de caja (2026-07-29): quien recauda no ordena compras.
@@ -149,9 +151,12 @@ export class OrdersController {
     const f = await this.orders.fileMeta(id, fileId);
     const path = join(UPLOAD_ROOT, id, f.storedName);
     if (!existsSync(path)) throw new BadRequestException('El archivo no está en el disco.');
-    res.setHeader('Content-Type', f.mimeType);
-    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(f.originalName)}"`);
-    createReadStream(path).pipe(res);
+    // Antes se devolvía con el Content-Type QUE DECLARÓ EL CLIENTE al subir y con
+    // `inline`, sin `nosniff`: subiendo un fichero con extensión permitida y
+    // `Content-Type: text/html` quedaba HTML ejecutándose en el origen de la API.
+    // `enviarAdjuntoSeguro` fija el tipo desde una lista blanca y manda `attachment`.
+    // La pantalla no se entera: lee los bytes por fetch y arma un blob.
+    return enviarAdjuntoSeguro(res, path, f.originalName);
   }
 
   async deleteFile(id: string, fileId: string, user: AuthUser) {

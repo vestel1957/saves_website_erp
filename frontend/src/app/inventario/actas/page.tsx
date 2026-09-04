@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
 import { Badge } from "@/components/ui/Badge";
@@ -10,6 +9,8 @@ import { DataTable } from "@/components/ui/DataTable";
 import { Pagination } from "@/components/ui/Pagination";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { useAuth } from "@/context/AuthProvider";
+import { can } from "@/lib/auth";
+import { screenKey } from "@/lib/nav";
 import { useOrden } from "@/lib/useOrden";
 import { fmtDate } from "@/lib/format";
 
@@ -17,8 +18,7 @@ type Acta = { id: string; date: string; from: string | null; to: string | null; 
 type ActaList = { items: Acta[]; total: number; page: number; pageSize: number; pages: number };
 
 export default function ActasPage() {
-  const { loading: authLoading, authFetch } = useAuth();
-  const router = useRouter();
+  const { user, loading: authLoading, authFetch } = useAuth();
   const [data, setData] = useState<ActaList | null>(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
@@ -39,9 +39,14 @@ export default function ActasPage() {
     <>
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <PageHeading icon="clipboard-list" title="Actas de transferencia" subtitle="Traspasos de material entre bodegas" />
-        <Link href="/inventario/traspasos" className="inline-flex items-center gap-1.5 rounded-lg border border-border-default px-3 py-2 text-[12px] font-semibold text-text-secondary transition-colors hover:bg-surface-2">
-          <Icon name="layers" size={14} /> Nuevo traspaso
-        </Link>
+        {/* El técnico entra aquí a FIRMAR lo que recibe, no a emitir: emitir es de
+            administración y caja, y sin este candado el botón lo mandaba a una
+            pantalla que su gate de área le cierra. */}
+        {can(user, screenKey("/inventario/traspasos")) && (
+          <Link href="/inventario/traspasos" className="inline-flex items-center gap-1.5 rounded-lg border border-border-default px-3 py-2 text-[12px] font-semibold text-text-secondary transition-colors hover:bg-surface-2">
+            <Icon name="layers" size={14} /> Nuevo traspaso
+          </Link>
+        )}
       </div>
 
       <div className="flex flex-col gap-3">
@@ -50,7 +55,7 @@ export default function ActasPage() {
           onSort={orden.onSort}
           rows={data.items}
           empty="No hay actas registradas."
-          onRowClick={(r: Acta) => router.push(`/inventario/actas/${r.id}`)}
+          rowHref={(r: Acta) => `/inventario/actas/${r.id}`}
           columns={[
             { key: "date", header: "Fecha", sortable: true, render: (r: Acta) => fmtDate(r.date) },
             { key: "from", header: "Origen", sortable: true, render: (r: Acta) => <span className="text-text-secondary">{r.from || "—"}</span> },

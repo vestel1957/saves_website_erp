@@ -106,6 +106,8 @@ export default function HistorialOrdenesPage() {
             onSort={orden.onSort}
             rows={data?.items ?? []}
             empty="No se encontraron órdenes."
+            // La fila entera abre la orden, no sólo el N°.
+            rowHref={(r: any) => `/ordenes/${r.id}`}
             columns={[
               { key: "tid", header: "N°", sortable: true, render: (r: any) => <Link href={`/ordenes/${r.id}`} className="font-mono font-medium text-brand hover:underline">{r.tid}</Link> },
               { key: "kind", header: "Tipo", sortable: true, render: (r: any) => <Badge label={r.kind} tone={r.kind === "compra" ? "brand" : "info"} /> },

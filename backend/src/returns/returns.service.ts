@@ -111,7 +111,7 @@ export class ReturnsService {
         const mat = await tx.material.findUnique({ where: { id: it.materialId } });
         if (mat) {
           await tx.stockReturnItem.update({ where: { id: it.id }, data: { product: mat.name } });
-          if (updateStock) await tx.material.update({ where: { id: mat.id }, data: { qty: Math.max(0, mat.qty - it.qty) } });
+          if (updateStock) await tx.material.update({ where: { id: mat.id }, data: { qty: Math.max(0, mat.qty - it.qty), editedAt: new Date() } });
         }
       }
       return { id: r.id, tid: r.tid, total: subtotal };
@@ -126,7 +126,7 @@ export class ReturnsService {
       for (const it of r.items) {
         if (it.materialId) {
           const mat = await tx.material.findUnique({ where: { id: it.materialId } });
-          if (mat) await tx.material.update({ where: { id: mat.id }, data: { qty: mat.qty + it.qty } });
+          if (mat) await tx.material.update({ where: { id: mat.id }, data: { qty: mat.qty + it.qty, editedAt: new Date() } });
         }
       }
       await tx.stockReturn.delete({ where: { id } });

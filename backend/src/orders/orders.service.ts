@@ -8,6 +8,8 @@ import { num, round2 } from '../common/money';
 import { nextTid, TID_SEQ } from '../common/tid';
 import { ResponsibilityNotifierService } from '../responsibilities/responsibility-notifier.service';
 import { SignatureOtpService } from '../common/signature/signature-otp.service';
+import { anotarBorradoLegacy } from '../common/legacy-deletion';
+import { comprobanteDe } from '../treasury/comprobante-legacy';
 
 const dateOnly = (s?: string) => { const d = s ? new Date(s) : new Date(); return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())); };
 
@@ -19,6 +21,11 @@ const noteSign = (type: string) => (type === 'Nota Debito' ? 1 : -1);
 
 // Estados terminales: ninguna acción de dinero/stock es válida sobre ellos.
 const TERMINAL = new Set(['cancelado', 'anulado', 'finalizado']);
+
+// Toda escritura de aquí sobre una orden sella `editedAt` (ver SupplyOrder.editedAt):
+// `purchase` se sincroniza desde el MySQL vivo del legacy, y sin el sello la pasada
+// le devolvería el estado de allá a una orden que aquí ya se aprobó, recibió o pagó.
+// Por eso el `data.editedAt = new Date()` justo antes de cada `supplyOrder.update`.
 
 /** Monto legible para los avisos (mismo formato que usan promociones y campañas). */
 const copFmt = (n: number) =>
@@ -138,6 +145,7 @@ export class OrdersService {
           approvedById: user.id, approvedByName: user.name ?? user.email, approvedAt: new Date(),
         };
         if (!needsTwo) data.status = 'aprobado';
+        data.editedAt = new Date();
         await tx.supplyOrder.update({ where: { id }, data });
         await this.logEvent(tx, id, {
           action: 'APROBAR', fromStatus: 'pendiente', toStatus: needsTwo ? 'pendiente' : 'aprobado',
@@ -152,7 +160,7 @@ export class OrdersService {
       }
       await tx.supplyOrder.update({
         where: { id },
-        data: { approved2ById: user.id, approved2ByName: user.name ?? user.email, approved2At: new Date(), status: 'aprobado' },
+        data: { approved2ById: user.id, approved2ByName: user.name ?? user.email, approved2At: new Date(), status: 'aprobado', editedAt: new Date() },
       });
       await this.logEvent(tx, id, { action: 'APROBAR', fromStatus: 'pendiente', toStatus: 'aprobado', detail: `2ª firma.${comoFirmo}`, user });
       return { ok: true, status: 'aprobado', needsSecond: false };
@@ -219,7 +227,7 @@ export class OrdersService {
       if (o.items.some((i) => !isNote(i) && i.receivedQty > 0)) {
         throw new BadRequestException('La orden tiene material recibido; devuélvalo antes de cancelar.');
       }
-      await tx.supplyOrder.update({ where: { id }, data: { status: 'cancelado' } });
+      await tx.supplyOrder.update({ where: { id }, data: { status: 'cancelado', editedAt: new Date() } });
       await this.logEvent(tx, id, { action: 'CANCELAR', fromStatus: o.status, toStatus: 'cancelado', detail: reason ?? null, user });
       return { ok: true, status: 'cancelado' };
     });
@@ -238,7 +246,7 @@ export class OrdersService {
       if (o.kind === 'compra' && items.length && !items.every((i) => i.receivedQty >= i.qty)) {
         throw new BadRequestException('Hay ítems sin recibir por completo; reciba el material antes de finalizar.');
       }
-      await tx.supplyOrder.update({ where: { id }, data: { status: 'finalizado' } });
+      await tx.supplyOrder.update({ where: { id }, data: { status: 'finalizado', editedAt: new Date() } });
       await this.logEvent(tx, id, { action: 'FINALIZAR', fromStatus: o.status, toStatus: 'finalizado', user });
       return { ok: true, status: 'finalizado' };
     });
@@ -276,6 +284,7 @@ export class OrdersService {
         data.approvedById = null; data.approvedByName = null; data.approvedAt = null;
         data.approved2ById = null; data.approved2ByName = null; data.approved2At = null;
       }
+      data.editedAt = new Date();
       await tx.supplyOrder.update({ where: { id }, data });
       await this.logEvent(tx, id, { action: 'EDITAR', detail: dto.items ? `Ítems reemplazados (${dto.items.length}); firmas reiniciadas.` : 'Cabecera actualizada.', user });
       const fresh = await tx.supplyOrder.findUnique({ where: { id }, select: { total: true } });
@@ -356,8 +365,46 @@ export class OrdersService {
     };
   }
 
+  /**
+   * La nota del movimiento, sin el enlace del comprobante.
+   *
+   * El writeback le pega al final ` | Comprobante: <url>` para que el legacy —que no
+   * tiene columna de adjunto— pueda abrirlo (ver `notaConComprobante`), y la ida nos
+   * devuelve esa nota tal cual. Aquí al lado hay una columna con el comprobante de
+   * verdad, así que la URL sólo estorba.
+   */
+  private static sinEnlaceDeComprobante(note: string | null) {
+    return note ? note.replace(/\s*\|\s*Comprobante:\s*\S+\s*$/, '').trim() || null : null;
+  }
+
+  /**
+   * Pagos de una orden, con su comprobante.
+   *
+   * El soporte del pago NO se guarda como adjunto de la orden: vive en el EGRESO que
+   * ese pago creó en tesorería (`Transaction.attach`, o `legacyAttach` si se subió en
+   * el legacy). Así se sube una sola vez y se ve en los dos sitios — antes había que
+   * cargarlo aquí y otra vez en el movimiento de caja.
+   */
+  private async pagosDeOrden(id: string) {
+    const rows = await this.prisma.transaction.findMany({
+      where: { supplyOrderId: id },
+      orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
+      select: {
+        id: true, date: true, type: true, debit: true, credit: true, method: true,
+        accountName: true, note: true, status: true, attach: true, attachName: true, legacyAttach: true,
+      },
+    });
+    return rows.map((t) => ({
+      id: t.id, date: t.date,
+      amount: t.type === 'EXPENSE' ? num(t.debit) : num(t.credit),
+      method: t.method, account: t.accountName, status: t.status,
+      note: OrdersService.sinEnlaceDeComprobante(t.note),
+      ...comprobanteDe(t),
+    }));
+  }
+
   async detail(id: string) {
-    const [o, threshold, firmaCfg] = await Promise.all([
+    const [o, threshold, firmaCfg, payments] = await Promise.all([
       this.prisma.supplyOrder.findUnique({
         where: { id },
         include: {
@@ -369,6 +416,7 @@ export class OrdersService {
       }),
       this.dualThreshold(),
       this.firma.config(),
+      this.pagosDeOrden(id),
     ]);
     if (!o) throw new NotFoundException('Orden no encontrada');
     // El total ya está neto de notas/retención; el saldo es total - pagado.
@@ -400,6 +448,8 @@ export class OrdersService {
       },
       events: o.events.map((e) => ({ id: e.id, action: e.action, from: e.fromStatus, to: e.toStatus, detail: e.detail, user: e.userName, at: e.createdAt })),
       files: o.files.map((f) => ({ id: f.id, name: f.originalName, size: f.size, mime: f.mimeType, by: f.uploadedByName, at: f.createdAt })),
+      // Los egresos que pagaron esta orden, con su comprobante (ver `pagosDeOrden`).
+      payments,
     };
   }
 
@@ -454,6 +504,7 @@ export class OrdersService {
     if (s._count.supplyOrders > 0 || s._count.stockReturns > 0) {
       throw new BadRequestException('No se puede eliminar: el proveedor tiene órdenes o devoluciones asociadas.');
     }
+    await anotarBorradoLegacy(this.prisma, 'supplier', s, { label: s.name });
     await this.prisma.supplier.delete({ where: { id } });
     return { id, deleted: true };
   }
@@ -496,6 +547,12 @@ export class OrdersService {
       const balance = round2(num(order.total) - num(order.paidAmount));
       if (amount > balance + 0.01) throw new BadRequestException(`El abono (${amount}) supera el saldo de la orden (${balance}).`);
 
+      // El motivo que escribe quien paga se AÑADE a la referencia de la orden, no
+      // la reemplaza: el egreso tiene que poder rastrearse hasta la orden desde el
+      // libro de caja aunque nadie escriba nada.
+      const motivo = dto.note?.trim();
+      const concepto = `Pago orden de compra #${order.tid}${motivo ? ` — ${motivo}` : ''}`;
+
       const t = await tx.transaction.create({
         data: {
           type: 'EXPENSE', category: 'Compras', debit: amount, credit: 0,
@@ -503,7 +560,7 @@ export class OrdersService {
           cashAccountId: dto.cashAccountId ?? null, accountName: dto.accountName ?? null,
           bankName: dto.method === 'Bank' ? (dto.bankName ?? null) : null,
           ext: true, status: 'VIGENTE', issuerUserId: null,
-          note: dto.note ?? `Pago orden de compra #${order.tid}`,
+          note: concepto,
           supplyOrderId: order.id, supplierId: order.supplierId,
         },
       });
@@ -512,8 +569,13 @@ export class OrdersService {
       // el estado de recepción y el cierre lo hace "finalizar".
       const data: Prisma.SupplyOrderUpdateInput = { paidAmount: newPaid };
       if (order.legacyId === null && order.status === 'aprobado' && newPaid < num(order.total)) data.status = 'abonado';
+      data.editedAt = new Date();
       await tx.supplyOrder.update({ where: { id }, data });
-      await this.logEvent(tx, id, { action: 'PAGAR', detail: `Abono ${amount} (${dto.method ?? 'Cash'}). Pagado ${newPaid} de ${num(order.total)}.`, user });
+      await this.logEvent(tx, id, {
+        action: 'PAGAR',
+        detail: `Abono ${amount} (${dto.method ?? 'Cash'}). Pagado ${newPaid} de ${num(order.total)}.${motivo ? ` Motivo: ${motivo}` : ''}`,
+        user,
+      });
       return { ok: true, transactionId: t.id, paidAmount: newPaid, balance: round2(num(order.total) - newPaid) };
     });
   }
@@ -648,6 +710,7 @@ export class OrdersService {
     });
     const data: Prisma.SupplyOrderUpdateInput = { total: newTotal };
     if (isRet) { data.retention = round2(num(order.retention) + amount); data.retentionType = input.retentionType!; }
+    data.editedAt = new Date();
     await tx.supplyOrder.update({ where: { id: order.id }, data });
     return { lineId: line.id, newTotal, signed };
   }
@@ -682,6 +745,7 @@ export class OrdersService {
         if (others === 0) data.retentionType = null;
       }
       await tx.supplyOrderItem.delete({ where: { id: noteId } });
+      data.editedAt = new Date();
       await tx.supplyOrder.update({ where: { id }, data });
       return { ok: true, removed: noteId, total: newTotal, balance: round2(newTotal - num(order.paidAmount)) };
     });
@@ -696,6 +760,9 @@ export class OrdersService {
     if (o.items.some((i) => !isNote(i) && i.receivedQty > 0)) {
       throw new BadRequestException('La orden tiene material recibido; no se puede eliminar.');
     }
+    // Lápida antes de borrar: sin ella la ida vuelve a crear la orden en la próxima
+    // pasada (da de alta lo que ve en el legacy y no tiene aquí) y el borrado se deshace.
+    await anotarBorradoLegacy(this.prisma, 'supplyOrder', o, { label: `Orden #${o.tid}` });
     await this.prisma.supplyOrder.delete({ where: { id } });
     return { id, deleted: true };
   }
@@ -713,7 +780,7 @@ export class OrdersService {
         const delta = r.received - item.receivedQty;
         if (delta !== 0 && item.materialId) {
           const mat = await tx.material.findUnique({ where: { id: item.materialId } });
-          if (mat) await tx.material.update({ where: { id: mat.id }, data: { qty: Math.max(0, mat.qty + delta) } });
+          if (mat) await tx.material.update({ where: { id: mat.id }, data: { qty: Math.max(0, mat.qty + delta), editedAt: new Date() } });
         }
         await tx.supplyOrderItem.update({ where: { id: item.id }, data: { receivedQty: r.received } });
       }
@@ -722,7 +789,7 @@ export class OrdersService {
       const allReceived = updated.every((i) => i.receivedQty >= i.qty);
       const anyReceived = updated.some((i) => i.receivedQty > 0);
       const status = allReceived ? 'recibido' : anyReceived ? 'recibido parcial' : o.status;
-      await tx.supplyOrder.update({ where: { id }, data: { status, receivedAt: new Date(), warehouseRef: undefined } });
+      await tx.supplyOrder.update({ where: { id }, data: { status, receivedAt: new Date(), warehouseRef: undefined, editedAt: new Date() } });
       if (status !== o.status) {
         await this.logEvent(tx, id, { action: 'RECIBIR', fromStatus: o.status, toStatus: status, user });
       }

@@ -36,6 +36,20 @@ export function Modal({
   const panel = useRef<HTMLDivElement>(null);
   const origen = useRef<HTMLElement | null>(null);
 
+  /*
+    `onClose` se lee de una ref y NO entra en las dependencias del efecto. Casi
+    todas las pantallas lo pasan como función anónima (`onClose={() => ...}`),
+    que cambia de identidad en CADA render: con él en las dependencias, cada
+    tecla escrita en el formulario (que re-renderiza el padre) rearmaba el efecto
+    y devolvía el foco al primer campo. Se notaba escribiendo el NIT de un
+    proveedor: al segundo carácter el cursor saltaba a Nombre.
+
+    El efecto de foco tiene que correr UNA vez por apertura, y eso es lo que
+    dice ahora `[open]`.
+  */
+  const cerrar = useRef(onClose);
+  useEffect(() => { cerrar.current = onClose; });
+
   useEffect(() => {
     if (!open) return;
 
@@ -51,7 +65,7 @@ export function Modal({
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        onClose();
+        cerrar.current();
         return;
       }
       if (e.key !== "Tab") return;
@@ -75,7 +89,7 @@ export function Modal({
       window.removeEventListener("keydown", onKey);
       origen.current?.focus?.();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 

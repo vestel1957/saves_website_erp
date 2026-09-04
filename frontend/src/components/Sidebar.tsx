@@ -362,7 +362,7 @@ export function Sidebar() {
       />
 
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex h-screen flex-col overflow-hidden border-r border-border-subtle bg-sidebar transition-transform duration-300 ease-in-out lg:static lg:z-auto lg:translate-x-0 lg:shrink-0 lg:transition-[width] ${
+        className={`fixed inset-y-0 left-0 z-50 flex h-dvh flex-col overflow-hidden border-r border-border-subtle bg-sidebar transition-transform duration-300 ease-in-out lg:static lg:z-auto lg:translate-x-0 lg:shrink-0 lg:transition-[width] ${
           mobileOpen ? "translate-x-0" : "-translate-x-full"
         } ${railMode ? "w-[68px]" : "w-[260px]"}`}
       >
@@ -414,8 +414,15 @@ export function Sidebar() {
         </nav>
 
         {/* Bloque de usuario: ÚNICO menú de cuenta de la app (el navbar ya no lo
-            duplica). De aquí cuelgan perfil, preferencias y cerrar sesión. */}
-        <div className={railMode ? "px-2 pb-4" : "px-3 pb-4"}>
+            duplica). De aquí cuelgan perfil, preferencias y cerrar sesión.
+            `shrink-0` + el respiro del `safe-area` para que en móvil no lo
+            aplaste la lista de secciones ni lo tape la barra del teléfono: si
+            este bloque no se ve, nadie puede cerrar sesión. */}
+        <div
+          className={`shrink-0 pb-[max(1rem,env(safe-area-inset-bottom))] ${
+            railMode ? "px-2" : "px-3"
+          }`}
+        >
           <div
             className={`flex items-center gap-2 border-t border-sidebar-hover pt-3 ${
               railMode ? "justify-center" : ""
@@ -423,11 +430,13 @@ export function Sidebar() {
           >
             <MenuUsuario railMode={railMode} roleLabel={roleLabel} />
             {!railMode && (
+              /* En móvil este atajo es la salida directa: 40 px de área táctil
+                 (en escritorio basta con 32). */
               <button
                 onClick={() => void logout()}
                 title="Cerrar sesión"
                 aria-label="Cerrar sesión"
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-text-sidebar-muted transition-colors hover:bg-sidebar-hover hover:text-error-text"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-text-sidebar-muted transition-colors hover:bg-sidebar-hover hover:text-error-text lg:h-8 lg:w-8"
               >
                 <Icon name="log-out" size={16} />
               </button>

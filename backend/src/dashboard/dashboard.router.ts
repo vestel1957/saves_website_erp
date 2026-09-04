@@ -8,7 +8,7 @@
  * Endpoints: 1
  */
 import { crearRouter, manejar } from '../core/http/ruta';
-import { autenticar, exigirArea } from '../core/auth/instancias';
+import { autenticar, exigirArea, usuarioDe } from '../core/auth/instancias';
 import { DashboardController } from './dashboard.controller';
 import { dashboardService } from '../core/contenedor';
 import { DashboardService } from './dashboard.service';
@@ -21,5 +21,5 @@ dashboardRouter.get(
   '/',
   autenticar,
   exigirArea('gerencia'),
-  manejar((req) => dashboard.summary()),
+  manejar((req) => dashboard.summary(req.query.from as string, req.query.to as string, req.query.sede as string, usuarioDe(req))),
 );

@@ -1,8 +1,10 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Icon } from "../Icon";
+import { volverA } from "@/lib/useFiltrosUrl";
 
 /**
  * Encabezado común de las fichas de detalle (`/clientes/123`, `/soporte/45`,
@@ -28,6 +30,7 @@ export function DetailHeader({
   badges,
   subtitle,
   meta,
+  cover,
   actions,
   aside,
   className = "",
@@ -46,6 +49,12 @@ export function DetailHeader({
   subtitle?: React.ReactNode;
   /** Fila extra bajo el subtítulo (chips de servicios, atajos…). */
   meta?: React.ReactNode;
+  /**
+   * Bloque a lo ancho entre el "volver" y la identidad (hoy, la foto de la vivienda
+   * del abonado en móvil). Va aquí y no encima del componente para que el "volver"
+   * siga siendo lo primero de la pantalla.
+   */
+  cover?: React.ReactNode;
   /** Botones de la ficha. A ancho completo en móvil, a la derecha desde `sm`. */
   actions?: React.ReactNode;
   /** Bloque destacado a la derecha (saldo, total…). Debajo en móvil. */
@@ -54,12 +63,20 @@ export function DetailHeader({
 }) {
   const router = useRouter();
 
+  /**
+   * El "Volver" devuelve al listado CON SUS FILTROS puestos (`/soporte?estado=…`),
+   * no a la lista en blanco: entrar a una ficha ya no cuesta rehacer el filtro.
+   * Se completa tras montar porque sessionStorage no existe en el servidor.
+   */
+  const [destino, setDestino] = useState(backHref);
+  useEffect(() => { setDestino(backHref ? volverA(backHref) : undefined); }, [backHref]);
+
   return (
     <div className={`mb-4 min-w-0 ${className}`}>
       {/* Volver — siempre en su propio renglón, nunca robándole ancho al título. */}
       {backHref ? (
         <Link
-          href={backHref}
+          href={destino ?? backHref}
           className="-ml-1 mb-1 inline-flex min-h-8 items-center gap-1 px-1 text-[12px] font-medium text-text-tertiary transition-colors hover:text-text-secondary"
         >
           <Icon name="arrow-left" size={13} /> {backLabel}
@@ -73,6 +90,8 @@ export function DetailHeader({
           <Icon name="arrow-left" size={13} /> {backLabel}
         </button>
       )}
+
+      {cover}
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex min-w-0 items-start gap-3">

@@ -1,8 +1,11 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Icon } from "../Icon";
 import { isNavLeaf } from "@/lib/nav";
+import { volverA } from "@/lib/useFiltrosUrl";
 
 /**
  * Encabezado de vista: botón "Volver" (compacto, arriba) + ícono + título +
@@ -19,27 +22,49 @@ export function PageHeading({
   title,
   subtitle,
   showBack,
+  backHref,
+  backLabel,
 }: {
   icon: string;
   title: string;
   subtitle?: string;
   /** Fuerza mostrar (true) u ocultar (false) el "Volver"; por defecto se decide por la ruta. */
   showBack?: boolean;
+  /**
+   * Destino fijo del "Volver". Sin esto se usa el historial del navegador, que
+   * devuelve a donde se venía — y a una ficha se puede llegar desde media docena
+   * de sitios. Cuando la pantalla tiene un padre claro (la sede de la que
+   * cuelgan sus clientes), conviene nombrarlo y llevar siempre allí.
+   */
+  backHref?: string;
+  /** Texto del volver (por defecto "Volver"); con `backHref`, nombra el destino. */
+  backLabel?: string;
 }) {
   const router = useRouter();
   const pathname = usePathname();
-  const back = showBack ?? !isNavLeaf(pathname);
+  const back = showBack ?? (!!backHref || !isNavLeaf(pathname));
+
+  /**
+   * El "Volver" lleva al listado CON SUS FILTROS: si se venía de
+   * `/soporte?estado=REALIZANDO`, vuelve ahí y no a la lista en blanco. La
+   * dirección se completa tras montar (sessionStorage no existe en el servidor
+   * y el HTML tiene que salir igual de los dos lados).
+   */
+  const [destino, setDestino] = useState(backHref);
+  useEffect(() => { setDestino(backHref ? volverA(backHref) : undefined); }, [backHref]);
+  const claseVolver =
+    "-ml-1 mb-1 inline-flex min-h-8 items-center gap-1 px-1 text-[12px] font-medium text-text-tertiary transition-colors hover:text-text-secondary";
   return (
     <div className="mb-4 min-w-0">
-      {back && (
-        <button
-          type="button"
-          onClick={() => router.back()}
-          className="-ml-1 mb-1 inline-flex min-h-8 items-center gap-1 px-1 text-[12px] font-medium text-text-tertiary transition-colors hover:text-text-secondary"
-        >
-          <Icon name="arrow-left" size={13} /> Volver
+      {back && (backHref ? (
+        <Link href={destino ?? backHref} className={claseVolver}>
+          <Icon name="arrow-left" size={13} /> {backLabel ?? "Volver"}
+        </Link>
+      ) : (
+        <button type="button" onClick={() => router.back()} className={claseVolver}>
+          <Icon name="arrow-left" size={13} /> {backLabel ?? "Volver"}
         </button>
-      )}
+      ))}
       <div className="flex items-center gap-2.5">
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-soft">
           <Icon name={icon} size={18} className="text-brand" />

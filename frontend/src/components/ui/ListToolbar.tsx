@@ -30,7 +30,7 @@ export function ListToolbar({
     // los filtros lo dejaba en una rendija) y las acciones bajan a su propia fila
     // repartiéndose el ancho, para que sean botones pulsables y no migajas
     // pegadas al borde. Desde `sm` es la barra de una sola línea de siempre.
-    <div className="mb-3 flex flex-wrap items-center gap-2">
+    <div className="mb-3 flex shrink-0 flex-wrap items-center gap-2">
       {search !== undefined && onSearch && (
         <div className="relative w-full sm:w-auto sm:min-w-[220px] sm:flex-1">
           <Icon
@@ -46,7 +46,23 @@ export function ListToolbar({
           />
         </div>
       )}
-      {children}
+      {/*
+        Los filtros van en UN renglón que se arrastra de lado, no envolviéndose en
+        tres. Cinco desplegables a 390 px ocupaban ~150 px de alto: sumados a la
+        cabecera de la página, se llegaba al primer registro con la pantalla ya
+        gastada. Desde `sm` el envoltorio desaparece (`contents`) y la barra queda
+        exactamente como estaba.
+
+        `shrink-0` en los hijos porque en un contenedor que scrollea flexbox
+        seguiría estrujándolos hasta hacerlos ilegibles antes de desbordar. Los
+        paneles de `MultiSelect` no se recortan: van en un portal con posición
+        `fixed`, fuera de esta caja.
+      */}
+      {children && (
+        <div className="flex w-full min-w-0 gap-2 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>*]:shrink-0 sm:contents">
+          {children}
+        </div>
+      )}
       {actions && (
         <div className="flex w-full items-center gap-2 [&>*]:flex-1 sm:ml-auto sm:w-auto sm:[&>*]:flex-none">
           {actions}

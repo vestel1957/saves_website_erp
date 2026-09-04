@@ -22,7 +22,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   const bare = BARE_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
   if (bare) return <>{children}</>;
   return (
-    <div className="flex h-screen overflow-hidden bg-canvas">
+    <div className="flex h-dvh overflow-hidden bg-canvas">
       {/* Reporta la posición del técnico cada minuto. Va aquí, en el shell que se
           monta una sola vez, y no dentro de una pantalla: así late en toda la
           jornada y no solo mientras el técnico mira una página concreta. */}

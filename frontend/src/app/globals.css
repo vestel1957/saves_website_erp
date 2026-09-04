@@ -133,7 +133,7 @@
   --radius-lg: 12px;
   --radius-xl: 16px;
 
-  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-ui), ui-sans-serif, system-ui, sans-serif;
 }
 
 /*

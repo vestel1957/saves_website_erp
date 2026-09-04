@@ -71,7 +71,7 @@ const principal: NavItem[] = [
   // la primera hoja visible). Lo que necesita al abrir el sistema es qué le toca
   // hoy y en qué orden; el resto de su trabajo está en /soporte.
   { icon: "calendar-clock", label: "Mi agenda", href: "/mi-agenda" },
-  { icon: "layout-dashboard", label: "Dashboard", href: "/dashboard" },
+  { icon: "layout-dashboard", label: "Tablero", href: "/dashboard" },
   { icon: "message-circle", label: "WhatsApp", href: "/whatsapp" },
   { icon: "map-pin", label: "Mapa", href: "/mapa" },
   { icon: "play", label: "Clientes PlayHub", href: "/playhub", iconClass: "text-error-text" },
@@ -103,6 +103,7 @@ const cajaTesoreria: NavItem[] = [
   { icon: "x", label: "Anulaciones", href: "/tesoreria/anulaciones" },
   { icon: "wallet", label: "Cajas y categorías", href: "/tesoreria/cajas" },
   { icon: "upload", label: "Importar pagos (Efecty)", href: "/tesoreria/importar-pagos" },
+  { icon: "globe", label: "Pagos en línea", href: "/tesoreria/pagos-en-linea" },
 ];
 
 // CONTABILIDAD — plan de cuentas, libros e informes.
@@ -119,6 +120,7 @@ const contabilidad: NavItem[] = [
 const red: NavItem[] = [
   { icon: "activity", label: "Conexiones", href: "/red/conexiones" },
   { icon: "git-branch", label: "Cajas NAP", href: "/red/naps" },
+  { icon: "network", label: "VLANs", href: "/red/vlans" },
   { icon: "radio-tower", label: "Gestión OLT", href: "/red/olt" },
   { icon: "tv", label: "GenieACS · TR-069", href: "/red/genieacs" },
 ];

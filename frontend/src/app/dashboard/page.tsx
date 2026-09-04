@@ -8,10 +8,12 @@ import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { LoadError } from "@/components/ui/LoadError";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
-import { esCajera } from "@/lib/treasury";
+import { esCajera, tieneCaja } from "@/lib/treasury";
 import { esTecnico } from "@/lib/support";
 import { PanelCaja } from "@/components/treasury/PanelCaja";
 import { PanelTecnico } from "@/components/support/PanelTecnico";
+import { RangoFechas, RangoFechasValor, etiquetaRango, rangoDePreset } from "@/components/ui/RangoFechas";
+import { Select } from "@/components/ui/Field";
 
 function compact(n: number): string {
   const a = Math.abs(n);
@@ -24,7 +26,12 @@ const nfmt = (n: number) => (n ?? 0).toLocaleString("es-CO");
 // Monto preciso en millones de COP (ej. $10.030,7 M) — más exacto que el compacto.
 const mill = (n: number) => `$${((n ?? 0) / 1e6).toLocaleString("es-CO", { maximumFractionDigits: 1 })} M`;
 const MONTHS = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
-const monthLabel = (m: string) => { const [y, mm] = (m || "-").split("-"); return `${MONTHS[Number(mm) - 1] ?? mm} ${(y || "").slice(2)}`; };
+// La serie viene por mes ('YYYY-MM') o por día ('YYYY-MM-DD') según el rango elegido.
+const puntoLabel = (m: string) => {
+  const [y, mm, dd] = (m || "-").split("-");
+  const mes = MONTHS[Number(mm) - 1] ?? mm;
+  return dd ? `${Number(dd)} ${mes}` : `${mes} ${(y || "").slice(2)}`;
+};
 
 type Seg = { label: string; value: number; cls: string }; // cls = text-color class
 
@@ -89,8 +96,16 @@ function AreaChart({ serie }: { serie: { month: string; income: number; expense:
         <path d={line("income")} fill="none" className="text-brand" stroke="currentColor" strokeWidth="1" vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
         <path d={line("expense")} fill="none" className="text-error-text" stroke="currentColor" strokeWidth="0.9" vectorEffect="non-scaling-stroke" strokeLinejoin="round" strokeDasharray="2 1.5" />
       </svg>
+      {/*
+        Con rango por días son hasta 92 puntos: se rotulan como mucho 8, repartidos, o
+        las etiquetas se pisan hasta ser ilegibles (y en móvil desbordan la tarjeta).
+      */}
       <div className="mt-1 flex justify-between text-[9px] text-text-tertiary">
-        {serie.map((s) => <span key={s.month}>{monthLabel(s.month)}</span>)}
+        {serie.map((s, i) => {
+          const paso = Math.ceil(serie.length / 8);
+          const visible = i % paso === 0 || i === serie.length - 1;
+          return <span key={s.month} className={visible ? "" : "invisible"}>{puntoLabel(s.month)}</span>;
+        })}
       </div>
     </div>
   );
@@ -99,7 +114,8 @@ function AreaChart({ serie }: { serie: { month: string; income: number; expense:
 /**
  * El dashboard no es uno solo: depende de a qué se dedique quien entra.
  *
- * · Cajera   → su caja: el informe del recaudo del día (ver `PanelCaja`).
+ * · CON caja asignada → su caja, y nada más (`PanelCaja`): el informe del recaudo del
+ *                       día de ESA caja, con el botón de abrirla.
  * · Técnico  → su rendimiento (`PanelTecnico`). Sus órdenes NO van aquí desde
  *              2026-07-31: se atienden en `/soporte`, que ya sólo le muestra las suyas.
  * · Los demás → el panel ejecutivo de siempre (abonados, cartera, recaudo, red).
@@ -108,26 +124,83 @@ function AreaChart({ serie }: { serie: { month: string; income: number; expense:
  * llamada de más: ni la cajera ni el técnico piden `/dashboard` (que además les
  * respondería 403, porque ese endpoint sigue siendo de gerencia). Cada panel se sirve
  * de sus propios endpoints, ya acotados a quien pregunta.
+ *
+ * LA CAJA MANDA SOBRE EL CARGO (2026-08-28, decisión del usuario). Quien tiene una caja
+ * asignada (`User.cajaLegacyId`, en la sesión como `user.caja`) ve el tablero de esa
+ * caja aunque además sea superusuario: son tres superusuarias que atienden ventanilla
+ * (Paula Unas y Windy Muñoz en Yopal, Margarita Reyes en Villanueva 2) y su día es la
+ * ventanilla, no la gerencia. Sustituye a las pestañas `Panel ejecutivo | Mi caja` que
+ * estuvieron vivas un día: el ejecutivo ya no se les pinta, y las cifras de empresa se
+ * miran desde una cuenta sin caja.
+ *
+ * OJO con el orden de las tres preguntas: la caja va PRIMERO, antes que `esCajera()` y
+ * que `esTecnico()`, porque es justamente el caso del mando con caja el que hay que
+ * atrapar antes de que gane su área. Y `GET /dashboard` (el endpoint del ejecutivo)
+ * sigue abierto para un superusuario: esto es lo que ve, no un candado sobre el dato.
  */
 export default function DashboardPage() {
   const { loading: authLoading, user } = useAuth();
+
   if (authLoading) return <PageSkeleton />;
-  if (esCajera(user)) return <PanelCaja />;
+  if (tieneCaja(user) || esCajera(user)) return <PanelCaja />;
   if (esTecnico(user)) return <PanelTecnico />;
   return <PanelEjecutivo />;
 }
+
+/** Dónde se recuerdan el último periodo y la última sede mirados, para no reelegirlos en cada visita. */
+const CLAVE_RANGO = "dashboard:rango";
+const CLAVE_SEDE = "dashboard:sede";
 
 function PanelEjecutivo() {
   const { loading: authLoading, authFetch } = useAuth();
   const [d, setD] = useState<any>(null);
   const [err, setErr] = useState(false);
+  const [cargando, setCargando] = useState(false);
+  const [rango, setRango] = useState<RangoFechasValor>(() => rangoDePreset("mes"));
+  // Sede mirada: "" = todas las que alcance el usuario. Viaja a la API como el
+  // `legacyId` de la sede, que es lo que entienden el resto de filtros del sistema.
+  const [sede, setSede] = useState("");
+
+  // El periodo elegido se recuerda entre visitas, pero las FECHAS se recalculan a
+  // partir del atajo: guardado "este mes" en julio, al volver en agosto tiene que
+  // enseñar agosto, no seguir clavado en julio.
+  useEffect(() => {
+    try {
+      const guardado = JSON.parse(localStorage.getItem(CLAVE_RANGO) ?? "null") as RangoFechasValor | null;
+      if (guardado?.preset === "personalizado") setRango(guardado);
+      else if (guardado?.preset) setRango(rangoDePreset(guardado.preset));
+    } catch { /* nada guardado o ilegible: se queda el mes en curso */ }
+    try { setSede(localStorage.getItem(CLAVE_SEDE) ?? ""); } catch { /* modo privado */ }
+  }, []);
+
+  const cambiarRango = useCallback((next: RangoFechasValor) => {
+    setRango(next);
+    try { localStorage.setItem(CLAVE_RANGO, JSON.stringify(next)); } catch { /* modo privado */ }
+  }, []);
+
+  const cambiarSede = useCallback((next: string) => {
+    setSede(next);
+    try { localStorage.setItem(CLAVE_SEDE, next); } catch { /* modo privado */ }
+  }, []);
+
+  const { desde, hasta } = rango;
+  
   const load = useCallback(() => {
     setErr(false);
-    void authFetch("/dashboard")
-      .then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
-      .then(setD)
-      .catch(() => setErr(true));
-  }, [authFetch]);
+    setCargando(true);
+    void authFetch(`/dashboard?from=${desde}&to=${hasta}${sede ? `&sede=${sede}` : ""}`)
+      .then((r) => {
+        // 403 = la sede recordada ya no es suya (le cambiaron el alcance). Se olvida y
+        // se vuelve a "todas" en vez de dejarlo con un panel roto que no sabe arreglar.
+        if (r.status === 403 && sede) { cambiarSede(""); return null; }
+        if (!r.ok) throw new Error(String(r.status));
+        return r.json();
+      })
+      .then((json) => { if (json) setD(json); })
+      .catch(() => setErr(true))
+      .finally(() => setCargando(false));
+  }, [authFetch, desde, hasta, sede, cambiarSede]);
+
   useEffect(() => { if (!authLoading) load(); }, [authLoading, load]);
   if (authLoading) return <PageSkeleton />;
   if (err && !d) return <div className="p-6"><LoadError message="No se pudo cargar el panel." onRetry={load} /></div>;
@@ -159,25 +232,72 @@ function PanelEjecutivo() {
       <div><div className="text-[17px] font-bold leading-none text-text-primary">{value}</div><div className="text-[11px] text-text-tertiary">{label}</div></div>
     </Link>
   );
+  const Rotulo = ({ children }: { children: React.ReactNode }) => (
+    <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-text-tertiary">{children}</div>
+  );
+
+  const periodo = etiquetaRango(rango);
+  // El catálogo lo trae la propia respuesta ya acotado a las sedes del usuario: no hay
+  // llamada aparte, y quien sólo alcanza una sede no ve un desplegable que no le sirve.
+  const sedes: { id: number; nombre: string }[] = d.sedes ?? [];
+  // La sede que trae los datos que se están pintando (`d.sede`), no la del selector:
+  // mientras vuelve la petición siguiente, los rótulos tienen que describir lo que hay
+  // en pantalla. Y a quien sólo alcanza una sede se la nombra igual, aunque no filtre.
+  const sedeActual = d.sede != null ? sedes.find((x) => x.id === d.sede) ?? null : null;
+  const ambito = sedeActual ? sedeActual.nombre : "Todas las sedes";
 
   return (
     <>
-      <PageHeading icon="layout-dashboard" title="Panel ejecutivo" subtitle="Operación Vestel · abonados, recaudo, cartera y red" />
-
-      {/* Franja de KPIs */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
-        <Kpi label="Abonados" value={nfmt(d.clientes.total)} icon="users" href="/clientes" />
-        <Kpi label="Activos" value={nfmt(d.clientes.activos)} icon="activity" href="/clientes" tone="bg-success-soft text-success-text" />
-        <Kpi label="Cartera" value={compact(d.cartera.total)} icon="alert-triangle" href="/facturacion" tone="bg-error-soft text-error-text" />
-        <Kpi label="Recaudo" value={compact(d.tesoreria.ingresos)} icon="banknote" href="/tesoreria" tone="bg-success-soft text-success-text" />
-        <Kpi label="Órdenes abiertas" value={nfmt(d.soporte.pendientes)} icon="headphones" href="/soporte" tone="bg-info-soft text-info-text" />
-        <Kpi label="Conexiones" value={nfmt(d.red.puertosUsados)} icon="wand-sparkles" href="/red" />
+      {/*
+        El panel se lee SIEMPRE contra un periodo (por defecto el mes en curso). Lo que
+        es una foto de hoy y no depende del rango —la base de abonados y la cartera—
+        queda sólo en las donas, que lo dicen en su propio subtítulo: la franja "A hoy"
+        se quitó a pedido del usuario (2026-08-08) por repetir esos mismos números.
+      */}
+      <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0 [&>div]:mb-0">
+          <PageHeading icon="layout-dashboard" title="Panel ejecutivo" subtitle={`${ambito} · ${periodo}`} />
+        </div>
+        <div className="flex flex-wrap items-center gap-2 lg:pt-1">
+          {cargando && <Icon name="loader" size={14} className="animate-spin text-text-tertiary" />}
+          {sedes.length > 1 && (
+            <Select value={sede} onChange={(e) => cambiarSede(e.target.value)} className="w-auto" aria-label="Sede">
+              <option value="">Todas las sedes</option>
+              {sedes.map((x) => <option key={x.id} value={x.id}>{x.nombre}</option>)}
+            </Select>
+          )}
+          <RangoFechas value={rango} onChange={cambiarRango} />
+        </div>
       </div>
 
-      {/* Gráfica hero: recaudo mensual */}
+      {/* Franja de KPIs del periodo elegido */}
+      <div className="shrink-0">
+        <Rotulo>En el periodo</Rotulo>
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
+          <Kpi label="Facturado" value={compact(d.facturacion.total)} icon="file-text" href="/facturacion" />
+          <Kpi label="Recaudo" value={compact(d.tesoreria.ingresos)} icon="banknote" href="/tesoreria" tone="bg-success-soft text-success-text" />
+          <Kpi label="Egresos" value={compact(d.tesoreria.egresos)} icon="arrow-down" href="/tesoreria" tone="bg-error-soft text-error-text" />
+          <Kpi label="Órdenes creadas" value={nfmt(d.soporte.total)} icon="headphones" href="/soporte" tone="bg-info-soft text-info-text" />
+          <Kpi label="Abonados nuevos" value={nfmt(d.nuevosAbonados ?? 0)} icon="user-plus" href="/clientes" tone="bg-success-soft text-success-text" />
+        </div>
+      </div>
+
+      {/* Gráfica hero: recaudo del periodo */}
       <div className="rounded-2xl border border-border-subtle bg-surface p-4 shadow-sm">
         <div className="mb-1 flex items-center justify-between">
-          <div><div className="text-[14px] font-bold text-text-primary">Recaudo vs egresos por mes</div><div className="text-[11px] text-text-tertiary">Flujo de caja de los últimos meses</div></div>
+          <div>
+            <div className="text-[14px] font-bold text-text-primary">Recaudo vs egresos</div>
+            {/*
+              Al filtrar por sede el movimiento se ata a SU CAJA, que es donde vive la
+              sede del dinero. Los bancos (Wompi, consignaciones) no son de ninguna
+              sede, así que quedan fuera: se avisa aquí para que nadie lea el recaudo de
+              una sede como "todo lo que entró por esos clientes".
+            */}
+            <div className="text-[11px] text-text-tertiary">
+              Flujo de caja {d.rango?.granularidad === "dia" ? "por día" : "por mes"} · {periodo}
+              {sedeActual && " · sólo las cajas de la sede (los bancos no se reparten)"}
+            </div>
+          </div>
           <span className="flex gap-3 text-[11px]">
             <span className="flex items-center gap-1"><span className="h-[3px] w-4 rounded-full bg-brand" /> Ingresos</span>
             <span className="flex items-center gap-1"><span className="h-[3px] w-4 rounded-full bg-error-text" /> Egresos</span>
@@ -189,7 +309,8 @@ function PanelEjecutivo() {
       {/* Dos donas: base de clientes + cartera por edad */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div className="rounded-2xl border border-border-subtle bg-surface p-4 shadow-sm">
-          <div className="mb-3 text-[13px] font-bold text-text-primary">Distribución de la base activa</div>
+          <div className="text-[13px] font-bold text-text-primary">Distribución de la base activa</div>
+          <div className="mb-3 text-[11px] text-text-tertiary">Cómo está la base hoy (no depende del periodo)</div>
           <div className="flex items-center gap-5">
             <Donut segments={baseSeg} centerValue={nfmt(baseActiva)} centerLabel="conectados" />
             <Legend segments={baseSeg} fmt={nfmt} />
@@ -197,7 +318,7 @@ function PanelEjecutivo() {
         </div>
         <div className="rounded-2xl border border-border-subtle bg-surface p-4 shadow-sm">
           <div className="text-[13px] font-bold text-text-primary">Cartera por antigüedad</div>
-          <div className="mb-3 text-[11px] text-text-tertiary">Deuda según los días que lleva vencida</div>
+          <div className="mb-3 text-[11px] text-text-tertiary">Deuda a hoy según los días que lleva vencida</div>
           <div className="flex items-center gap-5">
             <Donut segments={ageSeg} centerValue={compact(d.cartera.total)} centerLabel="pendiente" />
             <Legend segments={ageSeg} fmt={compact} />
@@ -209,22 +330,44 @@ function PanelEjecutivo() {
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div className="rounded-2xl border border-border-subtle bg-surface p-4 shadow-sm">
           <div className="text-[13px] font-bold text-text-primary">Facturación por sede</div>
-          <div className="mb-3 text-[11px] text-text-tertiary">Total facturado histórico y abonados por sede</div>
+          {/*
+            Esta tarjeta NO se filtra a propósito: es la comparativa entre sedes, y
+            filtrada sería una sola barra al 100%, que no compara nada. Al elegir una
+            sede se resalta la suya y se atenúan las demás.
+          */}
+          <div className="mb-3 text-[11px] text-text-tertiary">
+            Facturado y abonados facturados en el periodo · {periodo}
+            {sedeActual && sedes.length > 1 && " · todas las sedes, para comparar"}
+          </div>
           <div className="flex flex-col gap-3">
-            {(d.ventasPorSede ?? []).map((s: any) => (
-              <div key={s.sede} className="flex items-center gap-3">
-                <span className="w-24 shrink-0 truncate text-[12px] font-semibold text-text-primary">{s.sede}</span>
-                <div className="h-3 flex-1 overflow-hidden rounded-full bg-surface-2"><div className="h-full rounded-full bg-brand" style={{ width: `${(s.total / maxSede) * 100}%` }} /></div>
-                <div className="w-32 shrink-0 text-right">
-                  <div className="text-[12px] font-bold text-text-primary" title={cop(s.total)}>{mill(s.total)}</div>
-                  <div className="text-[10px] text-text-tertiary">{nfmt(s.abonados)} abonados</div>
-                </div>
-              </div>
-            ))}
+            {!(d.ventasPorSede ?? []).length && <div className="py-6 text-center text-[12px] text-text-tertiary">Sin facturación en el periodo</div>}
+            {(d.ventasPorSede ?? []).map((s: any) => {
+              const elegida = !!sedeActual && s.id === d.sede;
+              const atenuada = !!sedeActual && !elegida;
+              return (
+                <button
+                  key={s.sede}
+                  type="button"
+                  // La barra es también el filtro: es donde uno mira cuando piensa "¿y
+                  // qué pasa en Monterrey?". Volver a pulsarla quita el filtro.
+                  onClick={() => cambiarSede(elegida || s.id == null ? "" : String(s.id))}
+                  className={`tap flex items-center gap-3 rounded-lg px-1 py-0.5 text-left transition-opacity hover:bg-surface-2 ${atenuada ? "opacity-45" : ""}`}
+                  aria-pressed={elegida}
+                >
+                  <span className={`w-24 shrink-0 truncate text-[12px] font-semibold ${elegida ? "text-brand" : "text-text-primary"}`}>{s.sede}</span>
+                  <div className="h-3 flex-1 overflow-hidden rounded-full bg-surface-2"><div className="h-full rounded-full bg-brand" style={{ width: `${(s.total / maxSede) * 100}%` }} /></div>
+                  <div className="w-32 shrink-0 text-right">
+                    <div className="text-[12px] font-bold text-text-primary" title={cop(s.total)}>{mill(s.total)}</div>
+                    <div className="text-[10px] text-text-tertiary">{nfmt(s.abonados)} abonados</div>
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </div>
         <div className="rounded-2xl border border-border-subtle bg-surface p-4 shadow-sm">
-          <div className="mb-2 text-[13px] font-bold text-text-primary">Top clientes en mora</div>
+          <div className="text-[13px] font-bold text-text-primary">Top clientes en mora</div>
+          <div className="mb-2 text-[11px] text-text-tertiary">Deuda acumulada a hoy</div>
           <div className="flex flex-col">
             {(d.topDeudores ?? []).slice(0, 7).map((r: any, i: number) => (
               <Link key={r.id} href={`/clientes/${r.id}`} className="flex items-center justify-between gap-2 border-b border-border-subtle py-1.5 text-[12px] last:border-0 hover:text-brand">

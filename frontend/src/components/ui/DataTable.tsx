@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Icon } from "../Icon";
 import { alternarOrden, claveDeOrden, esOrdenable, etiquetaDe, ordenarFilas } from "./table-sort";
 
@@ -58,10 +59,12 @@ export function DataTable<T>({
   loading = false,
   loadingText = "Cargando…",
   onRowClick,
+  rowHref,
   sort,
   onSort,
   fill = false,
   sortableByDefault,
+  cardRender,
 }: {
   columns: Column<T>[];
   rows: T[];
@@ -75,6 +78,16 @@ export function DataTable<T>({
   /** Texto del indicador de carga (p. ej. "Consultando la OLT por SSH…"). */
   loadingText?: string;
   onRowClick?: (row: T) => void;
+  /**
+   * A dónde lleva la fila. Con esto la fila se comporta como un enlace de
+   * verdad: **ctrl/⌘+clic y el botón central abren en una pestaña nueva** y el
+   * listado se queda intacto detrás, con sus filtros y su página. El clic
+   * normal navega igual que siempre (sin recargar).
+   *
+   * Si además se pasa `onRowClick`, manda ese para el clic normal (filas que
+   * abren un panel en vez de navegar).
+   */
+  rowHref?: (row: T) => string;
   /** Estado de orden actual (columna + dirección). Solo con `onSort`. */
   sort?: SortState;
   /**
@@ -97,7 +110,47 @@ export function DataTable<T>({
    * filas aunque delegue el click.
    */
   sortableByDefault?: boolean;
+  /**
+   * Tarjeta a medida para móvil (< sm). Sin esto, la tarjeta se arma sola con las
+   * columnas (titular + una fila etiqueta/valor por columna), que sirve para una
+   * tabla de cuatro o cinco columnas y se vuelve un muro en cuanto hay más: la
+   * lista de órdenes son diez columnas, o sea diez renglones y 355 px por tarjeta
+   * —una orden por pantalla—, cuando lo que se busca en el móvil son cuatro datos.
+   *
+   * El listado sigue declarando sus `columns` (la tabla de escritorio, el orden y
+   * el Excel salen de ahí); esto sólo cambia CÓMO se dibuja la misma fila en
+   * pantalla estrecha. Quien lo use se encarga del interior de la tarjeta: la caja,
+   * el borde y el clic los sigue poniendo la tabla.
+   */
+  cardRender?: (row: T) => React.ReactNode;
 }) {
+  const router = useRouter();
+
+  /**
+   * Clic en una fila. Un `<tr>` no puede envolverse en `<a>` (el HTML no lo
+   * permite dentro de la tabla), así que las teclas de "abrir aparte" se
+   * atienden a mano: sin esto, ctrl+clic navegaba en la misma pestaña y el
+   * usuario perdía los filtros que tenía puestos.
+   */
+  const clicEnFila = (row: T) => (e: React.MouseEvent) => {
+    // Un clic sobre un enlace, un botón o un control DENTRO de la fila es suyo y
+    // no de la fila. Sin esto, un ctrl+clic sobre el enlace de la primera columna
+    // abría DOS pestañas (la del enlace y la que abre la fila), y un botón de
+    // acción del pie de la tarjeta navegaba además al detalle.
+    if ((e.target as HTMLElement)?.closest?.("a,button,input,select,textarea,label")) return;
+    const href = rowHref?.(row);
+    const aparte = e.ctrlKey || e.metaKey || e.shiftKey || e.button === 1;
+    if (href && aparte) {
+      e.preventDefault();
+      window.open(href, "_blank", "noopener,noreferrer");
+      return;
+    }
+    if (e.button === 1) return; // botón central sin destino: no hace nada
+    if (onRowClick) onRowClick(row);
+    else if (href) router.push(href);
+  };
+  const filaPulsable = (row: T) => !!onRowClick || !!rowHref?.(row);
+
   // Sin `onSort`, la tabla se ordena a sí misma: la cabecera funciona en todos
   // los listados sin que cada pantalla tenga que cablear nada.
   const local = !onSort;
@@ -194,8 +247,9 @@ export function DataTable<T>({
             {filas.map((row, i) => (
               <tr
                 key={i}
-                onClick={onRowClick ? () => onRowClick(row) : undefined}
-                className={`border-b border-border-subtle last:border-0 odd:bg-surface even:bg-surface-2/60 transition-colors hover:bg-brand-soft/30 ${onRowClick ? "cursor-pointer" : ""}`}
+                onClick={filaPulsable(row) ? clicEnFila(row) : undefined}
+                onAuxClick={rowHref ? clicEnFila(row) : undefined}
+                className={`border-b border-border-subtle last:border-0 odd:bg-surface even:bg-surface-2/60 transition-colors hover:bg-brand-soft/30 ${filaPulsable(row) ? "cursor-pointer" : ""}`}
               >
                 {columns.map((c) => (
                   <td key={c.key} className={`px-4 py-3 text-text-primary ${alignClass(c.align)}`}>
@@ -260,11 +314,26 @@ export function DataTable<T>({
           const titulo = columns.filter((c, j) => papelEnTarjeta(c, j) === "title");
           const filas = columns.filter((c, j) => papelEnTarjeta(c, j) === "row");
           const pie = columns.filter((c, j) => papelEnTarjeta(c, j) === "footer");
+          // Con tarjeta a medida la caja no lleva relleno propio: lo pone ella, que
+          // es quien sabe cómo se reparte por dentro.
+          if (cardRender) {
+            return (
+              <div
+                key={i}
+                onClick={filaPulsable(row) ? clicEnFila(row) : undefined}
+                onAuxClick={rowHref ? clicEnFila(row) : undefined}
+                className={`overflow-hidden rounded-xl border border-border-subtle bg-surface shadow-sm ${filaPulsable(row) ? "cursor-pointer active:bg-surface-2" : ""}`}
+              >
+                {cardRender(row)}
+              </div>
+            );
+          }
           return (
             <div
               key={i}
-              onClick={onRowClick ? () => onRowClick(row) : undefined}
-              className={`rounded-xl border border-border-subtle bg-surface px-3.5 py-1 shadow-sm ${onRowClick ? "cursor-pointer active:bg-surface-2" : ""}`}
+              onClick={filaPulsable(row) ? clicEnFila(row) : undefined}
+              onAuxClick={rowHref ? clicEnFila(row) : undefined}
+              className={`rounded-xl border border-border-subtle bg-surface px-3.5 py-1 shadow-sm ${filaPulsable(row) ? "cursor-pointer active:bg-surface-2" : ""}`}
             >
               {titulo.map((c) => (
                 <div

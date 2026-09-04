@@ -33,7 +33,7 @@ function bytesToBase64url(bytes: Uint8Array): string {
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-type TokenClaims = { exp?: number; areas?: string[]; sa?: boolean };
+type TokenClaims = { exp?: number; areas?: string[]; sa?: boolean; inv?: boolean };
 
 /**
  * Verifica firma + expiración y devuelve el payload decodificado, o null si el
@@ -81,6 +81,11 @@ const ROUTE_AREA: [RegExp, string[]][] = [
   [/^\/dashboard(\/|$)/, ["gerencia", "caja", "tecnicos"]],
   [/^\/reportes(\/|$)/, ["gerencia"]],
   [/^\/facturacion(\/|$)/, ["contabilidad", "caja"]],
+  // Pagos en línea del portal: es el recaudo de TODAS las sedes y trae el botón de
+  // forzar la pasada (que sale a tocar routers y OLTs). Regla específica ANTES de
+  // la general de /tesoreria, que sí incluye a la cajera — y la API no la deja
+  // pasar, así que sin esto la pantalla se le abriría para morir en un 403.
+  [/^\/tesoreria\/pagos-en-linea(\/|$)/, ["contabilidad", "administracion", "gerencia"]],
   [/^\/tesoreria(\/|$)/, ["contabilidad", "caja"]],
   [/^\/cotizaciones(\/|$)/, ["contabilidad"]],
   // El agendamiento lo hace la cajera (y administración), no el técnico: regla
@@ -120,16 +125,34 @@ const ROUTE_AREA: [RegExp, string[]][] = [
   // quitarle el acceso a quien la usa. Regla específica ANTES de la general.
   [/^\/configuracion\/empleados(\/|$)/, ["sistemas", "administracion"]],
   [/^\/configuracion(\/|$)/, ["sistemas"]],
+  // La FICHA del cliente se le abre al TÉCNICO (2026-08-31, a pedido del usuario):
+  // llega a ella desde su orden y necesita lo que hay dentro — teléfono, dirección,
+  // plan, equipos y el histórico de lo que ya se le hizo —. Es de CONSULTA: los
+  // botones que vuelven sobre el cliente (editar, plan, estado, cobrar) no se le
+  // pintan, y la API se los niega desde `SubscribersController.soloMira`.
+  // El LISTADO sigue sin ser suyo (regla general de abajo): "el técnico ve lo suyo",
+  // y los 15.000 clientes de la empresa no lo son. Regla específica ANTES de ella.
+  // `grupos` queda fuera a propósito: es otra pantalla, no una ficha.
+  [/^\/clientes\/(?!grupos(\/|$))[^/]+/, ["administracion", "caja", "tecnicos"]],
   [/^\/clientes(\/|$)/, ["administracion", "caja"]],
   [/^\/playhub(\/|$)/, ["administracion"]],
   // Traspasos de material: la cajera le entrega material al técnico (traspaso a su
-  // almacén). Regla específica ANTES de /inventario, que sigue siendo de
-  // administración: del módulo sólo se le abre esta pantalla.
-  [/^\/inventario\/traspasos(\/|$)/, ["administracion", "caja"]],
+  // almacén) y —desde 2026-09-03— el TÉCNICO devuelve a la bodega de su sede lo que
+  // le sobró. Cada uno ve un formulario distinto: el backend
+  // (`InventoryService.transferContext`) decide el modo, aquí sólo se abre la puerta.
+  // Regla específica ANTES de /inventario, que sigue siendo de administración.
+  [/^\/inventario\/traspasos(\/|$)/, ["administracion", "caja", "tecnicos"]],
   // Bodegas de material: al técnico se le abre SU bodega (el backend sólo le
   // devuelve esa). Regla específica ANTES de /inventario, que sigue siendo de
   // administración — del módulo no se le abre nada más.
   [/^\/inventario\/bodegas(\/|$)/, ["administracion", "tecnicos"]],
+  // Actas de traspaso: es la pantalla donde se FIRMA el recibido, así que la tiene
+  // que abrir quien recibe — el técnico en su almacén — además de quien entrega (la
+  // cajera) y de administración. La API ya las aceptaba a las tres
+  // (`InventoryController.TRASPASOS`); era este gate el que dejaba al técnico con el
+  // material en tránsito y sin forma de acreditarlo. Regla específica ANTES de la
+  // general de /inventario.
+  [/^\/inventario\/actas(\/|$)/, ["administracion", "tecnicos", "caja"]],
   [/^\/inventario(\/|$)/, ["administracion"]],
   // Compras salió del perfil de caja (2026-07-29): quien recauda no ordena compras.
   [/^\/ordenes(\/|$)/, ["administracion"]],
@@ -157,6 +180,18 @@ const AREA_LANDING: Record<string, string> = {
   sistemas: "/configuracion",
   administracion: "/clientes",
 };
+
+/**
+ * Lo que puede abrir el JEFE DE BODEGA (`inventory.admin`), que no tiene área
+ * ninguna. Es la lista corta a propósito: son las rutas que la API ya le abre con
+ * `@OrPermission(INV_PERMISSIONS.ADMIN)` —transferencias, equipos y bodegas de
+ * `/api/network`—, ni una más. Darle un área entera en su lugar le habría abierto
+ * también los datos de esa área, que no es lo que se quiere.
+ */
+const RUTAS_JEFE_BODEGA: RegExp[] = [/^\/red\/transferencias(\/|$)/];
+
+/** Su aterrizaje: la única pantalla que tiene. */
+const LANDING_JEFE_BODEGA = "/red/transferencias";
 
 function areasForPath(pathname: string): string[] | null {
   for (const [re, areas] of ROUTE_AREA) if (re.test(pathname)) return areas;
@@ -195,9 +230,13 @@ export async function middleware(req: NextRequest) {
   // para no dejar encerrada una sesión abierta antes de este despliegue.
   if (valid && claims && Array.isArray(claims.areas) && !claims.sa) {
     const areas = areasForPath(pathname);
-    if (areas && !areas.some((a) => claims.areas!.includes(a))) {
+    // El jefe de bodega pasa por su propia puerta: no tiene área, así que la
+    // comprobación de arriba lo rebotaba SIEMPRE (también fuera de su pantalla, con
+    // lo que quedaba dando vueltas sin poder entrar a nada).
+    const jefeBodega = !!claims.inv && RUTAS_JEFE_BODEGA.some((re) => re.test(pathname));
+    if (areas && !jefeBodega && !areas.some((a) => claims.areas!.includes(a))) {
       const mine = claims.areas[0];
-      const dest = (mine && AREA_LANDING[mine]) || "/";
+      const dest = (mine && AREA_LANDING[mine]) || (claims.inv ? LANDING_JEFE_BODEGA : "/");
       return NextResponse.redirect(new URL(dest === pathname ? "/" : dest, req.url));
     }
   }
@@ -207,5 +246,13 @@ export async function middleware(req: NextRequest) {
 
 export const config = {
   // Run on everything except Next internals and static assets.
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)"],
+  //
+  // `descargas/` queda fuera a propósito: es la carpeta de material comercial
+  // (public/descargas) pensada para enviar por fuera de la empresa. Todo lo que
+  // se deposite ahí es descargable SIN sesión, así que no debe contener datos de
+  // clientes. Es el único directorio exento; el resto del sitio sigue detrás del
+  // gate de sesión.
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|descargas/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
+  ],
 };

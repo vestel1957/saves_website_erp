@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Inter } from "next/font/google";
+import { Plus_Jakarta_Sans } from "next/font/google";
 import { cookies } from "next/headers";
 import "./globals.css";
 import { Toaster } from "@/components/ui/Toast";
@@ -25,9 +25,17 @@ async function getInitialUser(): Promise<AuthUser | null> {
   }
 }
 
-const inter = Inter({
+/**
+ * El tipo de letra de TODA la interfaz. Se expone como variable CSS y `globals.css`
+ * la ata a `--font-sans`, que es de donde tira el `font-sans` de Tailwind: cambiar
+ * la fuente del sistema entero es cambiar estas dos líneas y nada más.
+ *
+ * La variable se llama `--font-ui` y no por el nombre de la familia a propósito:
+ * el día que se vuelva a cambiar, el nombre no queda mintiendo por el CSS.
+ */
+const fuenteUi = Plus_Jakarta_Sans({
   subsets: ["latin"],
-  variable: "--font-inter",
+  variable: "--font-ui",
   display: "swap",
 });
 
@@ -41,6 +49,9 @@ export const viewport: Viewport = {
   initialScale: 1,
   // Permite hacer zoom (accesibilidad) pero evita el zoom automático en inputs de iOS.
   maximumScale: 5,
+  // Sin `cover`, `env(safe-area-inset-*)` vale 0 en iOS y el pie del menú lateral
+  // (donde está «Cerrar sesión») queda debajo de la barra de gestos.
+  viewportFit: "cover",
 };
 
 export default async function RootLayout({
@@ -50,7 +61,7 @@ export default async function RootLayout({
 }) {
   const initialUser = await getInitialUser();
   return (
-    <html lang="es" className={inter.variable} suppressHydrationWarning>
+    <html lang="es" className={fuenteUi.variable} suppressHydrationWarning>
       <head>
         {/*
           Anti-FOUC: aplica tema oscuro, color primario y tinte de fondo guardados

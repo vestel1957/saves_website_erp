@@ -95,3 +95,46 @@ export function Interruptor({
     </button>
   );
 }
+
+/**
+ * El mismo interruptor sin texto, para cuando va dentro de una fila de lista y
+ * lo que enciende ya lo dice la fila (el plan que tiene al lado, por ejemplo).
+ * `label` no se ve: es lo que lee el lector de pantalla.
+ */
+export function InterruptorCompacto({
+  checked,
+  onChange,
+  label,
+  disabled = false,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  label: string;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className="tap shrink-0 rounded-full disabled:opacity-50"
+    >
+      <span
+        aria-hidden
+        className={`block h-[21px] w-[38px] rounded-full transition-colors ${
+          checked ? "bg-brand" : "bg-border-strong"
+        }`}
+      >
+        <span
+          className={`block h-[17px] w-[17px] translate-y-[2px] rounded-full bg-white shadow-sm transition-transform ${
+            checked ? "translate-x-[19px]" : "translate-x-[2px]"
+          }`}
+        />
+      </span>
+    </button>
+  );
+}

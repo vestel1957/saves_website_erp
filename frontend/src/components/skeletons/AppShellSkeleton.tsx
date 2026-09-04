@@ -8,9 +8,9 @@ import { PageSkeleton } from "./PageSkeleton";
  */
 export function AppShellSkeleton() {
   return (
-    <div className="flex h-screen overflow-hidden bg-canvas">
+    <div className="flex h-dvh overflow-hidden bg-canvas">
       {/* Sidebar (oculto en móvil, igual que el real) */}
-      <aside className="hidden h-screen w-[260px] shrink-0 flex-col border-r border-border-subtle bg-sidebar lg:flex">
+      <aside className="hidden h-dvh w-[260px] shrink-0 flex-col border-r border-border-subtle bg-sidebar lg:flex">
         <div className="flex h-16 items-center gap-2.5 border-b border-border-subtle px-4">
           <Skeleton className="h-8 w-8 rounded-lg bg-sidebar-hover" />
           <Skeleton className="h-4 w-28 bg-sidebar-hover" />

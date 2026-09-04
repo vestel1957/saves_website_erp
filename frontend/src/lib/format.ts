@@ -47,6 +47,30 @@ export function fmtDate(d: string | Date | null | undefined): string {
   return fecha.toLocaleDateString("es-CO", esSoloFecha(fecha) ? { timeZone: "UTC" } : undefined);
 }
 
+/**
+ * Día largo con su nombre: "martes, 25 de agosto de 2026".
+ *
+ * Para encabezar agrupaciones por día, donde la fecha corta se lee como un dato más
+ * de la fila y no como el título del bloque.
+ */
+export function fmtDiaLargo(d: string | Date | null | undefined): string {
+  if (!d) return "—";
+  const fecha = d instanceof Date ? d : new Date(d);
+  if (Number.isNaN(fecha.getTime())) return "—";
+  return fecha.toLocaleDateString("es-CO", {
+    weekday: "long", day: "numeric", month: "long", year: "numeric",
+    ...(esSoloFecha(fecha) ? { timeZone: "UTC" } : {}),
+  });
+}
+
+/** Sólo la hora ("5:11 p. m."), para cuando el día ya está escrito al lado. */
+export function fmtHora(d: string | Date | null | undefined): string {
+  if (!d) return "—";
+  const fecha = d instanceof Date ? d : new Date(d);
+  if (Number.isNaN(fecha.getTime())) return "—";
+  return fecha.toLocaleTimeString("es-CO", { hour: "numeric", minute: "2-digit" });
+}
+
 /** Fecha y hora es-CO, para hilos, auditoría y movimientos. */
 export function fmtDateTime(d: string | Date | null | undefined): string {
   if (!d) return "—";

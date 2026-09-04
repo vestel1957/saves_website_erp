@@ -534,8 +534,14 @@ export type ServiceOrderData = {
   created: Date | string | null;
   finalDate: Date | string | null;
   technician: string | null;
+  /** Quién generó la orden. null en las heredadas que nacieron sin autor. */
+  generadaPor: string | null;
   problem: string | null;
   section: string | null;
+  /** Traslado: a dónde hay que ir a montar el servicio (y de dónde salió). */
+  traslado: { desde: string | null; hasta: string } | null;
+  /** Megas: a qué velocidad hay que dejar al cliente (y de cuál viene). */
+  megas: { de: number | null; a: number | null; plan: string | null } | null;
   subscriber: {
     name: string; doc: string | null; abonado: number | null; phone: string | null;
     address: string | null; barrio: string | null; branch: string | null;
@@ -543,7 +549,7 @@ export type ServiceOrderData = {
   } | null;
   equipment: { mac: string | null; installType: string | null; port: number | null; vlan: number | null; nat: number | null; serial: string | null }[];
   materials: { name: string; qty: number; price: number; total: number }[];
-  threads: { message: string | null; date: Date | string; hasPhoto: boolean }[];
+  threads: { message: string | null; date: Date | string; hasPhoto: boolean; author?: string | null }[];
   signature: { name: string; cc: string | null; rel: string | null } | null;
 };
 
@@ -561,6 +567,9 @@ export function serviceOrderPdf(res: Response, d: ServiceOrderData) {
   kv(doc, 'Creada:', fmt(d.created));
   if (d.finalDate) kv(doc, 'Finalizada:', fmt(d.finalDate));
   kv(doc, 'Técnico:', d.technician || '—');
+  // Quién la mandó. Va junto al técnico a propósito: el acta que se lleva a la
+  // casa del cliente dice las dos puntas del trabajo, quién lo pidió y quién lo hace.
+  if (d.generadaPor) kv(doc, 'Generada por:', d.generadaPor);
   doc.moveDown(0.8);
 
   // Datos del cliente
@@ -572,6 +581,23 @@ export function serviceOrderPdf(res: Response, d: ServiceOrderData) {
     if (s.abonado != null) kv(doc, 'Abonado N°:', String(s.abonado));
     if (s.phone) kv(doc, 'Celular:', s.phone);
     if (s.address) kv(doc, 'Dirección:', [s.address, s.barrio].filter(Boolean).join(', '));
+    // En un traslado la dirección de arriba YA es la nueva (se le cambia a la
+    // ficha al abrir la orden), así que lo que hace falta decir es de dónde viene:
+    // sin eso el técnico no sabe dónde está el equipo que tiene que recoger.
+    if (d.traslado) {
+      kv(doc, 'Traslado desde:', d.traslado.desde || 'dirección sin registrar');
+      kv(doc, 'Traslado hasta:', d.traslado.hasta);
+    }
+    // Y en una orden de megas, a qué velocidad hay que dejarlo: es LO que se va a
+    // hacer, y sin ella el acta impresa sólo dice "Subir megas".
+    if (d.megas) {
+      kv(
+        doc,
+        'Megas:',
+        `de ${d.megas.de != null ? `${d.megas.de}` : '—'} a ${d.megas.a != null ? `${d.megas.a}` : '—'}`
+          + (d.megas.plan ? ` (plan ${d.megas.plan})` : ''),
+      );
+    }
     if (s.branch) kv(doc, 'Sede:', s.branch);
     if (s.services) kv(doc, 'Servicios:', s.services);
     kv(doc, 'Deuda actual:', cop(s.debt));
@@ -627,7 +653,9 @@ export function serviceOrderPdf(res: Response, d: ServiceOrderData) {
       if (!h.message && !h.hasPhoto) continue;
       // Sin emoji: las fuentes base de pdfkit (Helvetica) no traen pictogramas y
       // el 📷 salía impreso como "Ø=Ü+" en la orden que firma el cliente.
-      const label = `${fmt(h.date)}${h.hasPhoto ? ' · con foto' : ''}`;
+      // Quién documentó va en el acta que firma el cliente: es la constancia de qué
+      // funcionario estuvo en la vivienda y qué dejó dicho.
+      const label = `${fmt(h.date)}${h.author ? ` · ${h.author}` : ''}${h.hasPhoto ? ' · con foto' : ''}`;
       doc.font('Helvetica-Bold').fillColor(GRAY).text(label);
       if (h.message) doc.font('Helvetica').fillColor('#333').text(h.message, { align: 'justify' });
       doc.moveDown(0.3);

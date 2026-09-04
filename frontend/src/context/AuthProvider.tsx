@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
+import { fijarDuenoDeFiltros } from "@/lib/useFiltrosUrl";
 import {
   API_URL,
   apiLogin,
@@ -75,6 +76,12 @@ export function AuthProvider({
   const router = useRouter();
   const [user, setUser] = useState<AuthUser | null>(initialUser);
   const [loading, setLoading] = useState(!initialUser);
+
+  // Los filtros que cada listado recuerda son de ESTE usuario (ver `useFiltrosUrl`).
+  // Se fija al pintar y no en un efecto a propósito: los efectos de los hijos corren
+  // ANTES que los del padre, así que en un efecto la lista habría leído los filtros
+  // guardados antes de saber de quién son.
+  if (typeof window !== "undefined") fijarDuenoDeFiltros(user?.id ?? null);
 
   const loadFromCookie = useCallback(async () => {
     const token = getTokenFromCookie();

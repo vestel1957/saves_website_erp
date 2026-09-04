@@ -21,6 +21,7 @@ import type { Response } from 'express';
 /** MIME permitidos → extensión canónica en disco. Todo lo demás se rechaza. */
 const EXT_POR_MIME: Record<string, string> = {
   'image/jpeg': '.jpg',
+  'image/jpg': '.jpg',
   'image/pjpeg': '.jpg',
   'image/png': '.png',
   'image/gif': '.gif',
@@ -33,6 +34,15 @@ const EXT_POR_MIME: Record<string, string> = {
   // demás módulos — eso lo decide la lista que cada uno pase a `mimeAceptado`.
   'application/msword': '.doc',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+  // Hoja de cálculo, texto plano y ZIP: no los sube una galería, pero sí el
+  // explorador del móvil, y `extensionDeAdjunto` los necesita aquí para poder
+  // deducir la extensión cuando el nombre no la trae.
+  'application/vnd.ms-excel': '.xls',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+  'text/csv': '.csv',
+  'text/plain': '.txt',
+  'application/zip': '.zip',
+  'application/x-zip-compressed': '.zip',
 };
 
 /**
@@ -66,9 +76,19 @@ export function extensionDeAudio(mimetype?: string | null): string | null {
   return EXT_POR_MIME_AUDIO[mimeBase(mimetype)] ?? null;
 }
 
-/** Content-Type con el que se devuelve cada extensión almacenada. */
+/**
+ * Content-Type con el que se devuelve cada extensión almacenada.
+ *
+ * Ojo con las extensiones que NO escribe `nombreEnDisco`: lo subido aquí siempre sale
+ * de `EXT_POR_MIME` (una foto es `.jpg`, nunca `.jpeg`), pero también se sirven ficheros
+ * cuyo nombre puso otro — los 26.153 comprobantes del legacy, de los cuales 19.492 son
+ * `.jpeg`. Lo que falte en este mapa se va por `application/octet-stream`, y entonces el
+ * navegador se BAJA el fichero en vez de enseñarlo: el comprobante del egreso estaba y
+ * se servía, pero pulsar "Ver" no mostraba nada.
+ */
 const MIME_POR_EXT: Record<string, string> = {
   '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
   '.png': 'image/png',
   '.gif': 'image/gif',
   '.webp': 'image/webp',
@@ -77,6 +97,18 @@ const MIME_POR_EXT: Record<string, string> = {
   '.pdf': 'application/pdf',
   '.doc': 'application/msword',
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  // Cargues masivos (importar pagos): el .xlsx original se guarda para poder volver
+  // a bajarlo. Se sirve igual que todo lo demás, como adjunto y con nosniff.
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  // Adjuntos de una orden de compra (cotización en Excel, listado en CSV…). Van aquí
+  // para que se sirvan con su tipo real y no como un binario anónimo; el
+  // `attachment` + `nosniff` de abajo los deja igual de inertes que los demás.
+  '.xls': 'application/vnd.ms-excel',
+  '.ppt': 'application/vnd.ms-powerpoint',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.csv': 'text/csv',
+  '.txt': 'text/plain',
+  '.zip': 'application/zip',
   // Notas de voz (ver EXT_POR_MIME_AUDIO). Se sirven con `enviarAdjuntoSeguro` como
   // todo lo demás: el reproductor de la bandeja lee los bytes por fetch y arma un
   // blob, así que el `Content-Disposition: attachment` no le estorba y se mantiene la
@@ -100,7 +132,10 @@ const MIME_POR_EXT: Record<string, string> = {
  * subir un `.docx` como comprobante de caja o como evidencia de una orden sin
  * que nadie lo decidiera. Ahora cada lista dice exactamente qué acepta.
  */
-export const MIMES_IMAGEN = ['image/jpeg', 'image/pjpeg', 'image/png', 'image/gif', 'image/webp', 'image/heic', 'image/heif'];
+// `image/jpg` no es un MIME estándar (el bueno es `image/jpeg`), pero es lo que
+// declaran varias galerías de Android al adjuntar una foto: sin él, subir desde la
+// galería fallaba y el funcionario tenía que "convertir la foto en archivo".
+export const MIMES_IMAGEN = ['image/jpeg', 'image/jpg', 'image/pjpeg', 'image/png', 'image/gif', 'image/webp', 'image/heic', 'image/heif'];
 export const MIMES_IMAGEN_Y_PDF = [...MIMES_IMAGEN, 'application/pdf'];
 /** Documentos de funcionario: lo anterior más Word. */
 export const MIMES_DOCUMENTO = [
@@ -112,6 +147,29 @@ export const MIMES_DOCUMENTO = [
 /** ¿Es un MIME que aceptamos? Se usa en el `fileFilter` de multer. */
 export function mimeAceptado(mimetype: string, permitidos: string[] = MIMES_IMAGEN_Y_PDF): boolean {
   return permitidos.includes(mimetype);
+}
+
+/**
+ * Extensión con la que se acepta y se guarda un adjunto en los módulos que validan
+ * **por extensión** (órdenes de compra, archivos del cliente, gestor documental).
+ *
+ * Por qué no basta con `extname(originalname)`: al adjuntar desde la GALERÍA del
+ * móvil, el nombre que entrega el navegador no siempre trae extensión (o trae una
+ * rara), así que el filtro rechazaba fotos perfectamente válidas — la queja de que
+ * "desde galería no deja, hay que convertirlo en archivo". Cuando el nombre no
+ * sirve, la extensión se deduce del MIME, y se comprueba contra la MISMA lista
+ * blanca: nada nuevo queda habilitado por este camino.
+ *
+ * Devuelve `null` si ni el nombre ni el MIME dan una extensión permitida.
+ */
+export function extensionDeAdjunto(
+  file: { originalname?: string | null; mimetype?: string | null },
+  permitidas: ReadonlySet<string>,
+): string | null {
+  const porNombre = extname(String(file.originalname ?? '')).toLowerCase();
+  if (permitidas.has(porNombre)) return porNombre;
+  const porMime = EXT_POR_MIME[mimeBase(file.mimetype)];
+  return porMime && permitidas.has(porMime) ? porMime : null;
 }
 
 /**

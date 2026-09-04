@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { listaJson } from "@/lib/errores";
+import { fmtDate } from "@/lib/format";
 import Link from "next/link";
 import { Icon } from "@/components/Icon";
 import { PageHeading } from "@/components/ui/PageHeading";
@@ -87,6 +88,8 @@ export default function EquiposPage() {
             { key: "client", header: "Asignado a", sortable: true, render: (r) => r.subscriberId ? <Link href={`/clientes/${r.subscriberId}`} className="text-brand hover:underline">{r.client}</Link> : <span className="text-text-tertiary">— disponible</span> },
             { key: "acs", header: "ACS", sortable: true, render: (r) => r.genieacs ? <Badge label="GenieACS" tone="info" /> : "—" },
             { key: "status", header: "Estado", sortable: true, render: (r) => <Badge label={r.status ?? "—"} tone={r.status === "Disponible" ? "success" : r.status === "Asignado" || r.status === "Instalado" ? "info" : "default"} /> },
+            // Día en que se recogió del cliente, no el día en que se tecleó la devolución.
+            { key: "returned", header: "Devuelto", sortable: true, render: (r) => r.returnedAt ? <span className="text-text-secondary">{fmtDate(r.returnedAt)}</span> : <span className="text-text-tertiary">—</span> },
             { key: "label", header: "", align: "right", render: (r) => (
               <button onClick={() => setLabel({ code: r.code, brand: r.brand, mac: r.mac, serial: r.serial })} title="Imprimir etiqueta QR"
                 className="inline-flex items-center gap-1 rounded-lg border border-border-default px-2.5 py-1.5 text-[12px] font-semibold text-text-secondary transition-colors hover:bg-surface-2">

@@ -8,10 +8,13 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { SignatureOtpService } from '../common/signature/signature-otp.service';
 import { WhatsappService } from '../common/whatsapp/whatsapp.service';
+import { NotificationsService } from '../common/notifications/notifications.service';
 import { pdfToBuffer } from '../common/pdf/pdf-buffer';
 import { actaPdf, ActaPdfData } from '../common/pdf/pdf-docs';
+import { hoyEnColombia } from '../common/fecha-colombia';
 import { esJefeDeBodega, esSuperusuario, exigirBodegaDeSuSede, sedesDeUsuario } from './bodega-scope';
 import { clavesDe, esTecnicoDeCampo, fichaDelUsuario } from '../common/tecnico-scope';
+import { cajerasDeSede } from '../common/sede-scope';
 
 export class EquipTransferDto {
   @IsString() fromWarehouseId!: string;
@@ -26,8 +29,14 @@ export class RejectTransferDto {
   @IsOptional() @IsString() reason?: string;
 }
 /** Código de firma (6 dígitos) para despachar o recibir entre sedes. */
+/**
+ * Firmar la salida. El código es OPCIONAL porque `signature.otpRequired` puede
+ * estar apagado: con el DTO exigiéndolo, apagar el ajuste dejaba la salida
+ * imposible de confirmar (400 antes de llegar al servicio). Quién puede firmar se
+ * sigue comprobando en `contextoDeFirma`, que eso no lo apaga ningún ajuste.
+ */
 export class SignTransferDto {
-  @IsString() @MinLength(4) code!: string;
+  @IsOptional() @IsString() @MinLength(4) code?: string;
 }
 /** Recibir: el código solo hace falta cuando la transferencia cruza sedes. */
 export class ReceiveTransferDto {
@@ -111,6 +120,7 @@ export class NetworkWriteService {
     private readonly prisma: PrismaService,
     private readonly firma: SignatureOtpService,
     private readonly whatsapp: WhatsappService,
+    private readonly avisos: NotificationsService,
   ) {}
 
   // ── Transferencias de equipos: sede y firmas ────────────────────────────────
@@ -246,7 +256,10 @@ export class NetworkWriteService {
   }
 
   async transferDetail(id: string, user?: AuthUser) {
-    const t = await this.prisma.equipmentTransfer.findUnique({ where: { id }, include: { items: { include: { equipment: true } } } });
+    const [t, firmaCfg] = await Promise.all([
+      this.prisma.equipmentTransfer.findUnique({ where: { id }, include: { items: { include: { equipment: true } } } }),
+      this.firma.config(),
+    ]);
     if (!t) throw new NotFoundException('Transferencia no encontrada');
     const { from, to } = await this.bodegasDe(t);
     const entreSedes = !!from && !!to && this.esEntreSedes(from, to);
@@ -263,6 +276,11 @@ export class NetworkWriteService {
       fromBranch: await this.nombreSede(from?.branchLegacy ?? null),
       toBranch: await this.nombreSede(to?.branchLegacy ?? null),
       entreSedes,
+      // ¿Salida y recepción van con código? Lo manda `signature.otpRequired`. La
+      // pantalla lo necesita para saber si abrir el diálogo de firma o despachar y
+      // recibir de una; `entreSedes` sigue diciendo QUIÉN puede hacerlo, que eso no
+      // lo apaga ningún ajuste.
+      otpRequired: firmaCfg.required,
       observations: t.observations, status: t.status ?? 'Emitida',
       requestedBy: t.requestedByName, requestedAt: t.requestedAt,
       approvedBy: t.approvedByName, approvedAt: t.approvedAt,
@@ -385,7 +403,7 @@ export class NetworkWriteService {
         const eq = await tx.equipment.findUnique({ where: { id: it.equipmentId } });
         // Revalida: el equipo debe seguir en la bodega origen al momento de despachar.
         if (!eq || eq.warehouseId !== fromWarehouseId) { skipped.push(eq?.code ?? it.equipmentLegacy); continue; }
-        await tx.equipment.update({ where: { id: eq.id }, data: { warehouseId: null } }); // en tránsito
+        await tx.equipment.update({ where: { id: eq.id }, data: { warehouseId: null, editedAt: new Date() } }); // en tránsito
         dispatched++;
       }
       if (!dispatched) throw new BadRequestException('Ningún equipo sigue disponible en la bodega origen');
@@ -492,19 +510,32 @@ export class NetworkWriteService {
 
     // Quién puede firmar ese paso = cajeras activas de esa sede. Mismo criterio que
     // autoriza la firma (`bodega-scope`), para no avisarle a quien luego no podría.
-    const cajeras = await this.prisma.user.findMany({
-      where: { isActive: true, roles: { some: { role: { key: 'area-caja' } } } },
-      select: { id: true, name: true, sedesAccede: true, cajaLegacyId: true },
+    // La resolución vive en `common/sede-scope` porque la comparte con la devolución
+    // de material del técnico, que también la firma "la cajera de esa sede".
+    const destinatarias = await cajerasDeSede(this.prisma, bodega.branchLegacy);
+    // La sede es la de ESA punta: en la entrada decía la de origen, que es
+    // justo la que no tiene el problema.
+    const sedePaso = paso === 'salida' ? data.fromBranch : data.toBranch;
+    if (!destinatarias.length) {
+      return { enviado: false as const, a: 0, motivo: `Nadie tiene asignada la sede ${sedePaso}: no hay quién firme ese paso (sólo el superusuario puede hacerlo en su lugar).` };
+    }
+
+    // La campanita PRIMERO, y pase lo que pase con Meta. Kapso rechaza con
+    // `422 outside the 24-hour window` a quien no le haya escrito al bot ese día —el
+    // caso normal de una cajera— y hasta ahora eso dejaba la transferencia esperando
+    // una firma que nadie sabía que tenía que poner. Ver el mismo arreglo en las
+    // actas de material (`InventoryService.enviarActa`).
+    await this.avisos.notify(destinatarias.map((c) => c.id), {
+      kind: 'red.transferencia',
+      title: paso === 'salida'
+        ? `Firma la SALIDA de ${data.items.length} equipo(s)`
+        : `Equipo en camino: ${data.items.length} equipo(s) por recibir`,
+      body: paso === 'salida'
+        ? `${data.from} (${data.fromBranch}) → ${data.to}. El equipo no sale hasta que firmes la salida con tu código.`
+        : `De ${data.from} a ${data.to} (${data.toBranch}). Cuando llegue, firma la recepción con tu código.`,
+      link: '/red/transferencias',
+      groupKey: `transferencia:${id}:${paso}`,
     });
-    const cuentas = await this.prisma.cashAccount.findMany({ select: { legacyId: true, branchLegacy: true } });
-    const sedeDeCaja = new Map(cuentas.filter((c) => c.legacyId != null).map((c) => [c.legacyId as number, c.branchLegacy]));
-    const destinatarias = cajeras.filter((c) => {
-      const sedes = new Set(c.sedesAccede ?? []);
-      const suya = c.cajaLegacyId != null ? sedeDeCaja.get(c.cajaLegacyId) : null;
-      if (suya != null && suya > 0) sedes.add(suya);
-      return sedes.has(bodega.branchLegacy!);
-    });
-    if (!destinatarias.length) return { enviado: false as const, a: 0, motivo: `Nadie tiene asignada la sede ${data.fromBranch}.` };
 
     const pdf = await pdfToBuffer((res) => actaPdf(res, data));
     const caption =
@@ -522,7 +553,7 @@ export class NetworkWriteService {
     return {
       enviado: enviadas > 0,
       a: enviadas,
-      motivo: enviadas ? undefined : 'Ninguna encargada de esa sede tiene celular registrado; el acta queda en el sistema.',
+      motivo: enviadas ? undefined : 'Ninguna encargada de esa sede recibió el acta por WhatsApp; ya les quedó el aviso en el sistema y el acta está en Transferencias de equipos.',
     };
   }
 
@@ -542,13 +573,21 @@ export class NetworkWriteService {
    * Firma la SALIDA: la cajera encargada de la sede origen confirma con su código
    * que el equipo se va, y ahí sí sale de la bodega y queda en tránsito.
    */
-  async firmarSalida(id: string, code: string, user: AuthUser) {
+  async firmarSalida(id: string, code: string | undefined, user: AuthUser) {
     const { t } = await this.contextoDeFirma(id, 'salida', user);
-    const firma = await this.firma.firmar({ userId: user.id, purpose: 'equipment.dispatch', targetId: id, code });
+    // El código lo manda `signature.otpRequired`, igual que las compras y las actas
+    // de material. Antes estaba a fuego aquí: apagar el ajuste dejaba el resto del
+    // sistema sin código y esta pantalla seguía pidiéndolo, sin forma de despachar.
+    // Apagado, la salida queda sellada con quién y cuándo, que es la constancia.
+    const { required } = await this.firma.config();
+    if (required && !code) throw new BadRequestException('Esta salida va firmada: pide el código y escríbelo para confirmar.');
+    const firma = required
+      ? await this.firma.firmar({ userId: user.id, purpose: 'equipment.dispatch', targetId: id, code: code! })
+      : null;
     const r = await this.despachar(id, t.items, t.fromWarehouseId!, {
       status: 'En tránsito',
       signedOutById: user.id, signedOutByName: user.name, signedOutAt: new Date(),
-      signedOutSignature: SignatureOtpService.rastro(firma),
+      signedOutSignature: firma ? SignatureOtpService.rastro(firma) : null,
     });
     // Ya firmada la salida, el acta —ahora con la primera firma puesta— viaja a la
     // sede destino: quien recibe sabe qué esperar antes de que llegue la caja.
@@ -579,10 +618,15 @@ export class NetworkWriteService {
     let rastro: string | null = null;
     if (entreSedes) {
       await this.contextoDeFirma(id, 'entrada', user); // valida quién puede firmar
-      if (!code) throw new BadRequestException('Esta recepción va firmada: pide el código y escríbelo para confirmar.');
-      rastro = SignatureOtpService.rastro(
-        await this.firma.firmar({ userId: user.id, purpose: 'equipment.receive', targetId: id, code }),
-      );
+      // Quién puede recibir se sigue comprobando SIEMPRE (la línea de arriba); lo que
+      // el ajuste apaga es el código, no el control de quién.
+      const { required } = await this.firma.config();
+      if (required) {
+        if (!code) throw new BadRequestException('Esta recepción va firmada: pide el código y escríbelo para confirmar.');
+        rastro = SignatureOtpService.rastro(
+          await this.firma.firmar({ userId: user.id, purpose: 'equipment.receive', targetId: id, code }),
+        );
+      }
     } else {
       // Dentro de la sede no hay código, pero el acotado por sede sí aplica: nadie
       // recibe en una bodega que no es suya.
@@ -596,7 +640,7 @@ export class NetworkWriteService {
       let received = 0;
       for (const it of t.items) {
         if (!it.equipmentId) continue;
-        await tx.equipment.update({ where: { id: it.equipmentId }, data: { warehouseId: to.id, warehouseLegacy: to.legacyId ?? 0 } });
+        await tx.equipment.update({ where: { id: it.equipmentId }, data: { warehouseId: to.id, warehouseLegacy: to.legacyId ?? 0, editedAt: new Date() } });
         received++;
       }
       await tx.equipmentTransfer.update({
@@ -793,8 +837,20 @@ export class NetworkWriteService {
   async updateVlan(id: string, dto: CreateVlanDto) {
     const v = await this.prisma.vlan.findUnique({ where: { id } });
     if (!v) throw new NotFoundException('VLAN no encontrada');
+    // La sede sólo se puede mover mientras la VLAN esté vacía: si ya tiene NAPs
+    // colgando, cambiarla dejaría esas NAPs con una VLAN de otra sede (que es
+    // justo lo que createNap se niega a hacer).
+    let branchData: { branchId: string; sedeLegacy: number } | undefined;
+    if (dto.branchId && dto.branchId !== v.branchId) {
+      const naps = await this.prisma.nap.count({ where: { vlanId: id } });
+      if (naps > 0) throw new BadRequestException(`No se puede cambiar de sede: la VLAN tiene ${naps} NAP(s) asociada(s).`);
+      const branch = await this.prisma.branch.findUnique({ where: { id: dto.branchId } });
+      if (!branch) throw new NotFoundException('Sede no encontrada');
+      branchData = { branchId: branch.id, sedeLegacy: branch.legacyId ?? 0 };
+    }
     const upd = await this.prisma.vlan.update({
-      where: { id }, data: { vlan: dto.vlan, detail: dto.detail.trim(), olt: dto.olt ?? null, tray: dto.tray ?? null, oltPort: dto.oltPort ?? null },
+      where: { id },
+      data: { vlan: dto.vlan, detail: dto.detail.trim(), olt: dto.olt ?? null, tray: dto.tray ?? null, oltPort: dto.oltPort ?? null, ...branchData },
     });
     return { id: upd.id, vlan: upd.vlan, detail: upd.detail };
   }
@@ -843,7 +899,11 @@ export class NetworkWriteService {
     await this.prisma.equipment.update({
       where: { id: equipmentId },
       data: {
-        subscriberId: dto.subscriberId, status: 'Asignado',
+        subscriberId: dto.subscriberId, status: 'Asignado', editedAt: new Date(),
+        // Vuelve a estar instalado: la fecha de la devolución anterior ya no habla
+        // de este equipo (si no, en inventario figuraría a la vez "en casa de un
+        // cliente" y "devuelto el…").
+        returnedAt: null,
         installType: dto.installType ?? eq.installType, port: dto.port ?? eq.port,
         vlan: dto.vlan ?? eq.vlan, meters: dto.meters ?? eq.meters, master: dto.master ?? eq.master,
       },
@@ -853,7 +913,17 @@ export class NetworkWriteService {
   async unassignEquipment(equipmentId: string) {
     const eq = await this.prisma.equipment.findUnique({ where: { id: equipmentId } });
     if (!eq) throw new NotFoundException('Equipo no encontrado');
-    await this.prisma.equipment.update({ where: { id: equipmentId }, data: { subscriberId: null, status: 'Disponible' } });
+    await this.prisma.equipment.update({
+      where: { id: equipmentId },
+      data: {
+        subscriberId: null, status: 'Disponible', editedAt: new Date(),
+        // Soltar desde inventario también es "el equipo dejó de estar en casa de un
+        // cliente": queda fechado hoy. Aquí no se pregunta el día (la devolución con
+        // fecha elegible es la de la ficha del cliente), y si el equipo ya estaba
+        // libre no se inventa ninguna.
+        ...(eq.subscriberId ? { returnedAt: hoyEnColombia() } : {}),
+      },
+    });
     return { id: equipmentId, unassigned: true };
   }
 

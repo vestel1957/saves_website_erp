@@ -5,6 +5,7 @@ import { NetworkWriteService, EquipTransferDto, AssignPortDto, AssignEquipmentSu
 import { MikrotikService } from './mikrotik.service';
 import { INV_PERMISSIONS, APP_PERMISSIONS } from '../auth/permissions.catalog';
 import { AuthUser } from '../auth/current-user.decorator';
+import { ListNapsQueryDto } from './dto/naps.dto';
 import { actaPdf } from '../common/pdf/pdf-docs';
 
 export class BatchIdsDto {
@@ -145,9 +146,9 @@ export class NetworkController {
     return this.network.onus({ search, oltId, page: Number(page), pageSize: Number(pageSize) });
   }
 
-  naps(search?: string, branchId?: string, sort?: string, page?: string, pageSize?: string, sortBy?: string, sortDir?: string) {
-    return this.network.naps({ search, branchId, sort, page: Number(page), pageSize: Number(pageSize), sortBy, sortDir });
-  }
+  naps(q: ListNapsQueryDto) { return this.network.naps(q); }
+  /** Barrios de las NAPs de una sede (opciones del filtro por dirección). */
+  napAddresses(branchId?: string) { return this.network.napAddresses(branchId); }
   napById(id: string) { return this.network.napById(id); }
   createNap(dto: CreateNapDto) { return this.write.createNap(dto); }
   updateNap(id: string, dto: UpdateNapDto) { return this.write.updateNap(id, dto); }

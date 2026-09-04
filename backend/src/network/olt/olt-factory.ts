@@ -1,4 +1,4 @@
-import { OltDriver } from './olt-ssh.client';
+import { OltDriver, OltTransporte } from './olt-ssh.client';
 import { OltHuawei } from './olt-huawei.driver';
 
 /**
@@ -8,11 +8,14 @@ import { OltHuawei } from './olt-huawei.driver';
  * Para agregar una marca: crear olt-<marca>.driver.ts extendiendo OltDriver
  * y agregar el case aquí. El resto del sistema no cambia.
  */
-export function createOltDriver(brand: string, host: string, port: string | number, user: string, pass: string): OltDriver {
+export function createOltDriver(
+  brand: string, host: string, port: string | number, user: string, pass: string,
+  transporte: OltTransporte = 'ssh',
+): OltDriver {
   const b = String(brand || '').trim().toLowerCase();
   switch (b) {
     case 'huawei':
-      return new OltHuawei(host, port, user, pass);
+      return new OltHuawei(host, port, user, pass, transporte);
     // case 'zte':       return new OltZte(host, port, user, pass);
     // case 'fiberhome': return new OltFiberhome(host, port, user, pass);
     default:
@@ -20,7 +23,7 @@ export function createOltDriver(brand: string, host: string, port: string | numb
       // devuelven "no implementado" hasta calibrar la marca real.
       return new (class extends OltDriver {
         getMarca() { return brand || 'Genérica'; }
-      })(host, port, user, pass);
+      })(host, port, user, pass, transporte);
   }
 }
 

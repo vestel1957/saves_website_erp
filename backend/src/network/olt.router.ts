@@ -5,12 +5,12 @@
  * controlador. Cablea HTTP -> método: extrae los argumentos de `req` y llama.
  * La lógica sigue viviendo en OltController, que ya no lleva decoradores.
  *
- * Endpoints: 36
+ * Endpoints: 37
  */
 import { crearRouter, manejar } from '../core/http/ruta';
 import { validar } from '../core/http/validar';
 import { autenticar, exigirArea, exigirPermisos, moduloRed, usuarioDe } from '../core/auth/instancias';
-import { OltController, CatvSetDto, CatvStateDto, LinkDto, OltUpsertDto, OnuActionDto, OnuDescDto, OnusQueryDto, PlanOltProfileDto, PlanOltProfileLoteDto, ProvisionDto, SlotDto } from './olt.controller';
+import { OltController, AdoptarDto, CatvSetDto, CatvStateDto, LinkDto, OltUpsertDto, OnuActionDto, OnuDescDto, OnusQueryDto, PlanOltProfileDto, PlanOltProfileLoteDto, ProvisionDto, SlotDto } from './olt.controller';
 import { oltPlanProfileService, oltService } from '../core/contenedor';
 import { Allow, IsOptional, IsString } from 'class-validator';
 import { OltService } from './olt.service';
@@ -177,6 +177,15 @@ oltRouter.get(
   exigirArea('tecnicos', 'administracion'),
   moduloRed,
   manejar((req) => olt.boards(req.params.id, req.query.frame as string, req.query.refresh as string)),
+);
+
+oltRouter.post(
+  '/olt/:id/onu/adoptar',
+  autenticar,
+  exigirArea('tecnicos', 'administracion'),
+  exigirPermisos(APP_PERMISSIONS.NETWORK_OLT_MANAGE),
+  moduloRed,
+  manejar((req) => olt.adoptar(req.params.id, validar(AdoptarDto, req.body), usuarioDe(req))),
 );
 
 oltRouter.post(

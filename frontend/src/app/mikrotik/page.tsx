@@ -127,7 +127,7 @@ export default function MikrotikPanelPage() {
       <PagedTable
         rows={shown}
         empty={search ? "Ningún Mikrotik coincide con la búsqueda." : "No hay Mikrotiks registrados. Pulse «Agregar Mikrotik» para crear el primero."}
-        onRowClick={(r) => nav.push(`/mikrotik/${r.id}`)}
+        rowHref={(r) => `/mikrotik/${r.id}`}
         columns={[
           { key: "name", header: "Nombre", render: (r) => (
             <span className="flex items-center gap-1.5 font-medium text-text-primary">

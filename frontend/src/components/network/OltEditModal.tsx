@@ -10,9 +10,17 @@ import { useAuth } from "@/context/AuthProvider";
 import type { OltRow, Profile } from "@/lib/olt";
 
 /**
- * Edición de una OLT: datos de conexión + DEFAULTS de aprovisionamiento.
+ * Alta y edición de una OLT: datos de conexión + DEFAULTS de aprovisionamiento.
  * Los defaults (VLAN, line/srv-profile, GEM-port, user-VLAN) pre-llenan el modal
  * "Autenticar ONU", así el técnico no reescribe la VLAN en cada autenticación.
+ *
+ * Con `olt = null` el modal da de ALTA. Antes solo editaba, y no había ninguna
+ * forma de registrar un equipo desde la interfaz aunque el backend ya lo
+ * aceptara: las sedes sin OLT dada de alta se quedaban sin botón de autenticar
+ * en sus órdenes de instalación.
+ *
+ * La SEDE es obligatoria y no es un adorno: la orden de instalación busca la OLT
+ * por la sede del abonado (`oltDeSede`). Una OLT sin sede no la encuentra nadie.
  */
 export function OltEditModal({
   open, onClose, onSaved, olt, brands,
@@ -20,26 +28,48 @@ export function OltEditModal({
   open: boolean;
   onClose: () => void;
   onSaved: () => void;
+  /** null = alta de una OLT nueva. */
   olt: OltRow | null;
   brands: string[];
 }) {
   const { authFetch } = useAuth();
   const [form, setForm] = useState({
-    name: "", brand: "Huawei", ip: "", port: "22", tech: "GPON", username: "", password: "",
+    name: "", brand: "Huawei", ip: "", port: "22", tech: "GPON", transport: "ssh", username: "", password: "", branchId: "",
     defaultLineProfile: "", defaultSrvProfile: "", defaultVlan: "", defaultGemport: "", defaultUserVlan: "",
   });
+  const [sedes, setSedes] = useState<{ id: string; name: string }[]>([]);
+  const alta = !olt;
   const [showPass, setShowPass] = useState(false);
   const [saving, setSaving] = useState(false);
   const [line, setLine] = useState<Profile[]>([]);
   const [srv, setSrv] = useState<Profile[]>([]);
   const [loadingProf, setLoadingProf] = useState(false);
 
+  // Las sedes se cargan siempre que se abre: hacen falta tanto para dar de alta
+  // como para corregir la sede de una que ya existe.
   useEffect(() => {
-    if (!open || !olt) return;
+    if (!open) return;
+    void authFetch("/network/branches")
+      .then((r) => (r.ok ? r.json() : []))
+      .then(setSedes)
+      .catch(() => setSedes([]));
+  }, [open, authFetch]);
+
+  useEffect(() => {
+    if (!open) return;
     setShowPass(false);
+    setLine([]); setSrv([]);
+    if (!olt) {
+      setForm({
+        name: "", brand: "Huawei", ip: "", port: "22", tech: "GPON", transport: "ssh", username: "", password: "", branchId: "",
+        defaultLineProfile: "", defaultSrvProfile: "", defaultVlan: "", defaultGemport: "", defaultUserVlan: "",
+      });
+      return;
+    }
     setForm({
       name: olt.name, brand: olt.brand || "Huawei", ip: olt.ip, port: String(olt.port),
-      tech: olt.tech || "GPON", username: olt.username, password: "",
+      tech: olt.tech || "GPON", transport: olt.transport || "ssh",
+      username: olt.username, password: "", branchId: olt.branchId ?? "",
       defaultLineProfile: olt.defaults.lineProfile != null ? String(olt.defaults.lineProfile) : "",
       defaultSrvProfile: olt.defaults.srvProfile != null ? String(olt.defaults.srvProfile) : "",
       defaultVlan: olt.defaults.vlan != null ? String(olt.defaults.vlan) : "",
@@ -47,8 +77,9 @@ export function OltEditModal({
       defaultUserVlan: olt.defaults.userVlan != null ? String(olt.defaults.userVlan) : "",
     });
     // Cargar perfiles del equipo por SSH para elegir los defaults desde un desplegable
-    // (si la OLT no responde, quedan los inputs manuales igual).
-    setLine([]); setSrv([]); setLoadingProf(true);
+    // (si la OLT no responde, quedan los inputs manuales igual). En el alta no hay
+    // equipo al que preguntarle todavía: los perfiles se eligen al editarla después.
+    setLoadingProf(true);
     void authFetch(`/network/olt/${olt.id}/profiles`)
       .then((r) => r.json())
       .then((d) => { setLine(d.line ?? []); setSrv(d.srv ?? []); })
@@ -60,22 +91,26 @@ export function OltEditModal({
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!olt) return;
     if (!form.name.trim() || !form.ip.trim()) { toast("Nombre e IP son obligatorios", "x"); return; }
+    if (!form.branchId) { toast("Elija la sede: sin ella las órdenes de instalación no encuentran la OLT", "x"); return; }
+    // En el alta la contraseña es obligatoria; al editar, vacío = se deja la que hay.
+    if (alta && !form.password) { toast("La contraseña es obligatoria para dar de alta la OLT", "x"); return; }
     setSaving(true);
     try {
       const body: Record<string, string> = {
         name: form.name.trim(), brand: form.brand, ip: form.ip.trim(), port: form.port,
-        tech: form.tech, username: form.username.trim(),
+        tech: form.tech, transport: form.transport, username: form.username.trim(), branchId: form.branchId,
         // Defaults: string vacío => se limpia (null) en el backend.
         defaultLineProfile: form.defaultLineProfile, defaultSrvProfile: form.defaultSrvProfile,
         defaultVlan: form.defaultVlan, defaultGemport: form.defaultGemport, defaultUserVlan: form.defaultUserVlan,
       };
       if (form.password) body.password = form.password;
-      const r = await authFetch(`/network/olt/olts/${olt.id}`, { method: "PATCH", body: JSON.stringify(body) });
+      const r = alta
+        ? await authFetch("/network/olt/olts", { method: "POST", body: JSON.stringify(body) })
+        : await authFetch(`/network/olt/olts/${olt!.id}`, { method: "PATCH", body: JSON.stringify(body) });
       const data = await r.json();
       if (!r.ok) { toast(data?.message ?? "No se pudo guardar", "x"); return; }
-      toast("OLT actualizada", "check");
+      toast(alta ? "OLT registrada. Pruebe la conexión y configure la velocidad por plan." : "OLT actualizada", "check");
       onSaved();
       onClose();
     } catch (err) {
@@ -86,7 +121,7 @@ export function OltEditModal({
   };
 
   return (
-    <Modal open={open} onClose={onClose} title={olt ? `Editar ${olt.name}` : "Editar OLT"} maxWidth="max-w-2xl">
+    <Modal open={open} onClose={onClose} title={olt ? `Editar ${olt.name}` : "Nueva OLT"} maxWidth="max-w-2xl">
       <form onSubmit={submit} className="space-y-3">
         {/* Conexión */}
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
@@ -107,7 +142,35 @@ export function OltEditModal({
           <label className="col-span-2 text-[12px] text-text-secondary">IP
             <Input value={form.ip} onChange={set("ip")} className="mt-0.5 font-mono" required />
           </label>
-          <label className="text-[12px] text-text-secondary">Puerto SSH
+          <label className="col-span-2 text-[12px] text-text-secondary">
+            Sede
+            <Select value={form.branchId} onChange={set("branchId")} className="mt-0.5" required>
+              <option value="">— Elija la sede —</option>
+              {sedes.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </Select>
+            <span className="mt-0.5 block text-[11px] text-text-tertiary">
+              Las órdenes de instalación buscan la OLT por la sede del abonado.
+            </span>
+          </label>
+          <label className="text-[12px] text-text-secondary">Conexión
+            <Select
+              value={form.transport}
+              onChange={(e) => {
+                // El puerto sigue al transporte, pero solo si venía en el otro
+                // por defecto: un equipo con SSH en un puerto raro (Yopal usa el
+                // 5022) no debe perder su puerto por tocar el desplegable.
+                const t = e.target.value;
+                const porDefecto = t === "telnet" ? "23" : "22";
+                const eraPorDefecto = form.port === "22" || form.port === "23" || !form.port;
+                setForm((f) => ({ ...f, transport: t, port: eraPorDefecto ? porDefecto : f.port }));
+              }}
+              className="mt-0.5"
+            >
+              <option value="ssh">SSH</option>
+              <option value="telnet">Telnet</option>
+            </Select>
+          </label>
+          <label className="text-[12px] text-text-secondary">Puerto {form.transport === "telnet" ? "Telnet" : "SSH"}
             <Input value={form.port} onChange={set("port")} className="mt-0.5 font-mono" />
           </label>
           <label className="text-[12px] text-text-secondary">Usuario

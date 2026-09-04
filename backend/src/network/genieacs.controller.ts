@@ -14,6 +14,15 @@ export class BatchDto {
   @IsArray() @ArrayNotEmpty() @IsString({ each: true }) ids!: string[];
   @IsOptional() @IsString() serverId?: string;
 }
+/**
+ * Cambio del WiFi de un abonado. La clave llega en claro por HTTPS y NO se guarda
+ * en ningún sitio: se le pasa al equipo y se olvida (ni en la auditoría ni en el log).
+ */
+export class WifiDto {
+  @IsString() subscriberId!: string;
+  @IsOptional() @IsString() ssid?: string;
+  @IsOptional() @IsString() password?: string;
+}
 export class RefreshDto {
   @IsString() deviceId!: string;
   @IsOptional() @IsString() objectName?: string;
@@ -55,6 +64,9 @@ export class GenieacsController {
   cutTv(dto: BatchDto, user: AuthUser) { return this.acs.cutTv(dto.ids, user, dto.serverId); }
   restoreTv(dto: BatchDto, user: AuthUser) { return this.acs.restoreTv(dto.ids, user, dto.serverId); }
   refresh(dto: RefreshDto, user: AuthUser) { return this.acs.refresh(dto.deviceId, dto.objectName ?? '', dto.serverId, user); }
+  setWifi(dto: WifiDto, user: AuthUser) {
+    return this.acs.setWifiBySubscriber(dto.subscriberId, { ssid: dto.ssid, clave: dto.password }, user);
+  }
   install(serverId?: string, user?: AuthUser) { return this.acs.installProvision(serverId, user); }
 
   // --- Corte de TV masivo POR ABONADO (resuelve TR-069 u OLT por cada uno) ---

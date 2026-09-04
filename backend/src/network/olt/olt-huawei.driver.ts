@@ -151,6 +151,16 @@ export class OltHuawei extends OltDriver {
         model: this.kv(b, 'Ont EquipmentID'),
         vendor: this.kv(b, 'VendorID'),
         version: this.kv(b, 'Ont Version'),
+        /**
+         * Desde cuándo se está anunciando (`2026-08-19 14:28:46-05:00`).
+         *
+         * Es el dato que distingue la ONU que el técnico acaba de conectar del
+         * resto: el autofind de esta planta arrastra decenas de equipos que
+         * llevan semanas sonando (66 en VILLANUEVA, el más viejo de hace 15
+         * días). Se normaliza a ISO —cambiar el espacio por la T— porque el
+         * formato de la OLT no lo parsea `Date` de forma fiable.
+         */
+        autofind_time: this.kv(b, 'Ont autofind time').replace(' ', 'T') || null,
       });
     }
     return found;
@@ -172,6 +182,9 @@ export class OltHuawei extends OltDriver {
    *   (opcional) service-port ... gpon F/S/P ont <ontid> gemport <gem> ...
    */
   async provisionOnu(p: any): Promise<any | false> {
+    // Las sesiones SSH se reutilizan entre altas: sin limpiar, el aviso de la
+    // anterior se colaría en la verificación de esta.
+    this.avisoAlta = '';
     const frame = Number(p.frame ?? 0) || 0;
     const slot = p.slot !== undefined && p.slot !== null && p.slot !== '' ? Number(p.slot) : null;
     const port = p.port !== undefined && p.port !== null && p.port !== '' ? Number(p.port) : null;
@@ -182,6 +195,16 @@ export class OltHuawei extends OltDriver {
     if (!p.lineprofile || !p.srvprofile) { this.error = 'Debe indicar line-profile y srv-profile.'; return false; }
 
     const commands: string[] = [];
+    /**
+     * Lo que contestó la OLT a cada comando de ESCRITURA. La transcripción SSH
+     * completa se recorta por la cola al registrarla, y en un alta la cola es el
+     * listado de service-ports del puerto: justo lo que sobra. Sin esto, un alta
+     * que falla a medias se investiga a ciegas (pasó: "0 service-port(s)" sin
+     * ninguna pista de por qué).
+     */
+    const respuestas: { cmd: string; out: string }[] = [];
+    /** Correcciones aplicadas al vuelo (p.ej. el GEM-port real de la ONT). */
+    const avisosSp: string[] = [];
 
     // 1) Entrar a la interfaz GPON del slot.
     await this.sendCommand(`interface gpon ${frame}/${slot}`);
@@ -195,10 +218,24 @@ export class OltHuawei extends OltDriver {
     if (p.desc) cmd += ` desc "${this.sanitize(p.desc)}"`;
     const out = await this.sendCommand(cmd, true);
     commands.push(cmd);
+    respuestas.push({ cmd, out: this.resumenDeSalida(out) });
 
-    if (/failure|fail|invalid|incorrect|conflict|already exist|repeat/i.test(out)) {
+    // "SN already exists": la ONU YA está dada de alta en algún puerto de esta
+    // OLT (autenticada antes desde aquí, desde SmartOLT o a mano). No es un
+    // fallo de perfil ni de velocidad, y devolverlo como error genérico hace
+    // que se reintente cambiando el srv-profile —cosa que nunca va a funcionar—
+    // en vez de mirar dónde está. Se busca y se devuelve con su posición.
+    if (/already exist|repeat|sn.*(?:in use|used by)/i.test(out)) {
       await this.sendCommand('quit');
-      this.error = 'La OLT reportó un error al agregar la ONT. Revise la salida cruda.';
+      const existente = await this.estadoPorSn(sn);
+      this.error = existente
+        ? `Esta ONU ya está autenticada en la OLT, en ${existente.fsp} (ONT-ID ${existente.ont_id}).`
+        : 'La OLT dice que ese SN ya existe, pero no se pudo localizar en qué puerto está.';
+      return { ok: false, codigo: 'SN_YA_EXISTE', error: this.error, existente };
+    }
+    if (/failure|fail|invalid|incorrect|conflict/i.test(out)) {
+      await this.sendCommand('quit');
+      this.error = this.mensajeDeFallo(out, 'el alta');
       return false;
     }
 
@@ -220,17 +257,25 @@ export class OltHuawei extends OltDriver {
         + 'la ONU queda registrada en la OLT pero sin servicio ni velocidad.';
     }
     if (!faltaSp && ontId !== '') {
-      const uservlan = p.user_vlan ? Number(p.user_vlan) : Number(p.vlan);
-      const sp = `service-port vlan ${Number(p.vlan)}`
-        + ` gpon ${frame}/${slot}/${port} ont ${ontId} gemport ${Number(p.gemport)}`
-        + ` multi-service user-vlan ${uservlan}`
-        + this.tagTransformArg(p)
-        + this.trafficTableArgs(p);
-      const spout = await this.sendCommand(sp, true);
-      commands.push(sp);
-      if (/failure|fail|invalid|incorrect/i.test(spout)) {
-        this.error = 'La ONT se agregó pero el service-port falló. Revise la salida cruda.';
-        // No retornamos false: la ONT quedó creada.
+      const r = await this.crearServicePort({
+        frame, slot, port, ontId: Number(ontId),
+        vlan: Number(p.vlan), gemport: Number(p.gemport),
+        user_vlan: p.user_vlan ? Number(p.user_vlan) : Number(p.vlan),
+        tag_transform: p.tag_transform, traffic_in: p.traffic_in, traffic_out: p.traffic_out,
+      });
+      commands.push(r.cmd);
+      respuestas.push({ cmd: r.cmd, out: r.salida });
+      if (r.avisoGem) avisosSp.push(r.avisoGem);
+      if (!r.ok) {
+        // El motivo lo dice la OLT en una línea y antes se tiraba: quedaba un
+        // "0 service-port(s)" sin causa, que es lo mismo que no decir nada.
+        // No se devuelve false —la ONT sí quedó creada— pero el aviso viaja
+        // hasta la pantalla del técnico.
+        this.avisoAlta = 'La ONT se agregó pero el SERVICE-PORT no: ' + r.error
+          + ' La ONU queda registrada sin servicio ni velocidad.';
+        this.error = this.avisoAlta;
+      } else if (avisosSp.length) {
+        this.avisoAlta = avisosSp.join(' ');
       }
     }
 
@@ -247,8 +292,61 @@ export class OltHuawei extends OltDriver {
       message: 'ONT agregada' + (ontId !== '' ? ` (ONT-ID ${ontId})` : '') + '.',
       ont_id: ontId,
       commands,
+      respuestas,
       verificacion,
     };
+  }
+
+  /**
+   * Crea el service-port de una ONT — el paso que le da servicio de verdad.
+   *
+   * El GEM-port NO se elige: es el que trae el line-profile con el que se dio de
+   * alta la ONT, y pedir otro hace que la OLT rechace el comando entero. Pasó en
+   * vivo (YOPAL 0/1/4, ONT 28): se mandó `gemport 1` porque es el valor por
+   * defecto de la pantalla, el perfil `vlan250` define `<Gem Index 250>`, y el
+   * abonado quedó registrado y online pero SIN internet. Así que se lee de la
+   * propia ONT y, si no cuadra con el pedido, manda la ONT y se avisa.
+   */
+  private async crearServicePort(p: {
+    frame: number; slot: number; port: number; ontId: number;
+    vlan: number; gemport: number; user_vlan?: number;
+    tag_transform?: string; traffic_in?: number | string | null; traffic_out?: number | string | null;
+  }): Promise<{ ok: boolean; cmd: string; salida: string; error: string; avisoGem: string | null; gemport: number }> {
+    let gem = Number(p.gemport);
+    let avisoGem: string | null = null;
+    const gems = this.gemsDeOnt(await this.sendCommand(`display ont info ${p.frame} ${p.slot} ${p.port} ${p.ontId}`));
+    if (gems.length && !gems.includes(gem)) {
+      avisoGem = `El GEM-port ${gem} no existe en esta ONT (su perfil usa ${gems.join(', ')}): `
+        + `se creó el service-port con el ${gems[0]}.`;
+      gem = gems[0];
+    }
+
+    const uservlan = p.user_vlan !== undefined && !Number.isNaN(Number(p.user_vlan)) ? Number(p.user_vlan) : Number(p.vlan);
+    const cmd = `service-port vlan ${Number(p.vlan)}`
+      + ` gpon ${p.frame}/${p.slot}/${p.port} ont ${p.ontId} gemport ${gem}`
+      + ` multi-service user-vlan ${uservlan}`
+      + this.tagTransformArg(p)
+      + this.trafficTableArgs(p);
+    const out = await this.sendCommand(cmd, true);
+    const fallo = /failure|fail|invalid|incorrect/i.test(out);
+    return {
+      ok: !fallo,
+      cmd,
+      salida: this.resumenDeSalida(out),
+      error: fallo ? this.mensajeDeFallo(out, 'el service-port') : '',
+      avisoGem,
+      gemport: gem,
+    };
+  }
+
+  /** GEM-ports que la ONT declara en su perfil: `<Gem Index 250>`. */
+  private gemsDeOnt(out: string): number[] {
+    const gems: number[] = [];
+    for (const m of out.matchAll(/<\s*Gem\s+Index\s+(\d+)\s*>/gi)) {
+      const n = Number(m[1]);
+      if (!gems.includes(n)) gems.push(n);
+    }
+    return gems;
   }
 
   /**
@@ -508,6 +606,171 @@ export class OltHuawei extends OltDriver {
       return false;
     }
     return info;
+  }
+
+  /**
+   * Dónde está y cómo está una ONU que YA existe en la OLT, buscándola por SN.
+   *
+   * Es lo que hay que saber para decidir qué hacer con una ONU que rechaza el
+   * alta por "SN already exists": en qué puerto quedó, si está navegando y con
+   * qué velocidad. Sin esto lo único que se sabía es que el alta falló.
+   */
+  async estadoPorSn(sn: string): Promise<{
+    fsp: string; frame: number; slot: number; port: number; ont_id: number;
+    run_state: string; config_state: string; match_state: string; description: string;
+    lineprofile: string; srvprofile: string; srvprofile_name: string;
+    servicePorts: { index: string; vlan: string; gemport: string; rx: string; tx: string }[];
+  } | null> {
+    const info = await this.findBySn(sn);
+    if (!info) return null;
+    const m = String(info.fsp ?? '').match(/(\d+)\s*\/\s*(\d+)\s*\/\s*(\d+)/);
+    if (!m || info.ont_id === undefined) return null;
+    const [frame, slot, port] = [Number(m[1]), Number(m[2]), Number(m[3])];
+    const ontId = Number(info.ont_id);
+    const servicePorts = await this.servicePortsDetalleDeOnt(frame, slot, port, ontId);
+    return {
+      fsp: `${frame}/${slot}/${port}`,
+      frame, slot, port, ont_id: ontId,
+      run_state: String(info.run_state ?? ''),
+      config_state: String(info.config_state ?? ''),
+      match_state: String(info.match_state ?? ''),
+      description: String(info.description ?? ''),
+      lineprofile: String(info['line profile id'] ?? ''),
+      srvprofile: String(info['service profile id'] ?? ''),
+      srvprofile_name: String(info['service profile name'] ?? ''),
+      servicePorts,
+    };
+  }
+
+  /**
+   * ADOPTA una ONU que ya está autenticada en la OLT: la deja con el comentario
+   * y la velocidad que le tocan, sin volver a darla de alta.
+   *
+   * Es la salida al caso real: la ONU se autenticó desde otro sitio (SmartOLT, a
+   * mano) y el abonado está navegando, pero para el sistema no existe. Borrarla
+   * y rehacerla dejaría al cliente sin servicio durante el proceso y, con las
+   * ZTE, es justo lo que las deja pegadas en "config: failed". Aquí NO se toca
+   * el `ont add`: solo el comentario y las traffic-tables del service-port.
+   */
+  async adoptarOnu(p: {
+    sn: string; desc?: string | null;
+    traffic_in?: number | string | null; traffic_out?: number | string | null;
+    /** Solo se usan si la ONU está SIN service-port y hay que crearle uno. */
+    vlan?: number | string | null; gemport?: number | string | null;
+    user_vlan?: number | string | null; tag_transform?: string;
+  }): Promise<any | false> {
+    this.avisoAlta = '';
+    const sn = this.sanitize(p.sn ?? '', /[^A-Za-z0-9]/g);
+    if (sn === '') { this.error = 'SN inválido o vacío.'; return false; }
+
+    const estado = await this.estadoPorSn(sn);
+    if (!estado) {
+      this.error = 'Esa ONU no está autenticada en esta OLT: no hay nada que adoptar (hay que darla de alta).';
+      return false;
+    }
+
+    const commands: string[] = [];
+    const cambios: string[] = [];
+    const avisos: string[] = [];
+
+    // 0) Sin service-port la ONU está registrada pero sin internet: adoptarla
+    //    tiene que poder arreglar eso, o el técnico se queda encerrado (no puede
+    //    volver a darla de alta —el SN ya existe— ni cambiarle una velocidad que
+    //    no tiene). Se crea con lo que ya funciona en el puerto.
+    if (!estado.servicePorts.length) {
+      const sug = await this.sugerenciaDePuerto(estado.frame, estado.slot, estado.port);
+      const elegir = (...vs: any[]) => {
+        for (const v of vs) if (v !== undefined && v !== null && v !== '' && !Number.isNaN(Number(v))) return Number(v);
+        return null;
+      };
+      const vlan = elegir(p.vlan, sug.vlan);
+      if (vlan === null) {
+        avisos.push('La ONU no tiene service-port y no se pudo deducir la VLAN del puerto: '
+          + 'sigue sin servicio. Hay que crearlo a mano en la OLT.');
+      } else {
+        const r = await this.crearServicePort({
+          frame: estado.frame, slot: estado.slot, port: estado.port, ontId: estado.ont_id,
+          vlan,
+          gemport: elegir(p.gemport, sug.gemport, 1)!,
+          user_vlan: elegir(p.user_vlan, sug.user_vlan, vlan)!,
+          tag_transform: p.tag_transform,
+          // Si no se pidió velocidad, se copia la del puerto: dejarlo sin
+          // traffic-table sería dejar al abonado sin tope.
+          traffic_in: elegir(p.traffic_in, sug.traffic_in),
+          traffic_out: elegir(p.traffic_out, sug.traffic_out),
+        });
+        commands.push(r.cmd);
+        if (r.avisoGem) avisos.push(r.avisoGem);
+        if (r.ok) {
+          cambios.push(`service-port creado (VLAN ${vlan}, GEM ${r.gemport})`);
+          // Ya tiene servicio: la velocidad va dentro de este mismo comando, no
+          // hace falta el paso de reapuntar traffic-tables de más abajo.
+          estado.servicePorts = await this.servicePortsDetalleDeOnt(estado.frame, estado.slot, estado.port, estado.ont_id);
+        } else {
+          avisos.push('No se pudo crear el service-port que le falta: ' + r.error);
+        }
+      }
+    }
+
+    // 1) Comentario. Solo si se pide y es distinto del que ya tiene: reescribir
+    //    el mismo texto es un comando de escritura gratis contra el equipo.
+    const desc = p.desc === undefined || p.desc === null ? null : this.sanitize(String(p.desc));
+    if (desc !== null && desc !== estado.description) {
+      const anterior = estado.description;
+      const r = await this.setOnuDescription({
+        frame: estado.frame, slot: estado.slot, port: estado.port, ont_id: estado.ont_id, desc,
+      });
+      commands.push(`interface gpon ${estado.frame}/${estado.slot}`,
+        `ont modify ${estado.port} ${estado.ont_id} desc "${desc}"`, 'quit');
+      if (r === false) avisos.push(`No se pudo cambiar el comentario: ${this.error}`);
+      else cambios.push(`comentario "${anterior || '(vacío)'}" → "${desc}"`);
+    }
+
+    // 2) Velocidad. Igual: si el service-port ya está en las tablas pedidas no
+    //    se manda nada (la ONU ya está como debe).
+    const val = (v: unknown) => (v !== undefined && v !== null && v !== '' && Number.isFinite(Number(v)) ? Number(v) : null);
+    const inb = val(p.traffic_in), outb = val(p.traffic_out);
+    let velocidad: any = null;
+    if (inb !== null || outb !== null) {
+      const sp = estado.servicePorts;
+      const yaEsta = sp.length === 1
+        && (inb === null || Number(sp[0].rx) === inb)
+        && (outb === null || Number(sp[0].tx) === outb);
+      if (yaEsta) {
+        cambios.push(`velocidad ya correcta (bajada tt ${sp[0].rx} / subida tt ${sp[0].tx})`);
+      } else {
+        const r = await this.setServicePortSpeed({
+          frame: estado.frame, slot: estado.slot, port: estado.port, ontId: estado.ont_id,
+          traffic_in: inb, traffic_out: outb,
+        });
+        if (r === false) {
+          // La velocidad es media adopción: si falla se dice, pero lo demás
+          // (comentario, vínculo) ya vale y no se tira por la borda.
+          avisos.push(`No se pudo aplicar la velocidad del plan: ${this.error}`);
+        } else {
+          velocidad = r;
+          commands.push(...(r.commands ?? []));
+          cambios.push(`velocidad → bajada tt ${r.despues?.traffic_in ?? inb} / subida tt ${r.despues?.traffic_out ?? outb}`);
+        }
+      }
+    }
+
+    // 3) Releer para devolver el estado real con el que queda (mismos avisos
+    //    que un alta: online, service-ports, config/match).
+    const verificacion = await this.verificarAlta(estado.frame, estado.slot, estado.port, estado.ont_id);
+
+    return {
+      ok: true,
+      adoptada: true,
+      message: `ONU adoptada en ${estado.fsp} (ONT-ID ${estado.ont_id})`
+        + (cambios.length ? ': ' + cambios.join(' · ') : ' (no hizo falta cambiar nada).'),
+      ont_id: String(estado.ont_id),
+      fsp: estado.fsp,
+      frame: estado.frame, slot: estado.slot, port: estado.port,
+      antes: estado,
+      cambios, avisos, velocidad, commands,
+      verificacion,
+    };
   }
 
   /**
@@ -774,25 +1037,55 @@ export class OltHuawei extends OltDriver {
       return 'La ONU tiene servicios (service-ports) asociados y la OLT no deja borrarla así. '
         + 'Hay que eliminar primero sus service-ports: eso deja al abonado sin servicio.';
     }
-    if (/does not exist|the required ont/i.test(out)) {
+    // Ojo con "does not exist" a secas: también lo dice de un PERFIL que falta,
+    // y contestar "esa ONU ya no existe" manda a buscar donde no es.
+    if (/required ont does not exist|the ont does not exist/i.test(out)) {
       return 'Esa ONU ya no existe en la OLT (puede que la hayan borrado desde otro sitio).';
     }
+    // Etiqueta legible de lo que se intentaba: la que venga ya redactada
+    // ("el alta", "el cambio de velocidad") se respeta.
+    const que = accion === 'delete' ? 'el borrado'
+      : accion === 'reset' ? 'el reinicio'
+      : /^(el|la|los|las) /.test(accion) ? accion
+      : 'la acción';
     return linea
-      ? `La OLT rechazó ${accion === 'delete' ? 'el borrado' : 'la acción'}: ${linea.replace(/^\s*Failure:\s*/i, '')}`
-      : `La OLT rechazó ${accion === 'delete' ? 'el borrado' : 'la acción'} sin dar detalle.`;
+      ? `La OLT rechazó ${que}: ${linea.replace(/^\s*Failure:\s*/i, '')}`
+      : `La OLT rechazó ${que} sin dar detalle.`;
+  }
+
+  /**
+   * La respuesta de un comando de escritura en dos líneas: el eco del CLI sobra
+   * y el volcado entero no cabe en un log. Se queda con lo que dice el equipo.
+   */
+  private resumenDeSalida(out: string): string {
+    const lineas = out.split('\n')
+      .map((l) => l.replace(/\r/g, '').replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').trim())
+      .filter((l) => l !== '' && !/^-+$/.test(l) && !/^\{.*\}:$/.test(l) && !/More \( Press/.test(l));
+    const dichas = lineas.filter((l) => /failure|error|success|command|ont ?id|ontid/i.test(l));
+    return (dichas.length ? dichas : lineas.slice(-3)).join(' | ').slice(0, 500);
   }
 
   /* ------------------------------- parsers ------------------------------- */
 
   private parseKvBlock(out: string): any {
     const r: any = {};
+    let ultima = '';
     for (const line of out.split('\n')) {
       const m = line.match(/^\s*([A-Za-z][A-Za-z0-9 /()\-.]+?)\s*:\s*(.+?)\s*$/);
       if (m) {
         const key = m[1].trim().toLowerCase();
         const val = m[2].trim();
+        ultima = key;
         if (/^-+$/.test(val)) continue;
         r[key] = val;
+        continue;
+      }
+      // La OLT parte el comentario largo en varias líneas alineadas bajo el
+      // valor, sin repetir la clave: "Dr," / "Orlando_zone_PRINCIPAL_authd_202"
+      // / "60818". Quedándose con la primera, un comentario de abonado se leía
+      // como "Dr," — y con eso no casa ni el auto-vinculador ni nada.
+      if (ultima === 'description' && /^\s{8,}\S/.test(line) && !line.includes(':')) {
+        r.description = String(r.description ?? '') + line.trim();
       }
     }
     if (!Object.keys(r).length) return {};

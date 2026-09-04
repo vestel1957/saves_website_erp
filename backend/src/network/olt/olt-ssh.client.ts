@@ -1,12 +1,27 @@
 import { Client, ClientChannel } from 'ssh2';
+import { Socket } from 'net';
+
+/** Transporte mínimo que necesita la sesión: escribir y cerrar. */
+type Canal = { write(data: string): void; end(): void };
+
+export type OltTransporte = 'ssh' | 'telnet';
 
 /**
- * OltDriver - Clase base para la conexión SSH a OLTs.
+ * OltDriver - Clase base para la conexión a OLTs.
  *
  * Portado de application/libraries/Olt/Olt_driver.php (legacy phpseclib3).
- * Maneja la sesión SSH con la librería `ssh2` sobre un canal `shell`
- * interactivo (write/read con detección de prompt y paginación
- * "---- More ----" / "{ <cr> }:") que reutilizan los drivers de cada marca.
+ * Maneja una sesión de CLI interactiva (write/read con detección de prompt y
+ * paginación "---- More ----" / "{ <cr> }:") que reutilizan los drivers de cada
+ * marca.
+ *
+ * DOS TRANSPORTES, una sola sesión. Por SSH se abre un canal `shell`; por TELNET
+ * un socket TCP crudo con negociación IAC y login interactivo. De ahí para
+ * arriba todo es idéntico: `sendCommand` escribe en `this.stream` y lee de
+ * `this.buffer`, así que los 1.100 lineas de parseo del driver Huawei no saben
+ * —ni les importa— por dónde viajan los comandos.
+ *
+ * Telnet no es un capricho heredado: bastantes OLT de planta traen el servidor
+ * SSH deshabilitado de fábrica y solo escuchan en el 23.
  *
  * Cada marca (Huawei, ZTE, ...) extiende esta clase y sobreescribe los
  * comandos/parsers específicos.
@@ -35,7 +50,8 @@ export abstract class OltDriver {
   protected promptRegex = /(?:^|[\r\n])[^\s\r\n]+[>#][ \t]*$/;
 
   private client: Client | null = null;
-  private stream: ClientChannel | null = null;
+  private socket: Socket | null = null;
+  private stream: Canal | null = null;
   /** Buffer acumulado de datos recibidos aún no consumidos. */
   private buffer = '';
   /** La sesión murió (socket cerrado/error): no se puede reutilizar. */
@@ -43,11 +59,18 @@ export abstract class OltDriver {
   /** Esperas pendientes de readUntil: se despiertan al llegar datos. */
   private dataWaiters: Array<() => void> = [];
 
-  constructor(host: string, port: string | number, user: string, pass: string) {
+  protected transporte: OltTransporte;
+
+  constructor(host: string, port: string | number, user: string, pass: string, transporte: OltTransporte = 'ssh') {
     this.host = (host || '').trim();
-    this.port = Number(port) || 22;
+    this.transporte = transporte === 'telnet' ? 'telnet' : 'ssh';
+    this.port = Number(port) || (this.transporte === 'telnet' ? 23 : 22);
     this.user = user;
     this.pass = pass;
+  }
+
+  getTransporte(): OltTransporte {
+    return this.transporte;
   }
 
   /** Identificador de la marca/driver (para logs y UI). */
@@ -62,10 +85,15 @@ export abstract class OltDriver {
   }
 
   /**
-   * Abre la sesión SSH, autentica y abre el canal shell interactivo.
-   * Devuelve true si el login fue exitoso.
+   * Abre la sesión y autentica. Devuelve true si el login fue exitoso.
+   * El transporte lo decide la ficha de la OLT.
    */
   connect(): Promise<boolean> {
+    return this.transporte === 'telnet' ? this.connectTelnet() : this.connectSsh();
+  }
+
+  /** SSH: canal `shell` interactivo (los Huawei/ZTE usan CLI paginado, no exec). */
+  private connectSsh(): Promise<boolean> {
     return new Promise((resolve) => {
       const client = new Client();
       this.client = client;
@@ -152,6 +180,131 @@ export abstract class OltDriver {
     });
   }
 
+  /* ---- Telnet ---------------------------------------------------------- *
+   *  Se implementa a pelo sobre `net.Socket` en vez de traer una librería:
+   *  son ~60 líneas, no hay que auditar una dependencia más para hablar con
+   *  equipos que están dentro de la red, y el login de estos CLI es siempre el
+   *  mismo par de preguntas.
+   * ---------------------------------------------------------------------- */
+
+  /** Bytes del protocolo telnet (RFC 854). */
+  private static readonly IAC = 255;
+  private static readonly DONT = 254;
+  private static readonly DO = 253;
+  private static readonly WONT = 252;
+  private static readonly WILL = 251;
+  private static readonly SB = 250;
+  private static readonly SE = 240;
+  private static readonly OPT_ECHO = 1;
+  private static readonly OPT_SGA = 3; // suppress go-ahead
+  private static readonly OPT_TTYPE = 24;
+  private static readonly OPT_NAWS = 31; // tamaño de ventana
+
+  /**
+   * Separa los mandos IAC del texto y los contesta.
+   *
+   * Sin esto los bytes de negociación entran al buffer y ensucian el parseo: un
+   * 0xFF suelto en medio de una tabla de service-ports rompe la expresión que
+   * lee las columnas.
+   */
+  private procesarTelnet(datos: Buffer): string {
+    const D = OltDriver;
+    let texto = '';
+    const respuesta: number[] = [];
+    for (let i = 0; i < datos.length; i++) {
+      if (datos[i] !== D.IAC) { texto += String.fromCharCode(datos[i]); continue; }
+      const mando = datos[++i];
+      if (mando === D.IAC) { texto += String.fromCharCode(D.IAC); continue; } // 255 escapado
+      if (mando === D.SB) {
+        // Subnegociación: se contesta solo el tipo de terminal, el resto se salta.
+        const opcion = datos[i + 1];
+        while (i < datos.length && !(datos[i] === D.IAC && datos[i + 1] === D.SE)) i++;
+        i++;
+        if (opcion === D.OPT_TTYPE) {
+          respuesta.push(D.IAC, D.SB, D.OPT_TTYPE, 0, ...[...'vt100'].map((c) => c.charCodeAt(0)), D.IAC, D.SE);
+        }
+        continue;
+      }
+      if (mando === D.DO || mando === D.DONT || mando === D.WILL || mando === D.WONT) {
+        const opcion = datos[++i];
+        if (mando === D.DO) {
+          // Se aceptan las tres que hacen falta para una sesión de CLI usable.
+          const acepto = opcion === D.OPT_TTYPE || opcion === D.OPT_NAWS || opcion === D.OPT_SGA;
+          respuesta.push(D.IAC, acepto ? D.WILL : D.WONT, opcion);
+          if (acepto && opcion === D.OPT_NAWS) {
+            respuesta.push(D.IAC, D.SB, D.OPT_NAWS, 0, 200, 0, 200, D.IAC, D.SE);
+          }
+        } else if (mando === D.WILL) {
+          const acepto = opcion === D.OPT_SGA || opcion === D.OPT_ECHO;
+          respuesta.push(D.IAC, acepto ? D.DO : D.DONT, opcion);
+        }
+        // A DONT/WONT no se contesta: el otro extremo ya cerró esa opción.
+      }
+    }
+    if (respuesta.length && this.socket) this.socket.write(Buffer.from(respuesta));
+    return texto;
+  }
+
+  /**
+   * Telnet: abre el socket, contesta la negociación y hace el login a mano
+   * (usuario y contraseña son dos preguntas del propio equipo, no del protocolo).
+   */
+  private connectTelnet(): Promise<boolean> {
+    return new Promise((resolve) => {
+      const socket = new Socket();
+      this.socket = socket;
+      let settled = false;
+      const done = (ok: boolean, err?: string) => {
+        if (settled) return;
+        settled = true;
+        if (!ok && err) this.error = this.humanizeError(err);
+        resolve(ok);
+      };
+
+      socket.setTimeout(this.timeout);
+      socket.on('data', (d: Buffer) => {
+        const t = this.procesarTelnet(d);
+        if (!t) return;
+        this.buffer += t;
+        this.rawLog += t;
+        this.notifyData();
+      });
+      socket.on('error', (e: Error) => { this.dead = true; this.notifyData(); done(false, e.message); });
+      socket.on('timeout', () => { this.dead = true; this.notifyData(); done(false, 'Connection timed out'); });
+      socket.on('close', () => { this.stream = null; this.dead = true; this.notifyData(); });
+
+      socket.connect(this.port, this.host, async () => {
+        this.stream = { write: (d: string) => socket.write(d), end: () => socket.end() };
+        try {
+          // El equipo pregunta usuario y contraseña; los prompts varían de marca
+          // ("Username:", "login:", ">>User name:"), de ahí que se busque flojo.
+          const pideUsuario = await this.readUntil(/(user\s*name|username|login)\s*:\s*$/i, this.timeout);
+          if (!/(user\s*name|username|login)\s*:\s*$/i.test(pideUsuario)) {
+            done(false, 'El equipo no pidió usuario: ¿está escuchando telnet en ese puerto?');
+            return;
+          }
+          this.stream.write(`${this.user}\n`);
+          const pideClave = await this.readUntil(/password\s*:\s*$/i, this.timeout);
+          if (!/password\s*:\s*$/i.test(pideClave)) { done(false, 'El equipo no pidió contraseña.'); return; }
+          this.stream.write(`${this.pass}\n`);
+          // Tras el login llega el prompt; si en su lugar repite la pregunta, la
+          // credencial es mala (telnet no devuelve un error de autenticación
+          // como SSH: reintenta y ya).
+          const tras = await this.readUntil(/(?:^|[\r\n])[^\s\r\n]+[>#][ \t]*$|(user\s*name|username|login)\s*:\s*$/i, this.timeout);
+          if (/(user\s*name|username|login)\s*:\s*$/i.test(tras)) {
+            done(false, 'Autenticación fallida (usuario o password incorrectos).');
+            return;
+          }
+          this.buffer = '';
+          socket.setTimeout(0); // el timeout de conexión no debe matar la sesión ociosa
+          done(true);
+        } catch (e) {
+          done(false, (e as Error).message);
+        }
+      });
+    });
+  }
+
   disconnect(): void {
     try {
       if (this.stream) this.stream.end();
@@ -159,8 +312,12 @@ export abstract class OltDriver {
     try {
       if (this.client) this.client.end();
     } catch { /* cerrando */ }
+    try {
+      if (this.socket) this.socket.destroy();
+    } catch { /* cerrando */ }
     this.stream = null;
     this.client = null;
+    this.socket = null;
     this.dead = true;
     this.notifyData();
   }
@@ -199,6 +356,16 @@ export abstract class OltDriver {
   }
   async provisionOnu(_p: any): Promise<any | false> {
     this.error = `Aprovisionar ONU aún no está implementado para ${this.getMarca()}.`;
+    return false;
+  }
+  /** Dónde está y cómo está una ONU ya autenticada, buscándola por SN. */
+  async estadoPorSn(_sn: string): Promise<any | null> {
+    this.error = `Localizar una ONU por SN aún no está implementado para ${this.getMarca()}.`;
+    return null;
+  }
+  /** Deja con su comentario y velocidad una ONU que YA está autenticada. */
+  async adoptarOnu(_p: any): Promise<any | false> {
+    this.error = `Adoptar una ONU ya autenticada aún no está implementado para ${this.getMarca()}.`;
     return false;
   }
   /** Todos los service-ports de un puerto PON, con su ONT-ID y traffic-tables. */
@@ -324,7 +491,9 @@ export abstract class OltDriver {
 
   /** ¿La sesión sigue abierta y es reutilizable? */
   isAlive(): boolean {
-    return !!this.client && !!this.stream && !this.dead;
+    // Por telnet no hay `client` (eso es de ssh2): el vivo es el socket.
+    const transporteVivo = this.transporte === 'telnet' ? !!this.socket : !!this.client;
+    return transporteVivo && !!this.stream && !this.dead;
   }
 
   /**

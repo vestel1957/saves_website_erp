@@ -5,12 +5,12 @@
  * controlador. Cablea HTTP -> método: extrae los argumentos de `req` y llama.
  * La lógica sigue viviendo en GenieacsController, que ya no lleva decoradores.
  *
- * Endpoints: 16
+ * Endpoints: 17
  */
 import { crearRouter, manejar } from '../core/http/ruta';
 import { validar } from '../core/http/validar';
 import { autenticar, exigirArea, exigirPermisos, moduloRed, usuarioDe } from '../core/auth/instancias';
-import { GenieacsController, BatchDto, RefreshDto, ServerUpsertDto } from './genieacs.controller';
+import { GenieacsController, BatchDto, RefreshDto, ServerUpsertDto, WifiDto } from './genieacs.controller';
 import { genieacsService } from '../core/contenedor';
 import { ArrayNotEmpty, Allow, IsArray, IsOptional, IsString } from 'class-validator';
 import { GenieacsService } from './genieacs.service';
@@ -148,4 +148,12 @@ genieacsRouter.post(
   exigirPermisos(APP_PERMISSIONS.NETWORK_RECONNECT),
   moduloRed,
   manejar((req) => genieacs.tvRestoreSubs(validar(BatchDto, req.body), usuarioDe(req))),
+);
+
+genieacsRouter.post(
+  '/genieacs/wifi',
+  autenticar,
+  exigirArea('tecnicos', 'administracion'),
+  moduloRed,
+  manejar((req) => genieacs.setWifi(validar(WifiDto, req.body), usuarioDe(req))),
 );

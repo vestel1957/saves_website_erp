@@ -33,6 +33,22 @@ export class ProvisionDto {
   @Allow() traffic_in?: number | string;
   @Allow() traffic_out?: number | string;
 }
+/**
+ * Adoptar una ONU que YA está autenticada en la OLT: no se vuelve a dar de alta,
+ * solo se le pone comentario/velocidad y se registra en el inventario.
+ */
+export class AdoptarDto {
+  @IsString() sn!: string;
+  @IsOptional() @IsString() desc?: string;
+  /** Índices de traffic-table: `inbound`/RX = bajada del abonado, `outbound`/TX = subida. */
+  @Allow() traffic_in?: number | string;
+  @Allow() traffic_out?: number | string;
+  /** Solo se usan si la ONU está SIN service-port y hay que crearle uno. */
+  @Allow() vlan?: number | string;
+  @Allow() gemport?: number | string;
+  @Allow() user_vlan?: number | string;
+  @IsOptional() @IsString() subscriberId?: string;
+}
 export class OnuActionDto {
   @Allow() frame?: number | string;
   @Allow() slot!: number | string;
@@ -85,6 +101,8 @@ export class OltUpsertDto {
   @IsOptional() @IsString() ip?: string;
   @Allow() port?: string | number;
   @IsOptional() @IsString() tech?: string;
+  /** "ssh" | "telnet". Los equipos viejos solo escuchan telnet en el 23. */
+  @IsOptional() @IsString() transport?: string;
   @Allow() sedeLegacy?: number | string;
   @IsOptional() @IsString() branchId?: string;
   @IsOptional() @IsString() username?: string;
@@ -194,6 +212,10 @@ export class OltController {
   // --- Escrituras (GATE dry-run) ---
   provision(id: string, dto: ProvisionDto, user: AuthUser) {
     return this.olt.provision(id, dto, user);
+  }
+  /** Adopta una ONU ya autenticada (la que rechaza el alta con "SN already exists"). */
+  adoptar(id: string, dto: AdoptarDto, user: AuthUser) {
+    return this.olt.adoptar(id, dto, user);
   }
   setDesc(id: string, dto: OnuDescDto, user: AuthUser) {
     return this.olt.setDescription(id, dto, user);

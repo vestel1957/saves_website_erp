@@ -100,7 +100,7 @@ export default function RedPage() {
             <div className="mb-2 flex items-center justify-end">
               <Link href="/red/naps" className="inline-flex items-center gap-1.5 rounded-lg border border-border-default px-3 py-1.5 text-[12px] font-semibold text-text-secondary hover:bg-surface-2"><Icon name="git-branch" size={14} /> Gestionar cajas NAP</Link>
             </div>
-            <DataTable rows={naps?.items ?? []} empty="Sin NAPs." onRowClick={(r) => { window.location.href = `/red/naps/${r.id}`; }} columns={[
+            <DataTable rows={naps?.items ?? []} empty="Sin NAPs." rowHref={(r) => `/red/naps/${r.id}`} columns={[
               { key: "name", header: "NAP", render: (r) => <span className="font-medium text-text-primary">{r.name}</span> },
               { key: "branch", header: "Sede", render: (r) => r.branch ?? "—" },
               { key: "vlan", header: "VLAN", render: (r) => r.vlan ?? "—" },

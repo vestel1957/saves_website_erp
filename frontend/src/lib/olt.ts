@@ -9,7 +9,11 @@ export type OltRow = {
   ip: string;
   port: string;
   tech: string;
+  /** "ssh" | "telnet": cómo se habla con el equipo. */
+  transport: string;
   branch: string | null;
+  /** id de la sede: hace falta para reasignarla desde el modal. */
+  branchId: string | null;
   sedeLegacy: number;
   username: string;
   isDefault: boolean;
@@ -66,9 +70,24 @@ export type OltLog = {
   oltName: string | null; sn: string | null; fsp: string | null; userName: string | null; createdAt: string;
 };
 
+/** Dónde está y cómo está una ONU que YA estaba autenticada en la OLT. */
+export type OnuExistente = {
+  fsp: string; ont_id: number;
+  run_state: string; config_state: string; match_state: string;
+  description: string; lineprofile: string; srvprofile: string; srvprofile_name: string;
+  servicePorts: { index: string; vlan: string; gemport: string; rx: string; tx: string }[];
+};
+
 export type ProvisionResult = {
   ok: boolean; dryRun: boolean; message?: string; error?: string;
   commands?: string[]; ontId?: string; raw?: string;
+  /** `SN_YA_EXISTE`: la ONU ya está dada de alta; se puede adoptar. */
+  codigo?: string;
+  existente?: OnuExistente | null;
+  /** Resultado de adoptarla: qué se le ajustó y qué no se pudo. */
+  adoptada?: boolean;
+  cambios?: string[];
+  avisos?: string[];
   verificacion?: {
     ok: boolean; run_state: string | null; config_state: string | null;
     match_state: string | null; servicePorts: string[]; avisos: string[];

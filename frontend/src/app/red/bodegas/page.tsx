@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
 import { Badge } from "@/components/ui/Badge";
@@ -12,6 +11,7 @@ import { ListToolbar } from "@/components/ui/ListToolbar";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { useAuth } from "@/context/AuthProvider";
 import { esTecnico } from "@/lib/support";
+import { listaJson, objetoJson } from "@/lib/errores";
 
 type Warehouse = { id: string; name: string; description?: string | null; equipment?: number };
 type EquipItem = {
@@ -37,10 +37,15 @@ function MisEquipos() {
   const cargar = useCallback(async (q: string) => {
     const params = new URLSearchParams({ pageSize: "100" });
     if (q.trim()) params.set("search", q.trim());
+    const vacio: EquipResp = { items: [], total: 0, page: 1, pageSize: 100, pages: 0 };
     try {
-      setEquipos(await authFetch(`/network/equipment?${params}`).then((x) => x.json()));
+      // `objetoJson` y no `.json()` a secas: el cuerpo de un error TAMBIÉN es JSON
+      // válido, así que un 403 se colaba en el estado y el `equipos.items.map` del
+      // render tumbaba la pantalla entera con "Algo se rompió en esta pantalla"
+      // (ver lib/errores.ts). Sin datos la vista se degrada; no se cae.
+      setEquipos((await authFetch(`/network/equipment?${params}`).then(objetoJson<EquipResp>)) ?? vacio);
     } catch {
-      setEquipos({ items: [], total: 0, page: 1, pageSize: 100, pages: 0 });
+      setEquipos(vacio);
     }
   }, [authFetch]);
 
@@ -92,7 +97,6 @@ function MisEquipos() {
 }
 
 export default function BodegaEquiposPage() {
-  const router = useRouter();
   const { loading: authLoading, authFetch, user } = useAuth();
   const [rows, setRows] = useState<Warehouse[] | null>(null);
   const [search, setSearch] = useState("");
@@ -101,8 +105,8 @@ export default function BodegaEquiposPage() {
   useEffect(() => {
     if (authLoading || soloLoSuyo) return;
     void authFetch("/network/equipment-warehouses")
-      .then((r) => r.json())
-      .then((list: Warehouse[]) => setRows(list))
+      .then(listaJson<Warehouse>)
+      .then(setRows)
       .catch(() => setRows([]));
   }, [authLoading, authFetch, soloLoSuyo]);
 
@@ -140,7 +144,7 @@ export default function BodegaEquiposPage() {
       <PagedTable
         rows={shown}
         empty={search ? "Ninguna bodega coincide con la búsqueda." : "Sin bodegas."}
-        onRowClick={(w: Warehouse) => router.push(`/red/bodegas/${w.id}`)}
+        rowHref={(w: Warehouse) => `/red/bodegas/${w.id}`}
         columns={[
           { key: "name", header: "Bodega", render: (w: Warehouse) => (
               <span className="flex items-center gap-2 font-medium text-text-primary">

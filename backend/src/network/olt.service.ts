@@ -7,6 +7,7 @@ import { AuthUser } from '../auth/current-user.decorator';
 import { OltDriver } from './olt/olt-ssh.client';
 import { OltHuawei } from './olt/olt-huawei.driver';
 import { createOltDriver, OLT_BRANDS } from './olt/olt-factory';
+import type { OltTransporte } from './olt/olt-ssh.client';
 import { decryptSecret, encryptSecret } from '../common/secret-box';
 
 /**
@@ -26,7 +27,7 @@ import { decryptSecret, encryptSecret } from '../common/secret-box';
 
 export type OltAction =
   | 'TEST' | 'BOARDS' | 'ONUS' | 'AUTOFIND' | 'PROFILES' | 'SYSTEM'
-  | 'DETAIL' | 'FIND' | 'PROVISION' | 'REBOOT' | 'DELETE' | 'SYNC' | 'LINK' | 'DESC' | 'CATV';
+  | 'DETAIL' | 'FIND' | 'PROVISION' | 'ADOPTAR' | 'REBOOT' | 'DELETE' | 'SYNC' | 'LINK' | 'DESC' | 'CATV';
 
 interface AuditMeta {
   sn?: string | null;
@@ -70,6 +71,16 @@ export function pickSrvProfileByModel(
   const target = norm(model);
   if (!target) return null;
   return srvList.find((p) => norm(p.name) === target) ?? null;
+}
+
+
+/**
+ * Transporte de una OLT. Se normaliza aquí y no en cada llamada porque las
+ * fichas viejas traen la columna vacía: sin este respaldo, una OLT importada
+ * del legacy intentaría conectarse por telnet a un puerto SSH.
+ */
+function transporteDe(olt: { transport?: string | null }): OltTransporte {
+  return String(olt.transport || '').toLowerCase() === 'telnet' ? 'telnet' : 'ssh';
 }
 
 export class OltService {
@@ -209,7 +220,7 @@ export class OltService {
    * descarta, porque el CLI pudo quedar en un submodo desconocido.
    */
   private async withDriver<T>(
-    olt: { id: string; brand: string; ip: string; port: string; username: string; password: string },
+    olt: { id: string; brand: string; ip: string; port: string; username: string; password: string; transport?: string },
     fn: (driver: OltDriver) => Promise<T>,
   ): Promise<{ ok: boolean; error: string; raw: string; data: T | null }> {
     return this.enFila(olt.ip, async () => {
@@ -229,7 +240,7 @@ export class OltService {
         }
       }
       if (!driver) {
-        driver = createOltDriver(olt.brand, olt.ip, olt.port, olt.username, decryptSecret(olt.password));
+        driver = createOltDriver(olt.brand, olt.ip, olt.port, olt.username, decryptSecret(olt.password), transporteDe(olt));
         const connected = await driver.connect();
         if (!connected) {
           const error = driver.getError();
@@ -299,8 +310,10 @@ export class OltService {
       include: { branch: { select: { name: true } }, _count: { select: { onus: true } } },
     });
     return rows.map((o) => ({
-      id: o.id, name: o.name, brand: o.brand, ip: o.ip, port: o.port, tech: o.tech,
-      branch: o.branch?.name ?? null, sedeLegacy: o.sedeLegacy, username: o.username,
+      id: o.id, name: o.name, brand: o.brand, ip: o.ip, port: o.port, tech: o.tech, transport: transporteDe(o),
+      // `branchId` además del nombre: el modal de edición necesita el id para
+      // poder cambiar la sede (el nombre solo sirve para pintar la tabla).
+      branch: o.branch?.name ?? null, branchId: o.branchId, sedeLegacy: o.sedeLegacy, username: o.username,
       isDefault: o.isDefault, online: o.online, onus: o._count.onus,
       defaults: {
         lineProfile: o.defaultLineProfile, srvProfile: o.defaultSrvProfile,
@@ -317,7 +330,7 @@ export class OltService {
     const olt = await this.prisma.olt.create({
       data: {
         name: dto.name, brand: dto.brand || 'Huawei', ip: dto.ip, port: String(dto.port || '22'),
-        tech: dto.tech || 'GPON', sedeLegacy, branchId: dto.branchId || null,
+        tech: dto.tech || 'GPON', transport: transporteDe(dto), sedeLegacy, branchId: dto.branchId || null,
         username: dto.username || '', password: encryptSecret(dto.password || ''),
         isDefault: already === 0,
         defaultLineProfile: dto.defaultLineProfile ? Number(dto.defaultLineProfile) : null,
@@ -337,8 +350,15 @@ export class OltService {
     for (const k of ['name', 'brand', 'ip', 'tech', 'username'] as const) {
       if (dto[k] !== undefined) (data as any)[k] = dto[k];
     }
+    if (dto.transport !== undefined) data.transport = transporteDe(dto);
     if (dto.port !== undefined) data.port = String(dto.port);
     if (dto.sedeLegacy !== undefined) data.sedeLegacy = Number(dto.sedeLegacy);
+    // La SEDE no se podía cambiar al editar, y de ella depende que una orden
+    // encuentre su OLT: `oltDeSede` resuelve por `branchId`. Una OLT sin sede
+    // —o con la equivocada— deja al técnico sin botón de autenticar.
+    if (dto.branchId !== undefined) {
+      data.branch = dto.branchId ? { connect: { id: dto.branchId } } : { disconnect: true };
+    }
     // password: sólo si viene y no es la máscara.
     if (dto.password && !/^\*+$/.test(dto.password)) data.password = encryptSecret(dto.password);
     for (const k of ['defaultLineProfile', 'defaultSrvProfile', 'defaultVlan', 'defaultGemport', 'defaultUserVlan'] as const) {
@@ -369,8 +389,9 @@ export class OltService {
 
   async testConnection(id: string, user?: AuthUser) {
     const olt = await this.resolveOlt(id);
-    this.logger.log(`TEST OLT "${olt.name}" → ${olt.ip}:${olt.port} (SSH como "${olt.username}")${user?.name ? ` — pedido por ${user.name}` : ''}`);
-    const driver = createOltDriver(olt.brand, olt.ip, olt.port, olt.username, decryptSecret(olt.password));
+    const via = transporteDe(olt).toUpperCase();
+    this.logger.log(`TEST OLT "${olt.name}" → ${olt.ip}:${olt.port} (${via} como "${olt.username}")${user?.name ? ` — pedido por ${user.name}` : ''}`);
+    const driver = createOltDriver(olt.brand, olt.ip, olt.port, olt.username, decryptSecret(olt.password), transporteDe(olt));
     const ok = await driver.connect();
     const error = driver.getError();
     driver.disconnect();
@@ -638,6 +659,21 @@ export class OltService {
     this.logger.warn(`AUTENTICAR ONU (LIVE) SN ${params.sn} en "${olt.name}" (${olt.ip}) fsp ${fsp}${user?.name ? ` — pedido por ${user.name}` : ''}`);
     const r = await this.withDriver(olt, (d) => d.provisionOnu(params));
     const res = r.data as any;
+
+    // La ONU ya estaba dada de alta (aquí, desde SmartOLT o a mano). No es un
+    // error de perfil: se devuelve DÓNDE está y con qué velocidad, para que la
+    // UI pueda ofrecer adoptarla en vez de mandar a reintentar a ciegas.
+    if (r.ok && res?.ok === false && res?.codigo === 'SN_YA_EXISTE') {
+      const e = res.existente;
+      this.logger.warn(
+        `AUTENTICAR SN ${params.sn}: la OLT "${olt.name}" dice que el SN ya existe`
+        + (e ? ` — está en ${e.fsp}:${e.ont_id}, ${e.run_state}/${e.config_state}, ${e.servicePorts?.length ?? 0} service-port(s)` : ' y no se pudo localizar'),
+      );
+      await this.audit('PROVISION', olt, false, false,
+        `SN ${params.sn} YA EXISTE${e ? ` en ${e.fsp}:${e.ont_id}` : ''} — no se re-autentica`,
+        { sn: params.sn, fsp: e ? `${e.fsp}:${e.ont_id}` : fsp, user });
+      return { ok: false, dryRun: false, codigo: 'SN_YA_EXISTE', error: res.error, existente: e ?? null, raw: r.raw };
+    }
     await this.audit('PROVISION', olt, r.ok, false, r.ok ? (res?.message ?? 'ONT agregada') : `ERROR: ${r.error}`, { sn: params.sn, fsp, user });
     // Traza SIEMPRE la sesión de un alta, aunque el CLI no diera error: el fallo
     // típico (config: failed / sin service-port) no es un error de comando y de
@@ -648,6 +684,13 @@ export class OltService {
       `vlan=${params.vlan ?? '-'} gem=${params.gemport ?? '-'} rx=${params.traffic_in ?? '-'} tx=${params.traffic_out ?? '-'} · ` +
       (v ? `verif: run=${v.run_state} config=${v.config_state} match=${v.match_state} sp=${v.servicePorts?.length ?? 0}` +
            (v.avisos?.length ? ` · avisos: ${v.avisos.join(' | ')}` : '') : 'sin verificación') +
+      // Lo que contestó la OLT a CADA comando de escritura, íntegro. La
+      // transcripción se recorta por la cola y en un alta la cola es el listado
+      // del puerto entero, así que el "Failure:" del service-port se perdía.
+      (res?.respuestas?.length
+        ? '\n--- respuestas de la OLT ---\n'
+          + res.respuestas.map((x: any) => `$ ${x.cmd}\n  → ${x.out || '(sin salida)'}`).join('\n')
+        : '') +
       `\n--- transcripción SSH ---\n${(r.raw || '').slice(-4000)}\n--- fin ---`,
     );
     if (!r.ok) return { ok: false, dryRun: false, error: r.error, raw: r.raw };
@@ -661,6 +704,90 @@ export class OltService {
       run_state: v?.run_state, config_state: v?.config_state, match_state: v?.match_state,
     }, new Date()).catch((e) => this.logger.warn(`No se pudo guardar la ONU recién autenticada en el inventario local: ${e.message}`));
     return { ok: true, dryRun: false, message: res.message, ontId: res.ont_id, commands: res.commands, verificacion: res.verificacion ?? null, raw: r.raw };
+  }
+
+  /**
+   * ADOPTA una ONU que ya está autenticada en la OLT: le pone el comentario y la
+   * velocidad que le tocan y la registra en el inventario (opcionalmente
+   * vinculada a un abonado). No la borra ni la vuelve a dar de alta.
+   *
+   * Existe porque la planta lleva años dándose de alta desde SmartOLT y a mano:
+   * cuando esas ONUs se tocan desde aquí, la OLT responde "SN already exists" y
+   * hasta ahora eso era un callejón sin salida. Borrar y rehacer sería dejar al
+   * abonado sin servicio a cambio de nada.
+   * Dry-run salvo OLT_LIVE=true.
+   */
+  async adoptar(
+    id: string,
+    params: {
+      sn: string; desc?: string | null;
+      traffic_in?: number | string | null; traffic_out?: number | string | null;
+      /** Solo se usan si la ONU está SIN service-port y hay que crearle uno. */
+      vlan?: number | string | null; gemport?: number | string | null; user_vlan?: number | string | null;
+      subscriberId?: string | null;
+    },
+    user?: AuthUser,
+  ) {
+    await this.syncLive();
+    const olt = await this.resolveOlt(id);
+    const sn = String(params.sn ?? '').trim().toUpperCase();
+    if (!sn) throw new BadRequestException('Debe indicar el SN de la ONU.');
+
+    if (!this.live) {
+      const commands = [
+        `display ont info by-sn ${sn}`,
+        ...(params.desc ? [`ont modify <puerto> <ont-id> desc "${params.desc}"`] : []),
+        ...(params.traffic_in || params.traffic_out
+          ? [`service-port <índice> inbound traffic-table index ${params.traffic_in ?? '-'} outbound traffic-table index ${params.traffic_out ?? '-'}`]
+          : []),
+        '(si la ONU no tiene service-port, se le crea uno con la VLAN y el GEM del puerto)',
+      ];
+      await this.audit('ADOPTAR', olt, true, true, `DRY-RUN adoptar SN ${sn}: ` + commands.join(' · '), { sn, user, subscriberId: params.subscriberId ?? null });
+      return { ok: true, dryRun: true, message: 'DRY-RUN: no se contacta la OLT. Active OLT_LIVE=true para adoptar de verdad.', commands };
+    }
+
+    this.logger.warn(`ADOPTAR ONU (LIVE) SN ${sn} en "${olt.name}" (${olt.ip})${user?.name ? ` — pedido por ${user.name}` : ''}`);
+    const r = await this.withDriver(olt, (d) => d.adoptarOnu({
+      sn, desc: params.desc ?? null,
+      traffic_in: params.traffic_in ?? null, traffic_out: params.traffic_out ?? null,
+      // Sin valores por defecto de la OLT a propósito: si hay que crear el
+      // service-port, manda lo que YA funciona en ese puerto (y el GEM real de
+      // la ONT), no un ajuste global que puede no valer para este PON.
+      vlan: params.vlan ?? null,
+      gemport: params.gemport ?? null,
+      user_vlan: params.user_vlan ?? null,
+    }));
+    const res = r.data as any;
+    const fsp = res?.fsp ? `${res.fsp}:${res.ont_id}` : null;
+    await this.audit('ADOPTAR', olt, r.ok, false,
+      r.ok ? (res?.message ?? 'ONU adoptada') : `ERROR: ${r.error}`,
+      { sn, fsp, user, subscriberId: params.subscriberId ?? null });
+    this.logger.log(
+      `ADOPTAR resultado SN ${sn} ${fsp ?? '(sin posición)'} · ${r.ok ? (res?.cambios?.join(' · ') || 'sin cambios') : 'ERROR: ' + r.error}`
+      + (res?.avisos?.length ? ` · avisos: ${res.avisos.join(' | ')}` : ''),
+    );
+    if (!r.ok) return { ok: false, dryRun: false, error: r.error, raw: r.raw };
+
+    // Al inventario local, con el estado real que reportó la OLT. Es lo que hace
+    // que la ONU pase a existir para el resto del sistema (ficha del abonado,
+    // "subir megas", cortes): hasta aquí solo existía en el equipo.
+    const v = res.verificacion;
+    await this.upsertOnu(olt.id, {
+      sn, frame: res.frame, slot: res.slot, port: res.port, ont_id: res.ont_id,
+      description: res.antes?.description !== undefined && params.desc ? String(params.desc) : res.antes?.description,
+      run_state: v?.run_state, config_state: v?.config_state, match_state: v?.match_state,
+    }, new Date()).catch((e) => this.logger.warn(`ONU ${sn} adoptada pero no se pudo guardar en el inventario local: ${e.message}`));
+    if (params.subscriberId) {
+      const onu = await this.prisma.oltOnu.findFirst({ where: { oltId: olt.id, sn }, select: { id: true } });
+      if (onu) await this.linkCustomer(onu.id, params.subscriberId, user).catch((e) => this.logger.warn(`ONU ${sn} adoptada pero no se pudo vincular al abonado: ${e.message}`));
+    }
+    return {
+      ok: true, dryRun: false, adoptada: true,
+      message: res.message, ontId: res.ont_id, fsp: res.fsp,
+      cambios: res.cambios ?? [], avisos: res.avisos ?? [],
+      antes: res.antes ?? null, velocidad: res.velocidad ?? null,
+      commands: res.commands ?? [], verificacion: res.verificacion ?? null, raw: r.raw,
+    };
   }
 
   /** Cambia el comentario (desc) de una ONU ya autorizada. Dry-run salvo OLT_LIVE=true. */

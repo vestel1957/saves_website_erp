@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
 import { Button } from "@/components/ui/Button";
+import { Badge } from "@/components/ui/Badge";
 import { Input, Select, Textarea, Field } from "@/components/ui/Field";
+import { Combobox, type ComboItem } from "@/components/ui/Combobox";
 import { DataTable } from "@/components/ui/DataTable";
 import { ListToolbar } from "@/components/ui/ListToolbar";
 import { Pagination } from "@/components/ui/Pagination";
@@ -82,12 +83,19 @@ export default function NapsPage() {
 
 function BranchNaps({ branch, onBack }: { branch: BranchOpt; onBack: () => void }) {
   const { authFetch } = useAuth();
-  const router = useRouter();
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<"name" | "vlan">("name");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [creating, setCreating] = useState(false);
+
+  // Filtros del listado. Viajan al servidor (el listado pagina allí), así que
+  // filtran sobre las 1.398 NAPs y no sólo sobre la página que se está viendo.
+  const [vlanId, setVlanId] = useState("");
+  const [ocupacion, setOcupacion] = useState("");
+  const [address, setAddress] = useState("");
+  const [vlans, setVlans] = useState<VlanOpt[]>([]);
+  const [barrios, setBarrios] = useState<{ value: string; naps: number }[]>([]);
 
   // Carga con cancelación: al teclear se aborta la petición en vuelo para que
   // una respuesta lenta no pise a otra más reciente. Ver lib/useRequest.
@@ -98,16 +106,44 @@ function BranchNaps({ branch, onBack }: { branch: BranchOpt; onBack: () => void 
     () => {
       const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize), sort, branchId: branch.id, ...orden.params });
       if (search.trim()) qs.set("search", search.trim());
+      if (vlanId) qs.set("vlanId", vlanId);
+      if (ocupacion) qs.set("ocupacion", ocupacion);
+      if (address) qs.set("address", address);
       return `/network/naps?${qs}`;
     },
-    [branch.id, page, pageSize, sort, search, orden.clave],
+    [branch.id, page, pageSize, sort, search, vlanId, ocupacion, address, orden.clave],
     { debounceMs: search ? 350 : 0 },
   );
 
+  // Las VLANs de la sede alimentan el filtro (y son las mismas que ofrece el
+  // alta de NAP, así que una sola petición al entrar).
+  useEffect(() => {
+    void authFetch(`/network/vlans?branchId=${branch.id}`).then(listaJson).then(setVlans).catch(() => setVlans([]));
+    void authFetch(`/network/nap-addresses?branchId=${branch.id}`).then(listaJson).then(setBarrios).catch(() => setBarrios([]));
+  }, [branch.id, authFetch]);
 
   useEffect(() => {
     setPage(1);
-  }, [search, sort, pageSize, orden.clave]);
+  }, [search, sort, pageSize, vlanId, ocupacion, address, orden.clave]);
+
+  const filtrosActivos = useMemo(
+    () => [vlanId, ocupacion, address].filter(Boolean).length + (search.trim() ? 1 : 0),
+    [vlanId, ocupacion, address, search],
+  );
+
+  // Opciones del desplegable de barrio: la primera limpia el filtro (el Combobox
+  // no trae aspa propia) y el resto llevan cuántas NAPs hay en cada uno.
+  const itemsBarrio = useMemo<ComboItem[]>(
+    () => [
+      { value: "", label: "Todos los barrios" },
+      ...barrios.map((b) => ({ value: b.value, label: b.value, sublabel: `${b.naps} NAP${b.naps === 1 ? "" : "s"}` })),
+    ],
+    [barrios],
+  );
+
+  function limpiar() {
+    setSearch(""); setVlanId(""); setOcupacion(""); setAddress("");
+  }
 
   return (
     <>
@@ -116,15 +152,55 @@ function BranchNaps({ branch, onBack }: { branch: BranchOpt; onBack: () => void 
           <button onClick={onBack} className="flex h-9 w-9 items-center justify-center rounded-lg border border-border-default text-text-secondary hover:bg-surface-2" title="Volver a sedes"><Icon name="arrow-left" size={16} /></button>
           <div>
             <h1 className="flex items-center gap-2 text-[18px] font-bold text-text-primary"><Icon name="landmark" size={18} className="text-brand" /> {branch.name}</h1>
-            <p className="text-[12px] text-text-tertiary">{data ? `${(data.total ?? 0).toLocaleString("es-CO")} cajas NAP en esta sede` : "Cajas NAP"}</p>
+            <p className="text-[12px] text-text-tertiary">
+              {data
+                ? filtrosActivos > 0
+                  ? `${(data.total ?? 0).toLocaleString("es-CO")} cajas NAP con estos filtros`
+                  : `${(data.total ?? 0).toLocaleString("es-CO")} cajas NAP en esta sede`
+                : "Cajas NAP"}
+            </p>
           </div>
         </div>
         <Button onClick={() => setCreating(true)}><Icon name="plus" size={15} /> Nueva NAP</Button>
       </div>
 
       {/* El orden se pide pulsando la cabecera de la tabla; antes había aquí un
-          selector Nombre/VLAN que ahora sería un segundo mando para lo mismo. */}
-      <ListToolbar search={search} onSearch={setSearch} searchPlaceholder="Buscar NAP por nombre…" />
+          selector Nombre/VLAN que ahora sería un segundo mando para lo mismo.
+          El buscador mira nombre Y dirección (lo resuelve el servidor). */}
+      <ListToolbar
+        search={search}
+        onSearch={setSearch}
+        searchPlaceholder="Buscar NAP por nombre o dirección…"
+        actions={filtrosActivos > 0 ? (
+          <Button variant="ghost" size="sm" onClick={limpiar} title="Quitar todos los filtros">
+            <Icon name="x" size={14} /> Limpiar ({filtrosActivos})
+          </Button>
+        ) : undefined}
+      >
+        <Select value={vlanId} onChange={(e) => setVlanId(e.target.value)} className="w-full sm:w-44" aria-label="Filtrar por VLAN">
+          <option value="">Todas las VLANs</option>
+          <option value="none">Sin VLAN</option>
+          {vlans.map((v) => <option key={v.id} value={v.id}>VLAN {v.vlan}{v.detail ? ` · ${v.detail}` : ""}</option>)}
+        </Select>
+        <Select value={ocupacion} onChange={(e) => setOcupacion(e.target.value)} className="w-full sm:w-44" aria-label="Filtrar por ocupación">
+          <option value="">Toda ocupación</option>
+          <option value="libres">Con puertos libres</option>
+          <option value="llenas">Llenas (sin libres)</option>
+          <option value="vacias">Vacías (sin clientes)</option>
+        </Select>
+        {/* La dirección de una NAP es en realidad el BARRIO. Va en combobox y no
+            en un <select> porque son cientos por sede (196 en Yopal) y ahí lo que
+            hace falta es teclear tres letras, no bajar por una lista. */}
+        <Combobox
+          items={itemsBarrio}
+          value={address}
+          onChange={setAddress}
+          placeholder="Todos los barrios"
+          emptyText="Ningún barrio coincide."
+          icon="map-pin"
+          className="w-full sm:w-56"
+        />
+      </ListToolbar>
 
       {loading && !data ? (
         <PageSkeleton />
@@ -134,13 +210,21 @@ function BranchNaps({ branch, onBack }: { branch: BranchOpt; onBack: () => void 
             sort={orden.sort}
             onSort={orden.onSort}
             rows={data?.items ?? []}
-            empty="Esta sede aún no tiene cajas NAP."
-            onRowClick={(r) => router.push(`/red/naps/${r.id}`)}
+            empty={filtrosActivos > 0 ? "Ninguna caja NAP coincide con los filtros." : "Esta sede aún no tiene cajas NAP."}
+            rowHref={(r) => `/red/naps/${r.id}`}
             columns={[
               { key: "name", header: "NAP", render: (r) => <span className="font-medium text-text-primary">{r.name}</span> },
               { key: "vlan", header: "VLAN", sortable: true, align: "right", render: (r) => r.vlan != null ? <span className="font-mono text-text-secondary">{r.vlan}</span> : "—" },
-              { key: "ports", header: "Puertos", sortable: true, align: "right", render: (r) => <span className="font-mono">{r.portsRegistered}/{r.portCount}</span> },
-              { key: "addr", header: "Dirección", sortable: true, render: (r) => <span className="text-text-secondary">{r.address || "—"}</span> },
+              // Ocupación real (puertos Ocupados / declarados). El registro de
+              // puertos va aparte porque no siempre cuadra con `portCount`.
+              { key: "ocupacion", header: "Ocupación", align: "right", render: (r) => <Ocupacion nap={r} /> },
+              { key: "ports", header: "Puertos", sortable: true, align: "right", render: (r) => <span className="font-mono text-text-tertiary">{r.portsRegistered}/{r.portCount}</span> },
+              { key: "addr", header: "Dirección", sortable: true, render: (r) => (
+                <span className="flex items-center gap-1.5 text-text-secondary">
+                  {r.gps && <Icon name="map-pin" size={13} className="shrink-0 text-brand" aria-label="Tiene ubicación" />}
+                  {r.address || "—"}
+                </span>
+              ) },
               { key: "go", header: "", align: "right", render: () => <Icon name="chevron-right" size={16} className="text-text-tertiary" /> },
             ]}
           />
@@ -159,6 +243,23 @@ function BranchNaps({ branch, onBack }: { branch: BranchOpt; onBack: () => void 
         onCreated={() => { setCreating(false); setPage(1); void load(); }}
       />
     </>
+  );
+}
+
+/**
+ * Puertos ocupados sobre los declarados, con el color diciendo si queda sitio:
+ * es la pregunta que se hace en campo antes de mandar a un técnico.
+ */
+function Ocupacion({ nap }: { nap: Nap }) {
+  const usados = nap.portsUsed ?? 0;
+  const libres = nap.portsRegistered - usados;
+  const tono = nap.portsRegistered === 0 ? "default" : libres <= 0 ? "error" : libres <= 2 ? "warning" : "success";
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <Badge tone={tono} label={`${usados}/${nap.portCount}`} />
+      {nap.portsRegistered > 0 && libres > 0 && <span className="text-[11px] text-text-tertiary">{libres} libre{libres === 1 ? "" : "s"}</span>}
+      {nap.portsRegistered === 0 && <span className="text-[11px] text-text-tertiary">sin puertos</span>}
+    </span>
   );
 }
 

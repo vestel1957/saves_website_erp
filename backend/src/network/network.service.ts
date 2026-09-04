@@ -5,6 +5,7 @@ import { orden } from '../common/pagination-params';
 import { AuthUser } from '../auth/current-user.decorator';
 import { sedesDeUsuario } from './bodega-scope';
 import { clavesDe, esTecnicoDeCampo, fichaDelUsuario } from '../common/tecnico-scope';
+import { ListNapsQueryDto } from './dto/naps.dto';
 
 function subName(s: {
   firstName: string | null; secondName: string | null; lastName1: string | null;
@@ -75,12 +76,10 @@ export class NetworkService {
     ports: (dir: 'asc' | 'desc') => ({ ports: { _count: dir } }),
   };
 
-  async naps(params: { search?: string; branchId?: string; sort?: string; page?: number; pageSize?: number; sortBy?: string; sortDir?: string }) {
+  async naps(params: ListNapsQueryDto) {
     const page = Math.max(1, Number(params.page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(params.pageSize) || 25));
-    const where: Prisma.NapWhereInput = {};
-    if (params.branchId) where.branchId = params.branchId;
-    if (params.search?.trim()) where.name = { contains: params.search.trim(), mode: 'insensitive' };
+    const where = await this.filtroNaps(params);
     // Orden: por VLAN (con NAPs sin VLAN al final) o alfabético por nombre (por defecto).
     // `sort=vlan` es el conmutador viejo de la pantalla; la cabecera manda
     // `sortBy`/`sortDir` y tiene prioridad si viene.
@@ -91,10 +90,80 @@ export class NetworkService {
       this.prisma.nap.findMany({ where, orderBy, skip: (page - 1) * pageSize, take: pageSize, include: { branch: { select: { name: true } }, vlan: { select: { vlan: true } }, _count: { select: { ports: true } } } }),
       this.prisma.nap.count({ where }),
     ]);
+    // Puertos ocupados de las NAPs de ESTA página (25 filas), en una consulta
+    // aparte: un `_count` filtrado por relación obligaría a contar toda la tabla
+    // de puertos para descartar casi todo.
+    const ocupados = await this.ocupacionDe(rows.map((n) => n.id));
     return {
-      items: rows.map((n) => this.mapNap(n)),
+      items: rows.map((n) => ({ ...this.mapNap(n), portsUsed: ocupados.get(n.id) ?? 0 })),
       total, page, pageSize, pages: Math.ceil(total / pageSize),
     };
+  }
+
+  /**
+   * Traduce los filtros de la pantalla a un `where` de Prisma. Vive aparte
+   * porque lo usan el listado y el contador de filtros activos.
+   */
+  private async filtroNaps(params: ListNapsQueryDto): Promise<Prisma.NapWhereInput> {
+    const where: Prisma.NapWhereInput = {};
+    const and: Prisma.NapWhereInput[] = [];
+    if (params.branchId) where.branchId = params.branchId;
+    // El buscador mira nombre Y dirección: en campo la NAP se busca tanto por su
+    // código ("NAP-12") como por el poste o el barrio donde está.
+    const q = params.search?.trim();
+    if (q) and.push({ OR: [{ name: { contains: q, mode: 'insensitive' } }, { address: { contains: q, mode: 'insensitive' } }] });
+    if (params.vlanId) where.vlanId = params.vlanId === 'none' ? null : params.vlanId;
+    // Barrio exacto. No se puede resolver con `equals + insensitive` porque 71
+    // direcciones traen espacios pegados del legacy y quedarían fuera; y con
+    // `contains` "LA LIBERTAD" se tragaría "LA LIBERTAD 1", que es otro barrio.
+    // Así que la comparación normalizada la hace Postgres y aquí entra por ids
+    // (son decenas de filas: el barrio más grande tiene 39 NAPs).
+    if (params.address?.trim()) {
+      const ids = await this.prisma.$queryRaw<{ id: string }[]>`
+        SELECT id FROM "Nap" WHERE upper(btrim(address)) = ${params.address.trim().toUpperCase()}
+      `;
+      and.push({ id: { in: ids.map((r) => r.id) } });
+    }
+    // Ocupación sobre los puertos REGISTRADOS. "Llenas" exige además tener
+    // puertos: si no, las 39 NAPs sin ninguno se colarían por no tener libres.
+    if (params.ocupacion === 'libres') and.push({ ports: { some: { status: 'Disponible' } } });
+    if (params.ocupacion === 'llenas') and.push({ ports: { some: {} } }, { ports: { none: { status: 'Disponible' } } });
+    if (params.ocupacion === 'vacias') and.push({ ports: { none: { status: 'Ocupado' } } });
+    if (and.length) where.AND = and;
+    return where;
+  }
+
+  /**
+   * Barrios/direcciones que existen en las NAPs de una sede, con cuántas hay en
+   * cada uno. Alimenta el desplegable de la pantalla.
+   *
+   * Se agrupa NORMALIZADO (`upper(btrim(...))`) porque el legacy trae el mismo
+   * barrio escrito de varias formas: sin esto ROSALES sale dos veces (23 y 15)
+   * y el operador no sabe cuál de las dos es "la buena". El valor normalizado es
+   * también el que viaja en el filtro `?address=`.
+   */
+  async napAddresses(branchId?: string) {
+    const filtro = branchId ? Prisma.sql`WHERE "branchId" = ${branchId}` : Prisma.empty;
+    const rows = await this.prisma.$queryRaw<{ value: string; naps: number }[]>`
+      SELECT upper(btrim(address)) AS value, count(*)::int AS naps
+      FROM "Nap"
+      ${filtro}
+      GROUP BY 1
+      HAVING upper(btrim(address)) <> ''
+      ORDER BY 2 DESC, 1 ASC
+    `;
+    return rows;
+  }
+
+  /** Puertos Ocupados por NAP, para el puñado de ids que se están pintando. */
+  private async ocupacionDe(napIds: string[]) {
+    if (!napIds.length) return new Map<string, number>();
+    const filas = await this.prisma.port.groupBy({
+      by: ['napId'],
+      where: { napId: { in: napIds }, status: 'Ocupado' },
+      _count: { _all: true },
+    });
+    return new Map(filas.map((f) => [f.napId as string, f._count._all]));
   }
 
   private mapNap(n: { id: string; name: string; branch: { name: string } | null; vlan: { vlan: number } | null; portCount: number; _count: { ports: number }; address: string; gpsLat: string | null; gpsLng: string | null }) {
@@ -108,10 +177,26 @@ export class NetworkService {
     return this.mapNap(n);
   }
 
-  /** VLANs (opcionalmente filtradas por sede) para selects de alta de NAP. */
-  vlans(branchId?: string) {
+  /**
+   * VLANs (opcionalmente filtradas por sede). Sirve a dos consumidores: el
+   * select de alta de NAP (que sólo mira id/vlan/detail) y la pantalla de
+   * administración /red/vlans, que además necesita sede, datos de OLT y cuántas
+   * NAPs cuelgan de cada una (una VLAN con NAPs no se puede borrar).
+   */
+  async vlans(branchId?: string) {
     const where: Prisma.VlanWhereInput = branchId ? { branchId } : {};
-    return this.prisma.vlan.findMany({ where, orderBy: { vlan: 'asc' }, select: { id: true, vlan: true, detail: true } });
+    const rows = await this.prisma.vlan.findMany({
+      where,
+      orderBy: [{ vlan: 'asc' }, { detail: 'asc' }],
+      select: {
+        id: true, vlan: true, detail: true, olt: true, tray: true, oltPort: true,
+        branchId: true, branch: { select: { name: true } }, _count: { select: { naps: true } },
+      },
+    });
+    return rows.map((v) => ({
+      id: v.id, vlan: v.vlan, detail: v.detail, olt: v.olt, tray: v.tray, oltPort: v.oltPort,
+      branchId: v.branchId, branch: v.branch?.name ?? null, naps: v._count.naps,
+    }));
   }
 
   /** Sedes con su número de cajas NAP (para la vista de red, sin depender de otros módulos). */
@@ -127,7 +212,7 @@ export class NetworkService {
    */
   private static readonly ORDEN_EQUIPOS = {
     code: 'code', brand: 'brand', mac: 'mac', serial: 'serial',
-    wh: 'warehouse.name', status: 'status', acs: 'genieacsId',
+    wh: 'warehouse.name', status: 'status', acs: 'genieacsId', returned: 'returnedAt',
     client: (dir: 'asc' | 'desc') => [
       { subscriber: { firstName: dir } }, { subscriber: { lastName1: dir } },
     ],
@@ -172,7 +257,7 @@ export class NetworkService {
       this.prisma.equipment.count({ where }),
     ]);
     return {
-      items: rows.map((e) => ({ id: e.id, code: e.code, mac: e.mac, serial: e.serial, brand: e.brand, status: e.status, warehouse: e.warehouse?.name ?? null, client: subName(e.subscriber), subscriberId: e.subscriber?.id ?? null, installType: e.installType, genieacs: !!e.genieacsId })),
+      items: rows.map((e) => ({ id: e.id, code: e.code, mac: e.mac, serial: e.serial, brand: e.brand, status: e.status, warehouse: e.warehouse?.name ?? null, client: subName(e.subscriber), subscriberId: e.subscriber?.id ?? null, installType: e.installType, genieacs: !!e.genieacsId, returnedAt: e.returnedAt })),
       total, page, pageSize, pages: Math.ceil(total / pageSize),
     };
   }

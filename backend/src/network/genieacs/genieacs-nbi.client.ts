@@ -156,16 +156,59 @@ export class GenieacsNbi {
     return r.ok;
   }
 
-  /** Encola una tarea. connectionRequest=true intenta ejecutarla de inmediato. */
-  async pushTask(deviceId: string, task: Record<string, any>, connectionRequest = true): Promise<{ ok: boolean; status: number }> {
+  /**
+   * Encola una tarea. connectionRequest=true intenta ejecutarla de inmediato.
+   *
+   * OJO con el estado, que aquí no es cosmético: **200 = el CPE la ejecutó** (el
+   * connection request llegó y el equipo contestó), **202 = quedó en cola** porque
+   * el equipo no contestó. Los dos son `ok` para fetch, y confundirlos es decirle a
+   * un cliente que su clave ya cambió cuando el router está apagado. Por eso se
+   * devuelve también el `taskId`: quien pida 200-o-nada puede cancelar la que quedó
+   * encolada (`deleteTask`) en vez de dejarla saltar tres días después.
+   */
+  async pushTask(deviceId: string, task: Record<string, any>, connectionRequest = true): Promise<{ ok: boolean; status: number; queued: boolean; taskId?: string }> {
     const q = connectionRequest ? '?connection_request' : '';
     const r = await this.req(`/devices/${this.enc(deviceId)}/tasks${q}`, { method: 'POST', headers: this.headers(), body: JSON.stringify(task) });
-    return { ok: r.ok, status: r.status };
+    let taskId: string | undefined;
+    try {
+      const body: any = await r.clone().json();
+      taskId = body?._id ? String(body._id) : undefined;
+    } catch {
+      // El NBI contesta cuerpo vacío en algunos errores: no es motivo para fallar.
+    }
+    return { ok: r.ok, status: r.status, queued: r.status === 202, taskId };
+  }
+
+  /** Cancela una tarea encolada (la que dejó un 202). */
+  async deleteTask(taskId: string): Promise<boolean> {
+    const r = await this.req(`/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE', headers: this.headers(false) });
+    return r.ok;
+  }
+
+  /** Árbol (o la parte proyectada) de UN dispositivo. null si el ACS no lo tiene. */
+  async getDevice(deviceId: string, projection: string[] = []): Promise<any | null> {
+    const p = new URLSearchParams();
+    p.set('query', JSON.stringify({ _id: deviceId }));
+    if (projection.length) p.set('projection', projection.join(','));
+    p.set('limit', '1');
+    const r = await this.req('/devices/?' + p.toString(), { headers: this.headers(false) });
+    if (!r.ok) throw new NbiError(r.status, '/devices');
+    const rows = (await r.json()) as any[];
+    return rows[0] ?? null;
   }
 
   /** setParameterValues de un booleano (ej. corte/alta de TV). */
   setBool(deviceId: string, param: string, value: boolean, connectionRequest = true) {
     return this.pushTask(deviceId, { name: 'setParameterValues', parameterValues: [[param, value, 'xsd:boolean']] }, connectionRequest);
+  }
+
+  /** setParameterValues de varios textos en UNA sola tarea (ej. SSID + clave del WiFi). */
+  setStrings(deviceId: string, pairs: Array<[string, string]>, connectionRequest = true) {
+    return this.pushTask(
+      deviceId,
+      { name: 'setParameterValues', parameterValues: pairs.map(([p, v]) => [p, v, 'xsd:string']) },
+      connectionRequest,
+    );
   }
 
   /** refreshObject de un subárbol (lectura; puebla valores en GenieACS). */

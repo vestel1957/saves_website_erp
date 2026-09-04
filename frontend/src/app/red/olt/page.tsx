@@ -33,6 +33,9 @@ export default function OltPanelPage() {
   const [loading, setLoading] = useState(true);
   const [testing, setTesting] = useState<string | null>(null);
   const [editOlt, setEditOlt] = useState<OltRow | null>(null);
+  /** El modal se abre con `editOlt = null` para dar de alta, y con una fila para editar.
+   *  Hace falta un estado aparte porque "null" ya significaba "cerrado". */
+  const [modalAbierto, setModalAbierto] = useState(false);
   const [search, setSearch] = useState("");
 
   const load = useCallback(async () => {
@@ -85,6 +88,9 @@ export default function OltPanelPage() {
             <Badge label={mode.live ? "MODO LIVE" : "DRY-RUN (simulación)"} tone={mode.live ? "error" : "info"} />
           )}
           <Link href="/red/onus"><Button variant="secondary"><Icon name="wand-sparkles" size={15} className="mr-1" />Inventario de ONUs</Button></Link>
+          <Button onClick={() => { setEditOlt(null); setModalAbierto(true); }}>
+            <Icon name="plus" size={15} className="mr-1" />Nueva OLT
+          </Button>
         </div>
       </div>
 
@@ -103,8 +109,8 @@ export default function OltPanelPage() {
 
       <PagedTable
         rows={shown}
-        empty={search ? "Ninguna OLT coincide con la búsqueda." : "No hay OLTs registradas."}
-        onRowClick={(o) => nav.push(`/red/olt/${o.id}`)}
+        empty={search ? "Ninguna OLT coincide con la búsqueda." : "No hay OLTs registradas. Use «Nueva OLT» para dar de alta un equipo."}
+        rowHref={(o) => `/red/olt/${o.id}`}
         columns={[
           { key: "name", header: "Nombre", render: (o) => (
             <span className="flex items-center gap-1.5 font-medium text-text-primary">
@@ -114,7 +120,14 @@ export default function OltPanelPage() {
             </span>
           ) },
           { key: "brand", header: "Marca / Tec.", render: (o) => <span className="text-text-secondary">{o.brand} · {o.tech}</span> },
-          { key: "ip", header: "IP:Puerto", render: (o) => <span className="font-mono text-text-secondary">{o.ip}:{o.port}</span> },
+          { key: "ip", header: "IP:Puerto", render: (o) => (
+            <span className="font-mono text-text-secondary">
+              {o.ip}:{o.port}
+              {/* El transporte se ve en la lista: un "sin conexión" se explica muchas
+                  veces porque el equipo habla telnet y la ficha dice SSH. */}
+              <span className="ml-1.5 font-sans text-[11px] uppercase text-text-tertiary">{o.transport}</span>
+            </span>
+          ) },
           { key: "branch", header: "Sede", render: (o) => o.branch ?? "—" },
           { key: "onus", header: "ONUs", align: "right", render: (o) => o.onus.toLocaleString("es-CO") },
           { key: "online", header: "Online", align: "right", render: (o) => <span className="text-success-text">{(dash?.porOlt.find((p) => p.oltId === o.id)?.online ?? 0).toLocaleString("es-CO")}</span> },
@@ -126,7 +139,7 @@ export default function OltPanelPage() {
                 className="tap rounded p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-brand disabled:opacity-50">
                 <Icon name={testing === o.id ? "loader" : "zap"} size={15} className={testing === o.id ? "animate-spin" : ""} />
               </button>
-              <button title="Editar / configurar defaults" onClick={() => setEditOlt(o)}
+              <button title="Editar / configurar defaults" onClick={() => { setEditOlt(o); setModalAbierto(true); }}
                 className="tap rounded p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-brand"><Icon name="pencil" size={15} /></button>
               <button title="Operar" onClick={() => nav.push(`/red/olt/${o.id}`)}
                 className="tap rounded p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-brand"><Icon name="play" size={15} /></button>
@@ -136,8 +149,8 @@ export default function OltPanelPage() {
       />
 
       <OltEditModal
-        open={!!editOlt}
-        onClose={() => setEditOlt(null)}
+        open={modalAbierto}
+        onClose={() => { setModalAbierto(false); setEditOlt(null); }}
         onSaved={load}
         olt={editOlt}
         brands={mode?.brands ?? ["Huawei", "ZTE", "Fiberhome", "V-SOL", "BDCOM", "Otra"]}

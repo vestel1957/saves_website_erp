@@ -5,11 +5,11 @@
  * controlador. Cablea HTTP -> método: extrae los argumentos de `req` y llama.
  * La lógica sigue viviendo en NetworkController, que ya no lleva decoradores.
  *
- * Endpoints: 48
+ * Endpoints: 49
  */
 import { crearRouter, manejar } from '../core/http/ruta';
-import { validar } from '../core/http/validar';
-import { autenticar, exigirArea, exigirAreaCon, exigirPermisos, moduloRed, usuarioDe } from '../core/auth/instancias';
+import { validar, validarQuery } from '../core/http/validar';
+import { autenticar, exigirArea, exigirAreaCon, exigirPermisos, moduloRed, abiertoAlTecnico, usuarioDe } from '../core/auth/instancias';
 import { NetworkController, BatchIdsDto, MessageBatchDto, RestoreBranchDto, TransferOtpDto } from './network.controller';
 import { mikrotikService, networkService, networkWriteService } from '../core/contenedor';
 import type { Response } from 'express';
@@ -18,6 +18,7 @@ import { NetworkService } from './network.service';
 import { NetworkWriteService, EquipTransferDto, AssignPortDto, AssignEquipmentSubDto, CreateEquipmentDto, CreateIpPoolDto, CreateNapDto, CreateVlanDto, ReceiveTransferDto, RejectTransferDto, SignTransferDto, UpdateIpPoolDto, UpdateNapDto } from './network-write.service';
 import { MikrotikService } from './mikrotik.service';
 import { INV_PERMISSIONS, APP_PERMISSIONS } from '../auth/permissions.catalog';
+import { ListNapsQueryDto } from './dto/naps.dto';
 import { actaPdf } from '../common/pdf/pdf-docs';
 
 /** Instancia única del controlador. Las dependencias salen del contenedor. */
@@ -45,7 +46,7 @@ networkRouter.get(
   '/equipment',
   autenticar,
   exigirAreaCon({ areas: ['tecnicos', 'administracion', 'caja'], orPermission: [INV_PERMISSIONS.ADMIN] }),
-  moduloRed,
+  abiertoAlTecnico,
   manejar((req) => network.equipment(usuarioDe(req), req.query.search as string, req.query.status as string, req.query.warehouseId as string, req.query.assigned as string, req.query.page as string, req.query.pageSize as string, req.query.sortBy as string, req.query.sortDir as string)),
 );
 
@@ -77,7 +78,7 @@ networkRouter.get(
   '/equipment-warehouses',
   autenticar,
   exigirArea('tecnicos', 'administracion'),
-  moduloRed,
+  abiertoAlTecnico,
   manejar((req) => network.equipmentWarehouses(usuarioDe(req))),
 );
 
@@ -154,6 +155,14 @@ networkRouter.post(
 );
 
 networkRouter.get(
+  '/nap-addresses',
+  autenticar,
+  exigirArea('tecnicos', 'administracion'),
+  moduloRed,
+  manejar((req) => network.napAddresses(req.query.branchId as string)),
+);
+
+networkRouter.get(
   '/nap-options',
   autenticar,
   exigirArea('tecnicos', 'administracion'),
@@ -166,7 +175,7 @@ networkRouter.get(
   autenticar,
   exigirArea('tecnicos', 'administracion'),
   moduloRed,
-  manejar((req) => network.naps(req.query.search as string, req.query.branchId as string, req.query.sort as string, req.query.page as string, req.query.pageSize as string, req.query.sortBy as string, req.query.sortDir as string)),
+  manejar((req) => network.naps(validarQuery(ListNapsQueryDto, req.query))),
 );
 
 networkRouter.post(
@@ -261,7 +270,7 @@ networkRouter.get(
 networkRouter.get(
   '/subscribers/:id/connection',
   autenticar,
-  exigirArea('tecnicos', 'administracion'),
+  exigirArea('tecnicos', 'administracion', 'caja'),
   moduloRed,
   manejar((req) => network.connection(req.params.id)),
 );

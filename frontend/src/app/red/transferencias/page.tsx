@@ -16,7 +16,7 @@ import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { useRequest } from "@/lib/useRequest";
 import { useOrden } from "@/lib/useOrden";
-import { mensajeDeError } from "@/lib/errores";
+import { listaJson, mensajeDeError } from "@/lib/errores";
 
 function statusTone(s: string): "default" | "success" | "warning" | "info" | "error" {
   if (s === "Recibida" || s === "Aprobada" || s === "Completada" || s === "Confirmada") return "success";
@@ -102,7 +102,7 @@ export default function TransferenciasPage() {
   useEffect(() => {
     if (!authLoading)
       void authFetch("/network/warehouses")
-        .then((r) => r.json())
+        .then(listaJson)
         .then(setWarehouses)
         .catch(() => {});
   }, [authLoading, authFetch]);
@@ -276,29 +276,40 @@ export default function TransferenciasPage() {
   }, [detail, authFetch]);
 
   /** Firma la SALIDA: el equipo sale de la bodega origen y queda en tránsito. */
-  const firmarSalida = useCallback(async (code: string) => {
+  const firmarSalida = useCallback(async (code?: string) => {
     if (!detail) return;
     setActing(true);
     try {
       const res = await authFetch(`/network/transfers/${detail.id}/sign-out`, {
         method: "POST",
-        body: JSON.stringify({ code }),
+        body: JSON.stringify(code ? { code } : {}),
       });
       const d = await res.json();
       if (!res.ok) throw new Error(d?.message || "Error");
-      toast(`Salida firmada · ${d?.dispatched ?? 0} equipos en tránsito${d?.skipped ? ` (${d.skipped} omitidos)` : ""}`);
+      toast(`Salida confirmada · ${d?.dispatched ?? 0} equipos en tránsito${d?.skipped ? ` (${d.skipped} omitidos)` : ""}`);
       setDetail(null);
       void load();
+    } catch (e) {
+      // Igual que en `receive`: con diálogo el error lo pinta él; sin diálogo, al toast.
+      if (code) throw e;
+      toast(mensajeDeError(e, "No se pudo confirmar la salida"), "alert-triangle");
     } finally {
       setActing(false);
     }
   }, [detail, authFetch, load]);
 
-  /** La firma que toca según el estado: salida si va Pendiente, entrada si va en tránsito. */
+  /** El paso que toca: salida si va Pendiente, entrada si va en tránsito. */
   const firmarPaso = useCallback(
-    async (code: string) => { await (paso1(detail) ? firmarSalida(code) : receive(code)); },
+    async (code?: string) => { await (paso1(detail) ? firmarSalida(code) : receive(code)); },
     [detail, firmarSalida, receive],
   );
+
+  /**
+   * ¿Este paso va con código? Lo dice el backend (`signature.otpRequired`). Mientras
+   * el detalle carga todavía no se sabe: se asume que SÍ, que es el lado del que no
+   * se cierra nada sin querer, y se corrige solo al llegar la respuesta.
+   */
+  const conCodigo = detail?.otpRequired ?? true;
 
   const reject = useCallback(async () => {
     if (!detail) return;
@@ -621,7 +632,7 @@ export default function TransferenciasPage() {
               <Icon name="arrow-left" size={13} className="rotate-180 text-text-tertiary" />
               <Badge label={detail.toBranch ? `${detail.toBranch} · ${detail.to}` : detail.to ?? "—"} tone="default" />
               {detail.status && <Badge label={detail.status} tone={statusTone(detail.status)} />}
-              {detail.entreSedes && <Badge label="Entre sedes · firmada" tone="warning" />}
+              {detail.entreSedes && <Badge label={conCodigo ? "Entre sedes · firmada" : "Entre sedes"} tone="warning" />}
             </div>
 
             {/* Historial del flujo. Entre sedes la columna del medio es la FIRMA DE
@@ -724,14 +735,14 @@ export default function TransferenciasPage() {
               paso1(detail) && canApprove && !canReceive ? (
                 <div className="rounded-lg bg-warning-soft px-3 py-2 text-[12px] text-warning-text">
                   Esta transferencia sale de <strong>{detail.fromBranch}</strong>: la despacha la cajera encargada de esa
-                  sede firmando la salida con su código. Tú puedes rechazarla mientras tanto.
+                  sede confirmando la salida{conCodigo ? " con su código" : ""}. Tú puedes rechazarla mientras tanto.
                 </div>
               ) : canReceive ? (
                 <div className="rounded-lg bg-info-soft px-3 py-2 text-[12px] text-info-text">
                   {paso1(detail) ? (
-                    <>Al firmar la <strong>salida</strong>, los equipos salen de {detail.from} ({detail.fromBranch}) y quedan en tránsito hacia {detail.to}.</>
+                    <>Al confirmar la <strong>salida</strong>, los equipos salen de {detail.from} ({detail.fromBranch}) y quedan en tránsito hacia {detail.to}.</>
                   ) : (
-                    <>Al firmar la <strong>recepción</strong>, los equipos entran a {detail.to} ({detail.toBranch}).</>
+                    <>Al confirmar la <strong>recepción</strong>, los equipos entran a {detail.to} ({detail.toBranch}).</>
                   )}
                 </div>
               ) : null
@@ -767,9 +778,16 @@ export default function TransferenciasPage() {
                       </Button>
                     )}
                     {canReceive && (
-                      <Button variant="primary" size="sm" disabled={acting} onClick={() => setFirmarOpen(true)}>
-                        <Icon name="file-signature" size={13} />{" "}
-                        {paso1(detail) ? "Firmar salida" : "Firmar recepción"}
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        disabled={acting}
+                        onClick={() => (conCodigo ? setFirmarOpen(true) : void firmarPaso())}
+                      >
+                        <Icon name={conCodigo ? "file-signature" : "check"} size={13} />{" "}
+                        {conCodigo
+                          ? paso1(detail) ? "Firmar salida" : "Firmar recepción"
+                          : acting ? "Confirmando…" : paso1(detail) ? "Confirmar salida" : "Confirmar recepción"}
                       </Button>
                     )}
                   </>

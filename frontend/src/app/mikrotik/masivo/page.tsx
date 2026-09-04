@@ -288,8 +288,13 @@ export default function OperacionesMasivasPage() {
           <span className="mb-1 block">Deuda</span>
           <select value={deuda} onChange={(e) => setDeuda(e.target.value)} className="rounded-lg border border-border-default bg-surface px-2 py-1.5 text-[13px]">
             <option value="">Cualquiera</option>
-            <option value="1">Debe 1 mes</option>
-            <option value="gt2">Debe más de 2 meses</option>
+            {/* Lo primero es lo que se mira para cortar: PLATA. Las dos de abajo
+                cuentan documentos abiertos, que no es lo mismo (una factura del
+                legacy puede traer varios meses, y un abono parcial deja la
+                factura abierta debiendo cuatro pesos). */}
+            <option value="fija">Debe su mensualidad o más</option>
+            <option value="1">Tiene 1 factura sin pagar</option>
+            <option value="gt2">Tiene más de 2 facturas sin pagar</option>
           </select>
         </label>
         <label className="text-[12px] text-text-secondary">

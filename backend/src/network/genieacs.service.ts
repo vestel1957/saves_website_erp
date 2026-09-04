@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { GenieacsNbi, NbiDevice, NbiError, nbiHttpMessage } from './genieacs/genieacs-nbi.client';
+import { elegirRedes, planWifi, validarClave, validarSsid } from './genieacs/wifi-targets';
 import { OltService } from './olt.service';
 import { encryptSecret, decryptSecret, isEncrypted } from '../common/secret-box';
 
@@ -28,6 +29,32 @@ import { encryptSecret, decryptSecret, isEncrypted } from '../common/secret-box'
 export type GenieacsAction =
   | 'TEST' | 'LIST' | 'TAG_CUT' | 'TAG_RESTORE' | 'REFRESH'
   | 'SET_PARAM' | 'INSTALL_PROVISION' | 'LINK' | 'DELETE';
+
+/** Subárbol TR-069 donde viven las redes WiFi (nombre y clave) en todo el parque. */
+export const WLAN_PATH = 'InternetGatewayDevice.LANDevice.1.WLANConfiguration';
+
+/**
+ * En qué puede terminar un cambio de WiFi. Se devuelve el motivo y no un booleano
+ * porque de eso depende lo que se le dice al cliente y si hay que abrir orden:
+ * «su equipo está apagado» y «su equipo no se puede configurar a distancia» son
+ * cosas distintas para quien está esperando en el chat.
+ */
+export type WifiResultado =
+  | 'APLICADO'          // el CPE ejecutó el cambio
+  | 'SIN_EQUIPO'        // no está en el ACS (o no se pudo identificar sin ambigüedad)
+  | 'EQUIPO_OFFLINE'    // está en el ACS pero no contestó
+  | 'RECHAZADO'         // contestó, pero no deja tocar el WiFi
+  | 'DRY_RUN'           // el gate de red está en simulación
+  | 'DATOS_INVALIDOS';  // la clave o el nombre no cumplen lo que exige WPA
+
+export interface WifiCambioResultado {
+  ok: boolean;
+  resultado: WifiResultado;
+  detalle: string;
+  deviceId?: string;
+  /** Qué se le hizo a cada red, sin la clave. */
+  redes?: string[];
+}
 
 /** Tag que marca "TV suspendida" y parámetro TR-069 que corta la salida de TV (RF/CATV). */
 export const TV_TAG = 'tv-suspendida';
@@ -447,20 +474,53 @@ export class GenieacsService {
     }
 
     const nbi = this.nbi(s);
-    let done = 0, failed = 0;
+    let done = 0, failed = 0, encoladas = 0;
     const errors: string[] = [];
+    // Qué pasó con CADA CPE. Antes quien llamaba tenía que deducirlo leyendo las
+    // cadenas de `errors` —topadas a 10—, así que a partir del fallo nº 11 los
+    // equipos pasaban por buenos. La verdad equipo por equipo es lo que decide si
+    // se cierra o no la orden de reconexión de un cliente.
+    const porDispositivo: Record<string, { ok: boolean; encolada: boolean; detalle: string }> = {};
     for (const id of list) {
       try {
         const tagOk = enable ? await nbi.removeTag(id, TV_TAG) : await nbi.addTag(id, TV_TAG);
         const p = await nbi.setBool(id, TV_PARAM, enable, true);
-        if (tagOk && p.ok) done++;
-        else { failed++; if (errors.length < 10) errors.push(`${id}: tag=${tagOk} task=${p.status}`); }
+        // 202 = el ACS ENCOLÓ la tarea porque el CPE no contestó al connection request
+        // (apagado, sin fibra, fuera de línea). Para fetch eso es un `ok`, y ahí estaba
+        // la mentira. En el CORTE no importa: el tag queda puesto y el provision aplica
+        // el corte en el próximo inform. En el ALTA sí, y mucho: al quitar el tag el
+        // provision YA NO corre sobre ese equipo (su precondición ES el tag), así que
+        // lo único que puede devolver la señal es esta tarea. Mientras el CPE no vuelva
+        // la TV sigue apagada, y darla por restaurada cerraba la orden de un cliente
+        // que acababa de pagar y no veía nada.
+        const encolada = enable && p.queued;
+        if (tagOk && p.ok && !encolada) {
+          done++;
+          porDispositivo[id] = { ok: true, encolada: false, detalle: enable ? 'TV restaurada por TR-069.' : 'TV cortada por TR-069.' };
+          continue;
+        }
+        failed++;
+        if (encolada) encoladas++;
+        porDispositivo[id] = {
+          ok: false,
+          encolada,
+          // La tarea encolada NO se cancela (a diferencia del WiFi, ver `setWifiBySubscriber`):
+          // encender la TV tarde no le hace daño a nadie, y si el equipo vuelve solo,
+          // el cliente recupera la señal sin que vaya nadie.
+          detalle: encolada
+            ? 'El equipo del cliente no contestó (apagado, sin fibra o fuera de línea): el ACS dejó la orden encolada y la TV volverá sola en cuanto el equipo vuelva a línea.'
+            : `El ACS no pudo aplicar el cambio (tag=${tagOk}, tarea=HTTP ${p.status}).`,
+        };
+        if (errors.length < 10) errors.push(`${id}: tag=${tagOk} task=${p.status}${encolada ? ' (encolada: equipo fuera de línea)' : ''}`);
       } catch (e) {
-        failed++; if (errors.length < 10) errors.push(`${id}: ${(e as Error).message}`);
+        failed++;
+        porDispositivo[id] = { ok: false, encolada: false, detalle: (e as Error).message };
+        if (errors.length < 10) errors.push(`${id}: ${(e as Error).message}`);
       }
     }
-    await this.audit(action, s, failed === 0, false, `${verb} TV: ${done} ok, ${failed} fallidos${errors.length ? ' — ' + errors.join('; ') : ''}`, { count: list.length, user });
-    return { ok: failed === 0, dryRun: false, done, failed, errors };
+    const resumen = `${verb} TV: ${done} ok, ${failed} fallidos${encoladas ? ` (${encoladas} con el equipo fuera de línea)` : ''}${errors.length ? ' — ' + errors.join('; ') : ''}`;
+    await this.audit(action, s, failed === 0, false, resumen, { count: list.length, user });
+    return { ok: failed === 0, dryRun: false, done, failed, encoladas, errors, porDispositivo };
   }
 
   /** refreshObject de un subárbol de un CPE (lectura; puebla valores). Sin gate (no modifica config). */
@@ -555,13 +615,18 @@ export class GenieacsService {
       const r = await (enable
         ? this.restoreTv(acsTargets.map((t) => t.device.id), user)
         : this.cutTv(acsTargets.map((t) => t.device.id), user));
-      const errIds = new Set((r as any).errors?.map((e: string) => e.split(':')[0]) ?? []);
+      // Equipo por equipo, tal como lo reportó el ACS: un CPE que no contestó NO cuenta
+      // como hecho aunque el lote entero no se haya caído.
+      const porCpe = (r as any).porDispositivo as Record<string, { ok: boolean; encolada: boolean; detalle: string }> | undefined;
       for (const t of acsTargets) {
-        const falló = !r.dryRun && (!(r as any).ok && errIds.has(t.device.id));
+        const fila = porCpe?.[t.device.id];
+        const ok = r.dryRun ? true : fila ? fila.ok : !!(r as any).ok;
         results.push({
           subscriberId: t.sub.id, abonado: t.sub.abonado, name: t.sub.fullName, via: 'TR069',
-          ok: !falló, dryRun: !!r.dryRun,
-          detail: r.dryRun ? 'DRY-RUN (ACS): plan sin aplicar.' : falló ? 'El ACS no pudo aplicar el cambio.' : (enable ? 'TV restaurada por TR-069.' : 'TV cortada por TR-069.'),
+          ok, dryRun: !!r.dryRun,
+          detail: r.dryRun
+            ? 'DRY-RUN (ACS): plan sin aplicar.'
+            : fila?.detalle ?? (ok ? (enable ? 'TV restaurada por TR-069.' : 'TV cortada por TR-069.') : 'El ACS no pudo aplicar el cambio.'),
         });
       }
     }
@@ -601,5 +666,163 @@ export class GenieacsService {
     const dryRun = results.some((r) => r.dryRun);
     this.logger.log(`TV MASIVO por abonado (${enable ? 'ALTA' : 'CORTE'}): ${ids.length} pedidos → TR069=${acsTargets.length} OLT=${oltTargets.length} sinEquipo=${sinEquipo} · ok=${done} fallidos=${failed}${dryRun ? ' (dry-run)' : ''}`);
     return { ok: failed === 0, dryRun, total: ids.length, done, failed, sinEquipo, results };
+  }
+
+  // ------------------------------------------------------------------ //
+  //  WiFi del abonado: nombre y clave por TR-069                        //
+  // ------------------------------------------------------------------ //
+
+  /**
+   * Cambia el nombre y/o la clave del WiFi de UN abonado en su propio equipo.
+   *
+   * Es la vía rápida del trámite «Cambio de clave»: si el CPE está en el ACS y
+   * contesta, el cambio queda hecho en el momento y no hace falta que vaya nadie. Si
+   * no —y es lo más frecuente: solo 605 de los 5.097 abonados activos tienen equipo
+   * en el ACS y unos 420 informan a diario—, esto devuelve POR QUÉ no se pudo y quien
+   * llama abre la orden de servicio de siempre. Nunca se inventa un éxito.
+   *
+   * Cómo se sabe que de verdad quedó: el NBI contesta **200 cuando el CPE ejecutó** la
+   * tarea y **202 cuando la encoló** porque el equipo no contestó al connection
+   * request. Solo el 200 cuenta como aplicado; la tarea encolada se CANCELA, para que
+   * no le cambie la clave al cliente tres días después, cuando ya fue el técnico y le
+   * puso otra.
+   *
+   * Lo que NO se puede hacer: releer la clave para verificarla. Los CPEs del parque
+   * exponen `KeyPassphrase` como solo-escritura (viene vacío en los 549 equipos
+   * vivos), así que la confirmación honesta es "el equipo aceptó el cambio", no
+   * "verifiqué que quedó". Y la clave JAMÁS entra en la auditoría ni en el log.
+   */
+  async setWifiBySubscriber(
+    subscriberId: string,
+    cambio: { ssid?: string; clave?: string },
+    user?: AuthUser,
+  ): Promise<WifiCambioResultado> {
+    await this.syncLive();
+
+    const ssid = String(cambio.ssid ?? '').trim();
+    const clave = String(cambio.clave ?? '');
+    if (!ssid && !clave) throw new BadRequestException('Indica el nombre nuevo de la red, la clave nueva, o las dos.');
+    const malo = (ssid && validarSsid(ssid)) || (clave && validarClave(clave));
+    if (malo) return { ok: false, resultado: 'DATOS_INVALIDOS', detalle: malo as string };
+
+    const sub = await this.prisma.subscriber.findUnique({
+      where: { id: subscriberId },
+      select: { id: true, abonado: true, fullName: true, pppUsername: true },
+    });
+    if (!sub) throw new NotFoundException('Cliente no encontrado.');
+
+    const s = await this.resolveServer(undefined);
+    const device = await this.buscarCpe(s, sub.pppUsername);
+    if (!device) {
+      return {
+        ok: false, resultado: 'SIN_EQUIPO',
+        detalle: sub.pppUsername
+          ? `El equipo del abonado (${sub.pppUsername}) no está en el ACS: no se puede configurar a distancia.`
+          : 'El abonado no tiene usuario PPPoE, así que no hay forma de identificar su equipo en el ACS.',
+      };
+    }
+
+    if (!this.live) {
+      await this.audit('SET_PARAM', s, true, true, `DRY-RUN WiFi del abonado ${sub.abonado ?? sub.id}: ${this.quePide(ssid, clave)}`, { deviceId: device.id, subscriberId, user });
+      return {
+        ok: false, resultado: 'DRY_RUN', deviceId: device.id,
+        detalle: 'La red está en modo simulación (GENIEACS_LIVE apagado): no se tocó el equipo.',
+      };
+    }
+
+    const nbi = this.nbi(s);
+
+    // Paso 1: refrescar el subárbol WiFi. Sirve para dos cosas — leer las redes tal
+    // como están HOY (los nombres del caché pueden ser de hace meses) y saber de una
+    // si el equipo contesta, antes de mandarle ninguna escritura.
+    const refresco = await nbi.refreshObject(device.id, WLAN_PATH, true);
+    if (refresco.queued || !refresco.ok) {
+      if (refresco.taskId) await nbi.deleteTask(refresco.taskId).catch(() => false);
+      await this.audit('SET_PARAM', s, false, false, `WiFi ${sub.abonado ?? sub.id}: el equipo no contestó (refresh HTTP ${refresco.status})`, { deviceId: device.id, subscriberId, user });
+      return {
+        ok: false, resultado: 'EQUIPO_OFFLINE', deviceId: device.id,
+        detalle: 'El equipo del cliente no contestó: está apagado, sin fibra o fuera de línea.',
+      };
+    }
+
+    // Paso 2: elegir SOBRE QUÉ redes se escribe (ver wifi-targets.ts: el índice no
+    // significa lo mismo en cada marca).
+    const arbol = await nbi.getDevice(device.id, [WLAN_PATH]);
+    const wlan = arbol?.InternetGatewayDevice?.LANDevice?.['1']?.WLANConfiguration;
+    const redes = elegirRedes(wlan);
+    const plan = planWifi(redes, { ssid: ssid || undefined, clave: clave || undefined });
+    if (!plan.pares.length) {
+      await this.audit('SET_PARAM', s, false, false, `WiFi ${sub.abonado ?? sub.id}: el equipo no expone parámetros escribibles de WiFi`, { deviceId: device.id, subscriberId, user });
+      return {
+        ok: false, resultado: 'RECHAZADO', deviceId: device.id,
+        detalle: 'El equipo no deja cambiar el WiFi a distancia (no expone los parámetros).',
+      };
+    }
+
+    // Paso 3: escribir. Todo en UNA tarea: un solo connection request y, si el equipo
+    // se cae a la mitad, no queda con el nombre nuevo y la clave vieja.
+    const r = await nbi.setStrings(device.id, plan.pares, true);
+    if (r.queued || !r.ok) {
+      if (r.taskId) await nbi.deleteTask(r.taskId).catch(() => false);
+      await this.audit('SET_PARAM', s, false, false, `WiFi ${sub.abonado ?? sub.id}: el equipo no aplicó el cambio (HTTP ${r.status})`, { deviceId: device.id, subscriberId, user });
+      return {
+        ok: false, resultado: r.queued ? 'EQUIPO_OFFLINE' : 'RECHAZADO', deviceId: device.id,
+        detalle: r.queued
+          ? 'El equipo dejó de contestar antes de aplicar el cambio; la tarea se canceló para que no salte más tarde.'
+          : `El ACS rechazó el cambio (HTTP ${r.status}).`,
+      };
+    }
+
+    await this.audit('SET_PARAM', s, true, false, `WiFi del abonado ${sub.abonado ?? sub.id}: ${this.quePide(ssid, clave)} · ${plan.resumen.join(' | ')}`, { deviceId: device.id, subscriberId, count: plan.pares.length, user });
+    this.logger.log(`WiFi aplicado por TR-069 al abonado ${sub.abonado ?? sub.id} (${device.id}): ${plan.resumen.join(' | ')}`);
+    // Si alguna banda se quedó con la clave vieja porque el equipo no deja tocarla, se
+    // dice aquí: un "listo, ya quedó" a medias es una llamada más la semana que viene.
+    const cojera = plan.sinClave.length
+      ? ` OJO: ${plan.sinClave.join(' y ')} se quedó con la clave anterior porque el equipo no deja cambiársela.`
+      : '';
+    return {
+      ok: true, resultado: 'APLICADO', deviceId: device.id,
+      redes: plan.resumen,
+      detalle: `Aplicado en el equipo (${plan.objetivos.length} red${plan.objetivos.length === 1 ? '' : 'es'}).${cojera}`,
+    };
+  }
+
+  /** Qué se pidió cambiar, para la auditoría. La clave NO se registra: solo que se cambió. */
+  private quePide(ssid: string, clave: string): string {
+    return [ssid ? `nombre → «${ssid}»` : '', clave ? 'clave nueva (no se registra)' : ''].filter(Boolean).join(' + ');
+  }
+
+  /**
+   * El CPE de un abonado en el ACS, buscado por su usuario PPPoE.
+   *
+   * Primero pregunta directo al NBI por ese usuario (medio segundo) y solo si no lo
+   * encuentra recorre el parque entero comparando sin distinguir mayúsculas (segundo
+   * y pico). Si el usuario casa con MÁS de un equipo no devuelve ninguno: usuarios
+   * basura como "pppoe" o "v" existen en la BD y escribirle la clave al equipo
+   * equivocado es peor que no hacer nada.
+   */
+  private async buscarCpe(
+    s: { nbiUrl: string; username: string; password: string },
+    pppUsername: string | null,
+  ): Promise<NbiDevice | null> {
+    const u = (pppUsername || '').trim();
+    if (!u) return null;
+    const nbi = this.nbi(s);
+    const WAN_USER = 'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Username._value';
+    const CR_USER = 'InternetGatewayDevice.ManagementServer.ConnectionRequestUsername._value';
+    const variantes = [...new Set([u, u.toUpperCase(), u.toLowerCase()])];
+
+    try {
+      const query = { $or: variantes.flatMap((v) => [{ [WAN_USER]: v }, { [CR_USER]: v }]) };
+      const rows = await nbi.listDevices(query as any);
+      if (rows.length === 1) return rows[0];
+      if (rows.length > 1) return null;
+    } catch (e) {
+      this.logger.warn(`Búsqueda directa del CPE falló (${(e as Error).message}); se recorre el parque.`);
+    }
+
+    const todos = await this.devicesOf(s);
+    const casan = todos.filter((d) => (d.pppUser || '').trim().toUpperCase() === u.toUpperCase());
+    return casan.length === 1 ? casan[0] : null;
   }
 }

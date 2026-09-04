@@ -72,7 +72,6 @@ const PROHIBIDO: [any, string, string][] = [
   [TreasuryController, 'pagosFijosRemove', 'borrar un pago fijo'],
   [SubscribersController, 'updateInvoice', 'editar la factura desde la ficha del cliente'],
   [SubscribersController, 'deleteInvoice', 'BORRAR una factura del cliente'],
-  [BillingController, 'create', 'crear una factura'],
   [BillingController, 'update', 'editar una factura'],
   [BillingController, 'createNote', 'emitir nota crédito/débito'],
   [BillingController, 'voidInvoice', 'anular una factura'],
@@ -103,6 +102,10 @@ const PERMITIDO: [any, string, string][] = [
   [TreasuryController, 'categories', 'ver las categorías'],
   [BillingController, 'detail', 'ver el detalle de una factura'],
   [BillingController, 'invoicePdf', 'imprimir la factura'],
+  // 2026-08-27: emitir SÍ es de ventanilla (instalación, traslado, reconexión,
+  // venta de equipo). Es la única escritura suya sobre facturas: `update`,
+  // `voidInvoice`, `createNote` y `generate` siguen en la lista de arriba.
+  [BillingController, 'create', 'emitir una factura de ventanilla'],
   [SubscribersController, 'invoices', 'ver las facturas del cliente'],
   [PlansController, 'list', 'ver el catálogo de planes'],
   [OmniController, 'createEvent', 'crear un evento de su agenda'],

@@ -17,15 +17,65 @@ export function esCajera(user: Pick<AuthUser, "permissions"> | null | undefined)
   return p.includes(PERM.AREA_CAJA);
 }
 
+/**
+ * ¿Este usuario tiene una caja PROPIA? (la que le asignó administración,
+ * `User.cajaLegacyId`, que la sesión trae en `user.caja`).
+ *
+ * No es lo mismo que `esCajera()`: hay superusuarios que atienden ventanilla —hoy
+ * tres, con las cajas de Yopal y Villanueva 2—. Para ellos `esCajera()` es false (y
+ * tiene que seguir siéndolo: eso decide el ALCANCE del dato, y ellos no van acotados),
+ * pero el tablero que ven es el de su caja.
+ *
+ * Con esto `/dashboard` les pinta `PanelCaja` y sólo eso (2026-08-28): tener caja pesa
+ * más que el cargo, porque su día es la ventanilla. Antes se les pintaba el panel
+ * ejecutivo, y durante un día los dos en pestañas. Ojo: esto es lo que se PINTA; el
+ * dato lo sigue acotando el backend (`treasury/caja-scope.ts`), que a ellos no los
+ * limita — un superusuario que pida otra caja por API la ve.
+ */
+export function tieneCaja(user: Pick<AuthUser, "caja"> | null | undefined): boolean {
+  return user?.caja != null;
+}
+
 export type TxRow = {
   id: string; date: string; type: string; category: string;
+  /** Consecutivo del movimiento en el legacy (`tid`), o null si nació aquí. */
+  codigo: number | null;
+  /** Funcionario que EMITIÓ el movimiento (no a quien se le pagó). */
+  emisor: string | null;
   debit: number; credit: number; amount: number;
   payer: string; subscriberId: string | null;
   method: string | null; account: string | null; bank: string | null;
   invoiceTid: number | null; status: string; note: string | null;
   attach: string | null; attachName: string | null;
+  /** Recibo de caja del movimiento (si lo tiene): permite reimprimir el voucher. */
+  receiptId?: string | null;
 };
-export type TxList = { items: TxRow[]; total: number; page: number; pageSize: number; pages: number };
+export type TxList = {
+  items: TxRow[]; total: number; page: number; pageSize: number; pages: number;
+  /**
+   * Suma de LO FILTRADO, sin las anuladas y **sin el arrastre de caja** (las dos patas
+   * 'Saldo <fecha>' con las que el cierre pasa el saldo al día siguiente, que no son
+   * plata que entre ni salga). `arrastres` dice cuántas filas de la lista quedaron
+   * fuera del total, para poder explicarlo en pantalla.
+   */
+  totales?: { ingresos: number; egresos: number; balance: number; arrastres: number };
+};
+
+/**
+ * Métodos de pago tal como están en los datos (405.267 Cash, 90.445 Bank, 1.463 Card,
+ * 812 Cheque, 76 PAYU, 7 WOMPI, 6 Balance y 11.650 sin método). No es el catálogo con
+ * el que se COBRA —ese es `PAY_METHODS` de `lib/cobranzas`, más corto— sino el que hace
+ * falta para FILTRAR lo que ya existe, incluido lo que llegó del legacy.
+ */
+export const TX_METHODS: { value: string; label: string }[] = [
+  { value: "Cash", label: "Efectivo" },
+  { value: "Bank", label: "Consignación / Transferencia" },
+  { value: "Card", label: "Tarjeta" },
+  { value: "Cheque", label: "Cheque" },
+  { value: "Balance", label: "Saldo a favor" },
+  { value: "WOMPI", label: "Wompi (en línea)" },
+  { value: "PAYU", label: "PayU (en línea)" },
+];
 
 export type TreasuryStats = {
   ingresos: number; egresos: number; balance: number;

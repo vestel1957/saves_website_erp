@@ -3,12 +3,15 @@ import { Logger } from '../core/logger';
 import { Prisma } from '@prisma/client';
 import type { EmisorDeEventos } from '../core/eventos';
 import { PrismaService } from '../prisma/prisma.service';
-import { PAGO_APLICADO_EVENT, type PagoAplicadoEvent } from './treasury.events';
+import {
+  PAGO_APLICADO_EVENT, type PagoAplicadoEvent,
+  CAJA_ABIERTA_EVENT, type CajaAbiertaEvent,
+} from './treasury.events';
 import { AuthUser } from '../auth/current-user.decorator';
 import { PostingService } from '../accounting/posting.service';
 import { ReconexionService } from '../network/reconexion.service';
 import {
-  CashAccountDto, CashCloseDto, CashOpenDto, CollectDto, EditTxDto, ExpenseDto,
+  BeneficiaryDto, CashAccountDto, CashCloseDto, CashOpenDto, CollectDto, EditTxDto, ExpenseDto,
   IncomeDto, TransferDto, TxCategoryDto, VoidTxDto,
 } from './dto/cobranzas.dto';
 import {
@@ -19,6 +22,15 @@ import {
   alcanceDe, esCajera, exigirAcceso, exigirAccesoAlMovimiento, exigirCajaDeEscritura, puedeVer,
 } from './caja-scope';
 import { num, round2 } from '../common/money';
+import { conceptoMesAdelantado, periodoDeFactura } from '../common/concepto-factura';
+import { revertirDescuentosVencidos } from '../promotions/revertir-descuentos-vencidos';
+import {
+  aplicarPromocionesAlCobrar, descuentosDePromocionPendientes,
+} from '../promotions/descuento-al-cobrar';
+import {
+  aplicarAnticipos, mesesCubiertos, propuestaAdelanto, registrarAnticipo,
+  revertirAplicaciones, revertirDescuentoAdelantado, saldoAFavor,
+} from '../billing/anticipos';
 
 
 /**
@@ -30,6 +42,50 @@ import { num, round2 } from '../common/money';
  * billetes. Paridad legacy: el método "Cheque" sigue vivo allá (último uso ayer).
  */
 const isBankMethod = (method: string | null | undefined) => method === 'Bank' || method === 'Cheque';
+
+/**
+ * Nota del movimiento de un recaudo, con el mismo contenido que el legacy
+ * (`Customers_model::pay_invoices`):
+ *
+ *   Pago de la factura #474221 CONY BONILLA 1006656330 metodo: efectivo
+ *   Pago de la factura #472180 MEIBI ARENAS 1115854962 metodo: WOMPI, Sede: Yopal, referencia: 8f56…
+ *
+ * No es adorno: el listado de movimientos y el cierre de caja muestran la nota, y
+ * con sólo "Pago de la factura #473202" no se sabe de quién es la plata ni por qué
+ * medio entró sin abrir la factura. Además esta nota viaja al legacy en el
+ * writeback, así que allá se veían los pagos de nexus "pelados" al lado de los suyos.
+ */
+export function notaDePago(p: {
+  tid: number;
+  nombre: string | null;
+  documento: string | null;
+  metodo: string;
+  /** Nombre de la cuenta donde entra la plata (corresponsal, banco o caja de sede). */
+  cuenta?: string | null;
+  sede?: string | null;
+  referencia?: string | null;
+  /** Lo que haya escrito quien registra el pago; se respeta y se añade al final. */
+  extra?: string | null;
+}): string {
+  const quien = [p.nombre, p.documento].map((x) => (x || '').trim()).filter(Boolean).join(' ');
+  // El efectivo se dice "efectivo" y no lleva sede ni referencia: la caja ya sale en
+  // la columna Cuenta y así queda idéntico al legacy.
+  const esEfectivo = p.metodo === 'Cash';
+  const medio = esEfectivo ? 'efectivo'
+    : p.metodo === 'Balance' ? 'saldo a favor'
+    : p.metodo === 'Cheque' ? 'cheque'
+    : (p.cuenta || '').trim() || (p.metodo === 'Bank' ? 'consignación' : p.metodo);
+
+  let nota = `Pago de la factura #${p.tid}`;
+  if (quien) nota += ` ${quien}`;
+  nota += ` metodo: ${medio}`;
+  if (!esEfectivo) {
+    if (p.sede) nota += `, Sede: ${p.sede}`;
+    if (p.referencia) nota += `, referencia: ${p.referencia}`;
+  }
+  if (p.extra) nota += ` · ${p.extra}`;
+  return nota;
+}
 
 /**
  * Fondo fijo por defecto de una caja: la plata que NUNCA sale del cajón, y por eso no
@@ -188,6 +244,24 @@ export class CobranzasService {
     }
   }
 
+  /**
+   * El `eid` con el que se firma un movimiento nuevo: QUIÉN lo emite.
+   *
+   * Todo el histórico del legacy lo trae (31.140 de 31.143 egresos) porque allá el
+   * `eid` se escribía siempre; aquí se venía guardando `issuerUserId: null`, así que
+   * cada egreso registrado en nexus nacía huérfano y la lista no podía decir quién lo
+   * hizo. `Transaction.issuerUserId` habla el espacio de ids del legacy, no cuids, de
+   * modo que se cruza User -> Staff por correo (los 116 empleados casan).
+   */
+  private async emisorLegacyId(user?: AuthUser | null): Promise<number | null> {
+    if (!user?.email) return null;
+    const staff = await this.prisma.staff.findFirst({
+      where: { email: { equals: user.email, mode: 'insensitive' }, legacyId: { not: null } },
+      select: { legacyId: true },
+    });
+    return staff?.legacyId ?? null;
+  }
+
   async createIncome(dto: IncomeDto, user: AuthUser) {
     const amount = round2(Number(dto.amount));
     if (!(amount > 0)) throw new BadRequestException('El monto debe ser mayor a cero');
@@ -199,6 +273,7 @@ export class CobranzasService {
       if (!sub) throw new NotFoundException('Cliente no encontrado');
     }
     const when = dto.date ? dateOnly(dto.date) : dateOnly(hoyColombia());
+    const issuerUserId = await this.emisorLegacyId(user);
     const result = await this.prisma.$transaction(async (tx) => {
       const t = await tx.transaction.create({
         data: {
@@ -208,7 +283,7 @@ export class CobranzasService {
           date: when,
           cashAccountId, accountName: dto.accountName ?? null,
           bankName: isBankMethod(dto.method) ? (dto.bankName ?? null) : null,
-          ext: false, status: 'VIGENTE', note: dto.note ?? null, issuerUserId: null,
+          ext: false, status: 'VIGENTE', note: dto.note ?? null, issuerUserId,
         },
       });
       // Subscriber antes que CashAccount (ver ORDEN DE BLOQUEO).
@@ -286,18 +361,57 @@ export class CobranzasService {
     const invoices = await this.prisma.subInvoice.findMany({
       where: { subscriberId, status: { in: ['DUE', 'PARTIAL'] } },
       orderBy: [{ invoiceDate: 'asc' }, { tid: 'asc' }],
-      select: { id: true, tid: true, invoiceDate: true, dueDate: true, total: true, paidAmount: true, status: true },
+      select: {
+        id: true, tid: true, invoiceDate: true, dueDate: true, total: true, paidAmount: true, status: true,
+        // Para rotular cada renglón con lo que se está pagando ("agosto de 2026"):
+        // la FIJA no tiene mes y se nombra por su concepto, que está en el primer ítem.
+        kind: true, items: { take: 1, orderBy: { id: 'asc' as const }, select: { productName: true } },
+        // Base del descuento de las promos "antes de imp.".
+        subtotal: true,
+        // Descuento de cabecera puesto por el portal del legacy: si ya lo trae, la
+        // promoción no se apila encima (`yaRebajadaEnOrigen`).
+        discount: true,
+      },
     });
+
+    // Descuento de la promoción vigente que alcance al cliente: la cajera tiene que
+    // cobrar el valor ya rebajado, no el total y devolver la diferencia. Se calcula
+    // sobre HOY (Colombia), que es el día que se va a cobrar en ventanilla.
+    const hoy = dateOnly(hoyColombia());
+    const promos = await descuentosDePromocionPendientes(this.prisma, subscriberId, invoices, hoy);
 
     const items = invoices.map((i) => ({
       id: i.id, tid: i.tid, invoiceDate: i.invoiceDate, dueDate: i.dueDate,
       total: num(i.total), paid: num(i.paidAmount),
       balance: round2(num(i.total) - num(i.paidAmount)), status: i.status,
+      ...periodoDeFactura(i),
+      // Lo que se le rebaja si la salda hoy (0 = no aplica). El descuento se concede al
+      // COBRAR y sólo si el pago la salda entera, así que aquí es una promesa, no un
+      // hecho: por eso el saldo `balance` sigue siendo el real.
+      descuento: promos.get(i.id)?.amount ?? 0,
+      promocion: promos.get(i.id)?.promotionName ?? null,
+      promocionLabel: promos.get(i.id)?.label ?? null,
     }));
+    const descuentoTotal = round2([...promos.values()].reduce((a, b) => a + b.amount, 0));
     return {
       subscriberId: sub.id, name: subName(sub), abonado: sub.abonado,
       balance: num(sub.balance),
+      // Saldo a favor de ESTE sistema (lo que el cliente pagó de más y todavía no se ha
+      // imputado). Va aparte de `balance`, que es el del legacy: son dos bolsas
+      // distintas y el método de pago "Balance" sólo sabe gastar la de allá.
+      advance: await saldoAFavor(this.prisma, subscriberId),
       totalDebt: round2(items.reduce((s, i) => s + i.balance, 0)),
+      // Lo que tendría que cobrar si el cliente lo salda todo hoy, ya con el descuento
+      // aplicado. El modal propone ESTE monto: con `totalDebt` la cajera cobraba de más
+      // y el sobrante se le quedaba al cliente como saldo a favor.
+      totalConDescuento: round2(items.reduce((s, i) => s + i.balance - i.descuento, 0)),
+      descuentoTotal,
+      // Lo que costaría dejar pagado ADEMÁS el mes que todavía no se ha facturado, ya
+      // con el descuento por adelantarlo. Es el número que la casilla "pagar también
+      // <mes>" le suma al monto en ventanilla: la cajera no tiene que calcular nada.
+      // Al cobrar, el servidor lo vuelve a calcular — del navegador sólo se cree
+      // CUÁNTOS meses, nunca el precio.
+      adelanto: await propuestaAdelanto(this.prisma, subscriberId, 1),
       invoices: items,
     };
   }
@@ -308,6 +422,9 @@ export class CobranzasService {
    *
    * `opts.reconectar: false` lo usa el cargue de pagos, que reconecta al final en
    * un solo lote: reconectar dentro del bucle abriría una sesión SSH/API por fila.
+   * `dto.reconectar: false` es otra cosa: lo pide QUIEN RECAUDA desde la caja, para el
+   * cliente que paga lo que debe pero no quiere volver a tener servicio (se retira).
+   * Cualquiera de los dos manda: si alguno dice que no, no se toca ningún equipo.
    *
    * `opts.cajaPropiaSiFalta` lo pone SOLO el endpoint interactivo: quien recauda a
    * mano y no manda caja (la pantalla ya no le enseña el selector: sólo lo ve el
@@ -343,9 +460,21 @@ export class CobranzasService {
 
       const sub = await tx.subscriber.findUnique({
         where: { id: dto.subscriberId },
-        select: { id: true, balance: true, ...SUB_NAME_SELECT },
+        // `docNumber` y la sede entran aquí porque van EN LA NOTA del movimiento
+        // (ver `notaDePago`): el legacy las escribe y por ellas se identifica el
+        // pago en el listado de movimientos y en el cierre.
+        select: { id: true, abonado: true, balance: true, docNumber: true, branch: { select: { name: true } }, ...SUB_NAME_SELECT },
       });
       if (!sub) throw new NotFoundException('Cliente no encontrado');
+
+      // El descuento de una promoción solo vale si se paga DENTRO de su vigencia.
+      // Va aquí arriba —después del bloqueo y antes de leer las facturas— para que
+      // el reparto de abajo trabaje ya con los totales restituidos: si se hiciera
+      // después, el pago se imputaría contra el total rebajado y la nota débito
+      // dejaría un saldo fantasma.
+      const descuentosRetirados = await revertirDescuentosVencidos(tx, dto.subscriberId, {
+        editedBy: user?.name ?? user?.email ?? null,
+      });
 
       let amount = montoPedido;
       // Método "Balance": el pago se cubre con el saldo a favor del cliente y NO
@@ -371,12 +500,41 @@ export class CobranzasService {
           orderBy: [{ invoiceDate: 'asc' }, { tid: 'asc' }],
         });
       }
-      if (!invoices.length) throw new BadRequestException('El cliente no tiene facturas pendientes');
+      // Cliente al día que viene a dejar pagado el mes siguiente: no hay factura que
+      // cubrir (la corrida es el día 1), así que la plata entra ENTERA como anticipo.
+      // Sólo por petición explícita (`comoAnticipo`): en el cargue masivo, una fila sin
+      // factura que cuadre es un error que alguien tiene que mirar, no un saldo a favor.
+      const soloAnticipo = !invoices.length;
+      if (soloAnticipo && !dto.comoAnticipo) {
+        throw new BadRequestException('El cliente no tiene facturas pendientes');
+      }
+      // "Balance" mueve saldo a favor YA existente contra una factura. Sin factura sería
+      // sacar del bolsillo izquierdo para meter en el derecho: no entra plata nueva.
+      if (soloAnticipo && dto.method === 'Balance') {
+        throw new BadRequestException('El saldo a favor no se puede dejar como saldo a favor: no hay factura que pagar.');
+      }
+
+      // Descuento de la promoción vigente, a la factura que este pago alcanza a SALDAR.
+      // Va aquí —después de retirar los descuentos vencidos y antes de la cascada—
+      // porque la cascada tiene que repartir contra el total ya rebajado; si se aplicara
+      // después, el cliente pagaría el 95% y la factura quedaría PARTIAL debiendo justo
+      // el descuento. Ver `promotions/descuento-al-cobrar.ts`.
+      const promo = soloAnticipo
+        ? { facturas: [] as { tid: number; descuento: number; promocion: string }[], total: 0 }
+        : await aplicarPromocionesAlCobrar(tx, dto.subscriberId, invoices, {
+            payDate, monto: amount, editedBy: user?.name ?? user?.email ?? null,
+          });
+      if (promo.facturas.length) {
+        // Las notas cambiaron los totales: se releen para que el reparto no trabaje
+        // sobre la foto vieja (mismo orden, que es el de la cascada).
+        const ids = invoices.map((i) => i.id);
+        const frescas = new Map((await tx.subInvoice.findMany({ where: { id: { in: ids } } })).map((i) => [i.id, i]));
+        invoices = invoices.map((i) => frescas.get(i.id) ?? i).filter((i) => i.status === 'DUE' || i.status === 'PARTIAL');
+      }
 
       // --- Fase 1: reparto en cascada (saldo = total - paidAmount) ---
       let monto = amount;
       const montos = new Map<string, number>();
-      let lastId: string | null = null;
       for (const inv of invoices) {
         if (monto <= 0) break;
         const saldo = round2(num(inv.total) - num(inv.paidAmount));
@@ -384,23 +542,91 @@ export class CobranzasService {
         if (monto >= saldo) {
           montos.set(inv.id, saldo);
           monto = round2(monto - saldo);
-          lastId = inv.id;
         } else {
           // El dinero se agota aquí → pago parcial de esta factura.
           montos.set(inv.id, monto);
-          lastId = inv.id;
           monto = 0;
           break;
         }
       }
-      // Excedente (sobrepago): se carga a la última factura procesada (queda como saldo a favor/adelanto).
-      if (monto > 0 && lastId) {
-        montos.set(lastId, round2((montos.get(lastId) ?? 0) + monto));
-        monto = 0;
+      // Excedente (sobrepago): NO se carga a la última factura. Se guarda como anticipo
+      // del cliente y se aplica solo a la factura del mes siguiente cuando nazca (ver
+      // `aplicarAnticipos`). Antes se sumaba al `paidAmount` de la última factura, igual
+      // que el legacy, pero aquí eso no vale para nada: nexus no tenía el reparto de
+      // `procesar_pagos_adelantados`, así que el mes siguiente nacía en DUE y el cliente
+      // aparecía debiendo un mes que ya había pagado.
+      const excedente = round2(monto);
+      monto = 0;
+      // Sin nada imputado Y sin excedente no hay recaudo. Con excedente sí lo hay: es el
+      // pago adelantado, que no cubre ninguna factura de hoy pero es plata que entró.
+      if (!montos.size && excedente <= 0) throw new BadRequestException('No hay saldo pendiente que cubrir');
+
+      // --- Mes(es) por adelantado con descuento -------------------------------------
+      // La cajera marcó "pagar también <mes>". El precio lo pone el SERVIDOR: del
+      // navegador sólo se cree cuántos meses. El descuento no se puede escribir en
+      // ninguna factura porque esa factura no existe (nace el día 1), así que viaja
+      // prometido en el anticipo y se concede al nacer (ver `concederDescuentosAdelantados`).
+      const mesesAdelantar = Math.max(0, Math.trunc(Number(dto.adelantarMeses ?? 0)));
+      let adelanto: { pct: number; descuento: number; meses: number; mensualidadNeta: number } | null = null;
+      let mesesPropuestos: string[] = [];
+      if (mesesAdelantar > 0) {
+        // Sólo se adelanta desde CERO: si al cliente le queda algo pendiente, el
+        // excedente se lo llevaría esa deuda en `aplicarAnticipos` y el mes siguiente
+        // se quedaría sin cubrir — el cliente se iría creyendo que lo dejó pagado.
+        const saldadas = [...montos.entries()]
+          .filter(([id, amt]) => {
+            const inv = invoices.find((i) => i.id === id)!;
+            return round2(num(inv.total) - num(inv.paidAmount)) <= amt;
+          })
+          .map(([id]) => id);
+        const quedanPendientes = await tx.subInvoice.count({
+          where: { subscriberId: sub.id, status: { in: ['DUE', 'PARTIAL'] }, id: { notIn: saldadas } },
+        });
+        if (quedanPendientes > 0) {
+          throw new BadRequestException(
+            'Para adelantar el mes siguiente el pago tiene que dejar al cliente sin facturas pendientes.',
+          );
+        }
+        const prop = await propuestaAdelanto(tx, sub.id, mesesAdelantar);
+        if (!prop) {
+          throw new BadRequestException(
+            'No se puede calcular el mes adelantado de este cliente: no tiene servicios activos ni facturas de referencia.',
+          );
+        }
+        // Un peso de tolerancia por el redondeo del navegador; por debajo de eso el
+        // adelanto no está pagado y no se promete ningún descuento.
+        if (excedente + 1 < prop.neto) {
+          throw new BadRequestException(
+            `Faltan ${Math.round(prop.neto - excedente).toLocaleString('es-CO')} para dejar pagado `
+            + `${prop.meses.map((m) => m.label).join(', ')}: son $${Math.round(prop.neto).toLocaleString('es-CO')} además de la deuda.`,
+          );
+        }
+        adelanto = {
+          pct: prop.pct,
+          descuento: prop.descuento,
+          meses: mesesAdelantar,
+          mensualidadNeta: round2(prop.neto / mesesAdelantar),
+        };
+        mesesPropuestos = prop.meses.map((m) => m.label);
       }
-      if (!montos.size) throw new BadRequestException('No hay saldo pendiente que cubrir');
 
       const payer = subName(sub);
+      // Nota igual a la del legacy: quién pagó, con qué documento y por qué medio.
+      // Ver `notaDePago`.
+      const nota = (tid: number) => notaDePago({
+        tid,
+        nombre: [sub.firstName, sub.lastName1].map((x) => (x || '').trim()).filter(Boolean).join(' ') || payer,
+        documento: sub.docNumber,
+        metodo: dto.method,
+        cuenta: accountName,
+        sede: sub.branch?.name ?? null,
+        referencia: dto.reference ?? null,
+        extra: dto.note ?? null,
+      });
+      // Constancia en el movimiento (y en el recibo) de que la plata entró SIN
+      // devolverle el servicio: quien lo revise después no tiene que adivinar por qué
+      // el cliente pagó y sigue cortado.
+      const sinReconexion = dto.reconectar === false ? ' · sin reconexión (a petición del cliente)' : '';
       const applied: { invoiceId: string; tid: number; amount: number; status: string }[] = [];
       const txIds: string[] = [];
       let primary: { id: string; tid: number } | null = null;
@@ -420,7 +646,7 @@ export class CobranzasService {
             cashAccountId, accountName,
             bankName: isBankMethod(dto.method) ? (dto.bankName ?? null) : null,
             ext: false, status: 'VIGENTE',
-            note: dto.note ?? `Pago de la factura #${inv.tid}`,
+            note: `${nota(inv.tid)}${sinReconexion}`,
           },
         });
         txIds.push(t.id);
@@ -432,11 +658,59 @@ export class CobranzasService {
         if (!primary) primary = { id: inv.id, tid: inv.tid };
       }
 
+      // Excedente → anticipo del cliente. La plata entra a la caja como cualquier otro
+      // recaudo (mismo día, misma caja, mismo método) pero SIN factura: el cierre del día
+      // lo cuenta y el writeback lo lleva al legacy con `tid = 0`. Lo que queda pendiente
+      // es a QUÉ imputarlo, y de eso se encarga `CustomerAdvance`.
+      let anticipo: { id: string; monto: number } | null = null;
+      if (excedente > 0) {
+        const t = await tx.transaction.create({
+          data: {
+            type: 'INCOME', category: 'Sales', credit: excedente, debit: 0,
+            payerName: payer, subscriberId: sub.id,
+            method: dto.method, date: payDate, invoiceId: null,
+            cashAccountId, accountName,
+            bankName: isBankMethod(dto.method) ? (dto.bankName ?? null) : null,
+            ext: false, status: 'VIGENTE',
+            // OJO con el texto: una nota que empiece por "Saldo " la confunde el cierre
+            // con una pata del ARRASTRE (ver `whereArrastre` / `esNotaSaldo` en
+            // cierre-legacy.ts), que no cuenta como ingreso. Este movimiento SÍ es plata
+            // que entró, así que la nota arranca por "Pago adelantado".
+            note: `Pago adelantado de ${payer}${sub.docNumber ? ` ${sub.docNumber}` : ''} `
+              + `metodo: ${dto.method}${accountName ? `, ${accountName}` : ''}`
+              + ' — queda a favor y se aplica a su próxima factura',
+          },
+        });
+        txIds.push(t.id);
+        const adv = await registrarAnticipo(tx, {
+          subscriberId: sub.id, amount: excedente, date: payDate, method: dto.method,
+          transactionId: t.id, sourceInvoiceId: primary?.id ?? null,
+          note: dto.note ?? null, adelanto,
+        });
+        anticipo = { id: adv.id, monto: excedente };
+      }
+
       // Método "Balance": descontar del saldo a favor del cliente.
       if (dto.method === 'Balance') {
         const nuevo = Math.max(0, round2(num(sub.balance) - amount));
         await tx.subscriber.update({ where: { id: sub.id }, data: { balance: nuevo } });
       }
+
+      // Reparto del saldo a favor (el recién creado y el que traiga de antes) sobre las
+      // mensualidades que sigan pendientes. Mismo momento en que lo dispara el legacy
+      // (`procesar_pagos_adelantados` al pagar); si no hay a qué imputarlo, se queda
+      // esperando a la factura del mes siguiente.
+      const anticiposAplicados = await aplicarAnticipos(tx, sub.id, {
+        fecha: payDate, editedBy: user?.name ?? user?.email ?? null,
+      });
+
+      // Qué meses deja pagados lo que entró de más. Es lo mismo que imprime el recibo
+      // (ver `mesesCubiertos` / `receiptPdfData`), y viaja en la respuesta para que la
+      // cajera pueda decírselo al cliente en el acto: "queda pagado septiembre".
+      const mesesAdelantados = anticipo
+        ? (await mesesCubiertos(tx, sub.id, anticipo.monto, { mensualidad: adelanto?.mensualidadNeta }))
+            .map((m) => conceptoMesAdelantado(m.fecha, null))
+        : [];
 
       await this.recomputeSubscriber(tx, sub.id);
       await this.recomputeCashBalance(tx, cashAccountId);
@@ -445,24 +719,55 @@ export class CobranzasService {
       const receipt = await tx.paymentReceipt.create({
         data: {
           date: payDate,
-          fileName: `${primary!.tid}_${Date.now()}`,
-          invoiceId: primary!.id,
+          // Un recaudo que es sólo anticipo no tiene factura principal: el recibo se
+          // numera por el abonado (`PaymentReceipt.invoiceId` ya es opcional) y el PDF
+          // saca cliente y sede del movimiento. Ver `receiptPdfData`.
+          fileName: `${primary ? primary.tid : `A${sub.abonado ?? ''}`}_${Date.now()}`,
+          invoiceId: primary?.id ?? null,
           transactions: { create: txIds.map((id) => ({ transactionId: id })) },
         },
       });
+
+      if (anticipo) {
+        await tx.customerAdvance.update({ where: { id: anticipo.id }, data: { receiptId: receipt.id } });
+      }
 
       return {
         receiptId: receipt.id,
         fileName: receipt.fileName,
         totalApplied: round2(applied.reduce((s, a) => s + a.amount, 0)),
         applied,
+        // Lo que entró de más y quedó a favor del cliente (para el recibo y el aviso de
+        // la cajera), y lo que de eso ya se pudo imputar a facturas.
+        advance: anticipo?.monto ?? 0,
+        /** Los meses que ese adelanto deja pagados: ['septiembre'] (los del recibo). */
+        advanceMonths: mesesAdelantados,
+        advanceApplied: anticiposAplicados.total,
+        advanceBalance: anticiposAplicados.pendiente,
+        /** El mes adelantado y lo que se le rebajó por adelantarlo (0 si no aplicó). */
+        adelanto: adelanto
+          ? { pct: adelanto.pct, descuento: adelanto.descuento, meses: mesesPropuestos }
+          : null,
+        // Viaja en la respuesta para que la cajera pueda explicarlo en el
+        // mostrador: el cliente llega creyendo que debe el valor con descuento.
+        descuentosRetirados,
+        // Lo contrario: lo que se le REBAJÓ por pagar dentro de la vigencia de una
+        // promoción. La cajera lo canta y el recibo lo lleva como nota crédito.
+        promo,
       };
     });
     // Contabilización automática del recaudo (DR banco/caja, CR cartera). "Balance"
     // se paga con saldo a favor del cliente: no mueve efectivo → no se contabiliza aquí.
-    if (dto.method !== 'Balance' && result.totalApplied > 0) {
+    //
+    // El excedente entra en el asiento: es plata que de verdad se recibió, y dejarlo
+    // fuera descuadraría la caja contable contra el arqueo. Va contra cartera igual que
+    // el resto (deja la cuenta del cliente en negativo hasta que nazca la factura del mes
+    // siguiente, que es justo lo que un anticipo es); la APLICACIÓN posterior no lleva
+    // asiento propio, porque esa plata ya se contabilizó aquí.
+    const recibido = round2(result.totalApplied + result.advance);
+    if (dto.method !== 'Balance' && recibido > 0) {
       await this.posting.postCustomerPayment({
-        sourceId: result.receiptId, date: payDate, amount: result.totalApplied,
+        sourceId: result.receiptId, date: payDate, amount: recibido,
         toBank: isBankMethod(dto.method), createdBy: user?.name ?? user?.email ?? null,
       });
     }
@@ -477,7 +782,11 @@ export class CobranzasService {
     // persistido en MikrotikActionLog / GenieacsLog / OltActionLog para reintentar
     // desde Red) y se propaga en la respuesta para que quien registra el pago vea en
     // el acto que quedó cortado.
-    const reconexion = opts?.reconectar === false
+    //
+    // Un recaudo que es SÓLO anticipo no reconecta nada: el cliente está al día (por eso
+    // no tenía factura pendiente) y viene a dejar pagado el mes que viene. No hay corte
+    // que levantar, así que no se abre sesión contra ningún equipo.
+    const reconexion = opts?.reconectar === false || dto.reconectar === false || !result.applied.length
       ? null
       : await this.reconexion.porPago(dto.subscriberId, user, `recibo ${result.receiptId}`);
 
@@ -487,7 +796,9 @@ export class CobranzasService {
     // avisando no puede tocar un recaudo que ya se hizo.
     this.events.emit(PAGO_APLICADO_EVENT, {
       subscriberId: dto.subscriberId,
-      monto: result.totalApplied,
+      // En un recaudo sólo-anticipo no se imputó nada, pero el cliente SÍ pagó: se avisa
+      // por lo que entró, no por un cero.
+      monto: result.totalApplied > 0 ? result.totalApplied : result.advance,
       reconexion: !reconexion || !reconexion.aplica ? 'no-aplica' : reconexion.ok ? 'reconectado' : 'fallo',
     } satisfies PagoAplicadoEvent);
 
@@ -543,6 +854,29 @@ export class CobranzasService {
       },
     });
 
+    // Anticipos: un recaudo con excedente deja un saldo a favor que puede estar ya
+    // imputado a otra factura. Anular la plata sin deshacer eso dejaría facturas pagadas
+    // con dinero que ya no existe, así que primero se devuelven las aplicaciones.
+    //
+    //   · si el movimiento ES el recaudo que creó el anticipo → se revierte todo lo que
+    //     se hizo con él y el anticipo queda ANULADO.
+    //   · si el movimiento ES una aplicación (el crédito de la pareja) → se devuelve sólo
+    //     esa imputación y el saldo vuelve a estar disponible.
+    const anticipoOrigen = await tx.customerAdvance.findUnique({
+      where: { transactionId: id }, select: { id: true },
+    });
+    if (anticipoOrigen) {
+      await revertirAplicaciones(tx, { advanceId: anticipoOrigen.id });
+      // Y el DESCUENTO del mes adelantado, si ya se había concedido: anular el pago sin
+      // retirarlo le dejaría al cliente la rebaja sin haber pagado por ella.
+      await revertirDescuentoAdelantado(tx, anticipoOrigen.id, {
+        editedBy: user?.name ?? user?.email ?? null,
+      });
+      await tx.customerAdvance.update({ where: { id: anticipoOrigen.id }, data: { status: 'ANULADO' } });
+    } else {
+      await revertirAplicaciones(tx, { transactionId: id });
+    }
+
     // Reversa sobre la factura (solo pagos de venta).
     if (t.invoiceId && t.category === 'Sales' && t.type === 'INCOME') {
       const inv = await tx.subInvoice.findUnique({ where: { id: t.invoiceId } });
@@ -580,19 +914,32 @@ export class CobranzasService {
       const sub = await this.prisma.subscriber.findUnique({ where: { id: dto.subscriberId }, select: { id: true } });
       if (!sub) throw new NotFoundException('Cliente no encontrado');
     }
+    // Beneficiario del directorio (proveedor o tercero). El NOMBRE lo pone el
+    // servidor a partir del id: si se copiara el texto que mande la pantalla, el
+    // mismo tercero volvería a entrar escrito de N maneras, que es justo lo que
+    // el desplegable vino a quitar. El texto libre sigue valiendo para el pago
+    // suelto a alguien que no está —ni va a estar— en el directorio.
+    let payerName = dto.payerName?.trim() || null;
+    if (dto.supplierId) {
+      const prov = await this.prisma.supplier.findUnique({ where: { id: dto.supplierId }, select: { id: true, name: true } });
+      if (!prov) throw new NotFoundException('Beneficiario no encontrado');
+      payerName = prov.name;
+    }
     const when = dto.date ? dateOnly(dto.date) : dateOnly(hoyColombia());
+    const issuerUserId = await this.emisorLegacyId(user);
     const result = await this.prisma.$transaction(async (tx) => {
       const t = await tx.transaction.create({
         data: {
           type: 'EXPENSE', category: dto.category, debit: amount, credit: 0,
-          payerName: dto.payerName ?? null,
+          payerName,
+          supplierId: dto.supplierId ?? null,
           subscriberId: dto.subscriberId ?? null,
           method: dto.method,
           date: when,
           cashAccountId, accountName: dto.accountName ?? null,
           bankName: isBankMethod(dto.method) ? (dto.bankName ?? null) : null,
           ext: true, status: 'VIGENTE', note: dto.note ?? null,
-          issuerUserId: null,
+          issuerUserId,
         },
       });
       await this.recomputeCashBalance(tx, cashAccountId);
@@ -848,6 +1195,133 @@ export class CobranzasService {
     return { id, deleted: true };
   }
 
+  // --- Beneficiarios del movimiento (directorio de proveedores y terceros) ---
+
+  /**
+   * Directorio para el desplegable de "Beneficiario" al registrar un movimiento.
+   *
+   * Es el MISMO `Supplier` de Proveedores —no un catálogo aparte— para que el pago
+   * al tercero caiga en su estado de cuenta y no haya dos listas que mantener. Vive
+   * aquí, y no en `/orders/suppliers`, sólo por el alcance: aquélla es de
+   * administración y la cajera, que es quien más egresos registra, no la alcanza.
+   * Por eso esta es de sólo lectura y devuelve lo justo para pintar la lista.
+   *
+   * El tope es 500 y NO 50 porque a la cajera esto le llega como un desplegable
+   * cerrado —elige, no escribe—: si la lista viniera recortada, el beneficiario que
+   * le falta sería inalcanzable y no tendría cómo buscarlo. Hoy el directorio son
+   * 212 registros; el tope es un freno por si algún día crece, no un paginado.
+   *
+   * Los terceros (categoría 3) van primero: son los que más se pagan por caja.
+   */
+  async beneficiaries(params: { search?: string; category?: string } = {}) {
+    const where: Prisma.SupplierWhereInput = {};
+    const search = (params.search || '').trim();
+    if (search) {
+      where.OR = [
+        { name: { contains: search, mode: 'insensitive' } },
+        { nit: { contains: search } },
+        { company: { contains: search, mode: 'insensitive' } },
+      ];
+    }
+    const category = Number(params.category);
+    if (category) where.category = category;
+    const rows = await this.prisma.supplier.findMany({
+      where,
+      orderBy: [{ name: 'asc' }],
+      take: 500,
+      select: { id: true, name: true, category: true, nit: true, phone: true },
+    });
+    const peso = (c: number) => (c === 3 ? 0 : 1);
+    return rows.sort((a, b) => peso(a.category) - peso(b.category) || a.name.localeCompare(b.name, 'es'));
+  }
+
+  /** Lo que se devuelve del directorio: lo justo para pintar la lista. */
+  private static readonly BENEFICIARIO_SELECT = {
+    id: true, name: true, category: true, nit: true, phone: true,
+  } as const;
+
+  /**
+   * Documento (NIT o cédula) en forma comparable: sin puntos, guiones ni espacios.
+   *
+   * El mismo señor se teclea "1.098.765.432", "1098765432" y "1098765432-1", así que
+   * comparar el texto tal cual no dice nada. Se guarda como lo escribieron —el legacy
+   * ya trae 4.330 formatos distintos y reescribirlos no es de esta pantalla— y se
+   * COMPARA normalizado. Menos de 5 caracteres no se considera documento: un "12" no
+   * identifica a nadie ni puede emparejar a dos terceros distintos, así que devuelve
+   * null y el alta se rechaza (el documento es obligatorio).
+   */
+  private claveDocumento(nit?: string | null) {
+    const clave = (nit || '').replace(/[^0-9A-Za-z]/g, '').toUpperCase();
+    return clave.length >= 5 ? clave : null;
+  }
+
+  /**
+   * Alta rápida de un beneficiario desde el movimiento (por defecto, TERCERO).
+   *
+   * Evita el desvío a Proveedores para poder registrar un egreso.
+   *
+   * **El documento (NIT o cédula) es OBLIGATORIO** y la regla vive aquí, no sólo en la
+   * pantalla: sin él, dar de alta al tercero no arregla nada —el nombre suelto es
+   * justamente lo que tiene 4.330 beneficiarios distintos en los egresos históricos—
+   * y el directorio se volvería a llenar de repetidos. Quien no lo tenga a mano no se
+   * queda sin registrar el egreso: para eso está el pago suelto (`payerName` sin
+   * `supplierId`), que no da de alta a nadie.
+   *
+   * NO duplica, y para eso mira por dos lados:
+   *
+   * 1. **Por documento**: es la identidad de verdad. Manda sobre el nombre porque el
+   *    mismo tercero se escribe de cinco maneras ("Dr Orlando Vesga", "ORLANDO VESGA",
+   *    "Vesga Orlando") y el NIT no.
+   * 2. **Por nombre**, como siempre. Si el que ya está no tenía documento —todos los
+   *    dados de alta antes de que existiera este campo—, se le COMPLETA con el que
+   *    llega en vez de crear un segundo registro.
+   *
+   * Nunca se pisa un documento ya guardado con otro distinto: eso sería cambiarle la
+   * identidad a un tercero desde la pantalla de un egreso, y se corrige en Proveedores.
+   */
+  async createBeneficiary(dto: BeneficiaryDto) {
+    const name = dto.name.trim();
+    const nit = dto.nit?.trim() || null;
+    const select = CobranzasService.BENEFICIARIO_SELECT;
+
+    const clave = this.claveDocumento(nit);
+    if (!clave) {
+      throw new BadRequestException(
+        'Escribe el NIT o la cédula del tercero (al menos 5 caracteres). Si no lo tienes, registra el egreso como pago no registrado sin guardarlo en el directorio.',
+      );
+    }
+
+    const [fila] = await this.prisma.$queryRaw<{ id: string }[]>`
+      SELECT id FROM "Supplier"
+      WHERE upper(regexp_replace(coalesce(nit, ''), '[^0-9A-Za-z]', '', 'g')) = ${clave}
+      LIMIT 1
+    `;
+    if (fila) {
+      return this.prisma.supplier.findUniqueOrThrow({ where: { id: fila.id }, select });
+    }
+
+    const existente = await this.prisma.supplier.findFirst({
+      where: { name: { equals: name, mode: 'insensitive' } },
+      select: { ...select, nit: true },
+    });
+    if (existente) {
+      if (!existente.nit?.trim()) {
+        return this.prisma.supplier.update({ where: { id: existente.id }, data: { nit }, select });
+      }
+      return existente;
+    }
+
+    return this.prisma.supplier.create({
+      data: {
+        name,
+        category: dto.category ?? 3,
+        nit,
+        phone: dto.phone?.trim() || null,
+      },
+      select,
+    });
+  }
+
   /**
    * Abrir la caja del día. Un botón, sin formulario.
    *
@@ -914,6 +1388,13 @@ export class CobranzasService {
       },
       update: {},
     });
+    // La apertura tiene que llegar al legacy en el acto: allá el menú de "Apertura"
+    // sólo se enseña de 5:00 a 7:59 am, así que esperar al cron de los 5 minutos puede
+    // dejar a la cajera con la caja abierta aquí y cerrada allá el resto del día.
+    this.events.emit(CAJA_ABIERTA_EVENT, {
+      cashAccountId, openedBy: o.openedBy ?? '',
+    } satisfies CajaAbiertaEvent);
+
     return {
       id: o.id, cashAccountId, accountName: o.accountName, date: o.date,
       base: num(o.base), fondoFijo, carryover,

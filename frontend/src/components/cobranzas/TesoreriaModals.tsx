@@ -10,8 +10,10 @@ import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import { type CashAccount, PAY_METHODS, BANKS, isBankMethod } from "@/lib/cobranzas";
 import { SubscriberPicker, type PickedSub } from "@/components/cobranzas/SubscriberPicker";
+import { BeneficiarioPicker, type Beneficiario } from "@/components/cobranzas/BeneficiarioPicker";
 import { mensajeDeError } from "@/lib/errores";
 import { useMiCaja } from "@/lib/useMiCaja";
+import { ACCEPT_IMAGEN_PDF } from "@/lib/adjuntos";
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -115,7 +117,7 @@ function CategoriaField({ categories, value, onChange }: { categories: string[];
 
 /** Registrar un egreso/gasto de caja. */
 export function EgresoModal({ open, onClose, onDone }: { open: boolean; onClose: () => void; onDone: () => void }) {
-  const { authFetch } = useAuth();
+  const { authFetch, can } = useAuth();
   const accounts = useCashAccounts(open);
   const categories = useTxCategories(open);
   const [amount, setAmount] = useState("");
@@ -123,14 +125,14 @@ export function EgresoModal({ open, onClose, onDone }: { open: boolean; onClose:
   const [method, setMethod] = useState("Cash");
   const [bank, setBank] = useState(BANKS[0]);
   const [cashAccountId, setCashAccountId] = useState("");
-  const [payerName, setPayerName] = useState("");
+  const [beneficiario, setBeneficiario] = useState<Beneficiario | null>(null);
   const [date, setDate] = useState(today());
   const [note, setNote] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  useEffect(() => { if (open) { setAmount(""); setNote(""); setPayerName(""); setFile(null); setErr(null); } }, [open]);
+  useEffect(() => { if (open) { setAmount(""); setNote(""); setBeneficiario(null); setFile(null); setErr(null); } }, [open]);
   // El default de la caja lo pone <CajaField/> (respeta la caja fija de la cajera).
   useEffect(() => { if (categories.length && !category) setCategory(categories[0]); }, [categories, category]);
 
@@ -150,7 +152,11 @@ export function EgresoModal({ open, onClose, onDone }: { open: boolean; onClose:
           cashAccountId: cashAccountId ? Number(cashAccountId) : undefined,
           accountName: accounts.find((a) => String(a.id) === cashAccountId)?.name,
           bankName: isBankMethod(method) ? bank : undefined,
-          payerName: payerName || undefined, date, note: note || undefined,
+          // Del directorio va el id (el nombre lo pone el servidor); el texto libre
+          // sigue viajando como payerName para el pago suelto.
+          supplierId: beneficiario?.id ?? undefined,
+          payerName: beneficiario && !beneficiario.id ? beneficiario.name : undefined,
+          date, note: note || undefined,
         }),
       });
       const data = await res.json();
@@ -175,14 +181,18 @@ export function EgresoModal({ open, onClose, onDone }: { open: boolean; onClose:
         <MetodoField value={method} onChange={setMethod} />
         {isBankMethod(method) && <Field label="Banco"><Select value={bank} onChange={(e) => setBank(e.target.value)}>{BANKS.map((b) => <option key={b} value={b}>{b}</option>)}</Select></Field>}
         <CajaField accounts={accounts} value={cashAccountId} onChange={setCashAccountId} />
-        <Field label="Beneficiario"><Input value={payerName} onChange={(e) => setPayerName(e.target.value)} placeholder="A quién se paga" /></Field>
         <Field label="Fecha"><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></Field>
+        <div className="sm:col-span-2">
+          <Field label="Proveedor" hint="Se elige del directorio (proveedores y terceros) o se escribe a mano.">
+            <BeneficiarioPicker value={beneficiario} onChange={setBeneficiario} />
+          </Field>
+        </div>
         <div className="sm:col-span-2"><Field label="Nota"><Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} /></Field></div>
         <div className="sm:col-span-2">
           <Field label="Comprobante (opcional)" hint="Foto o PDF de la factura, recibo o soporte de transferencia.">
             <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border-subtle bg-surface-2 px-3 py-1.5 text-[12px] font-medium text-text-secondary hover:border-brand hover:text-text-primary">
               <Icon name="upload" size={14} /> {file ? "Cambiar archivo" : "Adjuntar comprobante"}
-              <input type="file" accept="image/*,application/pdf" className="hidden" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+              <input type="file" accept={ACCEPT_IMAGEN_PDF} className="hidden" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
             </label>
             {file && <span className="ml-2 inline-flex items-center gap-1 text-[11px] text-text-tertiary"><Icon name="file-text" size={12} /> {file.name}<button type="button" onClick={() => setFile(null)} className="text-error-text hover:underline"><Icon name="x" size={12} /></button></span>}
           </Field>
@@ -285,7 +295,7 @@ export function IngresoLibreModal({ open, onClose, onDone }: { open: boolean; on
           <Field label="Comprobante (opcional)" hint="Foto o PDF del soporte.">
             <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border-subtle bg-surface-2 px-3 py-1.5 text-[12px] font-medium text-text-secondary hover:border-brand hover:text-text-primary">
               <Icon name="upload" size={14} /> {file ? "Cambiar archivo" : "Adjuntar comprobante"}
-              <input type="file" accept="image/*,application/pdf" className="hidden" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+              <input type="file" accept={ACCEPT_IMAGEN_PDF} className="hidden" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
             </label>
             {file && <span className="ml-2 inline-flex items-center gap-1 text-[11px] text-text-tertiary"><Icon name="file-text" size={12} /> {file.name}<button type="button" onClick={() => setFile(null)} className="text-error-text hover:underline"><Icon name="x" size={12} /></button></span>}
           </Field>

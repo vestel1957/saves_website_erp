@@ -5,6 +5,7 @@ import { Icon } from "@/components/Icon";
 import { Badge } from "@/components/ui/Badge";
 import { cop } from "@/lib/subscribers";
 import { BotonOrden, useTablaOrdenable } from "@/components/ui/tabla-ordenable";
+import { ComprobanteCell } from "@/components/treasury/ComprobanteCell";
 
 type Movimiento = {
   id: string;
@@ -21,6 +22,9 @@ type Movimiento = {
   subscriberId: string | null;
   method: string | null;
   note: string | null;
+  /** Comprobante adjunto del movimiento (soporte del egreso, foto de la consignación…). */
+  attach: string | null;
+  attachName: string | null;
   invoice: { id: string; tid: number } | null;
 };
 
@@ -321,13 +325,14 @@ export function CierreArqueo({ d, maxMovimientos = "max-h-80" }: {
           </div>
 
           <div translate="no" className={`${maxMovimientos} overflow-auto border-t border-border-subtle`}>
-            <table className="w-full min-w-[38rem] text-[13px]">
+            <table className="w-full min-w-[44rem] text-[13px]">
               <thead className="sticky top-0 bg-surface-2">
                 <tr className="text-left text-[11px] uppercase tracking-wider text-text-secondary">
                   <th className="px-4 py-3 font-semibold"><BotonOrden t={t} clave="quien">Quién</BotonOrden></th>
                   <th className="px-4 py-3 font-semibold"><BotonOrden t={t} clave="concepto">Concepto</BotonOrden></th>
                   <th className="px-4 py-3 font-semibold"><BotonOrden t={t} clave="medio">Medio</BotonOrden></th>
                   <th className="px-4 py-3 font-semibold"><BotonOrden t={t} clave="factura">Factura</BotonOrden></th>
+                  <th className="px-4 py-3 font-semibold">Comprobante</th>
                   <th className="px-4 py-3 text-right font-semibold"><BotonOrden t={t} clave="valor">Valor</BotonOrden></th>
                   <th className={`whitespace-nowrap px-4 py-3 text-right font-semibold ${conSaldo ? "" : "text-text-tertiary/60"}`}>
                     Saldo en caja
@@ -337,7 +342,7 @@ export function CierreArqueo({ d, maxMovimientos = "max-h-80" }: {
               <tbody>
                 {!movs.length && (
                   <tr>
-                    <td colSpan={6} className="px-4 py-12 text-center text-text-secondary">
+                    <td colSpan={7} className="px-4 py-12 text-center text-text-secondary">
                       {nFiltros ? (
                         <span key="con-filtro">
                           <span>Ningún movimiento con estos filtros. </span>
@@ -376,6 +381,20 @@ export function CierreArqueo({ d, maxMovimientos = "max-h-80" }: {
                         {m.invoice
                           ? <a href={`/facturacion/${m.invoice.id}`} className="text-brand hover:underline">#{m.invoice.tid}</a>
                           : <span className="text-text-tertiary">—</span>}
+                      </td>
+                      {/* El soporte del gasto, aquí mismo: revisar el cierre era salirse a
+                          /tesoreria/egresos a buscar la fila para poder abrirlo.
+
+                          Subir sólo se ofrece en las SALIDAS, que es lo que se revisa en un
+                          cierre: en un día de 190 cobros, una columna entera de "Adjuntar"
+                          tapaba los pocos egresos que sí llevan soporte. Un ingreso con
+                          comprobante se ve igual —y se adjunta desde /tesoreria/ingresos—.
+                          El arrastre no es un movimiento real, así que no admite ninguno. */}
+                      <td className="px-4 py-3">
+                        {m.arrastre
+                          ? <span className="text-text-tertiary">—</span>
+                          : <ComprobanteCell id={m.id} attach={m.attach} attachName={m.attachName}
+                              soloLectura={m.type === "INCOME"} />}
                       </td>
                       {/* `whitespace-nowrap`: sin esto, en un concepto largo la columna se
                           estrecha y el signo se va a un renglón aparte del número. */}

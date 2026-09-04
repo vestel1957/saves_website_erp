@@ -19,3 +19,19 @@ export interface PagoAplicadoEvent {
    */
   reconexion: 'reconectado' | 'no-aplica' | 'fallo';
 }
+
+/**
+ * Una cajera abrió su caja en este sistema. Lo escucha el writeback para reflejar la
+ * apertura en el legacy EN EL ACTO: mientras los dos convivan, una caja abierta aquí
+ * y cerrada allá deja a la cajera sin poder facturar en el sistema que hoy manda, y
+ * el menú de "Apertura" del legacy sólo se enseña de 5:00 a 7:59 am — pasada esa hora
+ * ya no puede abrirla ella sola.
+ */
+export const CAJA_ABIERTA_EVENT = 'treasury.caja.abierta';
+
+export interface CajaAbiertaEvent {
+  /** `CashAccount.legacyId` de la caja que se abrió. */
+  cashAccountId: number;
+  /** Nombre con el que se firmó la apertura (el puente con el usuario del legacy). */
+  openedBy: string;
+}

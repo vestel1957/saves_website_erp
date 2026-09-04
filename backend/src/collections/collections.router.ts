@@ -5,7 +5,7 @@
  * controlador. Cablea HTTP -> método: extrae los argumentos de `req` y llama.
  * La lógica sigue viviendo en CollectionsController, que ya no lleva decoradores.
  *
- * Endpoints: 6
+ * Endpoints: 7
  */
 import { crearRouter, manejar } from '../core/http/ruta';
 import { validar } from '../core/http/validar';
@@ -39,6 +39,13 @@ collectionsRouter.get(
   autenticar,
   exigirArea('administracion', 'caja'),
   manejar((req, res) => collections.exportAgreements(req.query as unknown as Record<string, string | undefined>, usuarioDe(req), res)),
+);
+
+collectionsRouter.get(
+  '/catalog',
+  autenticar,
+  exigirArea('administracion', 'caja'),
+  manejar((req) => collections.catalog()),
 );
 
 collectionsRouter.get(

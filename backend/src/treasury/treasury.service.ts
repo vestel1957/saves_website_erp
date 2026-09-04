@@ -1,3 +1,4 @@
+import { join } from 'path';
 import { NotFoundException } from '../core/http/errores';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -10,8 +11,12 @@ import { alcanceDe, cajasPermitidas, esCajera, exigirAcceso, exigirAccesoAlMovim
 import { hoyEnColombia } from '../common/fecha-colombia';
 import { AuthUser } from '../auth/current-user.decorator';
 import { num, round2 } from '../common/money';
-import { conceptoFactura } from '../common/concepto-factura';
+import { conceptoFactura, conceptoMesAdelantado } from '../common/concepto-factura';
+import { mesesCubiertos } from '../billing/anticipos';
+import { terminoDePago } from '../common/terminos-pago';
 import { orden, paginacion } from '../common/pagination-params';
+import { ListTxQueryDto } from './dto/movimientos.dto';
+import { comprobanteDe, rutaDeComprobanteLegacy, TREASURY_ROOT } from './comprobante-legacy';
 
 
 function subName(s: {
@@ -81,6 +86,26 @@ export class TreasuryService {
     return exigirAccesoAlMovimiento(this.prisma, user, id);
   }
 
+  /**
+   * Traduce los `issuerUserId` de un lote de movimientos al NOMBRE del funcionario.
+   *
+   * `issuerUserId` es el `eid` del legacy —quien registró el movimiento—, que cruza
+   * contra `Staff.legacyId` (mismo criterio que los reportes de personal). Se resuelve
+   * en UNA consulta por página, no una por fila.
+   *
+   * Los que no casan (604 egresos: usuarios borrados del legacy) se quedan sin nombre
+   * y la pantalla pinta un guión — inventar "Emisor 37" no le sirve a nadie.
+   */
+  private async nombresDeEmisor(ids: (number | null)[]): Promise<Map<number, string>> {
+    const unicos = [...new Set(ids.filter((x): x is number => x != null))];
+    if (!unicos.length) return new Map();
+    const staff = await this.prisma.staff.findMany({
+      where: { legacyId: { in: unicos } },
+      select: { legacyId: true, name: true },
+    });
+    return new Map(staff.map((s) => [s.legacyId as number, s.name]));
+  }
+
   /** Listado paginado de movimientos. Por defecto AÑO ACTUAL (override con from/to o all=1). */
   /**
    * Columnas ordenables de la tabla de movimientos de caja.
@@ -98,9 +123,35 @@ export class TreasuryService {
     fact: 'invoice.tid',
     method: 'method',
     status: 'status',
+    // Las tres que el legacy sí enseñaba en su lista de egresos/ingresos: su
+    // consecutivo (`tid` allá, `legacyId` aquí) y la cuenta del movimiento.
+    codigo: 'legacyId',
+    cuenta: 'accountName',
   };
 
-  async list(params: { search?: string; type?: string; category?: string; status?: string; from?: string; to?: string; all?: string; cashAccountId?: number; page?: number; pageSize?: number; sortBy?: string; sortDir?: string }, user: AuthUser) {
+  /**
+   * Las notas EXACTAS con las que el cierre escribe el arrastre ('Saldo YYYY-MM-DD').
+   *
+   * Hacen falta para poder dejarlas fuera de un total, y la regex que las define no se
+   * puede expresar en un filtro de Prisma (ver `SQL_NOTA_SALDO`). Son 311 valores
+   * distintos —uno por cierre—, así que se traen una vez y se meten en un `notIn`.
+   *
+   * Un `startsWith: 'Saldo '` NO sirve: hay gastos reales llamados "Saldo de nómina…",
+   * "Saldo arriendo…" (1.045 filas) que se irían del total sin que nadie lo notara.
+   */
+  private arrastres: { notas: string[]; hasta: number } | null = null;
+  private async notasDeArrastre(): Promise<string[]> {
+    if (this.arrastres && this.arrastres.hasta > Date.now()) return this.arrastres.notas;
+    const filas = await this.prisma.$queryRaw<{ note: string }[]>`
+      SELECT DISTINCT note FROM "Transaction" WHERE ${SQL_NOTA_SALDO}
+    `;
+    const notas = filas.map((f) => f.note);
+    // Sólo crece cuando se cierra una caja: media hora de caché no envejece nada.
+    this.arrastres = { notas, hasta: Date.now() + 30 * 60_000 };
+    return notas;
+  }
+
+  async list(params: ListTxQueryDto, user: AuthUser) {
     const { page, pageSize } = paginacion(params);
     const search = (params.search || '').trim();
 
@@ -108,24 +159,49 @@ export class TreasuryService {
     if (params.type) where.type = params.type as any;
     if (params.category) where.category = params.category;
     if (params.status) where.status = params.status as any;
-    // Movimientos de UNA caja: sin esto solo se podían ver dentro del detalle de un
-    // cierre, y solo del día de ese cierre — un día sin cerrar era invisible por caja.
-    if (params.cashAccountId) {
+    if (params.method) where.method = params.method;
+    // Con / sin comprobante adjunto: la pregunta de contabilidad al revisar egresos
+    // ("¿cuáles salieron sin soporte?") no tenía forma de hacerse en la pantalla.
+    // Cuenta igual el subido aquí que el del legacy: para contabilidad la pregunta
+    // es "¿este gasto tiene soporte?", no en qué sistema se cargó.
+    // Las condiciones que no son un campo suelto se acumulan aquí en vez de escribirse
+    // en `where.OR` / `where.AND`: el filtro de comprobante, la búsqueda y el rango de
+    // monto usaban los MISMOS dos huecos y el último en ejecutarse borraba al anterior
+    // (buscar con "sin comprobante" marcado ignoraba el comprobante, por ejemplo).
+    const ands: Prisma.TransactionWhereInput[] = [];
+    if (params.attach === '1') ands.push({ OR: [{ attach: { not: null } }, { legacyAttach: { not: null } }] });
+    else if (params.attach === '0') { where.attach = null; where.legacyAttach = null; }
+
+    // ── A qué cajas puede mirar esta consulta ──────────────────────────────────
+    // Se resuelve como UNA lista (null = sin límite) en vez de escribir
+    // `where.cashAccountId` en cada rama: el filtro de sede tiene que CRUZARSE con
+    // el alcance del usuario, y con la forma anterior el segundo pisaba al primero.
+    let cajas: number[] | null;
+    if (params.cashAccountId != null) {
       // Pedir una caja concreta es un 403 si no es tuya, no un listado vacío: así el
       // cliente distingue "no hay movimientos" de "no te toca".
       await exigirAcceso(this.prisma, user, Number(params.cashAccountId));
-      where.cashAccountId = Number(params.cashAccountId);
+      cajas = [Number(params.cashAccountId)];
     } else if (esCajera(user)) {
       // La cajera consulta SU ventanilla. Los bancos compartidos son para que el
       // CIERRE cuadre (esa regla sigue intacta en `cajasPermitidas`); en el listado
       // libre le enseñaban los movimientos bancarios de toda la empresa.
       const a = await alcanceDe(this.prisma, user);
-      where.cashAccountId = a.caja != null ? a.caja : { in: [] };
+      cajas = a.caja != null ? [a.caja] : [];
     } else {
       // Sin caja explícita, acotar a las que puede ver (null = sin límite).
-      const permitidas = await cajasPermitidas(this.prisma, user);
-      if (permitidas) where.cashAccountId = { in: permitidas };
+      cajas = await cajasPermitidas(this.prisma, user);
     }
+    // Sede: no es una columna del movimiento, vive en la caja (`CashAccount.branchLegacy`,
+    // 0 = banco). Se traduce a las cajas de esa sede y se INTERSECA con lo permitido —
+    // pedir una sede nunca puede ampliar lo que se ve.
+    if (params.sede != null) {
+      const deSede = (await this.prisma.cashAccount.findMany({
+        where: { branchLegacy: Number(params.sede) }, select: { legacyId: true },
+      })).map((c) => c.legacyId).filter((id): id is number => id != null);
+      cajas = cajas === null ? deSede : cajas.filter((id) => deSede.includes(id));
+    }
+    if (cajas !== null) where.cashAccountId = { in: cajas };
     // Por defecto AÑO ACTUAL (aplica también al buscar; usar all=1 para histórico).
     // Para la cajera el defecto es HOY: su pregunta es "qué ha pasado en mi turno",
     // y puede pedir otro periodo con los filtros de fecha.
@@ -134,33 +210,123 @@ export class TreasuryService {
       : scopeDate(params.from, params.to, params.all);
     if (period) where.date = period;
     if (search) {
+      // El nombre que se VE en la columna "Pagador" sale del abonado (`subName`), no de
+      // `payerName`: de los 469.094 movimientos con cliente, el legacy dejó en `payerName`
+      // sólo el PRIMER nombre ("LUZ", "JOHN"), así que buscar un apellido o el nombre
+      // completo no encontraba nada. Se busca contra las dos fuentes, y el nombre del
+      // abonado por PALABRAS (sus apellidos viven en columnas distintas: "JOHN CASTELLANOS"
+      // no está entero en ninguna).
+      const palabras = search.split(/\s+/).filter(Boolean);
+      const enElAbonado: Prisma.SubscriberWhereInput = {
+        AND: palabras.map((t) => ({
+          OR: [
+            { fullName: { contains: t, mode: 'insensitive' as const } },
+            { firstName: { contains: t, mode: 'insensitive' as const } },
+            { secondName: { contains: t, mode: 'insensitive' as const } },
+            { lastName1: { contains: t, mode: 'insensitive' as const } },
+            { lastName2: { contains: t, mode: 'insensitive' as const } },
+            { companyName: { contains: t, mode: 'insensitive' as const } },
+          ],
+        })),
+      };
+      // Un número puede ser el CÓDIGO del movimiento (primera columna, el consecutivo del
+      // legacy) o el nº de FACTURA: las dos columnas por las que pregunta contabilidad al
+      // cuadrar las listas, y ninguna de las dos se podía buscar.
+      const numero = /^\d{1,9}$/.test(search) ? Number(search) : null;
       where.OR = [
         { payerName: { contains: search, mode: 'insensitive' } },
         { note: { contains: search, mode: 'insensitive' } },
         { accountName: { contains: search, mode: 'insensitive' } },
+        { subscriber: enElAbonado },
+        ...(numero != null ? [{ legacyId: numero }, { invoice: { tid: numero } }] : []),
       ];
     }
+    // Rango de monto. "Monto" es lo que se ve en la lista, y esa columna es `credit`
+    // en los ingresos y `debit` en los egresos: por eso el campo depende del tipo, y
+    // sin tipo se pregunta por los dos (un ingreso trae debit=0, así que un `debit >= min`
+    // a secas lo dejaría fuera). Va en AND para no pisar el OR de la búsqueda.
+    const rangoMonto: Prisma.DecimalFilter = {};
+    if (params.min != null) rangoMonto.gte = params.min;
+    if (params.max != null) rangoMonto.lte = params.max;
+    if (Object.keys(rangoMonto).length) {
+      ands.push(
+        params.type === 'EXPENSE' ? { debit: rangoMonto }
+        : params.type === 'INCOME' ? { credit: rangoMonto }
+        : { OR: [{ credit: rangoMonto }, { debit: rangoMonto }] },
+      );
+    }
+    if (ands.length) where.AND = ands;
 
-    const [rows, total] = await Promise.all([
+    // El arrastre de caja NO es plata que entre ni salga: son las dos patas con las que
+    // el cierre pasa el saldo al día siguiente. En el mes en curso son el 46% de los
+    // "ingresos" (238 de 512 millones), así que un total que las sumara diría casi el
+    // doble de lo que de verdad se movió. Se quedan en la LISTA (existen y hay que poder
+    // verlas) pero fuera del total, y la pantalla lo dice.
+    const notasArrastre = await this.notasDeArrastre();
+    const sinArrastre: Prisma.TransactionWhereInput = {
+      ...where,
+      // Las anuladas no suman... salvo que sea justo lo que se pidió ver: en la pantalla
+      // de Anulaciones (`status=ANULADA`) forzar VIGENTE dejaba el total en cero, que es
+      // la única cifra que allí no le sirve a nadie.
+      ...(params.status ? {} : { status: 'VIGENTE' as const }),
+      AND: [
+        ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
+        // `notIn` a secas se comería los movimientos SIN nota: en SQL, `note NOT IN (…)`
+        // con note NULL no es cierto, es desconocido, y la fila se cae del total. Hoy no
+        // hay ninguna nota nula, pero el schema las permite y un egreso puede nacer sin
+        // nota — el día que pase, la plata desaparecería de la suma sin avisar.
+        { OR: [{ note: null }, { note: { notIn: notasArrastre } }] },
+      ],
+    };
+    const [rows, total, sumas, arrastres] = await Promise.all([
       this.prisma.transaction.findMany({
         where, orderBy: orden(params, TreasuryService.ORDEN_MOVIMIENTOS, { date: 'desc' }), skip: (page - 1) * pageSize, take: pageSize,
-        include: { subscriber: { select: SUB_SELECT }, invoice: { select: { tid: true } } },
+        include: {
+          subscriber: { select: SUB_SELECT }, invoice: { select: { tid: true } },
+          // El recibo de caja del movimiento, para poder REIMPRIMIR el voucher desde
+          // la lista: si la impresora se atasca o el navegador se come la ventana, la
+          // cajera no tenía ningún camino de vuelta al papel.
+          receiptLinks: { select: { receiptId: true }, take: 1 },
+        },
       }),
       this.prisma.transaction.count({ where }),
+      // Totales de LO FILTRADO, no del periodo: la pregunta que se hace quien filtra
+      // ("¿cuánto suma esto?") se contestaba sacando las filas a mano. Las anuladas
+      // se dejan fuera de la suma aunque estén en la lista — sumarlas mentiría.
+      this.prisma.transaction.aggregate({ _sum: { credit: true, debit: true }, where: sinArrastre }),
+      // Cuántas patas de arrastre se quedaron fuera del total, para poder decirlo.
+      this.prisma.transaction.count({ where: { ...where, note: { in: notasArrastre } } }),
     ]);
+
+    const emisores = await this.nombresDeEmisor(rows.map((t) => t.issuerUserId));
 
     return {
       items: rows.map((t) => ({
         id: t.id, date: t.date, type: t.type, category: t.category,
+        // Quién EMITIÓ el movimiento (la cajera o el funcionario que lo registró),
+        // no a quién se le pagó: son dos personas distintas y en la lista sólo se
+        // veía la segunda.
+        emisor: t.issuerUserId != null ? (emisores.get(t.issuerUserId) ?? null) : null,
+        // El consecutivo con el que el movimiento se conoce en el legacy: es el
+        // número por el que pregunta contabilidad cuando cuadra las dos listas.
+        codigo: t.legacyId,
         debit: num(t.debit), credit: num(t.credit),
         amount: t.type === 'EXPENSE' ? num(t.debit) : num(t.credit),
         payer: subName(t.subscriber) ?? t.payerName ?? '—',
         subscriberId: t.subscriber?.id ?? null,
         method: t.method, account: t.accountName, bank: t.bankName,
         invoiceTid: t.invoice?.tid ?? null, status: t.status, note: t.note,
-        attach: t.attach, attachName: t.attachName,
+        ...comprobanteDe(t),
+        receiptId: t.receiptLinks[0]?.receiptId ?? null,
       })),
       total, page, pageSize, pages: Math.ceil(total / pageSize),
+      totales: {
+        ingresos: num(sumas._sum.credit),
+        egresos: num(sumas._sum.debit),
+        balance: round2(num(sumas._sum.credit) - num(sumas._sum.debit)),
+        /** Movimientos de la lista que NO entran en el total (arrastre de caja). */
+        arrastres,
+      },
     };
   }
 
@@ -171,12 +337,45 @@ export class TreasuryService {
     return { ok: true, attachName: file.originalname };
   }
 
-  /** Datos del comprobante adjunto de un movimiento (para descargar/previsualizar). */
+  /**
+   * Fichero del comprobante de un movimiento (para descargar/previsualizar).
+   *
+   * Devuelve una RUTA ABSOLUTA y no un nombre porque las dos fuentes viven en carpetas
+   * distintas: lo subido aquí en `uploads/treasury`, y lo subido en el legacy en su
+   * `userfiles/attach/` (ver `rutaDeComprobanteLegacy`). Lo de aquí manda: si alguien
+   * sube un soporte nuevo sobre un movimiento que ya traía el del legacy, se enseña el
+   * nuevo.
+   */
   async getTransactionAttachment(id: string, user: AuthUser) {
     await this.exigirAccesoAlMovimiento(id, user);
-    const t = await this.prisma.transaction.findUnique({ where: { id }, select: { attach: true, attachName: true } });
+    const t = await this.prisma.transaction.findUnique({
+      where: { id }, select: { attach: true, attachName: true, legacyAttach: true },
+    });
+    if (t?.attach) return { ruta: join(TREASURY_ROOT, t.attach), originalName: t.attachName ?? t.attach };
+    if (t?.legacyAttach) return { ruta: await rutaDeComprobanteLegacy(t.legacyAttach), originalName: t.legacyAttach };
+    throw new NotFoundException('Comprobante no encontrado');
+  }
+
+  /**
+   * Comprobante servido por su NOMBRE DE ARCHIVO, sin sesión.
+   *
+   * Es el enlace que viaja al legacy dentro de la nota del movimiento (ver
+   * `notaConComprobante` en scripts/lib/vestel-map.js): allá no hay columna de
+   * adjunto ni pantalla que lo muestre, y quien abre el enlace está trabajando en el
+   * legacy, sin sesión aquí. El nombre en disco es un UUID v4 sorteado al subir, así
+   * que la URL no se adivina; y sólo abre mientras siga atada a un movimiento —
+   * quitar el adjunto cierra el enlace.
+   *
+   * La ruta del fichero se arma con lo que dice la BD, NUNCA con el texto que llega
+   * por la URL: así un `..%2F..%2Fetc/passwd` no puede salirse de uploads/treasury.
+   */
+  async getAttachmentByFile(archivo: string) {
+    const t = await this.prisma.transaction.findFirst({
+      where: { attach: archivo },
+      select: { attach: true, attachName: true },
+    });
     if (!t?.attach) throw new NotFoundException('Comprobante no encontrado');
-    return { storedName: t.attach, originalName: t.attachName ?? t.attach };
+    return { ruta: join(TREASURY_ROOT, t.attach), originalName: t.attachName ?? t.attach };
   }
 
   /** Detalle de un movimiento (con anulación y recibos ligados). */
@@ -282,7 +481,12 @@ export class TreasuryService {
     const horaApertura = primera?.createdAt ?? null;
     const horaCierre = cerrado && cerrado.legacyId == null ? cerrado.createdAt : null;
 
-    const esArrastre = (t: { note: string | null }) => !!t.note?.startsWith('Saldo ');
+    // Criterio canónico (`Saldo YYYY-MM-DD` exacto) y no "empieza por Saldo": el
+    // prefijo suelto se traga cualquier movimiento cuya nota empiece igual —un
+    // "Saldo a favor…" del mostrador, por ejemplo— y lo saca del arqueo como si fuera
+    // arrastre, o sea plata que entró y deja de contarse. Es el impostor que ya avisaba
+    // el comentario de `whereArrastre`.
+    const esArrastre = (t: { note: string | null }) => esNotaSaldo(t.note);
     const esBarridoDeHoy = (t: { note: string | null; type: string }) =>
       t.type === 'EXPENSE' && t.note === notaSaldo(d);
     /** ¿Esta fila es efectivo del cajón? Mismo criterio que `whereEfectivo`. */
@@ -300,6 +504,9 @@ export class TreasuryService {
       payer: subName(t.subscriber) ?? t.payerName ?? '—',
       subscriberId: t.subscriber?.id ?? null,
       method: t.method, note: t.note,
+      // El comprobante viaja con el movimiento: el cierre es donde se revisa el gasto
+      // uno a uno, y hasta ahora había que salirse a /tesoreria/egresos para verlo.
+      ...comprobanteDe(t),
       invoice: t.invoice ? { id: t.invoice.id, tid: t.invoice.tid } : null,
     }));
 
@@ -382,7 +589,7 @@ export class TreasuryService {
       include: {
         invoice: {
           select: {
-            id: true, tid: true, status: true, discount: true, branchRef: true, subscriberId: true,
+            id: true, tid: true, status: true, discount: true, branchRef: true, subscriberId: true, term: true,
             subscriber: {
               select: {
                 ...SUB_SELECT, legacyId: true, docType: true, docNumber: true, email: true,
@@ -395,7 +602,23 @@ export class TreasuryService {
             transaction: {
               select: {
                 credit: true, method: true, category: true, invoiceId: true,
+                // Un recaudo puede traer un renglón SIN factura: el excedente que quedó
+                // como saldo a favor. En el recibo tiene que decirlo con esas palabras
+                // —es lo que el cliente se lleva a casa—, no "Sales".
+                // `monthlyNet` es lo que valió cada mes adelantado YA REBAJADO: sin él
+                // el papel partiría el adelanto al precio de lista y saldría un renglón
+                // de más con el resto suelto.
+                advance: { select: { id: true, monthlyNet: true } },
                 invoice: { select: { tid: true, kind: true, invoiceDate: true, items: ITEM } },
+                // Cuando el recaudo es SÓLO anticipo el recibo no cuelga de ninguna
+                // factura, así que el cliente y la sede del papel salen de aquí.
+                subscriberId: true,
+                subscriber: {
+                  select: {
+                    ...SUB_SELECT, legacyId: true, docType: true, docNumber: true, email: true,
+                    branch: { select: { name: true } },
+                  },
+                },
               },
             },
           },
@@ -404,15 +627,53 @@ export class TreasuryService {
     });
     if (!r) throw new NotFoundException('Recibo no encontrado');
 
-    const s = r.invoice?.subscriber ?? null;
-    const items = r.transactions.map((rt) => ({
-      tid: rt.transaction.invoice?.tid ?? null,
-      concept: rt.transaction.invoice
-        ? conceptoFactura(rt.transaction.invoice)
-        : rt.transaction.category || 'Abono',
-      amount: num(rt.transaction.credit),
-      method: rt.transaction.method,
-    }));
+    // El cliente: de la factura principal si la hay, y si no —recibo de puro anticipo—
+    // del movimiento, que siempre lo lleva.
+    const desdeMovimiento = r.transactions.map((rt) => rt.transaction).find((t) => t.subscriber);
+    const s = r.invoice?.subscriber ?? desdeMovimiento?.subscriber ?? null;
+    const subscriberId = r.invoice?.subscriberId ?? desdeMovimiento?.subscriberId ?? null;
+    // Los renglones del papel. El pago adelantado no es UNO: se abre en un renglón por
+    // cada mes que la plata alcanza a cubrir —`septiembre CTA:474366`—, que es lo que el
+    // cliente necesita leerse cuando pregunta "¿hasta cuándo estoy pagado?". Esas
+    // facturas todavía no existen (nacen el día 1 y ya pagadas): el legacy hace lo mismo
+    // y lo dice sin rodeos, "calculo de facturas SIN CREAR al hacer pagos adelantados"
+    // (`Invoices_model::calculo_de_facturas_adelantadas`, impreso en
+    // `view-print-ltr2.php:286`). Ver `mesesCubiertos`.
+    const items: { tid: number | null; concept: string; amount: number; method: string | null }[] = [];
+    for (const rt of r.transactions) {
+      const t = rt.transaction;
+      const amount = num(t.credit);
+      if (t.invoice) {
+        items.push({ tid: t.invoice.tid, concept: conceptoFactura(t.invoice), amount, method: t.method });
+        continue;
+      }
+      if (t.advance && t.subscriberId) {
+        const meses = await mesesCubiertos(this.prisma, t.subscriberId, amount, {
+          mensualidad: t.advance.monthlyNet != null ? num(t.advance.monthlyNet) : undefined,
+        });
+        if (meses.length) {
+          // El `tid` es el de la factura del recibo, igual que el legacy: es el número
+          // de cuenta del cliente, no el de una factura que aún no se ha emitido.
+          for (const m of meses) {
+            items.push({
+              tid: r.invoice?.tid ?? null,
+              concept: conceptoMesAdelantado(m.fecha, r.invoice?.tid ?? null),
+              amount: m.monto,
+              method: t.method,
+            });
+          }
+          continue;
+        }
+      }
+      items.push({
+        tid: null,
+        // Respaldo cuando no se puede saber qué meses cubre (cliente sin facturas, o sin
+        // servicios de los que sacar la mensualidad): al menos que el papel diga qué es.
+        concept: t.advance ? 'Saldo a favor (pago adelantado)' : t.category || 'Abono',
+        amount,
+        method: t.method,
+      });
+    }
     const paid = round2(items.reduce((sum, i) => sum + i.amount, 0));
 
     // Lo que le queda debiendo. El saldo suma TODAS las pendientes (incluida la que
@@ -421,9 +682,9 @@ export class TreasuryService {
     const pagadas = new Set(
       r.transactions.map((t) => t.transaction.invoiceId).filter((x): x is string => !!x),
     );
-    const pendientes = r.invoice?.subscriberId
+    const pendientes = subscriberId
       ? await this.prisma.subInvoice.findMany({
-          where: { subscriberId: r.invoice.subscriberId, status: { in: ['DUE', 'PARTIAL'] } },
+          where: { subscriberId, status: { in: ['DUE', 'PARTIAL'] } },
           select: {
             id: true, tid: true, kind: true, invoiceDate: true, total: true, paidAmount: true,
             items: ITEM,
@@ -439,7 +700,7 @@ export class TreasuryService {
       number: String(r.legacyId ?? r.fileName ?? r.id.slice(-6)),
       date: r.date,
       createdAt: r.createdAt,
-      branch: r.invoice?.branchRef ?? null,
+      branch: r.invoice?.branchRef ?? desdeMovimiento?.subscriber?.branch?.name ?? null,
       cashier: null as string | null,
       cashierRole: null as string | null,
       method: items[0]?.method ?? null,
@@ -462,7 +723,10 @@ export class TreasuryService {
       discount: num(r.invoice?.discount ?? 0),
       balance,
       status: r.invoice?.status ?? null,
-      terms: null as string | null,
+      // Condición de pago (`billing_terms.title` del legacy). La tabla no se importó
+      // —allá solo queda viva la 2, "Consignacion", en el 99,9% de las facturas—, así
+      // que se traduce el id aquí en vez de arrastrar un catálogo de una fila.
+      terms: terminoDePago(r.invoice?.term),
     };
   }
 

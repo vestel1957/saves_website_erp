@@ -19,6 +19,7 @@ import {
 } from "@/lib/treasury";
 import { CierreArqueo, type CierreDetalle } from "@/components/treasury/CierreArqueo";
 import { CerrarCajaBoton } from "@/components/treasury/CerrarCajaBoton";
+import { TabStrip } from "@/components/ui/TabStrip";
 
 /** Sede que agrupa a los bancos (legacy `accounts.sede = 0`). */
 const SEDE_BANCO = 0;
@@ -31,11 +32,6 @@ const InformeCierre = dynamic(
   () => import("@/components/treasury/InformeCierre").then((m) => m.InformeCierre),
   { ssr: false },
 );
-const CierreDetalleModal = dynamic(
-  () => import("@/components/treasury/CierreDetalleModal").then((m) => m.CierreDetalleModal),
-  { ssr: false },
-);
-
 /**
  * Cierre de caja. La pantalla es distinta según quién entre:
  *
@@ -202,6 +198,14 @@ const masDias = (f: string, n: number) => {
  * pulsar otra vez. Ahora la caja y el día son una barra de contexto: en cuanto hay caja
  * elegida se carga solo, las flechas ‹ › recorren días y el estado del cierre —abierto,
  * cerrado, descuadrado— es un chip visible en vez de un renglón gris.
+ *
+ * DOS VISTAS de lo mismo (pestañas), porque son dos preguntas distintas:
+ *  · **Informe**: las cifras del día (cobranza, formas de pago, servicios) — lo que se
+ *    concilia con el legacy y sale en el PDF.
+ *  · **Arqueo**: exactamente lo que ve la cajera en SU pantalla — de qué se compone el
+ *    efectivo del cajón y los movimientos uno a uno, con los cortes Entró / Salió.
+ *    Antes esto sólo se alcanzaba desde un modal y SÓLO en días ya cerrados: el día en
+ *    curso, que es el que más se mira, no había forma de verlo así.
  */
 function CierresAdmin() {
   const { authFetch } = useAuth();
@@ -215,7 +219,11 @@ function CierresAdmin() {
   const [historial, setHistorial] = useState<CashCloseList | null>(null);
   const [cargando, setCargando] = useState(false);
   const [err, setErr] = useState("");
-  const [detalleId, setDetalleId] = useState<string | null>(null);
+  /** Qué pestaña se está mirando: las cifras del día o el arqueo de la cajera. */
+  const [vista, setVista] = useState<"informe" | "arqueo">("informe");
+  /** El arqueo (vista de la cajera). Se pide sólo cuando se abre su pestaña. */
+  const [arqueo, setArqueo] = useState<CierreDetalle | null>(null);
+  const [cargandoArqueo, setCargandoArqueo] = useState(false);
   /** Se incrementa al cerrar la caja, para que el informe se vuelva a pedir. */
   const [recarga, setRecarga] = useState(0);
 
@@ -284,6 +292,35 @@ function CierresAdmin() {
     })();
     return () => { vivo = false; };
   }, [authFetch, cashAccountId, fecha, recarga]);
+
+  /**
+   * El arqueo (pestaña "Como lo ve la cajera"). Se pide APARTE y sólo cuando se abre esa
+   * pestaña: es otra consulta al servidor y la mayoría de las visitas se quedan en el
+   * informe. Va contra `cash-close/preview`, igual que la pantalla de la cajera, que
+   * sirve tanto para un día cerrado como para el que está en curso.
+   */
+  useEffect(() => { setArqueo(null); }, [cashAccountId, fecha, recarga]);
+  useEffect(() => {
+    if (vista !== "arqueo" || !cashAccountId || !fecha || arqueo) return;
+    let vivo = true;
+    setCargandoArqueo(true);
+    void (async () => {
+      try {
+        const r = await authFetch(`/treasury/cash-close/preview?cashAccountId=${cashAccountId}&date=${fecha}`);
+        if (!vivo) return;
+        if (!r.ok) {
+          setErr(r.status === 403 ? "No tienes acceso a esta caja." : "No se pudo cargar el arqueo.");
+          return;
+        }
+        setArqueo(await r.json());
+      } catch {
+        if (vivo) setErr("No se pudo cargar el arqueo.");
+      } finally {
+        if (vivo) setCargandoArqueo(false);
+      }
+    })();
+    return () => { vivo = false; };
+  }, [authFetch, vista, cashAccountId, fecha, arqueo]);
 
   async function openPdf(id: string) {
     const res = await authFetch(`/treasury/cash-closes/${id}/pdf`);
@@ -398,20 +435,29 @@ function CierresAdmin() {
         )}
 
         <div className="ml-auto flex items-center gap-1">
+          {/* El PDF es el del cierre firmado: sólo existe si el día ya se cerró. Los
+              movimientos ya no viven en un modal — son la otra pestaña. */}
           {a?.id && (
-            <>
-              <button onClick={() => setDetalleId(a.id)} className="inline-flex items-center gap-1 rounded-lg border border-border-default px-2.5 py-1.5 text-[12px] font-semibold text-text-secondary hover:bg-surface-2">
-                <Icon name="search" size={13} /> Movimientos
-              </button>
-              <button onClick={() => void openPdf(a.id!)} className="inline-flex items-center gap-1 rounded-lg border border-border-default px-2.5 py-1.5 text-[12px] font-semibold text-text-secondary hover:bg-surface-2">
-                <Icon name="file-text" size={13} /> PDF
-              </button>
-            </>
+            <button onClick={() => void openPdf(a.id!)} className="inline-flex items-center gap-1 rounded-lg border border-border-default px-2.5 py-1.5 text-[12px] font-semibold text-text-secondary hover:bg-surface-2">
+              <Icon name="file-text" size={13} /> PDF
+            </button>
           )}
         </div>
       </div>
 
       {err && <div className="mb-3 rounded-lg bg-error-soft px-3 py-2 text-sm text-error-text">{err}</div>}
+
+      {/* ── Las dos formas de mirar el mismo día ── */}
+      {!!cashAccountId && (
+        <TabStrip
+          tabs={[
+            { key: "informe", label: "Informe del día", icon: "bar-chart-3" },
+            { key: "arqueo", label: "Arqueo y movimientos", icon: "wallet", count: arqueo?.movimientos.length },
+          ]}
+          active={vista}
+          onChange={setVista}
+        />
+      )}
 
       {/* ── El resultado ── */}
       {!cashAccountId ? (
@@ -420,6 +466,19 @@ function CierresAdmin() {
           <p className="text-sm text-text-secondary">Elige una sede y una caja arriba.</p>
           <p className="mt-1 text-[12px] text-text-tertiary">El informe se carga solo; las flechas recorren los días.</p>
         </div>
+      ) : vista === "arqueo" ? (
+        cargandoArqueo && !arqueo ? <PageSkeleton /> : arqueo ? (
+          <div className="flex flex-col gap-4">
+            {/* Lo mismo que ve la cajera en su pantalla: de qué se compone el efectivo del
+                cajón y los movimientos uno a uno, con los cortes Entró / Salió. */}
+            <CierreArqueo d={arqueo} maxMovimientos="max-h-[34rem]" />
+            <p className="text-[12px] text-text-tertiary">
+              Esto es lo que ve la cajera de {cajaSel?.name ?? "esta caja"} en su pantalla de cierre.
+              Las cifras del día (cobranza, formas de pago, servicios) están en la pestaña{" "}
+              <button onClick={() => setVista("informe")} className="font-semibold text-brand hover:underline">Informe del día</button>.
+            </p>
+          </div>
+        ) : null
       ) : cargando && !informe ? (
         <PageSkeleton />
       ) : informe ? (
@@ -429,8 +488,8 @@ function CierresAdmin() {
           {a && (
             <p className="text-[12px] text-text-tertiary">
               {a.yaCerrado
-                ? <>El excedente se arrastró al <strong className="text-text-secondary">{fechaCorta(a.proximoDiaHabil)}</strong>. El detalle movimiento a movimiento está en <button onClick={() => setDetalleId(a.id)} className="font-semibold text-brand hover:underline">Movimientos</button>.</>
-                : <>Cuando se cierre, el efectivo se arrastrará al <strong className="text-text-secondary">{fechaCorta(a.proximoDiaHabil)}</strong> (próximo día hábil; el sábado también lo es).</>}
+                ? <>El excedente se arrastró al <strong className="text-text-secondary">{fechaCorta(a.proximoDiaHabil)}</strong>. El detalle movimiento a movimiento está en <button onClick={() => setVista("arqueo")} className="font-semibold text-brand hover:underline">Arqueo y movimientos</button>.</>
+                : <>Cuando se cierre, el efectivo se arrastrará al <strong className="text-text-secondary">{fechaCorta(a.proximoDiaHabil)}</strong> (próximo día hábil; el sábado también lo es). Los movimientos, uno a uno, están en <button onClick={() => setVista("arqueo")} className="font-semibold text-brand hover:underline">Arqueo y movimientos</button>.</>}
             </p>
           )}
 
@@ -462,8 +521,6 @@ function CierresAdmin() {
           )}
         </div>
       ) : null}
-
-      <CierreDetalleModal open={!!detalleId} closeId={detalleId} onClose={() => setDetalleId(null)} />
     </>
   );
 }

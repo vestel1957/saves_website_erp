@@ -1,7 +1,7 @@
 import { BadRequestException } from '../core/http/errores';
 import { diskStorage } from 'multer';
 import { existsSync, mkdirSync } from 'node:fs';
-import { extname, join } from 'node:path';
+import { extname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Response } from 'express';
 import { TreasuryService } from './treasury.service';
@@ -10,14 +10,16 @@ import { reciboRolloPdf } from '../common/pdf/recibo-rollo';
 import { CobranzasService } from './cobranzas.service';
 import { EjecutarPagoFijoDto, PagoFijoDto, PagosFijosService, UpdatePagoFijoDto } from './pagos-fijos.service';
 import {
-  CashAccountDto, CashCloseDto, CashOpenDto, CollectDto, EditTxDto, ExpenseDto,
+  BeneficiaryDto, CashAccountDto, CashCloseDto, CashOpenDto, CollectDto, EditTxDto, ExpenseDto,
   IncomeDto, TransferDto, TxCategoryDto, VoidTxDto,
 } from './dto/cobranzas.dto';
+import { ListTxQueryDto } from './dto/movimientos.dto';
 import { AuthUser } from '../auth/current-user.decorator';
 import { enviarAdjuntoSeguro, mimeAceptado, nombreEnDisco } from '../common/uploads';
-
-/** Carpeta de comprobantes/evidencia de los movimientos de tesorería. */
-export const TREASURY_ROOT = join(process.cwd(), 'uploads', 'treasury');
+// Una sola definición de dónde viven los comprobantes: la comparte con el servicio,
+// que además sabe resolver los que están en el legacy.
+export { TREASURY_ROOT } from './comprobante-legacy';
+import { TREASURY_ROOT } from './comprobante-legacy';
 type MulterFile = { originalname: string; filename: string; mimetype: string; size: number };
 
 /** Tesorería: movimientos, cajas y cierres (migrado de saves-vestel). */
@@ -182,26 +184,14 @@ export class TreasuryController {
     else reciboRolloPdf(res, d);
   }
 
-  list(
-    search?: string,
-    type?: string,
-    category?: string,
-    status?: string,
-    from?: string,
-    to?: string,
-    all?: string,
-    cashAccountId?: string,
-    page?: string,
-    pageSize?: string,
-    sortBy?: string,
-    sortDir?: string,
-    user?: AuthUser,
-  ) {
-    return this.treasury.list({
-      search, type, category, status, from, to, all,
-      cashAccountId: cashAccountId ? Number(cashAccountId) : undefined,
-      page: Number(page), pageSize: Number(pageSize), sortBy, sortDir,
-    }, user as AuthUser);
+  /**
+   * Listado de movimientos. Los filtros llegan como UN objeto validado
+   * (`ListTxQueryDto`) en vez de doce argumentos posicionales: añadir un filtro nuevo
+   * era tocar controlador + router + contrato en el mismo orden exacto, y equivocarse
+   * de posición cambiaba en silencio el significado de una consulta de dinero.
+   */
+  list(q: ListTxQueryDto, user: AuthUser) {
+    return this.treasury.list(q, user);
   }
 
   detail(id: string, user: AuthUser) {
@@ -217,7 +207,16 @@ export class TreasuryController {
   /** Sirve el comprobante adjunto de un movimiento (inline, para preview autenticado). */
   async attachment(id: string, res: Response, user: AuthUser) {
     const a = await this.treasury.getTransactionAttachment(id, user);
-    return enviarAdjuntoSeguro(res, join(TREASURY_ROOT, a.storedName), a.originalName);
+    return enviarAdjuntoSeguro(res, a.ruta, a.originalName);
+  }
+
+  /**
+   * Comprobante por nombre de archivo, SIN sesión: es el enlace que se le entrega al
+   * legacy dentro de la nota del movimiento, y quien lo abre está allá, no aquí.
+   */
+  async comprobantePublico(archivo: string, res: Response) {
+    const a = await this.treasury.getAttachmentByFile(archivo);
+    return enviarAdjuntoSeguro(res, a.ruta, a.originalName);
   }
 
   // --- Cobranzas (escritura) ---
@@ -276,6 +275,16 @@ export class TreasuryController {
   /** Eliminar una categoría (bloquea si está en uso). */
   deleteCategory(id: string) {
     return this.cobranzas.deleteCategory(id);
+  }
+
+  /** Directorio de beneficiarios (proveedores y terceros) para el desplegable del movimiento. */
+  beneficiaries(search?: string, category?: string) {
+    return this.cobranzas.beneficiaries({ search, category });
+  }
+
+  /** Alta rápida de un beneficiario desde el movimiento (por defecto, tercero). */
+  createBeneficiary(dto: BeneficiaryDto) {
+    return this.cobranzas.createBeneficiary(dto);
   }
 
   /** Facturas pendientes de un cliente (para el modal de recaudo). */

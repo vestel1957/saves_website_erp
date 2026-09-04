@@ -13,13 +13,16 @@ import { cop } from "@/lib/subscribers";
 import type { CashAccount } from "@/lib/cobranzas";
 import { mensajeDeError } from "@/lib/errores";
 import { useMiCaja } from "@/lib/useMiCaja";
+import { ACCEPT_IMAGEN_PDF } from "@/lib/adjuntos";
 
 const today = () => new Date().toISOString().slice(0, 10);
 
 type Result = {
   amount: number;
-  from: { name: string };
-  to: { name: string };
+  from: { name: string; transactionId?: string };
+  to: { name: string; transactionId?: string };
+  /** Nombre del comprobante que quedó adjunto (null = no se subió ninguno). */
+  comprobante?: string | null;
 };
 
 export default function TransferenciaPage() {
@@ -33,6 +36,10 @@ export default function TransferenciaPage() {
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState(today());
   const [note, setNote] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  // El <input type="file"> es no controlado: para vaciarlo tras registrar hay que
+  // remontarlo, y por eso lleva `key`.
+  const [fileKey, setFileKey] = useState(0);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [last, setLast] = useState<Result | null>(null);
@@ -50,6 +57,17 @@ export default function TransferenciaPage() {
   const amountNum = Number(amount) || 0;
   const sameAccount = !!fromId && fromId === toId;
   const canSubmit = !!fromId && !!toId && !sameAccount && amountNum > 0 && !saving;
+
+  /** Sube el comprobante a un movimiento del traslado. Devuelve si quedó adjunto. */
+  async function adjuntar(txId: string | undefined, f: File): Promise<boolean> {
+    if (!txId) return false;
+    try {
+      const fd = new FormData();
+      fd.append("file", f);
+      const r = await authFetch(`/treasury/transactions/${txId}/attach`, { method: "POST", body: fd });
+      return r.ok;
+    } catch { return false; }
+  }
 
   async function submit() {
     setErr(null);
@@ -71,10 +89,27 @@ export default function TransferenciaPage() {
       });
       const d = await res.json();
       if (!res.ok) throw new Error(d?.message || "No se pudo transferir");
-      setLast(d);
+      // El soporte se sube DESPUÉS, contra los movimientos que acaba de crear el
+      // traslado (crear -> adjuntar, igual que el egreso). Va en las DOS patas para
+      // que se vea desde el cierre de la caja origen y desde los movimientos de la
+      // destino; si la destino no la alcanza quien transfiere (otra sede), basta con
+      // que su propia pata lo lleve.
+      let comprobante: string | null = null;
+      if (file) {
+        const nombre = file.name;
+        const [origen] = await Promise.all([
+          adjuntar(d?.from?.transactionId, file),
+          adjuntar(d?.to?.transactionId, file),
+        ]);
+        if (origen) comprobante = nombre;
+        else toast("Transferencia registrada, pero el comprobante no se pudo subir", "alert-triangle");
+      }
+      setLast({ ...d, comprobante });
       toast(`Transferencia de ${cop(d.amount)} registrada`, "check");
       setAmount("");
       setNote("");
+      setFile(null);
+      setFileKey((k) => k + 1);
     } catch (e) { setErr(mensajeDeError(e)); } finally { setSaving(false); }
   }
 
@@ -139,6 +174,21 @@ export default function TransferenciaPage() {
             <Field label="Concepto / nota"><Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Opcional" /></Field>
           </div>
 
+          <div className="mt-3">
+            <Field label="Comprobante (opcional)" hint="Foto o PDF del soporte de la consignación o el traslado.">
+              <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border-subtle bg-surface-2 px-3 py-1.5 text-[12px] font-medium text-text-secondary hover:border-brand hover:text-text-primary">
+                <Icon name="upload" size={14} /> {file ? "Cambiar archivo" : "Adjuntar comprobante"}
+                <input key={fileKey} type="file" accept={ACCEPT_IMAGEN_PDF} className="hidden" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+              </label>
+              {file && (
+                <span className="ml-2 inline-flex items-center gap-1 text-[11px] text-text-tertiary">
+                  <Icon name="file-text" size={12} /> {file.name}
+                  <button type="button" onClick={() => { setFile(null); setFileKey((k) => k + 1); }} className="text-error-text hover:underline"><Icon name="x" size={12} /></button>
+                </span>
+              )}
+            </Field>
+          </div>
+
           {amountNum > 0 && fromName && toName && !sameAccount && (
             <div className="mt-3 rounded-xl border border-border-subtle bg-surface-subtle p-3.5 text-[13px]">
               <div className="flex items-center justify-between py-0.5">
@@ -154,14 +204,17 @@ export default function TransferenciaPage() {
 
           {err && <p className="mt-2 text-[12px] text-error-text">{err}</p>}
           <Button className="mt-3 w-full" onClick={submit} disabled={!canSubmit}>
-            {saving ? "Transfiriendo…" : "Transferir"}
+            {saving ? (file ? "Transfiriendo y subiendo…" : "Transfiriendo…") : "Transferir"}
           </Button>
         </div>
 
         {last && (
           <div className="mt-3 flex items-start gap-2 rounded-xl border border-success-soft bg-success-soft px-3.5 py-3 text-[13px] text-success-text">
             <Icon name="check" size={16} className="mt-0.5 shrink-0" />
-            <span>Última transferencia: <b>{cop(last.amount)}</b> de <b>{last.from.name}</b> a <b>{last.to.name}</b>.</span>
+            <span>
+              Última transferencia: <b>{cop(last.amount)}</b> de <b>{last.from.name}</b> a <b>{last.to.name}</b>.
+              {last.comprobante && <> Comprobante <b>{last.comprobante}</b> adjunto; se ve en Movimientos y en el cierre.</>}
+            </span>
           </div>
         )}
       </div>

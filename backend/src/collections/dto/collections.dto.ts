@@ -1,7 +1,11 @@
 import { IsOptional, IsString, MinLength } from 'class-validator';
+import { ACUERDO_DE_PAGO } from '../llamada-catalogo';
 
-/** Valor de `drespuesta` que marca un compromiso/acuerdo de pago (legacy). */
-export const AGREEMENT_DETAIL = 'Acuerdo de Pago';
+/**
+ * Valor de `drespuesta` que marca un compromiso/acuerdo de pago (legacy).
+ * El catálogo de la cascada manda; esto es el nombre con el que ya se conocía.
+ */
+export const AGREEMENT_DETAIL = ACUERDO_DE_PAGO;
 
 /** Registro de una llamada de cobranza (legacy `llamadas`). */
 export class CreateCallDto {

@@ -21,6 +21,9 @@ export class CollectionsController {
     };
   }
 
+  /** Cascada tipo → respuesta → detalle del formulario del legacy. */
+  catalog() { return this.collections.catalog(); }
+
   responseTypes() { return this.collections.responseTypes(); }
 
   agreements(q: Record<string, string | undefined>, user: AuthUser) {

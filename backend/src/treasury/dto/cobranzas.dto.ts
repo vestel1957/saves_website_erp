@@ -1,5 +1,5 @@
 import {
-  IsArray, IsDateString, IsInt, IsNumber, IsOptional, IsString, Min, MinLength,
+  IsArray, IsBoolean, IsDateString, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength,
 } from 'class-validator';
 
 /** Registrar un recaudo/pago que se aplica en cascada sobre las facturas pendientes. */
@@ -29,9 +29,59 @@ export class CollectDto {
   @IsOptional() @IsString()
   note?: string;
 
+  /**
+   * Referencia externa del pago (id de la pasarela, referencia del corresponsal).
+   * Va a la nota del movimiento igual que en el legacy, que la escribía como
+   * "referencia: <id_orden>".
+   */
+  @IsOptional() @IsString()
+  reference?: string;
+
   /** Orden explícito de facturas a pagar (ids). Si se omite: más antiguas primero. */
   @IsOptional() @IsArray() @IsString({ each: true })
   invoiceIds?: string[];
+
+  /**
+   * ¿Devolverle el servicio al pagar? Por defecto SÍ (paridad legacy: pagar reconecta).
+   *
+   * Se manda `false` cuando el cliente paga pero NO quiere volver a tener servicio —
+   * el caso típico es el que se va: llega a saldar lo que debe y a retirarse. Antes
+   * no había forma de decirlo desde caja y el recaudo lo reconectaba igual, así que
+   * el cliente quedaba activo (y volviendo a facturar) sin haberlo pedido.
+   *
+   * Ojo: esto NO retira al cliente ni cambia su estado, solo se abstiene de tocar los
+   * equipos. El retiro sigue siendo su propio trámite.
+   */
+  @IsOptional() @IsBoolean()
+  reconectar?: boolean;
+
+  /**
+   * Recibir la plata SIN factura pendiente que cubrir: queda entera como saldo a
+   * favor y se aplica sola a la factura del mes siguiente cuando nazca.
+   *
+   * El caso: el cliente está al día y quiere dejar pagado el mes que viene, que
+   * todavía no se ha facturado (la corrida es el día 1). Hasta ahora el recaudo se
+   * caía con "El cliente no tiene facturas pendientes" y había que emitirle la
+   * factura por adelantado a mano.
+   *
+   * Es OPT-IN a propósito: sin esto, el cargue masivo de pagos convertiría en
+   * anticipo cualquier fila que no cuadre con una factura, en vez de fallar y que
+   * alguien la mire.
+   */
+  @IsOptional() @IsBoolean()
+  comoAnticipo?: boolean;
+
+  /**
+   * Dejar pagados TAMBIÉN los próximos N meses, que todavía no se han facturado.
+   *
+   * Es la casilla "pagar también <mes>" del modal de recaudo. Sólo viaja el NÚMERO de
+   * meses: el precio y el descuento por adelantar (`billing.advanceDiscountPct`) los
+   * pone el servidor, para que nadie pueda cobrarse un mes a su antojo desde el
+   * navegador. El recaudo se rechaza si el monto no alcanza o si al cliente le queda
+   * alguna factura pendiente (esa deuda se comería el adelanto).
+   */
+  @IsOptional() @IsInt() @Min(1) @Max(12)
+  adelantarMeses?: number;
 }
 
 /** Anular una transacción (soft-delete + reversa de saldo). */
@@ -62,6 +112,20 @@ export class ExpenseDto {
 
   @IsOptional() @IsString()
   payerName?: string;
+
+  /**
+   * Opcional: a quién se le paga, del directorio (`Supplier`, incluidos los
+   * TERCEROS — categoría 3). Si viene, el nombre del beneficiario lo pone el
+   * servidor a partir del directorio y no hace falta escribirlo.
+   *
+   * Existía el agujero de siempre: el beneficiario se tecleaba a mano y el mismo
+   * de siempre entraba escrito de N maneras (hay 4.330 nombres distintos en los
+   * egresos históricos, con duplicados invisibles del tipo "Dr Orlando Vesga"
+   * dos veces). Ligarlo por id es lo que hace que el estado de cuenta del
+   * proveedor cuadre.
+   */
+  @IsOptional() @IsString()
+  supplierId?: string;
 
   /**
    * Opcional: ligar el egreso a un cliente (sin tocar sus facturas). Paridad
@@ -242,4 +306,31 @@ export class CashAccountDto {
 export class TxCategoryDto {
   @IsString() @MinLength(1)
   name!: string;
+}
+
+/**
+ * Alta rápida de un beneficiario (`Supplier`) desde el propio movimiento.
+ *
+ * Es la vía corta para que el directorio se llene solo con lo que de verdad se
+ * paga: si el tercero no está en el desplegable se crea aquí mismo, sin salir a
+ * Proveedores. Lo completo (NIT, banco, cuenta…) se sigue editando allá.
+ */
+export class BeneficiaryDto {
+  @IsString() @MinLength(1)
+  name!: string;
+
+  /** 1 productos · 2 servicios · 3 terceros (el default aquí). */
+  @IsOptional() @IsInt()
+  category?: number;
+
+  /**
+   * NIT o cédula. OBLIGATORIO: sin documento el directorio se vuelve a llenar de
+   * repetidos, que es el problema que resuelve. Se guarda como lo escriben y se
+   * compara sin puntos ni guiones.
+   */
+  @IsString() @MinLength(5) @MaxLength(30)
+  nit!: string;
+
+  @IsOptional() @IsString()
+  phone?: string;
 }

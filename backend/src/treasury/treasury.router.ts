@@ -5,18 +5,18 @@
  * controlador. Cablea HTTP -> método: extrae los argumentos de `req` y llama.
  * La lógica sigue viviendo en TreasuryController, que ya no lleva decoradores.
  *
- * Endpoints: 39
+ * Endpoints: 42
  */
 import { crearRouter, manejar } from '../core/http/ruta';
-import { validar } from '../core/http/validar';
+import { validar, validarQuery } from '../core/http/validar';
 import { autenticar, exigirArea, usuarioDe } from '../core/auth/instancias';
 import { ficheroDe, subirUno } from '../core/http/uploads';
-import { TreasuryController, TREASURY_ROOT } from './treasury.controller';
+import { TreasuryController } from './treasury.controller';
 import { cobranzasService, pagosFijosService, treasuryService } from '../core/contenedor';
 import { BadRequestException } from '../core/http/errores';
 import { diskStorage } from 'multer';
 import { existsSync, mkdirSync } from 'node:fs';
-import { extname, join } from 'node:path';
+import { extname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Response } from 'express';
 import { TreasuryService } from './treasury.service';
@@ -25,15 +25,31 @@ import { reciboRolloPdf } from '../common/pdf/recibo-rollo';
 import { CobranzasService } from './cobranzas.service';
 import { EjecutarPagoFijoDto, PagoFijoDto, PagosFijosService, UpdatePagoFijoDto } from './pagos-fijos.service';
 import {
-  CashAccountDto, CashCloseDto, CashOpenDto, CollectDto, EditTxDto, ExpenseDto,
+  BeneficiaryDto, CashAccountDto, CashCloseDto, CashOpenDto, CollectDto, EditTxDto, ExpenseDto,
   IncomeDto, TransferDto, TxCategoryDto, VoidTxDto,
 } from './dto/cobranzas.dto';
+import { ListTxQueryDto } from './dto/movimientos.dto';
 import { enviarAdjuntoSeguro, mimeAceptado, nombreEnDisco } from '../common/uploads';
+import { TREASURY_ROOT } from './comprobante-legacy';
 
 /** Instancia única del controlador. Las dependencias salen del contenedor. */
 const treasury = new TreasuryController(treasuryService, cobranzasService, pagosFijosService);
 
 export const treasuryRouter = crearRouter();
+treasuryRouter.get(
+  '/beneficiaries',
+  autenticar,
+  exigirArea('contabilidad', 'administracion', 'caja'),
+  manejar((req) => treasury.beneficiaries(req.query.search as string, req.query.category as string)),
+);
+
+treasuryRouter.post(
+  '/beneficiaries',
+  autenticar,
+  exigirArea('contabilidad', 'administracion'),
+  manejar((req) => treasury.createBeneficiary(validar(BeneficiaryDto, req.body))),
+);
+
 treasuryRouter.get(
   '/cash-accounts',
   autenticar,
@@ -174,6 +190,11 @@ treasuryRouter.post(
   manejar((req) => treasury.collect(validar(CollectDto, req.body), usuarioDe(req))),
 );
 
+treasuryRouter.get(
+  '/comprobante/:archivo',
+  manejar((req, res) => treasury.comprobantePublico(req.params.archivo, res)),
+);
+
 treasuryRouter.post(
   '/expenses',
   autenticar,
@@ -262,7 +283,7 @@ treasuryRouter.get(
   '/transactions',
   autenticar,
   exigirArea('contabilidad', 'administracion', 'caja'),
-  manejar((req) => treasury.list(req.query.search as string, req.query.type as string, req.query.category as string, req.query.status as string, req.query.from as string, req.query.to as string, req.query.all as string, req.query.cashAccountId as string, req.query.page as string, req.query.pageSize as string, req.query.sortBy as string, req.query.sortDir as string, usuarioDe(req))),
+  manejar((req) => treasury.list(validarQuery(ListTxQueryDto, req.query), usuarioDe(req))),
 );
 
 treasuryRouter.get(

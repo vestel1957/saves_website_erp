@@ -15,6 +15,7 @@ import { PERM } from "@/lib/auth";
 import { cop } from "@/lib/subscribers";
 import { mensajeDeError } from "@/lib/errores";
 import type { CashAccount } from "@/lib/cobranzas";
+import { ACCEPT_IMAGEN_PDF } from "@/lib/adjuntos";
 
 type Ejecucion = { id: string; amount: number; transactionId: string | null; executedByName: string | null; executedAt: string };
 type PagoFijo = {
@@ -286,7 +287,7 @@ export default function PagosFijosPage() {
           <Field label="Comprobante" hint="Foto o PDF del recibo. Queda adjunto al egreso.">
             <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border-subtle bg-surface-2 px-3 py-1.5 text-[12px] font-medium text-text-secondary hover:border-brand hover:text-text-primary">
               <Icon name="upload" size={14} /> {comprobante ? "Cambiar archivo" : "Adjuntar comprobante"}
-              <input type="file" accept="image/*,application/pdf" className="hidden" onChange={(e) => setComprobante(e.target.files?.[0] ?? null)} />
+              <input type="file" accept={ACCEPT_IMAGEN_PDF} className="hidden" onChange={(e) => setComprobante(e.target.files?.[0] ?? null)} />
             </label>
             {comprobante && (
               <span className="ml-2 inline-flex items-center gap-1 text-[11px] text-text-tertiary">

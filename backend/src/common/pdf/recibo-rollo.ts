@@ -362,7 +362,7 @@ export type ReciboRolloData = {
   } | null;
   /** Lo que se abonó con este recibo (mes + CTA:tid, como el legacy). */
   items: { tid: number | null; concept: string; amount: number }[];
-  /** Lo que le sigue quedando debiendo (el legacy las imprime en negrita cursiva). */
+  /** Lo que le sigue quedando debiendo: mes + CTA (el legacy las pone en negrita cursiva). */
   pending: { tid: number | null; concept: string; amount: number }[];
   total: number;
   paid: number;

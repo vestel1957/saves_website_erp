@@ -175,6 +175,14 @@ export function EditarOrdenModal({
   const porMegas = type.trim().toLowerCase().includes("megas");
   const subeMegas = porMegas && type.trim().toLowerCase().includes("subir");
   const bajaMegas = porMegas && type.trim().toLowerCase().includes("bajar");
+  /**
+   * 'AgregarInternet' lleva el mismo plan destino, y corregirlo aquí es lo que
+   * rescata las que ya se cerraron sin él: se le pone el plan y se vuelve a cerrar
+   * la orden, en vez de anularla y repetir la visita.
+   */
+  const porAgregarInternet = type.trim().toLowerCase() === "agregarinternet";
+  /** ¿Este trabajo lleva plan de internet destino? (backend: `ordenLlevaPlanInternet`) */
+  const conPlanInternet = porMegas || porAgregarInternet;
   /** Los de internet, del más lento al más rápido: así se lee el desplegable. */
   const planesInternet = useMemo(
     () => planes
@@ -221,24 +229,24 @@ export function EditarOrdenModal({
   // El catálogo de internet y lo que el cliente tiene contratado, solo cuando la
   // orden es de megas: en el resto no pinta nada y son dos consultas más.
   useEffect(() => {
-    if (!porMegas || planes.length) return;
+    if (!conPlanInternet || planes.length) return;
     let vivo = true;
     void authFetch("/plans?activeOnly=true&kind=INTERNET")
       .then(listaJson)
       .then((d) => { if (vivo) setPlanes(d as Plan[]); })
       .catch(() => {});
     return () => { vivo = false; };
-  }, [porMegas, planes.length, authFetch]);
+  }, [conPlanInternet, planes.length, authFetch]);
 
   useEffect(() => {
-    if (!porMegas || !orden.subscriberId) return;
+    if (!conPlanInternet || !orden.subscriberId) return;
     let vivo = true;
     void authFetch(`/subscribers/${orden.subscriberId}/plan`)
       .then(listaJson)
       .then((d) => { if (vivo) setServicios(d as ServicioActual[]); })
       .catch(() => {});
     return () => { vivo = false; };
-  }, [porMegas, orden.subscriberId, authFetch]);
+  }, [conPlanInternet, orden.subscriberId, authFetch]);
 
   // La dirección de hoy y la zona del cliente, para partir de ellas. Solo se pide
   // en un traslado: es una consulta más y la mayoría de las órdenes no lo son.
@@ -307,7 +315,7 @@ export function EditarOrdenModal({
           // El plan solo viaja si se eligió otro: abrir este modal en una orden de
           // megas y guardar la observación no puede volver a cambiarle el plan al
           // cliente (y con él el precio de su próxima factura).
-          ...(porMegas && planNuevo && planNuevo !== (orden.megas?.planId ?? "")
+          ...(conPlanInternet && planNuevo && planNuevo !== (orden.megas?.planId ?? "")
             ? { planToId: planNuevo }
             : {}),
           // El destino solo viaja si se escribió algo: abrir este modal en una orden
@@ -393,13 +401,15 @@ export function EditarOrdenModal({
             porque no basta con el desplegable: hay que ver de cuánto venía el cliente
             y en cuánto queda ANTES de guardar. Corregirlo no le mueve el plan: eso
             pasa al CERRAR la orden. */}
-        {porMegas && (
+        {conPlanInternet && (
           <div className="rounded-lg border border-border-default bg-surface-2 p-3">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <span className="text-[13px] font-semibold text-text-primary">
-                {orden.megas?.planId
-                  ? "Corregir a cuántas megas se pasa"
-                  : bajaMegas ? "¿A cuántas megas se baja?" : "¿A cuántas megas se sube?"}
+                {porAgregarInternet
+                  ? orden.megas?.planId ? "Corregir con qué plan de internet queda" : "¿Con qué plan de internet queda?"
+                  : orden.megas?.planId
+                    ? "Corregir a cuántas megas se pasa"
+                    : bajaMegas ? "¿A cuántas megas se baja?" : "¿A cuántas megas se sube?"}
               </span>
               {origenMegas.megas != null && (
                 <span className="text-[12px] text-text-secondary">
@@ -416,8 +426,12 @@ export function EditarOrdenModal({
               </p>
             ) : (
               <p className="mb-2 text-[12px] text-text-tertiary">
-                Esta orden no dice a cuántas megas se pasa el cliente
-                {origenMegas.nombre ? <> · hoy tiene <span className="text-text-secondary">{origenMegas.nombre}</span></> : null}.
+                {porAgregarInternet
+                  ? "Esta orden no dice con qué plan de internet queda el cliente: elígelo y vuelve a cerrarla para que se le monte el servicio."
+                  : "Esta orden no dice a cuántas megas se pasa el cliente"}
+                {!porAgregarInternet && origenMegas.nombre
+                  ? <> · hoy tiene <span className="text-text-secondary">{origenMegas.nombre}</span>.</>
+                  : porAgregarInternet ? null : "."}
               </p>
             )}
             <Field label="Plan nuevo" hint="La velocidad la pone el plan: es también el precio de la próxima factura y el perfil que se le empuja al router">

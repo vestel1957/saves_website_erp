@@ -13,10 +13,14 @@ import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import { mensajeDeError } from "@/lib/errores";
+import { ConsignacionCampos, consignacionVacia, type Consignacion } from "@/components/orders/ConsignacionCampos";
 
 type Row = { product: string; qty: string; price: string; taxRate: string };
 
 const emptyRow = (): Row => ({ product: "", qty: "1", price: "0", taxRate: "0" });
+
+/** Los tipos de retención del legacy (`purchase.tipo_retencion`). Espejo de `RETENTION_TYPES` en el backend. */
+const TIPOS_RETENCION = ["Retefuente Servicios", "Compras", "Personas no declarantes", "Reteiva"];
 
 /**
  * Hoy en Colombia, en el formato de <input type="date">.
@@ -43,7 +47,18 @@ export default function NuevaOrdenPage() {
   const [notes, setNotes] = useState("");
   const [category, setCategory] = useState("");
   const [cats, setCats] = useState<{ id: string; name: string }[]>([]);
+  // Retención en la fuente, como en newinvoice.php: tipo y valor digitados a mano.
+  const [retentionType, setRetentionType] = useState("");
+  const [retention, setRetention] = useState("");
+  // Datos de la consignación: se llenan con la cuenta del proveedor y se pueden corregir.
+  const [consig, setConsig] = useState<Consignacion>(consignacionVacia);
   const [saving, setSaving] = useState(false);
+
+  const elegirProveedor = (s: any) => {
+    setSupplier(s);
+    setResults([]);
+    setConsig({ payBank: s.bank ?? "", payAccountType: s.accountType ?? "", payAccount: s.account ?? "", payHolder: s.name ?? "", payHolderDoc: s.nit ?? "" });
+  };
 
   const searchSuppliers = useCallback(async (q: string) => {
     setSearching(true);
@@ -80,6 +95,7 @@ export default function NuevaOrdenPage() {
     }
     return { subtotal, tax, total: subtotal + tax };
   }, [rows]);
+  const retentionValue = retentionType ? Math.max(0, Number(retention) || 0) : 0;
 
   const setRow = (i: number, patch: Partial<Row>) =>
     setRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
@@ -92,11 +108,18 @@ export default function NuevaOrdenPage() {
       .filter((r) => r.product.trim() && Number(r.qty) > 0)
       .map((r) => ({ product: r.product.trim(), qty: Number(r.qty), price: Number(r.price) || 0, taxRate: Number(r.taxRate) || 0 }));
     if (!items.length) { toast("Agrega al menos un ítem", "alert-triangle"); return; }
+    if (retentionType && !(retentionValue > 0)) { toast("Escribe el valor de la retención", "alert-triangle"); return; }
+    if (retentionValue > totals.total) { toast("La retención no puede ser mayor que el total de la orden", "alert-triangle"); return; }
     setSaving(true);
     try {
       const res = await authFetch("/orders", {
         method: "POST",
-        body: JSON.stringify({ supplierId: supplier.id, orderDate, categoryRef: category || undefined, notes: notes.trim() || undefined, items }),
+        body: JSON.stringify({
+          supplierId: supplier.id, orderDate, categoryRef: category || undefined, notes: notes.trim() || undefined, items,
+          ...consig,
+          // El servidor la vuelve una nota de retención que descuenta del total.
+          ...(retentionValue > 0 ? { retentionType, retention: retentionValue } : {}),
+        }),
       });
       const d = await res.json();
       if (!res.ok) throw new Error(d?.message || "Error");
@@ -143,7 +166,7 @@ export default function NuevaOrdenPage() {
                     <button
                       key={s.id}
                       type="button"
-                      onClick={() => { setSupplier(s); setResults([]); }}
+                      onClick={() => elegirProveedor(s)}
                       className="flex w-full items-center justify-between gap-3 border-b border-border-subtle px-4 py-2.5 text-left transition-colors last:border-b-0 hover:bg-surface-2"
                     >
                       <span className="flex flex-col leading-tight">
@@ -169,6 +192,16 @@ export default function NuevaOrdenPage() {
           </Field>
         </div>
       </div>
+
+      {supplier && (
+        <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
+          <h2 className="text-[13px] font-bold text-text-primary">Datos de la consignación</h2>
+          <p className="mb-3 text-[12px] text-text-tertiary">
+            {supplier.account ? "Tomados de la cuenta del proveedor. Corrígelos si esta orden se paga a otra cuenta." : "El proveedor no tiene cuenta registrada: la que escribas aquí le queda guardada."}
+          </p>
+          <ConsignacionCampos value={consig} onChange={setConsig} />
+        </div>
+      )}
 
       <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
         <div className="mb-3 flex items-center justify-between">
@@ -210,10 +243,28 @@ export default function NuevaOrdenPage() {
           </table>
         </div>
 
-        <div className="mt-4 flex flex-col items-end gap-1 border-t border-border-subtle pt-3 text-[13px]">
-          <div className="flex w-64 justify-between text-text-secondary"><span>Subtotal</span><span>{cop(totals.subtotal)}</span></div>
-          <div className="flex w-64 justify-between text-text-secondary"><span>IVA</span><span>{cop(totals.tax)}</span></div>
-          <div className="flex w-64 justify-between text-[15px] font-bold text-text-primary"><span>Total</span><span>{cop(totals.total)}</span></div>
+        <div className="mt-4 flex flex-col gap-4 border-t border-border-subtle pt-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="grid gap-3 sm:w-72">
+            <Field label="Retención" hint="Opcional · se descuenta del total a pagar al proveedor">
+              <Select value={retentionType} onChange={(e) => setRetentionType(e.target.value)}>
+                <option value="">Sin retención</option>
+                {TIPOS_RETENCION.map((t) => <option key={t} value={t}>{t}</option>)}
+              </Select>
+            </Field>
+            {retentionType && (
+              <Field label="Valor de la retención" required>
+                <Input type="number" min={0} className="text-right" value={retention} onChange={(e) => setRetention(e.target.value)} placeholder="0" />
+              </Field>
+            )}
+          </div>
+          <div className="flex flex-col items-end gap-1 text-[13px]">
+            <div className="flex w-64 justify-between text-text-secondary"><span>Subtotal</span><span>{cop(totals.subtotal)}</span></div>
+            <div className="flex w-64 justify-between text-text-secondary"><span>IVA</span><span>{cop(totals.tax)}</span></div>
+            {retentionValue > 0 && (
+              <div className="flex w-64 justify-between text-text-secondary"><span>Retención ({retentionType})</span><span className="text-warning-text">-{cop(retentionValue)}</span></div>
+            )}
+            <div className="flex w-64 justify-between text-[15px] font-bold text-text-primary"><span>{retentionValue > 0 ? "Total neto" : "Total"}</span><span>{cop(totals.total - retentionValue)}</span></div>
+          </div>
         </div>
       </div>
 

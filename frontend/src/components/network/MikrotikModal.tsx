@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Icon } from "@/components/Icon";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
+import { puedeMoverMorosos } from "@/lib/auth";
 import {
   type MikrotikMode,
   type MikrotikActionResult,
@@ -18,7 +19,20 @@ import {
  * Panel de conectividad: corte / reconexión REAL contra el Mikrotik del cliente.
  * Refleja el modo del backend (LIVE vs DRY-RUN) y exige confirmación explícita
  * antes de ejecutar un corte/reconexión cuando el backend está en modo LIVE.
+ *
+ * Lleva además el INTERRUPTOR MANUAL del legacy (Activar / Desactivar), que sólo
+ * mete o saca la IP de la lista MOROSOS —no cambia el estado de la ficha ni tumba la
+ * sesión—. Va detrás de un permiso nominal (`puedeMoverMorosos`), así que para casi
+ * todo el mundo, superusuarios incluidos, este bloque no existe.
  */
+/** Lo que se le pregunta a quien va a tocar el router de verdad, acción por acción. */
+const PREGUNTA_CONFIRMAR: Record<"cut" | "reconnect" | "activar" | "desactivar", string> = {
+  cut: "¿Cortar el internet",
+  reconnect: "¿Reconectar el internet",
+  activar: "¿Sacar de MOROSOS la IP",
+  desactivar: "¿Meter en MOROSOS la IP",
+};
+
 export function MikrotikModal({
   subscriberId,
   subscriberName,
@@ -32,12 +46,15 @@ export function MikrotikModal({
   onClose: () => void;
   onDone?: () => void;
 }) {
-  const { authFetch } = useAuth();
+  const { authFetch, user } = useAuth();
+  const puedeMorosos = puedeMoverMorosos(user);
   const [mode, setMode] = useState<MikrotikMode | null>(null);
   const [result, setResult] = useState<MikrotikActionResult | null>(null);
   const [history, setHistory] = useState<MikrotikLog[]>([]);
-  const [busy, setBusy] = useState<null | "cut" | "reconnect" | "status" | "provision">(null);
-  const [confirm, setConfirm] = useState<null | "cut" | "reconnect">(null);
+  const [busy, setBusy] = useState<null | "cut" | "reconnect" | "status" | "provision" | "morosos">(null);
+  const [confirm, setConfirm] = useState<null | "cut" | "reconnect" | "activar" | "desactivar">(null);
+  /** ¿La IP está HOY en MOROSOS? `null` mientras no se haya podido leer del router. */
+  const [enMorosos, setEnMorosos] = useState<boolean | null>(null);
 
   const loadMeta = useCallback(() => {
     void authFetch(`/network/mikrotik/mode`).then((r) => (r.ok ? r.json() : null)).then(setMode).catch(() => {});
@@ -47,12 +64,28 @@ export function MikrotikModal({
       .catch(() => {});
   }, [authFetch, subscriberId]);
 
+  /**
+   * Dónde está la IP AHORA MISMO. Sólo se pregunta para quien tiene el interruptor:
+   * es una consulta al router (hasta 6 s) y sin ella el botón no sabría si le toca
+   * decir "Activar" o "Desactivar", que es justo lo que hace el legacy al pintar la
+   * ficha. El backend cachea la lectura, así que abrir y cerrar no la repite.
+   */
+  const loadMorosos = useCallback(() => {
+    if (!puedeMorosos) return;
+    void authFetch(`/network/subscribers/${subscriberId}/connection`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: MikrotikActionResult | null) => setEnMorosos(d?.live?.inMorosos ?? null))
+      .catch(() => setEnMorosos(null));
+  }, [authFetch, subscriberId, puedeMorosos]);
+
   useEffect(() => {
     if (!open) return;
     setResult(null);
     setConfirm(null);
+    setEnMorosos(null);
     loadMeta();
-  }, [open, loadMeta]);
+    loadMorosos();
+  }, [open, loadMeta, loadMorosos]);
 
   async function run(kind: "cut" | "reconnect" | "status" | "provision") {
     setBusy(kind);
@@ -69,6 +102,7 @@ export function MikrotikModal({
         return;
       }
       setResult(data);
+      if (data.live?.inMorosos !== undefined) setEnMorosos(data.live.inMorosos);
       if (kind !== "status") {
         if (data.ok) {
           toast(data.dryRun ? "Simulación completada (dry-run)" : data.message, "check");
@@ -76,6 +110,43 @@ export function MikrotikModal({
         } else {
           toast(data.message, "x");
         }
+      }
+      loadMeta();
+    } catch (e) {
+      toast((e as Error).message, "x");
+    } finally {
+      setBusy(null);
+      setConfirm(null);
+    }
+  }
+
+  /**
+   * El interruptor del legacy. Endpoint aparte de `cut`/`reconnect` a propósito: aquí
+   * NO se corta ni se reconecta nada —sólo se mueve la IP de lista—, y confundir las
+   * dos cosas es lo que dejaría la ficha diciendo una cosa y el router otra.
+   */
+  async function runMorosos(accion: "activar" | "desactivar") {
+    setBusy("morosos");
+    setResult(null);
+    try {
+      const res = await authFetch(`/network/subscribers/${subscriberId}/estado-mikrotik`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accion }),
+      });
+      const data = (await res.json()) as MikrotikActionResult;
+      if (!res.ok) {
+        toast((data as any)?.message ?? "Error ejecutando la acción", "x");
+        return;
+      }
+      setResult(data);
+      if (data.ok) {
+        // En dry-run no se tocó el router: el interruptor sigue donde estaba.
+        if (!data.dryRun) setEnMorosos(accion === "desactivar");
+        toast(data.dryRun ? "Simulación completada (dry-run)" : data.message, "check");
+        onDone?.();
+      } else {
+        toast(data.message, "x");
       }
       loadMeta();
     } catch (e) {
@@ -132,15 +203,64 @@ export function MikrotikModal({
           </Button>
         </div>
 
+        {/* Interruptor manual del legacy — sólo la lista MOROSOS, y sólo para quien lo tiene a su nombre */}
+        {puedeMorosos && (
+          <div className="rounded-lg border border-border-subtle bg-surface-subtle p-3">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <span className="text-[12px] font-semibold uppercase tracking-wide text-text-tertiary">
+                Estado en el Mikrotik
+              </span>
+              {enMorosos === null ? (
+                <Badge label="sin leer" tone="default" />
+              ) : enMorosos ? (
+                <Badge label="En MOROSOS" tone="error" />
+              ) : (
+                <Badge label="En ACTIVOS" tone="success" />
+              )}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {enMorosos !== false && (
+                <Button
+                  variant={enMorosos ? "primary" : "secondary"}
+                  disabled={busy !== null}
+                  onClick={() => (live ? setConfirm("activar") : runMorosos("activar"))}
+                >
+                  <Icon name="toggle-right" size={15} /> {busy === "morosos" ? "Aplicando…" : "Activar"}
+                </Button>
+              )}
+              {enMorosos !== true && (
+                <Button
+                  variant={enMorosos === false ? "danger" : "secondary"}
+                  disabled={busy !== null}
+                  onClick={() => (live ? setConfirm("desactivar") : runMorosos("desactivar"))}
+                >
+                  <Icon name="toggle-left" size={15} /> {busy === "morosos" ? "Aplicando…" : "Desactivar"}
+                </Button>
+              )}
+            </div>
+            <p className="mt-2 text-[12px] text-text-tertiary">
+              Mueve la IP entre <b>ACTIVOS</b> y <b>MOROSOS</b> en todos los Mikrotik de la sede, igual que el
+              botón del sistema anterior. No cambia el estado de la ficha, no tumba la sesión abierta y no abre
+              ninguna orden.
+            </p>
+          </div>
+        )}
+
         {/* Confirmación en modo LIVE */}
         {confirm && (
           <div className="rounded-lg border border-warning/40 bg-warning/10 p-3 text-[13px]">
             <p className="mb-2 font-semibold text-text-primary">
-              {confirm === "cut" ? "¿Cortar el internet" : "¿Reconectar el internet"} de{" "}
-              {subscriberName ?? "este cliente"}? Esta acción es <b>real</b> sobre el router.
+              {PREGUNTA_CONFIRMAR[confirm]} de {subscriberName ?? "este cliente"}? Esta acción es <b>real</b>{" "}
+              sobre el router.
             </p>
             <div className="flex gap-2">
-              <Button variant={confirm === "cut" ? "danger" : "primary"} disabled={busy !== null} onClick={() => run(confirm)}>
+              <Button
+                variant={confirm === "cut" || confirm === "desactivar" ? "danger" : "primary"}
+                disabled={busy !== null}
+                onClick={() =>
+                  confirm === "activar" || confirm === "desactivar" ? runMorosos(confirm) : run(confirm)
+                }
+              >
                 {busy ? "Ejecutando…" : "Sí, confirmar"}
               </Button>
               <Button variant="ghost" onClick={() => setConfirm(null)}>

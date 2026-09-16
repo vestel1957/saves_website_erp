@@ -6,9 +6,16 @@ import { Badge } from "@/components/ui/Badge";
 import { cop } from "@/lib/subscribers";
 import { BotonOrden, useTablaOrdenable } from "@/components/ui/tabla-ordenable";
 import { ComprobanteCell } from "@/components/treasury/ComprobanteCell";
+import { useAuth } from "@/context/AuthProvider";
+import { screenKey } from "@/lib/nav";
 
 type Movimiento = {
   id: string;
+  /**
+   * Consecutivo del legacy — el número con el que se busca el movimiento en
+   * /tesoreria para anularlo. Null = nacido aquí y aún sin viajar al legacy.
+   */
+  codigo: number | null;
   date: string;
   type: "INCOME" | "EXPENSE" | "TRANSFER";
   category: string;
@@ -48,6 +55,8 @@ export type CierreDetalle = {
   cashAccountId: number;
   account: { holder: string; accountNumber: string | null } | null;
   yaCerrado: boolean;
+  /** true = el día no tiene movimientos propios; sólo el arrastre del cierre anterior. */
+  sinActividad: boolean;
   cajero: string | null;
   cerradoEl: string | null;
   proximoDiaHabil: string;
@@ -151,6 +160,36 @@ function BotonDireccion({ activo, tono, icono, label, ayuda, monto, n, onClick }
 }
 
 /**
+ * El código del movimiento, enlazado a la lista de Movimientos con ese código buscado y
+ * el periodo acotado a ese día: es el camino a la anulación, que es para lo que se lee
+ * esta columna. Se acota el periodo porque /tesoreria abre en el mes en curso y un
+ * cierre de hace dos meses no encontraría nada.
+ *
+ * Sin código (movimiento nacido en nexus que todavía no ha viajado al legacy) no hay
+ * enlace: no es un fallo, es que aún no tiene ese número.
+ */
+function CodigoCell({ codigo, fecha }: { codigo: number | null; fecha: string }) {
+  const { can } = useAuth();
+  if (codigo == null) return <span className="text-text-tertiary">—</span>;
+  const dia = fecha.slice(0, 10);
+  // A la cajera no se le enlaza: Movimientos es pantalla de contabilidad (y anular no
+  // es suyo desde el 2026-08-03). El número sí lo ve —es lo que dicta por teléfono o
+  // copia en el correo cuando pide que le anulen un pago.
+  if (!can(screenKey("/tesoreria"))) {
+    return <span className="font-mono text-[12px] text-text-secondary">{codigo}</span>;
+  }
+  return (
+    <a
+      href={`/tesoreria?q=${codigo}&desde=${dia}&hasta=${dia}`}
+      title="Ver el movimiento en Movimientos (para anularlo)"
+      className="font-mono text-[12px] text-brand hover:underline"
+    >
+      {codigo}
+    </a>
+  );
+}
+
+/**
  * El arqueo de un día: de qué está hecho el efectivo del cajón y qué movimientos lo
  * componen. Es lo que antes vivía dentro del modal "Detalle" del cierre.
  *
@@ -201,7 +240,7 @@ export function CierreArqueo({ d, maxMovimientos = "max-h-80" }: {
       return (!dirs.size || dirs.has(dir)) &&
         (!soloEfectivo || m.efectivo) &&
         (!q || m.payer.toLowerCase().includes(q) || String(m.invoice?.tid ?? "").includes(q) ||
-          (m.note ?? "").toLowerCase().includes(q));
+          String(m.codigo ?? "").includes(q) || (m.note ?? "").toLowerCase().includes(q));
     }),
     [d.movimientos, dirs, soloEfectivo, q],
   );
@@ -218,6 +257,7 @@ export function CierreArqueo({ d, maxMovimientos = "max-h-80" }: {
   // Los movimientos del arqueo son una lista plana: se pueden reordenar sin
   // tocar los totales del cierre, que se calculan aparte.
   const t = useTablaOrdenable(movs, {
+    codigo: (m) => m.codigo,
     quien: (m) => m.payer,
     concepto: (m) => m.category,
     medio: (m) => m.method,
@@ -314,7 +354,7 @@ export function CierreArqueo({ d, maxMovimientos = "max-h-80" }: {
               <input
                 value={busca}
                 onChange={(e) => setBusca(e.target.value)}
-                placeholder="Buscar por nombre, factura o nota…"
+                placeholder="Buscar por código, nombre, factura o nota…"
                 className="w-full rounded-lg border border-border-subtle bg-surface-2 py-1.5 pl-8 pr-3 text-[12px] text-text-primary placeholder:text-text-tertiary focus:border-brand focus:outline-none"
               />
             </div>
@@ -325,9 +365,10 @@ export function CierreArqueo({ d, maxMovimientos = "max-h-80" }: {
           </div>
 
           <div translate="no" className={`${maxMovimientos} overflow-auto border-t border-border-subtle`}>
-            <table className="w-full min-w-[44rem] text-[13px]">
+            <table className="w-full min-w-[48rem] text-[13px]">
               <thead className="sticky top-0 bg-surface-2">
                 <tr className="text-left text-[11px] uppercase tracking-wider text-text-secondary">
+                  <th className="px-4 py-3 font-semibold"><BotonOrden t={t} clave="codigo">Código</BotonOrden></th>
                   <th className="px-4 py-3 font-semibold"><BotonOrden t={t} clave="quien">Quién</BotonOrden></th>
                   <th className="px-4 py-3 font-semibold"><BotonOrden t={t} clave="concepto">Concepto</BotonOrden></th>
                   <th className="px-4 py-3 font-semibold"><BotonOrden t={t} clave="medio">Medio</BotonOrden></th>
@@ -342,7 +383,7 @@ export function CierreArqueo({ d, maxMovimientos = "max-h-80" }: {
               <tbody>
                 {!movs.length && (
                   <tr>
-                    <td colSpan={7} className="px-4 py-12 text-center text-text-secondary">
+                    <td colSpan={8} className="px-4 py-12 text-center text-text-secondary">
                       {nFiltros ? (
                         <span key="con-filtro">
                           <span>Ningún movimiento con estos filtros. </span>
@@ -359,6 +400,12 @@ export function CierreArqueo({ d, maxMovimientos = "max-h-80" }: {
                   if (conSaldo && m.efectivo) saldo += (m.type === "INCOME" ? 1 : -1) * Math.abs(Number(m.amount) || 0);
                   return (
                     <tr key={m.id} className="border-t border-border-subtle hover:bg-surface-2">
+                      {/* El código del movimiento, y el enlace que lleva a él en
+                          /tesoreria ya buscado y con el día puesto: desde el cierre,
+                          anular un pago era salir a buscarlo por nombre y monto. */}
+                      <td className="whitespace-nowrap px-4 py-3">
+                        <CodigoCell codigo={m.codigo} fecha={d.date} />
+                      </td>
                       <td className="px-4 py-3">
                         {m.subscriberId
                           ? <a href={`/clientes/${m.subscriberId}`} className="text-brand hover:underline">{m.payer}</a>

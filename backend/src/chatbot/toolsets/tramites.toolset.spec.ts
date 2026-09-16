@@ -53,8 +53,11 @@ function armar(d: Dobles = {}) {
       return r;
     }),
   };
-  const toolset = new TramitesToolset(subscribers as any, cobranzas as any, write as any, genieacs as any);
-  return { toolset, creados, leads, write, genieacs };
+  // Sólo lo usa el atajo de "pronto pago" para leer la promoción vigente; sin
+  // promociones en la base la respuesta cae al texto de siempre.
+  const prisma = { promotion: { findMany: jest.fn(async () => []) } };
+  const toolset = new TramitesToolset(subscribers as any, cobranzas as any, write as any, genieacs as any, prisma as any);
+  return { toolset, creados, leads, write, genieacs, prisma };
 }
 
 const CLIENTE: ChatIdentity = { kind: 'cliente', subscriberId: 'sub-1', abonado: 1234 };

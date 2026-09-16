@@ -3,10 +3,8 @@ import { BillingService } from './billing.service';
 import { invoicePdf } from './billing-pdf';
 import { reciboRolloPdf } from '../common/pdf/recibo-rollo';
 import { FacturasService } from './facturas.service';
-import { RecurringService } from './recurring.service';
 import { CatalogoService } from './catalogo.service';
 import { AsignarServicioDto, CreateInvoiceDto, CreateNoteDto, CreateNotesBulkDto, GenerateInvoicesDto, UpdateInvoiceDto, VoidInvoiceDto } from './dto/facturas.dto';
-import { CreateRecurringDto } from './dto/recurring.dto';
 import { AuthUser } from '../auth/current-user.decorator';
 
 /** Facturación y cartera (vertical migrado de saves-vestel). */
@@ -14,13 +12,20 @@ export class BillingController {
   constructor(
     private readonly billing: BillingService,
     private readonly facturas: FacturasService,
-    private readonly recurring: RecurringService,
     private readonly catalogo: CatalogoService,
   ) {}
 
   /** Catálogo facturable (planes + productos del legacy) para el selector de ítems. */
   catalog(search?: string, limit?: string) {
     return this.catalogo.buscar(search, limit ? Number(limit) : undefined);
+  }
+
+  /**
+   * POR QUÉ se factura: los motivos que puede llevar una factura, con el concepto y
+   * el precio de hoy de cada uno. Lo pide "Nueva factura" al abrirse.
+   */
+  motivos() {
+    return this.catalogo.motivos();
   }
 
   /**
@@ -190,37 +195,5 @@ export class BillingController {
   /** Anular una factura de venta (motivo obligatorio). */
   voidInvoice(id: string, dto: VoidInvoiceDto, user: AuthUser) {
     return this.facturas.voidInvoice(id, dto, user);
-  }
-
-  // --- Reciclaje de ventas (plantillas recurrentes) ---
-
-  recStats() {
-    return this.recurring.stats();
-  }
-
-  recList(search?: string, page?: string, pageSize?: string, sortBy?: string, sortDir?: string) {
-    return this.recurring.list({ search, page: Number(page), pageSize: Number(pageSize), sortBy, sortDir });
-  }
-
-  recDetail(id: string) {
-    return this.recurring.detail(id);
-  }
-
-  recCreate(dto: CreateRecurringDto, user: AuthUser) {
-    return this.recurring.create(dto, user);
-  }
-
-  /** Generar una factura real a partir de la plantilla. */
-  recRun(id: string, user: AuthUser) {
-    return this.recurring.run(id, user);
-  }
-
-  /** Activar/desactivar plantilla. */
-  recToggle(id: string, body: { active: boolean }) {
-    return this.recurring.toggle(id, !!body.active);
-  }
-
-  recRemove(id: string) {
-    return this.recurring.remove(id);
   }
 }

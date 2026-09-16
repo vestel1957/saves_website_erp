@@ -262,6 +262,24 @@ html.dark *::-webkit-scrollbar-thumb {
   @apply inline-flex min-h-8 min-w-8 items-center justify-center;
 }
 
+/*
+  EL FOCO VISIBLE DE LOS CONTROLES QUE NO SON UN <input>.
+
+  Las casillas del calendario, las tiras de eventos y los días del mini son botones
+  desnudos: sin esto, quien navega con el teclado no ve dónde está. Va un contorno POR
+  FUERA, separado dos píxeles, y del color de la marca que el usuario haya elegido
+  (`--color-border-focus`) — un foco fijo sería la única parte de la interfaz que se
+  negaría a seguir el selector de marca.
+
+  En `:focus-visible` y no en `:focus`: con `:focus` el contorno aparece también al
+  pulsar con el ratón, y entonces cada día que se toca se queda marcado detrás del
+  diálogo que acaba de abrirse.
+*/
+.foco:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 2px;
+}
+
 /* Controles de formulario reutilizables (usados en administración / modales). */
 .input {
   @apply w-full rounded-lg border border-border-default bg-surface px-3 py-2 text-[13px] text-text-primary shadow-sm outline-none transition-colors placeholder:text-text-tertiary hover:border-border-strong focus:border-border-focus focus:ring-2 focus:ring-brand/30;

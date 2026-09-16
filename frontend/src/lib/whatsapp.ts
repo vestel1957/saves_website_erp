@@ -57,12 +57,55 @@ export const WA_SEND_STATUS: Record<string, { label: string; tone: "default" | "
 /** Estados de un cliente (para el filtro de destinatarios). */
 export const SUBSCRIBER_STATUSES = ["ACTIVO", "CORTADO", "CARTERA", "SUSPENDIDO", "RETIRADO"];
 
+/** Estado de una campaña y su presentación. */
+export const WA_CAMPAIGN_STATUS: Record<string, { label: string; tone: "default" | "info" | "success" | "error" | "warning" }> = {
+  running: { label: "Enviando", tone: "info" },
+  waiting: { label: "Esperando cupo", tone: "warning" },
+  done: { label: "Finalizada", tone: "success" },
+  error: { label: "Con error", tone: "error" },
+};
+
+/** Cupo de clientes únicos en 24 h (lo que Meta deja iniciar) y cuánto va gastado. */
+export type WaCupo = { tier: string | null; limiteMeta: number; limite: number; usadas: number; disponibles: number };
+
 /** Salud real del número contra Kapso/Meta (GET /admin/whatsapp/health). */
 export type WaHealth = {
   ok: boolean; error?: string;
   phone?: string | null; name?: string | null;
   quality?: string | null; tier?: string | null;
   codeVerification?: string | null; platform?: string | null;
+  cupo?: WaCupo;
+};
+
+/** Filtro del público de una campaña (viaja tal cual a la API). */
+export type WaFiltroCampana = {
+  statuses: string[];
+  branchIds: string[];
+  planIds: string[];
+  deuda?: "con" | "sin";
+  deudaMin?: number;
+  soloMoviles: boolean;
+  omitirEnAtencion: boolean;
+};
+
+/** GET /admin/whatsapp/campaigns/options */
+export type WaOpcionesCampana = {
+  sedes: { id: string; name: string }[];
+  planes: { id: string; name: string; kind: string }[];
+  estados: { value: string; count: number }[];
+};
+
+/** POST /admin/whatsapp/campaigns/preview */
+export type WaPreviewCampana = {
+  coinciden: number;
+  destinatarios: number;
+  descartes: { fueraPorDeuda: number; sinTelefono: number; enAtencion: number; telefonoRepetido: number };
+  deudaTotal: number;
+  muestra: { subscriberId: string; nombre: string; abonado: number | null; telefono: string; deuda: number }[];
+  plantilla: { name: string; category: string | null; metaStatus: string | null } | null;
+  ejemplo: { subscriberId: string; nombre: string; cabecera: string | null; cuerpo: string } | null;
+  cupo: WaCupo;
+  reparto: { hoy: number; dias: number };
 };
 
 /** Calidad del número según Meta (semáforo): bloqueos/reportes la bajan. */
@@ -77,6 +120,7 @@ export const WA_TIER: Record<string, string> = {
   TIER_50: "50 clientes / 24 h",
   TIER_250: "250 clientes / 24 h",
   TIER_1K: "1.000 clientes / 24 h",
+  TIER_2K: "2.000 clientes / 24 h",
   TIER_10K: "10.000 clientes / 24 h",
   TIER_100K: "100.000 clientes / 24 h",
   TIER_UNLIMITED: "Sin límite",

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Icon } from "@/components/Icon";
 import { TICKET_PRIORITY_TONE, TICKET_STATUS_LABEL } from "@/lib/support";
+import { AvisoEquipo, type EquipoDeOrden } from "@/components/soporte/AvisoEquipo";
 
 export type OrdenAgendada = {
   id: string; code: number | null; type: string; priority: string | null; status: string;
@@ -19,24 +20,45 @@ export type OrdenAgendada = {
   atrasada: boolean;
   cliente: string | null; abonado: number | null; subscriberId: string | null;
   direccion: string | null; telefono: string | null; barrio: string | null; sede: string | null;
+  /**
+   * El equipo con el que sale esta visita (instalación, cambio de equipo, migración,
+   * agregar internet). `null` = no lleva ninguno, que es lo normal. Ver `AvisoEquipo`.
+   */
+  equipo?: EquipoDeOrden;
 };
+/** La orden abierta que ancla a un funcionario (ver `support/turno.ts`). */
+export type OrdenEnCurso = {
+  id: string;
+  code: number | null;
+  type: string;
+  cliente: string | null;
+  agendadaPara: string | null;
+};
+
 export type MiAgenda = {
   resolved: boolean; fecha: string; hoy: string; tecnico?: string;
   ordenes: OrdenAgendada[]; proximas: number;
   /**
-   * La visita EN TURNO: la única que el técnico puede abrir ahora (2026-09-02). La
-   * decide el backend con la misma regla que aplica su candado (`support/turno.ts`),
-   * y no la pantalla eligiendo "la primera pendiente": si aquí se recalculara, el día
-   * que las dos no coincidieran se le ofrecería una visita que la API le rechaza.
-   * `null` = no le queda nada abierto hoy, y entonces no hay nada bloqueado.
+   * La visita EMPEZADA, si está en el día que se mira (2026-09-02). La decide el
+   * backend con la misma regla que aplica su candado (`support/turno.ts`) y no la
+   * pantalla eligiendo "la primera pendiente": si aquí se recalculara, el día que las
+   * dos no coincidieran se le destacaría una tarjeta que no es la que tiene a medias.
+   * `null` = no tiene ninguna empezada hoy, y entonces se destaca la primera del día.
    */
   enTurno: string | null;
   /**
-   * Este técnico está EXENTO del turno (`Staff.agendaLibre`, 2026-09-02): ve su día
-   * entero y puede abrir cualquiera de sus visitas.
+   * La orden que tiene EMPEZADA y que le impide empezar otra (2026-09-10, la regla
+   * del legacy). Puede NO estar en la agenda de hoy —la dejó a medias ayer, o no está
+   * agendada—, y por eso viaja entera: con ella la pantalla pinta el aviso con su
+   * enlace en vez de una jornada que no puede arrancar.
+   */
+  enCurso?: OrdenEnCurso | null;
+  /**
+   * Este técnico está EXENTO del candado (`Staff.agendaLibre`, 2026-09-02): ve su día
+   * entero de una vez.
    *
    * Viaja aparte y no como `enTurno: null` porque los dos casos se pintan al revés:
-   * sin turno pendiente la pantalla felicita por el día terminado, y al exento con
+   * sin nada pendiente la pantalla felicita por el día terminado, y al exento con
    * seis visitas por delante eso sería mentirle.
    */
   turnoLibre?: boolean;
@@ -107,6 +129,9 @@ export function VisitaAgendada({ o }: { o: OrdenAgendada }) {
               {TICKET_STATUS_LABEL[o.status] ?? o.status}
             </span>
           )}
+          {/* La caja que hay que meter en la camioneta ANTES de salir: en la visita ya
+              hecha no se pinta, que ahí ya no cambia nada y sólo estorba. */}
+          {!lista && <AvisoEquipo equipo={o.equipo} />}
         </span>
         {o.cliente && (
           <span className="mt-0.5 block truncate text-[12px] text-text-secondary">

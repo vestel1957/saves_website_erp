@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Icon } from "@/components/Icon";
 import { Input, Select } from "@/components/ui/Field";
 import { ListToolbar } from "@/components/ui/ListToolbar";
@@ -8,7 +8,7 @@ import { useAuth } from "@/context/AuthProvider";
 import { listaJson } from "@/lib/errores";
 import { cop } from "@/lib/subscribers";
 import { TX_METHODS, TX_TYPE_LABEL } from "@/lib/treasury";
-import { RangoFechas, rangoDePreset, etiquetaRango, type RangoFechasValor } from "@/components/ui/RangoFechas";
+import { RangoFechas, rangoDePreset, rangoDeUrl, rangoAUrl, etiquetaRango, type RangoFechasValor } from "@/components/ui/RangoFechas";
 
 /**
  * Filtros de los listados de movimientos (Ingresos, Egresos, Anulaciones).
@@ -58,10 +58,43 @@ export function filtrosActivos(f: FiltrosTx): number {
     .filter((v) => v !== "").length;
 }
 
+/**
+ * Los filtros tal como viajan en la URL del listado, con nombres en castellano
+ * (`?sede=3&caja=12&metodo=Efectivo&min=500000&comprobante=0&periodo=semana`).
+ * Así volver atrás, recargar o pasarle el enlace a un compañero deja la lista igual.
+ *
+ * A la cajera no se le lee ni se le escribe periodo ni caja: el servidor la lleva a
+ * su ventanilla y a hoy, y un enlace que le llegara con otro periodo no debe
+ * enseñarle un control que no cambia nada.
+ */
+export function filtrosTxDeUrl(v: Record<string, string>, cajera: boolean): FiltrosTx {
+  const numero = (s?: string) => (s && /^\d+$/.test(s) ? s : "");
+  return {
+    rango: cajera ? null : rangoDeUrl(v),
+    sede: !cajera && v.sede !== undefined && /^\d+$/.test(v.sede) ? v.sede : "",
+    cashAccountId: cajera ? "" : numero(v.caja),
+    category: v.categoria ?? "",
+    method: v.metodo ?? "",
+    min: numero(v.min),
+    max: numero(v.max),
+    attach: v.comprobante === "1" || v.comprobante === "0" ? v.comprobante : "",
+    status: v.estado ?? "",
+    type: v.tipo ?? "",
+  };
+}
+
+export function filtrosTxAUrl(f: FiltrosTx): Record<string, string> {
+  return {
+    ...rangoAUrl(f.rango),
+    sede: f.sede, caja: f.cashAccountId, categoria: f.category, metodo: f.method,
+    min: f.min, max: f.max, comprobante: f.attach, estado: f.status, tipo: f.type,
+  };
+}
+
 type Caja = { id: number; name: string; branchLegacy: number | null; sede: string | null };
 
 export function FiltrosMovimientos({
-  value, onChange, search, onSearch, cajera, fijos, totales, resultados,
+  value, onChange, search, onSearch, cajera, fijos, totales, resultados, acciones,
 }: {
   value: FiltrosTx;
   onChange: (f: FiltrosTx) => void;
@@ -73,6 +106,8 @@ export function FiltrosMovimientos({
   fijos: { type?: string; status?: string };
   totales?: { ingresos: number; egresos: number; balance: number; arrastres: number };
   resultados?: number;
+  /** Botones a la derecha del buscador (el Excel de la pantalla). */
+  acciones?: ReactNode;
 }) {
   const { authFetch } = useAuth();
   const [cajas, setCajas] = useState<Caja[]>([]);
@@ -111,12 +146,13 @@ export function FiltrosMovimientos({
             value={value.rango}
             onChange={(r) => set({ rango: r })}
             presets={[...PRESETS_TESORERIA]}
+            conHora
           />
           <span className="text-[12px] font-medium text-text-tertiary">{etiquetaRango(value.rango)}</span>
         </div>
       )}
 
-      <ListToolbar search={search} onSearch={onSearch} searchPlaceholder="Buscar por código, pagador, factura, nota o cuenta…">
+      <ListToolbar search={search} onSearch={onSearch} searchPlaceholder="Buscar por código, pagador, factura, nota o cuenta…" actions={acciones}>
         {!cajera && sedes.length > 1 && (
           <Select
             value={value.sede}
@@ -156,7 +192,7 @@ export function FiltrosMovimientos({
           )}
           <Icon name={abierto ? "chevron-up" : "chevron-down"} size={13} />
         </button>
-        {(activos > 0 || search) && (
+        {(activos > 0 || search || value.rango?.horaDesde || value.rango?.horaHasta) && (
           <button
             type="button"
             onClick={() => { onSearch(""); onChange(filtrosVacios(cajera)); }}

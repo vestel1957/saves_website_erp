@@ -2,7 +2,11 @@
  * Inventario en el perfil de cajera (2026-07-29). Idempotente.
  *
  * Dos movimientos, por decisión de negocio:
- *   − COMPRAS fuera: `/ordenes` y `/ordenes/historial`.
+ *   − COMPRAS fuera: `/ordenes` y `/ordenes/historial`.  ← REVERTIDO el 2026-09-08 por
+ *     `migrate-caja-ve-compras-2026-09.ts`: la cajera vuelve a VER las órdenes (sube la
+ *     factura del proveedor y el comprobante del pago), aunque sigue sin poder crearlas
+ *     ni aprobarlas ni pagarlas. Se vacía `QUITAR` para que volver a correr este script
+ *     no deshaga aquello; se deja escrito porque es el historial de la decisión.
  *   + Entrega de material a técnicos: `/inventario/traspasos`. Cada técnico tiene su
  *     bodega (`MaterialWarehouse.technicianRef`), así que "asignarle material" es un
  *     traspaso al almacén de ese técnico, y el acta se cierra cuando él la recibe.
@@ -19,7 +23,7 @@ import { ALL_PERMISSIONS, SCREENS, screenKey } from '../src/auth/permissions.cat
 const prisma = new PrismaClient();
 
 const ROL = 'area-caja';
-const QUITAR = ['/ordenes', '/ordenes/historial'];
+const QUITAR: string[] = []; // eran ['/ordenes', '/ordenes/historial'] — ver la nota de arriba
 const DAR = ['/inventario/traspasos'];
 
 async function main() {

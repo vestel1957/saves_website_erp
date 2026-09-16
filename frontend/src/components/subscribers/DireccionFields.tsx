@@ -9,8 +9,25 @@ export const NOMENCLATURAS = ["Calle", "Carrera", "Diagonal", "Transversal", "Ma
 export const ADICIONALES = ["", "bis", "sur", "a", "a sur", "b", "b sur", "c", "d", "e", "f", "g", "h", "a bis", "b bis", "c bis", "d bis", "oeste"];
 export const ADICIONALES2 = ["", "Lote", ...ADICIONALES.slice(1)];
 export const RESIDENCIAS = ["", "Casa", "Apartamento", "Edificio", "Oficina", "Vereda"];
-export const DIVICIONES = ["", "Torre", "Interior", "Manzana", "Bloque"];
-export const DIVICIONES2 = ["", "Apartamento", "Casa"];
+/**
+ * El INTERIOR del inmueble: torre/piso y apartamento/casa. Son las dos únicas piezas
+ * con las que se puede decir "la misma casa, otro piso", así que de ellas depende que
+ * la ficha distinga los dos sitios (la dirección que arma `direccionDe` sí las lleva;
+ * Residencia y Referencia no).
+ *
+ * Ya no FRENAN nada: el traslado a la misma dirección se abre igual (`armarTraslado`,
+ * 2026-09-08). Siguen importando porque sin ellas la ficha queda diciendo que vive
+ * donde vivía, y el técnico de la próxima visita toca la puerta de abajo.
+ *
+ * **"Piso" es un añadido nuestro** (2026-09-08, pedido del usuario: un traslado a la
+ * misma dirección «pero piso 2»). El legacy no lo ofrecía en su desplegable —Torre,
+ * Interior, Manzana, Bloque— pero la gente lo venía escribiendo a mano en la casilla
+ * de Residencia ('PISO 2', 'PISO', 'PISO2'), donde NO cuenta como dirección: ahí es
+ * una referencia para llegar, no un sitio distinto. La columna del legacy es un
+ * varchar, así que 'Piso' viaja allá sin problema.
+ */
+export const DIVICIONES = ["", "Torre", "Piso", "Interior", "Manzana", "Bloque"];
+export const DIVICIONES2 = ["", "Apartamento", "Casa", "Piso"];
 
 /** Las 12 casillas en que está partida la dirección (espejo de `CASILLAS_DIRECCION`). */
 export const NOM_KEYS = [
@@ -156,10 +173,13 @@ export function DireccionFields({
       <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
         <Field label="Residencia"><Select value={value.residencia ?? ""} onChange={set("residencia")}>{RESIDENCIAS.map((t) => <option key={t} value={t}>{t || "—"}</option>)}</Select></Field>
         <div className="col-span-1 sm:col-span-3"><Field label="Referencia"><Input value={value.referencia ?? ""} onChange={set("referencia")} /></Field></div>
-        <Field label="División 1"><Select value={value.divicion ?? ""} onChange={set("divicion")}>{DIVICIONES.map((t) => <option key={t} value={t}>{t || "—"}</option>)}</Select></Field>
-        <Field label="Nº div1"><Input value={value.divnum1 ?? ""} onChange={set("divnum1")} /></Field>
-        <Field label="División 2"><Select value={value.divicion2 ?? ""} onChange={set("divicion2")}>{DIVICIONES2.map((t) => <option key={t} value={t}>{t || "—"}</option>)}</Select></Field>
-        <Field label="Nº div2"><Input value={value.divnum2 ?? ""} onChange={set("divnum2")} /></Field>
+        {/* El INTERIOR. Se rotula por lo que es —torre/piso y apartamento/casa— y no
+            "División 1/2", que no le decía a nadie dónde poner el piso: es justo lo
+            que hay que llenar para mudar a alguien dentro del mismo edificio. */}
+        <Field label="Torre / piso"><Select value={value.divicion ?? ""} onChange={set("divicion")}>{DIVICIONES.map((t) => <option key={t} value={t}>{t || "—"}</option>)}</Select></Field>
+        <Field label="Nº"><Input value={value.divnum1 ?? ""} onChange={set("divnum1")} /></Field>
+        <Field label="Apto / casa"><Select value={value.divicion2 ?? ""} onChange={set("divicion2")}>{DIVICIONES2.map((t) => <option key={t} value={t}>{t || "—"}</option>)}</Select></Field>
+        <Field label="Nº"><Input value={value.divnum2 ?? ""} onChange={set("divnum2")} /></Field>
       </div>
       {comercial && (
         <div className="mt-2">

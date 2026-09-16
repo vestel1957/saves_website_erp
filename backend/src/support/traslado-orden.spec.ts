@@ -100,17 +100,55 @@ describe('orden de traslado', () => {
     expect(creada.traslado).toMatchObject({ hasta: 'Carrera 7 # 11 - 2', factura: 500999, cobrado: true });
   });
 
-  it('no abre un traslado sin dirección destino ni a la misma casa', async () => {
+  it('la misma casa PERO otro piso sí es un traslado', async () => {
+    // El caso real (2026-09-08): el cliente se muda al piso 2 del mismo inmueble. El
+    // piso va en las casillas del INTERIOR —que sí forman parte de la dirección—; en
+    // Residencia o Referencia no contaría y la orden se quedaría sin poder abrir.
+    const { srv, creados, fichas } = armar();
+    await srv.createTicket(
+      {
+        subscriberId: 'sub-1', type: 'Traslado',
+        moveTo: {
+          nomenclature: {
+            nomenclatura: 'Calle', numero1: '10', numero2: '5', numero3: '20',
+            divicion: 'Piso', divnum1: '2',
+          },
+        },
+      } as any,
+      USUARIO,
+    );
+    expect(creados[0].moveToText).toBe('Calle 10 # 5 - 20 Piso 2');
+    expect(creados[0].moveFromText).toBe('Calle 10 # 5 - 20');
+    expect(fichas[0].nomenclature).toMatchObject({ divicion: 'Piso', divnum1: '2' });
+  });
+
+  it('no abre un traslado sin dirección destino', async () => {
     const { srv } = armar();
     await expect(srv.createTicket({ subscriberId: 'sub-1', type: 'Traslado' } as any, USUARIO))
       .rejects.toThrow(/dirección nueva/i);
     await expect(srv.createTicket(
       { subscriberId: 'sub-1', type: 'Traslado', moveTo: { nomenclature: { residencia: 'Casa' } } } as any, USUARIO,
     )).rejects.toThrow(/vacía/i);
-    await expect(srv.createTicket(
-      { subscriberId: 'sub-1', type: 'Traslado', moveTo: { nomenclature: { nomenclatura: 'Calle', numero1: '10', numero2: '5', numero3: '20' } } } as any,
+  });
+
+  it('a la MISMA dirección sí se abre: el traslado corto también es un traslado', async () => {
+    // 2026-09-08, pedido del usuario: se rechazaba por parecer un error de dedo y
+    // frenaba el caso más común de todos —el segundo piso de la misma casa, la pieza
+    // del fondo—, que no siempre se puede escribir en las casillas del interior. Hay
+    // visita y hay obra: la orden vale.
+    const { srv, creados } = armar();
+    const creada: any = await srv.createTicket(
+      {
+        subscriberId: 'sub-1', type: 'Traslado',
+        moveTo: { nomenclature: { nomenclatura: 'Calle', numero1: '10', numero2: '5', numero3: '20' } },
+      } as any,
       USUARIO,
-    )).rejects.toThrow(/misma/i);
+    );
+    expect(creados[0].moveToText).toBe('Calle 10 # 5 - 20');
+    expect(creados[0].moveFromText).toBe('Calle 10 # 5 - 20');
+    // La nota que lee el técnico no puede decir "de X a X".
+    expect(creados[0].section).toContain('dentro del mismo inmueble');
+    expect(creada.traslado).toMatchObject({ desde: 'Calle 10 # 5 - 20', hasta: 'Calle 10 # 5 - 20' });
   });
 
   it('si el cobro falla, la orden se abre igual y lo dice', async () => {

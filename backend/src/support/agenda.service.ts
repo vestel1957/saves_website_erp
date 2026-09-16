@@ -4,7 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { hoyEnColombia } from '../common/fecha-colombia';
 import { CARGO_TECNICO } from '../staff/cargos-legacy';
-import { esTecnicoDeCampo } from '../common/tecnico-scope';
+import { clavesDe, esTecnicoDeCampo, fichaDelUsuario } from '../common/tecnico-scope';
 import { sedesDe } from '../common/sede-scope';
 import { variosDeQuery } from '../common/filtros-query';
 import { TICKET_ASIGNADO_EVENT, type TicketAsignadoEvent } from './support.events';
@@ -12,7 +12,7 @@ import type { EmisorDeEventos } from '../core/eventos';
 import { enteroBuscable, rangoPrioridad } from './support.service';
 import { ABIERTA, celdaDelDia, ORDEN_AGENDA, origenDelDia, whereDelDia, whereDelRango } from './agenda-dia';
 import { esDeMisSedes } from './agenda-sede';
-import { tieneAgendaLibre, visitaEnTurno } from './turno';
+import { ordenEnCurso, tieneAgendaLibre, type OrdenEnCurso } from './turno';
 import { direccionDe, referenciaDe } from '../common/subscriber-address';
 import { parsePoint } from '../geo/geo.util';
 import type { RoutingService } from '../geo/routing.service';
@@ -20,6 +20,10 @@ import { metros, proponerRecorrido, type Parada } from './recorrido.policy';
 import { esTrabajoDeCampo } from './field-work.policy';
 import { textoPlano } from '../common/texto-legacy';
 import { traductorDeTecnicos } from '../staff/nombre-tecnico';
+import { equiposDeOrdenes, type EquipoDeOrden } from './equipo-reserva.service';
+import { esOrdenDeServicio } from './order-types';
+import { mixPorAbonado, type MixDeServicios } from '../common/servicios-del-abonado';
+import { whereDeServicios } from './servicio-orden.filtro';
 
 /**
  * Filtros del tablero. Filtran ÓRDENES, no técnicos: la pregunta de la cajera es
@@ -38,6 +42,16 @@ export type FiltrosAgenda = {
   clase?: string;
   /** `Ticket.type`: el detalle concreto ('Corte Internet', 'Instalacion'…). Varios, por coma. */
   tipo?: string;
+  /**
+   * QUÉ TIENE CONTRATADO EL CLIENTE: `TV` (solo televisión), `INTERNET` (solo
+   * internet) o `COMBO` (los dos); varios, por coma.
+   *
+   * Es el filtro grueso del que cuelga el detalle, y sobre todo el que separa al
+   * abonado de solo televisión —al que no hay que tocarle el Mikrotik— del que
+   * tiene las dos cosas. Alcanza sólo a las órdenes que van de un servicio, que son
+   * las que llevan el cartel. Ver `servicio-orden.filtro.ts`.
+   */
+  servicio?: string;
   /** Varias, por coma. */
   prioridad?: string;
   /** `PENDIENTE` | `REALIZANDO` | `cerradas` (RESUELTO + ANULADA). Varios, por coma. */
@@ -373,7 +387,7 @@ export class AgendaService {
     return p || (s.companyName || '').trim() || null;
   }
 
-  private async tarjeta(t: any, barrios: Map<number, string>, hoy?: number, puesto?: number | null) {
+  private async tarjeta(t: any, ctx: { barrios: Map<number, string>; equipos: Map<string, EquipoDeOrden>; mix: Map<string, MixDeServicios> }, hoy?: number, puesto?: number | null) {
     const nb = Number(t.subscriber?.neighborhood);
     // Arrastrada de un día anterior: la tarjeta tiene que DECIRLO. Si no, el técnico
     // ve una visita más y la cajera cuenta como trabajo de hoy algo que lleva
@@ -387,6 +401,11 @@ export class AgendaService {
     const dia = origen ? new Date(origen).getTime() : null;
     return {
       id: t.id, code: t.code, subject: t.subject, type: t.type, priority: t.priority,
+      // El cartel Solo TV / Solo internet / Combo: QUÉ TIENE CONTRATADO el cliente,
+      // para saber sin abrir la orden si hay que tocarle el internet o sólo la
+      // televisión. Sólo en las órdenes que van de un servicio; `null` en el resto
+      // (ver `common/servicios-del-abonado.ts`).
+      servicio: (esOrdenDeServicio(t.type) && t.subscriber?.id ? ctx.mix.get(t.subscriber.id) : null) ?? null,
       status: t.status, created: t.created,
       // Pasa por `textoPlano`: el legacy editaba esto con un WYSIWYG y lo que hay en
       // la base es '<p>SUSPENDER TV</p>'. Pintarlo como HTML sería XSS almacenado;
@@ -416,21 +435,56 @@ export class AgendaService {
       telefono2: t.subscriber?.phone2 ?? null,
       cedula: [t.subscriber?.docType, t.subscriber?.docNumber].filter(Boolean).join(' ') || null,
       sede: t.subscriber?.branch?.name ?? null,
-      barrio: Number.isFinite(nb) ? barrios.get(nb) ?? null : null,
+      barrio: Number.isFinite(nb) ? ctx.barrios.get(nb) ?? null : null,
       // El ID del barrio, además del nombre: es la clave con la que la pantalla de
       // repartir cruza esta orden contra `zonasDelDia` para decir "Óscar ya tiene 3
       // aquí" al elegir técnico. Por NOMBRE no se puede — hay barrios que se llaman
       // igual en dos municipios.
       barrioId: Number.isFinite(nb) ? String(nb) : null,
+      // HAY QUE LLEVAR EQUIPO (2026-09-04, a pedido del usuario). Una instalación, un
+      // cambio de equipo, una migración o un "agregar internet" no se atienden con las
+      // manos vacías: sale una caja del estante. El sistema ya la aparta al abrir la
+      // orden (`EquipoReservaService`), pero eso solo se veía abriendo la orden — quien
+      // reparte el día veía una visita igual a las demás y el técnico salía sin ella.
+      //
+      // `null` = esta orden no pide equipo. Con equipo dentro, ese es el que hay que
+      // llevar; con `equipo: null` la orden lo pide y no hay ninguno apartado (las que
+      // nacieron en el legacy no pasan por la reserva, y la sede puede haberse quedado
+      // sin unidades): hay que sacarlo a mano de la bodega.
+      equipo: ctx.equipos.get(t.id) ?? null,
     };
   }
 
-  /** Resuelve los nombres de barrio de un lote de tarjetas (el ticket guarda el id legacy). */
-  private async barriosDe(filas: { subscriber: { neighborhood: string | null } | null }[]) {
+  /**
+   * Lo que hace falta para pintar un lote de tarjetas y no cabe en el `select`: el
+   * NOMBRE del barrio (el ticket guarda el id legacy) y el EQUIPO apartado para la
+   * visita (vive en `Equipment.reservedTicketId`, que no es una relación de Prisma).
+   *
+   * Se resuelven las dos cosas juntas, en dos consultas para todo el lote, porque las
+   * piden los mismos sitios a la vez y con el mismo juego de filas: repartirlo en dos
+   * métodos era invitar a que una pantalla pidiera uno y se olvidara del otro — y una
+   * tarjeta que calla que hay que llevar equipo es peor que no tener el aviso.
+   */
+  private async contextoDe(filas: { id: string; type: string; status: string; subscriber: { id?: string; neighborhood: string | null } | null }[]) {
     const ids = [...new Set(filas.map((f) => Number(f.subscriber?.neighborhood)).filter((n) => Number.isFinite(n)))];
-    if (!ids.length) return new Map<number, string>();
-    const rows = await this.prisma.neighborhood.findMany({ where: { legacyId: { in: ids } }, select: { legacyId: true, name: true } });
-    return new Map(rows.flatMap((n) => (n.legacyId == null ? [] : [[n.legacyId, n.name] as [number, string]])));
+    const abonados = [...new Set(filas.map((f) => f.subscriber?.id).filter((id): id is string => !!id))];
+    const [rows, equipos, mix] = await Promise.all([
+      ids.length
+        ? this.prisma.neighborhood.findMany({ where: { legacyId: { in: ids } }, select: { legacyId: true, name: true } })
+        : [],
+      // El cliente viaja con la fila cuando el `select` lo trajo: así el aviso no
+      // tiene que volver a preguntar de quién es cada orden para saber si el abonado
+      // ya tiene equipo suyo (ver `equiposDeOrdenes`).
+      equiposDeOrdenes(this.prisma, filas.map((f) => ({ ...f, subscriberId: f.subscriber?.id }))),
+      // Qué tiene contratado cada cliente de la jornada, para el cartel de la
+      // tarjeta (ver `common/servicios-del-abonado.ts`).
+      mixPorAbonado(this.prisma, abonados),
+    ]);
+    return {
+      barrios: new Map(rows.flatMap((n) => (n.legacyId == null ? [] : [[n.legacyId, n.name] as [number, string]]))),
+      equipos,
+      mix,
+    };
   }
 
   /**
@@ -460,6 +514,12 @@ export class AgendaService {
     // uno de esos textos tal cual. Insensible por lo mismo que la prioridad.
     const tipos = variosDeQuery(f.tipo);
     if (tipos.length) cond.push(unaDe(tipos.map((t) => ({ type: { equals: t, mode: 'insensitive' as const } }))));
+    // QUÉ TIENE CONTRATADO EL CLIENTE, que es como se mira la bandeja cuando hay que
+    // repartir: al abonado de solo televisión no se le toca el Mikrotik. Misma regla
+    // que el cartel de la tarjeta, para que filtrar por "Solo TV" enseñe exactamente
+    // las que llevan ese cartel.
+    const porServicio = await whereDeServicios(this.prisma, variosDeQuery(f.servicio));
+    if (porServicio) cond.push(porServicio);
     // `priority` es texto libre del legacy: "URGENTE" también tiene que caer al
     // filtrar por "Urgente". Con varias elegidas va como OR de iguales y no como
     // `in`, que en Postgres no respeta el `mode`.
@@ -783,7 +843,7 @@ export class AgendaService {
         ? await this.cerradasQueCoinciden(mias, conFiltro, enteroBuscable(filtros!.q!.trim()))
         : [];
 
-    const barrios = await this.barriosDe([...sinAgendar, ...agendadas]);
+    const ctx = await this.contextoDe([...sinAgendar, ...agendadas]);
     const hoyMs = hoyEnColombia().getTime();
     // Sin filtro, `agendadas` YA es la columna completa en su orden: se numera sobre
     // ella y se ahorra la consulta. Con filtro hay que volver a preguntar, porque el
@@ -793,7 +853,7 @@ export class AgendaService {
     // que el técnico sí va a atender y ocupan puesto en su día).
     const puestos = await this.puestosDelDia(dia, filtrando || mias.length ? null : agendadas);
     const mapear = (fs: any[]) =>
-      Promise.all(fs.map((f) => this.tarjeta(f, barrios, hoyMs, puestos.get(f.id))));
+      Promise.all(fs.map((f) => this.tarjeta(f, ctx, hoyMs, puestos.get(f.id))));
 
     const porTecnico = new Map<string, any[]>();
     for (const t of agendadas) {
@@ -1048,7 +1108,7 @@ export class AgendaService {
         ? await this.cerradasQueCoinciden(mias, deBandeja, enteroBuscable(q))
         : [];
 
-    const barrios = await this.barriosDe([...sinAgendar, ...agendadas, ...fueraCrudo]);
+    const ctx = await this.contextoDe([...sinAgendar, ...agendadas, ...fueraCrudo]);
     const hoyMs = hoy.getTime();
     const ejeDias = AgendaService.diasDelRango(inicio, fin);
 
@@ -1092,11 +1152,11 @@ export class AgendaService {
        */
       q,
       tipos: AgendaService.tiposDe(tiposCrudos),
-      sinAgendar: await Promise.all(sinAgendar.map((f) => this.tarjeta(f, barrios, hoyMs, null))),
+      sinAgendar: await Promise.all(sinAgendar.map((f) => this.tarjeta(f, ctx, hoyMs, null))),
       sinAgendarTotal: totalBandeja,
       sinAgendarSinFiltro: sinFiltro,
       /** Las que coinciden pero caen FUERA del tramo: de quién son y para cuándo. */
-      fuera: await Promise.all(fueraCrudo.map((f) => this.tarjeta(f, barrios, hoyMs, null))),
+      fuera: await Promise.all(fueraCrudo.map((f) => this.tarjeta(f, ctx, hoyMs, null))),
       /** Igual que en `tablero()`: lo ya RESUELTO/ANULADO, sólo como último recurso. */
       cerradas,
       columnas: await Promise.all(
@@ -1112,7 +1172,7 @@ export class AgendaService {
                 const carga = casillas.carga.get(clave) ?? { total: 0, pendientes: 0, atrasadas: 0 };
                 const ordenes = await Promise.all(
                   (porCasilla.get(clave) ?? []).map((f) =>
-                    this.tarjeta(f, barrios, hoyMs, casillas.puesto.get(f.id)),
+                    this.tarjeta(f, ctx, hoyMs, casillas.puesto.get(f.id)),
                   ),
                 );
                 return [d, { ordenes, ...carga }] as const;
@@ -1234,7 +1294,7 @@ export class AgendaService {
     const porId = new Map(filasBandeja.map((f) => [f.id, f]));
     const sinAgendar = idsBandeja.flatMap((id) => porId.get(id) ?? []);
 
-    const barrios = await this.barriosDe([...agendadas, ...sinAgendar]);
+    const ctx = await this.contextoDe([...agendadas, ...sinAgendar]);
     const hoyMs = hoy.getTime();
     // El nombre del técnico sale de su FICHA, no de `Ticket.assigned` (que guarda el
     // username del legacy: 'OmarTec'). Lo que no cruce con ninguna ficha se traduce,
@@ -1254,7 +1314,7 @@ export class AgendaService {
       creada ? Math.max(0, Math.round((hoyMs - creada.getTime()) / 86_400_000)) : '';
 
     const fila = async (t: any, agendada: boolean) => ({
-      ...(await this.tarjeta(t, barrios, hoyMs, casillas.puesto.get(t.id))),
+      ...(await this.tarjeta(t, ctx, hoyMs, casillas.puesto.get(t.id))),
       /** El día en que TOCA hacerla (lo atrasado cae en hoy); vacío si está sin agendar. */
       dia: agendada ? casillas.dia.get(t.id) ?? null : null,
       tecnico: nombreTecnico(t),
@@ -2032,6 +2092,19 @@ export class AgendaService {
   /**
    * "Llegué y no se pudo": aparta una visita del día y la devuelve a la cajera.
    *
+   * **CERRADO AL TÉCNICO DE CAMPO desde el 2026-09-10**, a pedido del usuario: «los
+   * técnicos no podrán saltarse órdenes una vez documentadas; si no pueden realizar
+   * una orden, deberán comunicarse con la persona encargada del agendamiento». Era el
+   * último camino por el que el técnico sacaba una visita de su día por su cuenta —el
+   * botón ya no se le pinta (`VisitaDeHoy.tsx`)— y esta puerta lo repite en el
+   * servidor, que es donde hay que repetirlo: la pantalla se salta llamando al
+   * endpoint. Quien agenda sí puede moverla o reasignarla desde `/soporte/agenda`, y
+   * con eso el técnico se destapa (el turno mira lo agendado para HOY).
+   *
+   * No se borra ni el método ni el rastro (`skippedAt` y sus 3 columnas): el
+   * historial del técnico y los filtros de la agenda enseñan las que ya se apartaron,
+   * y el día que se quiera devolver la salida está entera.
+   *
    * NO cierra la orden ni la desasigna. La orden sigue PENDIENTE y sigue siendo del
    * técnico; lo único que cambia es que sale del día y vuelve a la bandeja de la
    * cajera con el motivo escrito, para que ella decida cuándo repetirla. Cerrar aquí
@@ -2043,6 +2116,11 @@ export class AgendaService {
    * de atrás: apartaría las que no le apetecen hasta destapar la que quiere.
    */
   async noSePudoAtender(user: AuthUser, ticketId: string, motivo: string) {
+    if (esTecnicoDeCampo(user)) {
+      throw new ForbiddenException(
+        'Las visitas ya no se apartan desde aquí: si no puedes hacer una orden, comunícate con la persona encargada del agendamiento para que la reprograme.',
+      );
+    }
     const razon = motivo?.trim();
     if (!razon) throw new BadRequestException('Escribe por qué no se pudo atender la visita.');
     if (razon.length > 300) throw new BadRequestException('El motivo es demasiado largo.');
@@ -2062,13 +2140,14 @@ export class AgendaService {
     if (!(ABIERTA as readonly string[]).includes(t.status)) {
       throw new BadRequestException('Esa visita ya está cerrada.');
     }
-    // La que toca, y sólo esa: apartar es la salida cuando se llegó y no se pudo, no
-    // un botón para saltarse el orden de la cajera. Al técnico exento del turno no se
-    // le pide eso: si puede elegir qué visita hace, puede devolver la que no se pudo.
-    if (!(await tieneAgendaLibre(this.prisma, staff.id))) {
-      const turno = await visitaEnTurno(this.prisma, staff.id, hoyEnColombia());
-      if (turno && turno !== t.id) {
-        throw new ForbiddenException('Sólo puedes apartar la visita que tienes en turno.');
+    // Con una orden EMPEZADA encima no se aparta otra: primero se cierra lo que se
+    // dejó a medias. Apartar es la salida cuando se llegó y no se pudo, no un botón
+    // para saltarse el orden de la cajera. Al exento no se le pide eso: si puede
+    // elegir qué visita hace, puede devolver la que no se pudo.
+    if (!(await tieneAgendaLibre(this.prisma, staff.id, user))) {
+      const enCurso = await ordenEnCurso(this.prisma, staff.id, user);
+      if (enCurso && enCurso.id !== t.id) {
+        throw new ForbiddenException('Primero cierra la orden que tienes empezada.');
       }
     }
 
@@ -2115,21 +2194,35 @@ export class AgendaService {
    * La agenda del técnico logueado para un día: sus órdenes en el orden que le puso
    * la cajera. Sin parámetros de alcance a propósito — quién es lo dice la sesión.
    *
-   * Devuelve además `enTurno`: la única que puede abrir ahora mismo (2026-09-02, ver
-   * `turno.ts`). Va calculada por la MISMA función que usa el candado del backend y
-   * no por "la primera pendiente de esta lista": duplicar la regla es exactamente lo
-   * que produce una pantalla que ofrece una visita y una API que la rechaza.
+   * Devuelve además `enCurso`: la orden que tiene EMPEZADA y que le impide empezar
+   * otra (2026-09-10, la regla del legacy; ver `turno.ts`), y `enTurno` —su id— cuando
+   * además está en el día que se está mirando. Van calculadas por la MISMA función que
+   * usa el candado del backend y no por "la primera pendiente de esta lista": duplicar
+   * la regla es exactamente lo que produce una pantalla que ofrece una visita y una API
+   * que la rechaza.
+   *
+   * Con nada empezado, `enCurso` es `null` y la pantalla destaca la primera pendiente
+   * del día: el orden de la agenda lo sigue poniendo quien agenda, pero ya no hay un
+   * 403 detrás de cada tarjeta — el candado sólo cierra el paso a EMPEZAR una segunda.
    */
   async miAgenda(user: AuthUser, fecha?: string) {
     const dia = this.diaDe(fecha);
     const staff = await this.staffDelUsuario(user);
-    const vacia = { resolved: false, fecha: dia.toISOString().slice(0, 10), hoy: hoyEnColombia().toISOString().slice(0, 10), ordenes: [] as any[], proximas: 0, enTurno: null as string | null, turnoLibre: false };
+    const vacia = { resolved: false, fecha: dia.toISOString().slice(0, 10), hoy: hoyEnColombia().toISOString().slice(0, 10), ordenes: [] as any[], proximas: 0, enTurno: null as string | null, enCurso: null as OrdenEnCurso | null, turnoLibre: false };
     if (!staff) return vacia;
     // Exento del turno (`Staff.agendaLibre`): ve su jornada entera. Viaja como dato
     // propio y no como "enTurno = null" a secas, porque la pantalla necesita
     // distinguirlo de "ya no le queda nada abierto" — con null a secas pintaría el
     // cartel de día terminado teniendo seis visitas por hacer.
-    const libre = await tieneAgendaLibre(this.prisma, staff.id);
+    const libre = await tieneAgendaLibre(this.prisma, staff.id, user);
+    // La orden que tiene EMPEZADA (una a la vez, 2026-09-10). La pide a la MISMA
+    // función que usa el candado del backend y no la deduce de la lista de abajo: la
+    // que ancla puede no estar en la agenda de hoy (se empezó ayer y no se cerró, o
+    // no está agendada). Si la pantalla la dedujera de su día, ofrecería tarjetas que
+    // la API rechaza, que es exactamente el fallo que esta regla lleva evitando desde
+    // agosto.
+    const enCurso = libre ? null : await ordenEnCurso(this.prisma, staff.id, user);
+    const esHoy = dia.getTime() === hoyEnColombia().getTime();
 
     const [filas, proximas] = await Promise.all([
       this.prisma.ticket.findMany({
@@ -2141,7 +2234,7 @@ export class AgendaService {
       // que mañana hay trabajo puesto es útil; adelantarlo hoy, no.
       this.prisma.ticket.count({ where: { assignedStaffId: staff.id, scheduledFor: { gt: dia }, status: { in: ['PENDIENTE', 'REALIZANDO'] } } }),
     ]);
-    const barrios = await this.barriosDe(filas);
+    const ctx = await this.contextoDe(filas);
     const hoyMs = hoyEnColombia().getTime();
     return {
       resolved: true,
@@ -2150,16 +2243,89 @@ export class AgendaService {
       tecnico: staff.name,
       // Aquí `filas` ya es la jornada entera del técnico en su orden: el puesto es la
       // posición en la lista, no `scheduledSeq` (ver `puestosDelDia`).
-      ordenes: await Promise.all(filas.map((f, i) => this.tarjeta(f, barrios, hoyMs, i + 1))),
+      ordenes: await Promise.all(filas.map((f, i) => this.tarjeta(f, ctx, hoyMs, i + 1))),
       proximas,
       // Sólo para HOY. Consultar un día pasado es mirar el historial, y ahí no hay
       // turno que valga: si se devolviera el de hoy, la pantalla de otro día pintaría
       // como "tu visita ahora" una que no está en ella.
-      enTurno:
-        !libre && dia.getTime() === hoyEnColombia().getTime()
-          ? await visitaEnTurno(this.prisma, staff.id, dia)
-          : null,
+      // Sólo para HOY. Consultar un día pasado es mirar el historial, y ahí no hay
+      // candado que valga: si se devolviera el de hoy, la pantalla de otro día pintaría
+      // como "tu visita ahora" una que no está en ella.
+      //
+      // `enTurno` es la orden EMPEZADA si está en el día que se está mirando;
+      // `enCurso` va siempre y es la que manda. Los dos, porque la pantalla los pinta
+      // distinto: con `enTurno` destaca la tarjeta, y con `enCurso` fuera del día
+      // enseña el aviso con el enlace —"tienes la #505628 empezada"— para que sepa
+      // dónde está lo que le falta cerrar.
+      enTurno: esHoy && enCurso && filas.some((f) => f.id === enCurso.id) ? enCurso.id : null,
+      enCurso: esHoy ? enCurso : null,
       turnoLibre: libre,
+    };
+  }
+
+  /**
+   * **MI CALENDARIO: el mes (o la semana) del técnico**, sólo lo suyo.
+   *
+   * `miAgenda` responde "qué hago ahora" y es un día; esto responde la otra pregunta,
+   * la que hasta hoy había que ir a preguntar a la oficina: **cómo viene la semana**.
+   * Es la misma mirada que la cajera tiene en `/soporte/agenda`, pero acotada a UNA
+   * persona y sin nada que repartir — el técnico no agenda, sólo mira.
+   *
+   * Va aparte del calendario de la cajera (`calendario`) por dos razones que no se
+   * pueden salvar con un filtro: aquél cuenta BULTO por día (cuántas y de quién, para
+   * decidir a dónde mandar la siguiente) y está acotado por SEDE con `exigirArea`
+   * de caja/administración, que es justo lo que un técnico no tiene. Aquí hacen falta
+   * las visitas una a una —para pintarlas con su código y su cliente— y el alcance es
+   * `assignedStaffId = yo`, que es más estrecho que cualquier sede.
+   *
+   * La casilla en la que cae cada visita la decide `celdaDelDia`, la MISMA que usa la
+   * cajera: una visita abierta que se quedó atrás se pinta en HOY y no en el día en
+   * que se agendó, porque hoy es cuando hay que hacerla. El día original viaja en
+   * `agendadaPara` para que la pantalla pueda decir "atrasada desde el 27".
+   */
+  async miCalendario(user: AuthUser, desde?: string, hasta?: string) {
+    const inicio = this.diaDe(desde);
+    const fin = hasta?.trim() ? this.diaDe(hasta) : AgendaService.masDias(inicio, 41);
+    if (fin.getTime() < inicio.getTime()) {
+      throw new BadRequestException('El rango va al revés: la fecha final es anterior a la inicial.');
+    }
+    if (AgendaService.diasDelRango(inicio, fin).length > AgendaService.TOPE_DIAS) {
+      throw new BadRequestException(`El calendario no puede pedir más de ${AgendaService.TOPE_DIAS} días de una vez.`);
+    }
+
+    const staff = await this.staffDelUsuario(user);
+    const cabecera = { desde: inicio.toISOString().slice(0, 10), hasta: fin.toISOString().slice(0, 10) };
+    // Sin ficha de empleado no hay agenda que enseñar (lo mismo que hace `miAgenda`):
+    // se responde vacío y no 403, que es lo que deja a la pantalla decirlo con letras.
+    if (!staff) return { resolved: false, ...cabecera, tecnico: null, visitas: [] as any[] };
+
+    const hoy = hoyEnColombia();
+    const filas = await this.prisma.ticket.findMany({
+      where: { AND: [whereDelRango(inicio, fin, hoy), { assignedStaffId: staff.id }] },
+      select: {
+        id: true, code: true, type: true, subject: true, status: true, priority: true,
+        scheduledFor: true, scheduledSeq: true, carriedFrom: true, section: true, problem: true,
+        subscriber: { select: { firstName: true, lastName1: true, companyName: true, fullName: true, nomenclature: true, addressLine: true } },
+      },
+      orderBy: ORDEN_AGENDA,
+    });
+
+    return {
+      resolved: true,
+      ...cabecera,
+      tecnico: staff.name,
+      visitas: filas.map((t) => ({
+        id: t.id, code: t.code, type: t.type, subject: t.subject,
+        status: t.status, priority: t.priority,
+        cliente: AgendaService.nombreAbonado(t.subscriber),
+        direccion: direccionDe(t.subscriber?.nomenclature, t.subscriber?.addressLine) || null,
+        // `dia` es la casilla; `agendadaPara`, el día para el que se puso de verdad.
+        dia: t.scheduledFor ? celdaDelDia(t.scheduledFor, t.status, hoy) : null,
+        agendadaPara: origenDelDia(t),
+        atrasada: t.scheduledFor ? origenDelDia(t) !== celdaDelDia(t.scheduledFor, t.status, hoy) : false,
+        puesto: t.scheduledSeq ?? null,
+        nota: (t.section || t.problem || '').trim() || null,
+      })),
     };
   }
 
@@ -2191,7 +2357,7 @@ export class AgendaService {
       select: AgendaService.TARJETA,
       orderBy: ORDEN_AGENDA,
     });
-    const barrios = await this.barriosDe(filas);
+    const ctx = await this.contextoDe(filas);
 
     const porDia = new Map<string, any[]>();
     for (const f of filas) {
@@ -2217,9 +2383,192 @@ export class AgendaService {
             fecha,
             // El puesto es el de ESE día: aquí no hay arrastre de atrasadas que valga
             // —son días que todavía no han llegado—.
-            ordenes: await Promise.all(fs.map((f, i) => this.tarjeta(f, barrios, hoy.getTime(), i + 1))),
+            ordenes: await Promise.all(fs.map((f, i) => this.tarjeta(f, ctx, hoy.getTime(), i + 1))),
           })),
       ),
     };
+  }
+
+  /** Cuánto historial se deja pedir de una vez: un trimestre. */
+  private static readonly HISTORIAL_TOPE_DIAS = 92;
+  /** Tope de visitas devueltas. 92 días de un técnico rondan las 300. */
+  private static readonly HISTORIAL_TOPE_FILAS = 500;
+
+  /**
+   * **Mi historial: lo que el técnico YA hizo**, día por día (2026-09-04, a pedido
+   * del usuario: «que pueda ver a detalle órdenes que ya realizó, la de hace tres
+   * días, con su documentación»).
+   *
+   * El detalle de una orden cerrada nunca estuvo cerrado —el turno lo deja pasar a
+   * propósito (ver `turno.ts`) y se comprobó contra la base: sus fotos, su firma, su
+   * material y su seguimiento le salen enteros—. Lo que faltaba era el CAMINO: su
+   * pantalla (`/mi-agenda`) enseña sólo hoy, y para llegar a la del martes tenía que
+   * ir a la lista general y adivinar. Aquí está esa lista, ordenada como él la
+   * recuerda: por día de trabajo.
+   *
+   * Tres decisiones que conviene no deshacer:
+   *
+   *  1. **El día es el del CIERRE (`finalDate`), no el de creación.** "Lo que hice el
+   *     martes" no son las órdenes que ABRIERON el martes. Para lo heredado del
+   *     legacy —que llega cerrado y sin `fecha_final`: 725 de las cerradas del último
+   *     mes— se cae a `created`, o esas visitas no aparecerían ningún día.
+   *  2. **No se agrupa por la agenda** (`scheduledFor`): 112 de las 416 cerradas en
+   *     dos semanas nunca se agendaron (las abre la cajera y las cierra el técnico el
+   *     mismo día), y un historial que se salte una de cada cuatro no sirve de nada.
+   *  3. **Las que fue a hacer y no pudo también son trabajo del día.** Siguen
+   *     PENDIENTE, así que por estado no saldrían nunca, pero él estuvo allí y subió
+   *     la foto: entran por `skippedAt` marcadas `NO_ATENDIDA`.
+   *
+   * Va por su FICHA y por las dos columnas de asignación —el FK y el texto libre del
+   * legacy—, igual que `SupportService.soloMisOrdenes`: mirar sólo el FK le esconde
+   * la mitad de su historia. Sin ficha de empleado devuelve vacío, nunca lo de todos.
+   */
+  async miHistorial(user: AuthUser, desde?: string, hasta?: string) {
+    const hoy = hoyEnColombia();
+    const fin = hasta?.trim() ? this.diaDe(hasta) : hoy;
+    const ini = desde?.trim() ? this.diaDe(desde) : AgendaService.masDias(fin, -6);
+    if (ini.getTime() > fin.getTime()) throw new BadRequestException('El día inicial no puede ser posterior al final.');
+    const dias = Math.round((fin.getTime() - ini.getTime()) / 86_400_000) + 1;
+    if (dias > AgendaService.HISTORIAL_TOPE_DIAS) {
+      throw new BadRequestException(`El historial se consulta de a ${AgendaService.HISTORIAL_TOPE_DIAS} días como mucho.`);
+    }
+    const iso = (d: Date) => d.toISOString().slice(0, 10);
+    const vacio = {
+      resolved: false, desde: iso(ini), hasta: iso(fin), hoy: iso(hoy),
+      total: 0, truncado: false, dias: [] as any[],
+    };
+
+    const ficha = await fichaDelUsuario(this.prisma, user);
+    if (!ficha) return vacio;
+    const claves = clavesDe(ficha);
+    const mias: Prisma.TicketWhereInput = {
+      OR: [{ assignedStaffId: ficha.id }, ...(claves.length ? [{ assigned: { in: claves } }] : [])],
+    };
+    const enRango = { gte: ini, lte: fin };
+    // `finalDate` es `@db.Date` y `skippedAt` un instante: el fin del rango se
+    // extiende al final de ESE día o lo apartado por la tarde se quedaría fuera.
+    const finDelDia = new Date(fin.getTime() + 86_400_000 - 1);
+
+    const filas = await this.prisma.ticket.findMany({
+      where: {
+        AND: [
+          mias,
+          {
+            OR: [
+              // Cerradas con fecha de cierre: el caso normal.
+              { status: { in: ['RESUELTO', 'ANULADA'] }, finalDate: enRango },
+              // Cerradas sin fecha de cierre (las que llegan así del legacy): su día
+              // es el de creación. Se piden aparte para no arrastrar a las que SÍ
+              // tienen `finalDate` fuera del rango.
+              { status: { in: ['RESUELTO', 'ANULADA'] }, finalDate: null, created: enRango },
+              // Fue y no pudo: la visita existió aunque la orden siga abierta.
+              { skippedAt: { gte: ini, lte: finDelDia } },
+            ],
+          },
+        ],
+      },
+      select: { ...AgendaService.TARJETA, finalDate: true, score: true, signatureName: true, signatureImage: true },
+      orderBy: [{ finalDate: 'desc' }, { created: 'desc' }],
+      take: AgendaService.HISTORIAL_TOPE_FILAS,
+    });
+
+    const ctx = await this.contextoDe(filas as any);
+    const doc = await this.documentacionDe(filas as any);
+
+    /** El día en que se hizo el trabajo, que es como el técnico lo busca. */
+    const diaDeTrabajo = (t: any, resultado: string): string =>
+      resultado === 'NO_ATENDIDA' ? iso(new Date(t.skippedAt)) : iso(new Date(t.finalDate ?? t.created));
+
+    const entradas: { fecha: string; t: any; resultado: string }[] = [];
+    for (const t of filas as any[]) {
+      const cerrada = t.status === 'RESUELTO' || t.status === 'ANULADA';
+      if (cerrada) {
+        const f = diaDeTrabajo(t, 'CERRADA');
+        if (f >= iso(ini) && f <= iso(fin)) entradas.push({ fecha: f, t, resultado: t.status === 'ANULADA' ? 'ANULADA' : 'CERRADA' });
+      }
+      // Una orden puede haber sido apartada un día y cerrada otro: son dos visitas
+      // distintas y las dos son suyas. Lo que no se hace es contarla dos veces el
+      // MISMO día.
+      if (t.skippedAt) {
+        const f = iso(new Date(t.skippedAt));
+        const yaEseDia = entradas.some((e) => e.t.id === t.id && e.fecha === f);
+        if (!yaEseDia && f >= iso(ini) && f <= iso(fin)) entradas.push({ fecha: f, t, resultado: 'NO_ATENDIDA' });
+      }
+    }
+
+    const porDia = new Map<string, typeof entradas>();
+    for (const e of entradas) porDia.set(e.fecha, [...(porDia.get(e.fecha) ?? []), e]);
+
+    return {
+      resolved: true,
+      desde: iso(ini),
+      hasta: iso(fin),
+      hoy: iso(hoy),
+      tecnico: ficha.name,
+      total: entradas.length,
+      // Se dice cuándo la lista viene recortada: un historial que calla que le faltan
+      // órdenes es peor que uno corto.
+      truncado: filas.length >= AgendaService.HISTORIAL_TOPE_FILAS,
+      dias: await Promise.all(
+        [...porDia.entries()]
+          .sort(([a], [b]) => b.localeCompare(a)) // lo más reciente primero: es lo que se busca
+          .map(async ([fecha, es]) => ({
+            fecha,
+            cuantas: es.length,
+            ordenes: await Promise.all(
+              es.map(async (e) => ({
+                ...(await this.tarjeta(e.t, ctx)),
+                resultado: e.resultado,
+                cerradaEl: e.t.finalDate ?? null,
+                apartadaEl: e.resultado === 'NO_ATENDIDA' ? e.t.skippedAt : null,
+                puntaje: e.t.score ?? null,
+                // Lo que hace útil el historial: si esta visita quedó documentada y
+                // con qué. Sin esto hay que abrir las nueve para encontrar la foto.
+                documentacion: doc.get(e.t.id) ?? { seguimiento: 0, fotos: 0, material: 0, firma: false },
+              })),
+            ),
+          })),
+      ),
+    };
+  }
+
+  /**
+   * Qué documentación tiene cada orden del lote: seguimiento, fotos, material y firma.
+   *
+   * En dos consultas para todas, no una por orden. El hilo se cruza por `ticketCode`
+   * —no por id— porque así lo guarda el legacy (`tickets_th.tid`) y así lo lee la
+   * ficha de la orden; el material sí cuelga del id.
+   */
+  private async documentacionDe(filas: { id: string; code: number | null; signatureName: string | null; signatureImage: string | null }[]) {
+    const codes = [...new Set(filas.map((f) => f.code).filter((c): c is number => c != null))];
+    const ids = filas.map((f) => f.id);
+    const [hilos, materiales] = await Promise.all([
+      codes.length
+        ? this.prisma.ticketThread.findMany({ where: { ticketCode: { in: codes } }, select: { ticketCode: true, attach: true } })
+        : [],
+      ids.length
+        ? this.prisma.ticketMaterial.groupBy({ by: ['ticketId'], where: { ticketId: { in: ids } }, _count: { _all: true } })
+        : [],
+    ]);
+    const porCode = new Map<number, { seguimiento: number; fotos: number }>();
+    for (const h of hilos) {
+      const acc = porCode.get(h.ticketCode) ?? { seguimiento: 0, fotos: 0 };
+      acc.seguimiento++;
+      if (h.attach) acc.fotos++;
+      porCode.set(h.ticketCode, acc);
+    }
+    const porTicket = new Map<string, number>();
+    for (const m of materiales) porTicket.set(m.ticketId, m._count._all);
+    return new Map(
+      filas.map((f) => [
+        f.id,
+        {
+          seguimiento: (f.code != null ? porCode.get(f.code)?.seguimiento : 0) ?? 0,
+          fotos: (f.code != null ? porCode.get(f.code)?.fotos : 0) ?? 0,
+          material: porTicket.get(f.id) ?? 0,
+          firma: Boolean(f.signatureName || f.signatureImage),
+        },
+      ]),
+    );
   }
 }

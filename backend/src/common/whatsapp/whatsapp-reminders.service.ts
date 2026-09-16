@@ -68,7 +68,7 @@ type Candidato = {
  * rechaza. Y va montado sobre el motor de campañas que ya existe, en vez de un
  * bucle propio de `sendTemplate`, para heredar el throttle, el reintento con
  * backoff ante rate-limit, el seguimiento de entrega por webhook y el reporte de
- * /configuracion/whatsapp/masivo — una corrida del cron se ve y se audita igual
+ * /whatsapp/masivo — una corrida del cron se ve y se audita igual
  * que una campaña lanzada a mano.
  *
  * Si el cliente RESPONDE, el mensaje entra por el webhook de siempre y lo atiende
@@ -280,7 +280,11 @@ export class WhatsappRemindersService {
       { autoStart: false },
     );
 
-    await this.campaigns.runCampaign(campaignId);
+    // `sinEspera`: si el cupo de 24 h se acaba a mitad, lo que falta se marca
+    // fallido en vez de quedar esperando cupo. Una campaña que siguiera enviando
+    // horas después saldría sin marcar `lastWaReminderAt`, y mañana esos clientes
+    // volverían a entrar en la lista: dos cobros seguidos.
+    await this.campaigns.runCampaign(campaignId, { sinEspera: true });
 
     const enviados = await this.prisma.whatsappSend.findMany({
       where: { campaignId, status: { in: ['SENT', 'DELIVERED', 'READ'] } },

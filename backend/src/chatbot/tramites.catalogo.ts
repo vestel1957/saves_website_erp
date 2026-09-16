@@ -202,11 +202,17 @@ export const INFO_COMERCIAL: Record<string, { titulo: string; texto: string }> =
     titulo: 'Internet dedicado punto a punto (empresas)',
     texto: NOTA_DEDICADO,
   },
+  // OJO: el texto de este tema NO se usa. Lo sustituye `TramitesToolset.info()` con lo
+  // que de verdad haya vigente en /configuracion/promociones (ver
+  // `promotions/pronto-pago-vigente.ts`). El porcentaje estuvo aquí escrito a mano
+  // hasta el 2026-09-08 y el bot lo siguió prometiendo tres días después de que la
+  // promoción venciera. Este respaldo es el conservador a propósito: si la consulta
+  // falla, el bot no promete nada.
   pronto_pago: {
     titulo: 'Descuento por pronto pago',
     texto:
-      'Es la única promoción permanente: 5% de descuento si paga dentro de los primeros 5 días del mes. ' +
-      'Solo aplica al mes en curso, NO a facturas atrasadas.',
+      'En este momento NO hay descuento por pronto pago vigente. No le prometas ninguno; ' +
+      'si el cliente insiste, pásalo a un asesor con hablar_con_humano.',
   },
   horarios: {
     titulo: 'Horarios de atención',

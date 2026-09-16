@@ -97,7 +97,7 @@ export class GeofenceService {
    */
   async evaluar(
     ticket: { id?: string; code?: number | null; type: string | null; subscriberId: string | null },
-    dto: { lat?: number; lng?: number; accuracyM?: number; justificacion?: string },
+    dto: { lat?: number; lng?: number; accuracyM?: number },
     user: AuthUser | undefined,
     ip?: string | null,
   ): Promise<ResultadoCerca> {
@@ -129,7 +129,6 @@ export class GeofenceService {
       permisosUsuario: user?.permissions,
       cliente,
       tecnico,
-      justificacion: dto.justificacion,
     });
 
     // Señales de ubicación simulada. Se calculan aunque el cierre se permita:
@@ -157,14 +156,24 @@ export class GeofenceService {
       case 'exigir-ubicacion':
         throw new GeofenceException({ razon: 'sin-ubicacion', message: veredicto.motivo, radioM });
 
-      case 'exigir-justificacion':
+      /**
+       * Fuera de rango: la orden NO se cierra, y ya no hay motivo que lo permita
+       * (2026-09-10). El mensaje tiene que decir las DOS salidas reales, porque un
+       * bloqueo sin salida se convierte en una orden abierta para siempre: acercarse
+       * al domicilio, o —si el punto guardado del cliente está mal, que es la causa
+       * más frecuente— avisarlo en el seguimiento para que se corrija la coordenada
+       * y la cierre su coordinador.
+       */
+      case 'exigir-presencia':
         throw new GeofenceException({
           razon: 'fuera-de-rango',
           distanciaM: veredicto.distanciaM,
           radioM: veredicto.radioM,
           message:
-            `Estás a ${Math.round(veredicto.distanciaM)} m del domicilio del cliente y el máximo ` +
-            `para cerrar es ${veredicto.radioM} m. Si aun así tienes que cerrarla, escribe el motivo.`,
+            `Estás a ${Math.round(veredicto.distanciaM)} m del domicilio del cliente y el máximo `
+            + `para cerrar es ${veredicto.radioM} m: esta orden se cierra desde la casa del cliente. `
+            + 'Si ya estás allí y lo que está mal es la dirección guardada, déjalo dicho en el '
+            + 'seguimiento para que se corrija y la cierre tu coordinador.',
         });
 
       case 'permitir-y-georreferenciar':
@@ -173,19 +182,6 @@ export class GeofenceService {
           senales,
           datos: { ...base, closeGeoOk: null },
           georreferenciar: tecnico ? { lat: tecnico.lat, lng: tecnico.lng } : null,
-        };
-
-      case 'permitir-justificado':
-        return {
-          veredicto,
-          senales,
-          datos: {
-            ...base,
-            closeDistanceM: veredicto.distanciaM,
-            closeGeoOk: false,
-            closeGeoReason: dto.justificacion?.trim() ?? null,
-          },
-          georreferenciar: null,
         };
 
       case 'permitir-marcado':

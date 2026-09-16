@@ -3,7 +3,7 @@
  * del perfil del cliente. El módulo bajo prueba vive en `scripts/lib` porque lo
  * comparten el volcado histórico y la pasada de sincronización, que son scripts.
  */
-// eslint-disable-next-line @typescript-eslint/no-var-requires
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const legacy = require('../../scripts/lib/observaciones-legacy');
 
 describe('limpiarHtml', () => {

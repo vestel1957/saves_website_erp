@@ -5,6 +5,19 @@ import { num } from '../common/money';
 import { AuthUser } from '../auth/current-user.decorator';
 import { BadRequestException, ForbiddenException } from '../core/http/errores';
 import { sedesDe, whereSedePorSuscriptor, whereSedeSuscriptor } from '../common/sede-scope';
+import { SQL_NOTA_SALDO } from '../treasury/cierre-legacy';
+
+/**
+ * Lo que NO es plata que entre o salga de la empresa, y por eso no cuenta como recaudo
+ * ni como egreso en el panel (2026-09-11, a petición de administración):
+ *  · el ARRASTRE del cierre de caja ('Saldo YYYY-MM-DD'): el mismo efectivo que duerme
+ *    en el cajón, sacado por la noche y devuelto por la mañana. En sep-2026 eran 153 M
+ *    de los 248 M de "recaudo" del panel. Ver `SQL_NOTA_SALDO`.
+ *  · las consignaciones entre cajas y banco, categoría 'Transferencia': se registran
+ *    como un EXPENSE en una caja y un INCOME en otra (no como TRANSFER), así que se
+ *    sumaban a los dos lados. Siempre vienen en pares.
+ */
+const SIN_MOVIMIENTO_INTERNO = Prisma.sql`AND (note IS NULL OR NOT (${SQL_NOTA_SALDO})) AND category IS DISTINCT FROM 'Transferencia'`;
 
 /** El día de HOY en Colombia, como 'YYYY-MM-DD' (el servidor no corre en esa zona). */
 function hoyColombia(): string {
@@ -320,7 +333,6 @@ export class DashboardService implements OnModuleInit {
         ? this.prisma.branch.findMany({ where: { legacyId: { in: sedes } }, select: { name: true } }).then((bs) => bs.map((b) => b.name))
         : Promise.resolve(null),
     ]);
-    const deCaja = cajasDeSede ? { cashAccountId: { in: cajasDeSede } } : {};
     const filtroCaja = cajasDeSede ? Prisma.sql`AND ${enLista(Prisma.sql`"cashAccountId"`, cajasDeSede)}` : Prisma.empty;
     // Acotado, el JOIN con Branch tiene que ser INTERNO: con un LEFT, los abonados de
     // otras sedes no desaparecerían — caerían todos juntos en la fila "Sin sede".
@@ -328,7 +340,7 @@ export class DashboardService implements OnModuleInit {
       ? Prisma.sql`JOIN "Branch" b ON b.id = s."branchId" AND ${enLista(Prisma.sql`b."legacyId"`, permitidas)}`
       : Prisma.sql`LEFT JOIN "Branch" b ON b.id = s."branchId"`;
 
-    const [facturado, byInvStatus, ingreso, egreso, supportByStatus, ordersAgg, series, topTypes, nuevos, ventasSede] = await Promise.all([
+    const [facturado, byInvStatus, caja, supportByStatus, ordersAgg, series, topTypes, nuevos, ventasSede] = await Promise.all([
       // Lo FACTURADO excluye las anuladas. El sync marca CANCELED las facturas que el
       // legacy borró (2.847 solo en agosto, 197 M COP): contarlas inflaba el panel un
       // 57% contra el legacy, y descuadraba contra /reportes, que sí las filtra.
@@ -338,9 +350,14 @@ export class DashboardService implements OnModuleInit {
       // Ingresos y egresos POR TIPO, igual que la pantalla de Tesorería. Antes se
       // sumaba todo el credit/debit vigente, que mete también las dos patas de cada
       // TRANSFER: el panel enseñaba un recaudo inflado que no cuadraba ni con su
-      // propia gráfica (que sí filtra por tipo) ni con /tesoreria.
-      this.prisma.transaction.aggregate({ _sum: { credit: true }, where: { status: 'VIGENTE', type: 'INCOME', date: enRango, ...deCaja } }),
-      this.prisma.transaction.aggregate({ _sum: { debit: true }, where: { status: 'VIGENTE', type: 'EXPENSE', date: enRango, ...deCaja } }),
+      // propia gráfica (que sí filtra por tipo) ni con /tesoreria. Y sin los movimientos
+      // internos (arrastre y consignaciones, ver `SIN_MOVIMIENTO_INTERNO`), que en SQL
+      // crudo porque la regex del arrastre no cabe en un filtro de Prisma.
+      this.prisma.$queryRaw<{ ingresos: number; egresos: number }[]>`
+        SELECT COALESCE(SUM(credit) FILTER (WHERE type='INCOME'),0)::float ingresos,
+               COALESCE(SUM(debit) FILTER (WHERE type='EXPENSE'),0)::float egresos
+        FROM "Transaction"
+        WHERE status='VIGENTE' AND "date" BETWEEN ${desde}::date AND ${hasta}::date ${filtroCaja} ${SIN_MOVIMIENTO_INTERNO}`,
       this.prisma.ticket.groupBy({ by: ['status'], _count: { _all: true }, where: { created: enRango, ...deSede } }),
       this.prisma.supplyOrder.aggregate({ _sum: { total: true }, _count: { _all: true }, where: { orderDate: enRango, ...(nombresDeSede ? { branchRef: { in: nombresDeSede } } : {}) } }),
       this.prisma.$queryRaw<{ m: string; income: number; expense: number }[]>`
@@ -348,7 +365,7 @@ export class DashboardService implements OnModuleInit {
                COALESCE(SUM(credit) FILTER (WHERE type='INCOME'),0)::float income,
                COALESCE(SUM(debit) FILTER (WHERE type='EXPENSE'),0)::float expense
         FROM "Transaction"
-        WHERE status='VIGENTE' AND "date" BETWEEN ${desde}::date AND ${hasta}::date ${filtroCaja}
+        WHERE status='VIGENTE' AND "date" BETWEEN ${desde}::date AND ${hasta}::date ${filtroCaja} ${SIN_MOVIMIENTO_INTERNO}
         GROUP BY 1 ORDER BY 1`,
       this.prisma.ticket.groupBy({ by: ['type'], _count: { _all: true }, where: { created: enRango, ...deSede }, orderBy: { _count: { type: 'desc' } }, take: 8 }),
       this.prisma.subscriber.count({ where: { entryDate: enRango, ...whereSedeSuscriptor(sedes) } }),
@@ -373,7 +390,10 @@ export class DashboardService implements OnModuleInit {
         total: num(facturado._sum.total), facturas: facturado._count._all,
         pagadas: invStatus['PAID'] ?? 0, pendientes: (invStatus['DUE'] ?? 0) + (invStatus['PARTIAL'] ?? 0),
       },
-      tesoreria: { ingresos: num(ingreso._sum.credit), egresos: num(egreso._sum.debit), balance: num(ingreso._sum.credit) - num(egreso._sum.debit) },
+      tesoreria: (() => {
+        const { ingresos = 0, egresos = 0 } = caja[0] ?? {};
+        return { ingresos, egresos, balance: ingresos - egresos };
+      })(),
       soporte: {
         pendientes: (supStatus['PENDIENTE'] ?? 0) + (supStatus['REALIZANDO'] ?? 0),
         resueltas: supStatus['RESUELTO'] ?? 0,

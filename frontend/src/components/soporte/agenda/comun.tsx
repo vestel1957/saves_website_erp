@@ -7,7 +7,8 @@ import { useAuth } from "@/context/AuthProvider";
 import { mensajeDeError } from "@/lib/errores";
 import { Input } from "@/components/ui/Field";
 import { MultiSelect } from "@/components/ui/MultiSelect";
-import { TICKET_PRIORITIES } from "@/lib/support";
+import { SERVICIO_CONTRATADO, SERVICIOS_CONTRATADOS, TICKET_PRIORITIES, type ServicioContratado } from "@/lib/support";
+import type { EquipoDeOrden } from "@/components/soporte/AvisoEquipo";
 
 /**
  * Las piezas que comparten las dos pestañas del agendamiento: "Repartir" (la lista
@@ -22,6 +23,8 @@ import { TICKET_PRIORITIES } from "@/lib/support";
 
 export type Tarjeta = {
   id: string; code: number | null; subject: string; type: string;
+  /** Qué tiene contratado el cliente, en las órdenes que van de un servicio (`ChipServicio`). */
+  servicio: ServicioContratado | null;
   priority: string | null; status: string; created: string;
   /** La falla en una línea (`problem`) y la observación (`section`), ya en texto plano.
    *  Casi todas las órdenes traen la segunda y no la primera: hay que mirar las dos. */
@@ -38,6 +41,11 @@ export type Tarjeta = {
   direccion: string | null; telefono: string | null; sede: string | null; barrio: string | null;
   /** Id legacy del barrio. Cruza contra `zonasDelDia` para la pista de zona al repartir. */
   barrioId?: string | null;
+  /**
+   * HAY QUE LLEVAR EQUIPO. `null` = esta orden no lo pide, que es la mayoría de las
+   * visitas; con algo dentro, lo pinta `AvisoEquipo` (ver allí los dos casos).
+   */
+  equipo?: EquipoDeOrden;
 };
 /** `ordenes` viene filtrada; `total`/`pendientes` son la carga real del día, sin filtro. */
 export type Columna = { staffId: string; nombre: string; ordenes: Tarjeta[]; total: number; pendientes: number };
@@ -97,6 +105,12 @@ export type Filtros = {
    * funcionando igual.
    */
   clase: string[]; tipo: string[]; prioridad: string[]; estado: string[];
+  /**
+   * TV / INTERNET / COMBO: el filtro grueso del que cuelgan los tipos. 'Reconexion
+   * Television', 'Reconexion Television2' y 'Suspension Television' son tres
+   * entradas del desplegable de tipos y un solo trabajo para quien reparte.
+   */
+  servicio: string[];
   noAtendidas: boolean;
   /**
    * `Branch.id` de las sedes que se están mirando ([] = todas las mías).
@@ -109,10 +123,10 @@ export type Filtros = {
    */
   sede: string[];
 };
-export const SIN_FILTROS: Filtros = { q: "", clase: [], tipo: [], prioridad: [], estado: [], noAtendidas: false, sede: [] };
+export const SIN_FILTROS: Filtros = { q: "", clase: [], tipo: [], servicio: [], prioridad: [], estado: [], noAtendidas: false, sede: [] };
 export const hayFiltros = (f: Filtros) =>
-  f.q.trim() !== "" || f.clase.length > 0 || f.tipo.length > 0 || f.prioridad.length > 0
-  || f.estado.length > 0 || f.noAtendidas || f.sede.length > 0;
+  f.q.trim() !== "" || f.clase.length > 0 || f.tipo.length > 0 || f.servicio.length > 0
+  || f.prioridad.length > 0 || f.estado.length > 0 || f.noAtendidas || f.sede.length > 0;
 
 export const CLASES = [
   { valor: "servicio", etiqueta: "Servicio" },
@@ -130,7 +144,7 @@ export function queryAgenda(f: Filtros, extra?: Record<string, string | number |
   if (f.q.trim()) qs.set("q", f.q.trim());
   // Las listas viajan en el parámetro de siempre, separadas por comas. Vacías no se
   // mandan: un `clase=` suelto sería un filtro puesto que no filtra nada.
-  for (const [k, v] of [["clase", f.clase], ["tipo", f.tipo], ["prioridad", f.prioridad], ["estado", f.estado], ["sede", f.sede]] as const) {
+  for (const [k, v] of [["clase", f.clase], ["tipo", f.tipo], ["servicio", f.servicio], ["prioridad", f.prioridad], ["estado", f.estado], ["sede", f.sede]] as const) {
     if (v.length) qs.set(k, v.join(","));
   }
   if (f.noAtendidas) qs.set("noAtendidas", "1");
@@ -345,6 +359,17 @@ export function BarraFiltros({
         }
         options={CLASES.map((c) => ({ value: c.valor, label: c.etiqueta }))}
       />
+      {/* QUÉ TIENE CONTRATADO el cliente. Va delante de los tipos porque es como se
+          mira la bandeja: la televisión y el internet no se tocan en el mismo equipo
+          —el CPE o el puerto CATV de la OLT contra el Mikrotik— y quien reparte
+          suele querer sacar de un golpe a los abonados de solo televisión, a los que
+          no hay que tocarles el Mikrotik. Sólo alcanza a las órdenes que van de un
+          servicio, que son las que llevan el cartel. */}
+      <MultiSelect
+        label="Servicio" todos="Todo servicio" className={ALTO_FILTRO}
+        value={filtros.servicio} onChange={(v) => puso("servicio", v)}
+        options={SERVICIOS_CONTRATADOS.map((x) => ({ value: x, label: SERVICIO_CONTRATADO[x].label }))}
+      />
       {/* Los tipos salen de las órdenes que hay, ordenados por cuántas son: lo que
           más se repite —y lo que más se reparte— queda arriba. El número al lado
           evita el clic a ciegas en un tipo que solo tiene una. */}
@@ -394,3 +419,4 @@ export function BarraFiltros({
     </div>
   );
 }
+

@@ -3,6 +3,8 @@ import { Logger } from '../core/logger';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { SiigoClient } from './siigo-client';
+import { direccionDe } from '../common/subscriber-address';
+import { exigirEmisorDeNotas } from '../billing/emisor-de-notas';
 
 /**
  * Emisión REAL de factura electrónica ante la DIAN vía Siigo.
@@ -25,13 +27,43 @@ export class EinvoiceEmitService {
     return this.live;
   }
 
-  /** Resuelve la cuenta Siigo por servicio (TV/Internet); fallback: primera activa. */
-  private async resolveAccount(servicesBilled?: string | null) {
+  /**
+   * Cuenta Siigo que EMITE. Es una sola, como en el legacy: allá hay dos filas en
+   * `config_facturacion_electronica` (Tv / Internet) pero el documento siempre se manda
+   * con el token de la de Internet (`$ob1 = config id=2`) — la TV viaja como un ítem más
+   * dentro de esa factura. La cuenta de TV quedó de vestigio (su bloque está comentado
+   * en `Facturas_electronicas_model.php`), así que aquí NO se ramifica por servicio.
+   */
+  private async resolveAccount(_servicesBilled?: string | null) {
     const accounts = await this.prisma.siigoAccount.findMany({ where: { active: true } });
     if (accounts.length === 0) throw new BadRequestException('No hay cuentas Siigo configuradas.');
-    const wantTv = (servicesBilled ?? '').toLowerCase().includes('televi');
-    const byRole = accounts.find((a) => (wantTv ? a.role === 'Tv' : a.role === 'Internet'));
-    return byRole ?? accounts.find((a) => a.role === 'Internet') ?? accounts[0];
+    return accounts.find((a) => a.role === 'Todo') ?? accounts.find((a) => a.role === 'Internet') ?? accounts[0];
+  }
+
+  /**
+   * Códigos de producto de Siigo para los ítems de una factura. El legacy los saca de
+   * `products.product_code` buscando el producto POR NOMBRE (`product_name == plan del
+   * cliente`); aquí el mismo catálogo vive en `Material` (importado de `products`), así
+   * que se resuelve igual: por nombre exacto del ítem.
+   */
+  private async codigosSiigo(items: any[]): Promise<Map<string, string>> {
+    const nombres = [...new Set(items.map((it) => String(it.productName ?? it.description ?? '').trim()).filter(Boolean))];
+    if (!nombres.length) return new Map();
+    const materiales = await this.prisma.material.findMany({
+      where: { name: { in: nombres }, code: { not: null } },
+      select: { name: true, code: true, categoryLegacy: true, legacyId: true },
+      // Hay nombres repetidos en el catálogo ("5Megas", "30MegasF"...). El legacy recorre
+      // `products` y se queda con la PRIMERA coincidencia, así que se ordena por el id
+      // legacy para elegir la misma que él.
+      orderBy: { legacyId: 'asc' },
+    });
+    // Categorías facturables del legacy (`pcat IN (4,10,15)`): un plan y una herramienta
+    // pueden llamarse igual, y el código que va a la DIAN es el del plan.
+    const codes = new Map<string, string>();
+    for (const m of [...materiales.filter((x) => [4, 10, 15].includes(x.categoryLegacy ?? -1)), ...materiales]) {
+      if (!codes.has(m.name)) codes.set(m.name, m.code as string);
+    }
+    return codes;
   }
 
   /** Token vigente de la cuenta (renovando si venció y estamos en LIVE). */
@@ -50,49 +82,93 @@ export class EinvoiceEmitService {
     return auth.access_token;
   }
 
-  /** Construye el cuerpo de factura Siigo desde la SubInvoice. */
-  private buildPayload(account: any, invoice: any, subscriber: any) {
+  /**
+   * Cuerpo de la factura para Siigo, con la misma forma que manda el legacy
+   * (`Facturas_electronicas_model::generar_factura_customer_para_multiple` /
+   * `FacturasElectronicas::guardar`), verificado contra documentos reales ya timbrados:
+   *
+   *   document.id 27274 · seller 945 · cost_center 69|167|165 · payments[0].id 2512
+   *   items[].code = product_code del catálogo ("T02" para todo lo de TV)
+   *   items[].taxes = [IVA 19%] SOLO si el ítem grava; los de 0% van SIN el nodo `taxes`
+   *   observations = "Estrato : X" · date = el día en que se timbra
+   */
+  private buildPayload(account: any, invoice: any, subscriber: any, codes: Map<string, string>) {
     const docId = subscriber?.docNumber || subscriber?.legacyId?.toString() || '0';
-    const items = (invoice.items ?? []).map((it: any) => {
-      const item: any = {
-        code: it.productId ? String(it.productId) : (account.defaultItemCode ?? 'GEN'),
-        description: it.description || it.productName || 'Servicio',
-        quantity: Number(it.qty) || 1,
-        price: Number(it.price) || 0,
-      };
-      if (account.ivaTaxId && Number(it.taxRate) > 0) {
-        item.taxes = [{ id: account.ivaTaxId }];
-      }
-      return item;
-    });
-    const total = Number(invoice.total) || items.reduce((s: number, i: any) => s + i.price * i.quantity, 0);
-    // Medio de pago: crédito si el cliente está marcado como crédito y la cuenta
-    // tiene ese medio configurado; si no, contado (efectivo). Porta get_m_pago_f_e.
+    const items = (invoice.items ?? []).map((it: any) => this.buildItem(account, it, codes));
+    const total = this.legTotal(invoice.items ?? []);
+
+    // Medio de pago: crédito si el cliente está marcado como crédito y la cuenta tiene ese
+    // medio configurado; si no, contado. El legacy vivo manda siempre contado (2512).
     const isCredit = subscriber?.eInvoicePayMethod === 'CREDITO' && !!account.paymentCredIt;
     const paymentId = isCredit ? account.paymentCredIt : (account.paymentCash ?? null);
-    const date = new Date(invoice.invoiceDate);
+
+    // La fecha del documento es la del TIMBRE, no la de la factura interna: el legacy manda
+    // el día en que se emite (`new DateTime($_POST['sdate'])`, que la pantalla trae en hoy)
+    // y la DIAN rechaza documentos con fecha vieja. Vencimiento: 20 días después.
+    const hoy = new Date();
+    const vence = new Date(hoy.getTime() + 20 * 86400_000);
+    const ymd = (d: Date) => d.toISOString().slice(0, 10);
+
     const payload: any = {
       document: { id: account.documentId ?? null },
-      date: date.toISOString().slice(0, 10),
+      date: ymd(hoy),
       customer: { identification: docId, branch_office: 0 },
       seller: account.sellerId ?? null,
+      // El legacy manda "Estrato : " aunque el cliente no tenga estrato (así se ven las
+      // facturas reales en Siigo); es lo que marca el documento como emitido por el CRM.
+      observations: `Estrato : ${subscriber?.estrato ?? ''}`.trim(),
       items,
-      payments: [{
-        id: paymentId,
-        value: total,
-        // Vencimiento del medio de pago (el legacy lo mandaba siempre).
-        due_date: new Date(invoice.dueDate ?? invoice.invoiceDate).toISOString().slice(0, 10),
-      }],
+      payments: [{ id: paymentId, value: total, due_date: ymd(vence) }],
     };
-    // Centro de costo por sede. El legacy lo ramificaba con ifs por `gid`
-    // (Yopal 1074/69, Villanueva 1072/167, Monterrey 1070/165); aquí sale del mapa
-    // configurable `SiigoAccount.costCenterByBranch` = {branchLegacyId: costCenterId}.
     const costCenter = this.resolveCostCenter(account, subscriber);
     if (costCenter != null) payload.cost_center = costCenter;
-    // Observaciones: el legacy mandaba "Estrato : X".
-    if (subscriber?.estrato) payload.observations = `Estrato : ${subscriber.estrato}`;
-    if (account.contactEmail) payload.mail = { send: false };
+    // SIN esto Siigo crea el documento pero lo deja en BORRADOR: no se manda a la DIAN, no
+    // hay CUFE y no es una factura electrónica todavía. El legacy no lo manda —allá el
+    // envío lo aprueba contabilidad a mano en Siigo—, pero aquí el botón promete "emitir
+    // ante la DIAN", así que se timbra de una (apagable en `SiigoAccount.autoStamp`).
+    payload.stamp = { send: account.autoStamp !== false };
+    // El correo al cliente NO se dispara desde aquí: es un envío a terceros y se decide
+    // aparte (en Siigo o marcando la cuenta), no como efecto secundario de facturar.
+    payload.mail = { send: false };
     return payload;
+  }
+
+  /**
+   * Un ítem de la factura con la forma del legacy: código del catálogo Siigo, la
+   * descripción con la que Vestel las emite ("Servicio de Internet X" / "Television X" /
+   * "Puntos de tv adicionales N") y el IVA desglosado.
+   */
+  private buildItem(account: any, it: any, codes: Map<string, string>) {
+    const nombre = String(it.productName ?? it.description ?? '').trim();
+    const qty = Number(it.qty) || 1;
+    const price = Number(it.price) || 0;
+    const rate = Number(it.taxRate) || 0;
+    const tv = this.isTvItem(it);
+
+    // Todo lo de TV va con el código "T02" (el legacy lo fija en cada rama de televisión);
+    // el resto lleva el `product_code` del catálogo.
+    const code = tv ? 'T02' : (codes.get(nombre) || (it.productId ? String(it.productId) : nombre) || 'GEN');
+
+    const item: any = { code, description: this.describirItem(nombre, qty, tv), quantity: qty, price };
+    if (rate > 0) {
+      const valor = Math.round(price * qty * rate) / 100;
+      item.taxes = [{
+        id: account.ivaTaxId ?? null,
+        name: `IVA ${rate}%`,
+        type: 'IVA',
+        percentage: rate,
+        value: valor,
+      }];
+    }
+    return item;
+  }
+
+  /** La descripción con la que el legacy rotula cada concepto en la factura DIAN. */
+  private describirItem(nombre: string, qty: number, tv: boolean): string {
+    if (!tv) return nombre ? `Servicio de Internet ${nombre}` : 'Servicio de Internet';
+    if (/comercial/i.test(nombre)) return `Puntos de Tv Comerciales ${qty}`;
+    if (/punto/i.test(nombre)) return `Puntos de tv adicionales ${qty}`;
+    return `Television ${nombre}`.trim();
   }
 
   /**
@@ -125,7 +201,14 @@ export class EinvoiceEmitService {
     return { existed: false, created: created.ok, error: created.ok ? undefined : created.error };
   }
 
-  /** Cuerpo del tercero para Siigo (porta `Facturas_electronicas_model` líneas 137-198). */
+  /**
+   * Cuerpo del tercero para Siigo, con la forma del legacy (`getCustomerJson` + los
+   * ajustes de `generar_factura_customer_para_multiple`): nombres en mayúsculas, ciudad
+   * DIAN según la sede, celular saneado a 10 dígitos y el contacto de la empresa.
+   *
+   * Dos cosas del legacy que NO se copian por ser defectos, no reglas: mandaba siempre
+   * `check_digit: "4"` y `commercial_name: "Siigo"` heredados de la plantilla de ejemplo.
+   */
   private buildCustomerPayload(account: any, subscriber: any, identification: string) {
     const isCompany = String(subscriber?.docType ?? '').toUpperCase() === 'NIT';
     const up = (s: any) => String(s ?? '').trim().toUpperCase();
@@ -137,35 +220,61 @@ export class EinvoiceEmitService {
       : [first || up(subscriber?.fullName), last].filter(Boolean);
     // Celular: el legacy manda "0" si no es un número de hasta 10 dígitos.
     const phone = /^\d{1,10}$/.test(String(subscriber?.phone1 ?? '')) ? String(subscriber.phone1) : '0';
+    // El vendedor con el que se crea el tercero es otro que el de la factura (legacy: 282).
+    const relatedUser = account?.customerSellerId ?? account?.sellerId ?? null;
     return {
       type: 'Customer',
       person_type: isCompany ? 'Company' : 'Person',
       id_type: isCompany ? '31' : '13',
       identification,
       name,
+      branch_office: 0,
       active: true,
       vat_responsible: false,
       fiscal_responsibilities: [{ code: 'R-99-PN' }],
       address: {
-        address: subscriber?.addressLine || 'SIN DIRECCION',
-        city: { country_code: 'Co', state_code: '85', city_code: '85001' },
+        // La dirección NO está en `addressLine` (viene vacía o con basura del legacy): se
+        // arma de `nomenclature`, igual que el legacy la concatenaba campo por campo.
+        address: direccionDe(subscriber?.nomenclature, subscriber?.addressLine) || 'SIN DIRECCION',
+        city: this.resolveCity(account, subscriber),
+        postal_code: '00000',
       },
-      phones: [{ number: phone }],
+      phones: [{ indicative: '57', number: phone, extension: '000' }],
       contacts: [{
         first_name: first || 'CLIENTE',
         last_name: last || 'VESTEL',
         // El legacy hardcodeaba el correo de la empresa; aquí es configurable por cuenta y
         // sólo cae al del cliente si la cuenta no define uno.
         email: account?.contactEmail || subscriber?.email || undefined,
-        phone: { number: phone },
+        phone: { indicative: '57', number: phone, extension: '000' },
       }],
-      related_users: account?.sellerId ? { seller_id: account.sellerId, collector_id: account.sellerId } : undefined,
+      comments: `Estrato : ${subscriber?.estrato ?? ''}`.trim(),
+      related_users: relatedUser ? { seller_id: relatedUser, collector_id: relatedUser } : undefined,
+    };
+  }
+
+  /**
+   * Ciudad DIAN del tercero según su sede. `cityByBranch` mapea el id legacy de la sede
+   * (`customers.gid`) a `{state_code, city_code}`; lo que no esté en el mapa cae al
+   * default (Yopal, 85/85001), igual que los ifs del legacy.
+   */
+  private resolveCity(account: any, subscriber: any) {
+    const def = { country_code: 'Co', state_code: '85', city_code: '85001' };
+    const map = account?.cityByBranch;
+    if (!map || typeof map !== 'object') return def;
+    const gid = subscriber?.branch?.legacyId;
+    const hit = (gid != null ? map[String(gid)] : undefined) ?? map.default;
+    if (!hit) return def;
+    return {
+      country_code: hit.country_code ?? 'Co',
+      state_code: String(hit.state_code ?? def.state_code),
+      city_code: String(hit.city_code ?? def.city_code),
     };
   }
 
   /** Construye el payload de NOTA CRÉDITO referenciando la factura Siigo original. */
-  private buildCreditNotePayload(account: any, invoice: any, subscriber: any, siigoInvoiceId: string, reason: string, causeCode: number) {
-    const base = this.buildPayload(account, invoice, subscriber);
+  private buildCreditNotePayload(account: any, invoice: any, subscriber: any, siigoInvoiceId: string, reason: string, causeCode: number, codes: Map<string, string>) {
+    const base = this.buildPayload(account, invoice, subscriber, codes);
     return {
       ...base,
       document: { id: account.creditNoteDocumentId ?? account.documentId ?? null },
@@ -173,6 +282,19 @@ export class EinvoiceEmitService {
       cause: causeCode, // 1=Devolución, 2=Anulación, 3=Rebaja, 4=Otros (DIAN)
       reason: reason?.slice(0, 250) || 'Anulación de factura',
     };
+  }
+
+  /**
+   * Conceptos que NO viajan a la DIAN. El legacy no los manda porque arma la factura
+   * electrónica desde los servicios del cliente, no desde los renglones de la factura:
+   *  - los descuentos de promoción entran como renglón de precio NEGATIVO ("Nota Credito
+   *    · Promoción 5% pronto pago") y Siigo no admite ítems en negativo;
+   *  - "Saldo anterior" / "saldo inicial" son arrastre de cartera, no una venta.
+   */
+  private esTimbrable(it: any): boolean {
+    const nombre = String(it.productName ?? it.description ?? '');
+    if (Number(it.price) <= 0) return false;
+    return !/^\s*(nota\s+(cr[eé]dito|d[eé]bito)|saldo)/i.test(nombre);
   }
 
   /** ¿La línea es de TV? (Vestel: la TV lleva IVA 19%; el Internet 0%). */
@@ -190,20 +312,48 @@ export class EinvoiceEmitService {
   }
 
   /**
+   * Freno al doble timbre: el LEGACY SIGUE EMITIENDO en paralelo y sus emisiones no
+   * quedan atadas a la factura (`facturacion_electronica_siigo.invoice_id` viene NULL en
+   * las 222 mil filas), así que la idempotencia por `invoiceId` no las ve. Lo que sí llega
+   * por el sync cada 15 min es la fila con el ABONADO y la FECHA, y con eso alcanza: si a
+   * este abonado ya se le timbró algo en el mismo mes, no se vuelve a emitir.
+   *
+   * Un segundo documento legítimo en el mismo mes (una afiliación aparte, p. ej.) se emite
+   * con `forzar`, que es una decisión humana y explícita.
+   */
+  private async exigirSinTimbreDelMes(invoice: any, subscriber: any) {
+    if (!invoice.subscriberId) return;
+    const ref = new Date(invoice.invoiceDate);
+    const desde = new Date(Date.UTC(ref.getUTCFullYear(), ref.getUTCMonth(), 1));
+    const hasta = new Date(Date.UTC(ref.getUTCFullYear(), ref.getUTCMonth() + 1, 1));
+    const previa = await this.prisma.electronicInvoice.findFirst({
+      where: { subscriberId: invoice.subscriberId, type: 'FACTURADA', date: { gte: desde, lt: hasta } },
+      orderBy: { date: 'desc' },
+      select: { date: true, dianNumber: true, servicesBilled: true },
+    });
+    if (!previa) return;
+    const cuando = previa.date.toISOString().slice(0, 10);
+    throw new BadRequestException(
+      `Este abonado ya tiene factura electrónica de ${cuando} (${previa.dianNumber ?? previa.servicesBilled ?? 'emitida en el legacy'}). No se timbra dos veces el mismo mes.`,
+    );
+  }
+
+  /**
    * Emite (o simula) UNA pieza de e-factura contra una cuenta Siigo (un servicio).
    * NO cambia la bandera de la SubInvoice — eso lo decide el orquestador `emit`,
    * tras confirmar que todas las piezas del combo salieron bien.
    */
-  private async emitLeg(invoice: any, subscriber: any, servicesBilled: string, items: any[]) {
+  private async emitLeg(invoice: any, subscriber: any, servicesBilled: string, items: any[], forzar = false) {
     // Idempotencia POR FACTURA: una sola e-factura DIAN por SubInvoice.
     const dup = await this.prisma.electronicInvoice.findFirst({
       where: { invoiceId: invoice.id, type: 'FACTURADA', dianNumber: { not: null } },
     });
     if (dup) throw new BadRequestException(`Esta factura ya fue emitida ante la DIAN (${dup.dianNumber}).`);
+    if (!forzar) await this.exigirSinTimbreDelMes(invoice, subscriber);
 
     const account = await this.resolveAccount(servicesBilled);
     const legInvoice = { ...invoice, items, total: this.legTotal(items) };
-    const payload = this.buildPayload(account, legInvoice, subscriber);
+    const payload = this.buildPayload(account, legInvoice, subscriber, await this.codigosSiigo(items));
 
     if (!this.live) {
       return {
@@ -221,27 +371,29 @@ export class EinvoiceEmitService {
     // El tercero debe existir en Siigo antes de facturar (get-or-create, como el legacy).
     const customer = await this.ensureCustomer(account, token, subscriber, client);
     const result = await client.createInvoice(token, payload);
+    // Documento creado pero rechazado por la DIAN: no es una factura electrónica.
+    const timbrada = result.ok && !result.error;
     const ei = await this.prisma.electronicInvoice.create({
       data: {
         siigoAccountId: account.id, subscriberId: invoice.subscriberId, invoiceId: invoice.id,
         date: new Date(invoice.invoiceDate), executedAt: new Date(), servicesBilled,
-        type: result.ok ? 'FACTURADA' : 'ERROR',
+        type: timbrada ? 'FACTURADA' : 'ERROR',
         // Se guarda también el resultado del get-or-create del tercero: cuando Siigo
         // rechaza, casi siempre es por el cliente y es lo primero que hay que mirar.
         payloadJson: JSON.stringify({ payload, customer, response: result.raw }).slice(0, 20000),
         siigoInvoiceId: result.id ?? null, dianNumber: result.number ?? null,
         cufe: result.cufe ?? null, pdfUrl: result.pdfUrl ?? null,
-        errorMessage: result.ok ? null : (result.error ?? 'Error desconocido'),
+        errorMessage: timbrada ? null : (result.error ?? 'Error desconocido'),
       } as any,
     });
-    if (!result.ok) {
+    if (!timbrada) {
       this.logger.warn(`Emisión fallida factura ${invoice.tid} (${servicesBilled}): ${result.error}`);
       throw new BadRequestException(`Siigo rechazó la factura (${servicesBilled}): ${result.error}`);
     }
-    this.logger.log(`E-factura emitida: tid ${invoice.tid} (${servicesBilled}) → DIAN ${result.number}`);
+    this.logger.log(`E-factura emitida: tid ${invoice.tid} (${servicesBilled}) → DIAN ${result.number} [${result.stampStatus ?? 'sin sello'}]`);
     return {
       ok: true, dryRun: false, servicesBilled, electronicInvoiceId: ei.id,
-      dianNumber: result.number, cufe: result.cufe, pdfUrl: result.pdfUrl,
+      dianNumber: result.number, cufe: result.cufe, stampStatus: result.stampStatus, pdfUrl: result.pdfUrl,
     };
   }
 
@@ -255,7 +407,7 @@ export class EinvoiceEmitService {
    *   - solo uno marcado → un documento con ese servicio
    *   - ninguno marcado → se timbra la factura completa (todo lo que traiga)
    */
-  async emit(subInvoiceId: string, user?: AuthUser) {
+  async emit(subInvoiceId: string, user?: AuthUser, forzar = false) {
     const invoice = await this.prisma.subInvoice.findUnique({
       where: { id: subInvoiceId },
       // `branch.legacyId` (= `customers.gid` del legacy) resuelve el centro de costo Siigo.
@@ -268,8 +420,9 @@ export class EinvoiceEmitService {
     const wantNet = !!sub?.eInvoiceInternet;
     const selective = wantTv || wantNet; // hay una selección explícita de servicios
 
-    // Filtra los ítems por la selección del cliente. Sin selección → todo.
-    let items = invoice.items ?? [];
+    // Fuera lo que no es una venta (descuentos en negativo, arrastre de saldo) y luego
+    // filtra por la selección de servicios del cliente. Sin selección → todo.
+    let items = (invoice.items ?? []).filter((it) => this.esTimbrable(it));
     if (selective) {
       items = items.filter((it) => (this.isTvItem(it) ? wantTv : wantNet));
     }
@@ -286,7 +439,7 @@ export class EinvoiceEmitService {
     const servicesBilled = isCombo ? 'Combo' : hasTv ? 'Television' : 'Internet';
 
     // UN SOLO documento DIAN con todos los ítems seleccionados.
-    const doc = await this.emitLeg(invoice, sub, servicesBilled, items);
+    const doc = await this.emitLeg(invoice, sub, servicesBilled, items, forzar);
 
     if (doc.ok && this.live) {
       await this.prisma.subInvoice.update({
@@ -303,7 +456,12 @@ export class EinvoiceEmitService {
       ...doc, combo: isCombo, servicesBilled,
       message: doc.dryRun
         ? `DRY-RUN: payload construido (${servicesBilled}), NO se envió a la DIAN. Active EINVOICE_LIVE=true para emitir.`
-        : `Factura emitida ante la DIAN: ${doc.dianNumber}`,
+        // El estado del sello va en el mensaje a propósito: "creada en Siigo" y "aceptada
+        // por la DIAN" no son lo mismo, y un documento que se quedó en BORRADOR (sin CUFE)
+        // todavía no es una factura electrónica — hay que verlo, no descubrirlo después.
+        : (doc as any).stampStatus === 'Accepted' || (doc as any).cufe
+          ? `Factura emitida y aceptada por la DIAN: ${doc.dianNumber}`
+          : `Factura ${doc.dianNumber} creada en Siigo, pero el sello quedó en «${(doc as any).stampStatus ?? 'sin estado'}»: aún NO está ante la DIAN.`,
     };
   }
 
@@ -313,6 +471,11 @@ export class EinvoiceEmitService {
    * resultado como ElectronicInvoice tipo NOTA_CREDITO. Porta get_invoice_credito.
    */
   async emitCreditNote(subInvoiceId: string, reason: string, causeCode = 2, user?: AuthUser) {
+    // Mismo candado que las notas internas: emitir una nota crédito es nominal
+    // (ver `billing/emisor-de-notas.ts`). Cuenta también aquí porque una factura ya
+    // timbrada NO se puede anular sin su nota crédito DIAN — o sea que ésta es la
+    // otra puerta por la que se le rebaja al abonado lo que debe.
+    exigirEmisorDeNotas(user);
     const invoice = await this.prisma.subInvoice.findUnique({
       where: { id: subInvoiceId },
       // La nota crédito reusa `buildPayload`, que necesita la sede para el centro de costo.
@@ -339,7 +502,7 @@ export class EinvoiceEmitService {
       : await this.resolveAccount(emitted.servicesBilled);
     if (!account) throw new BadRequestException('No se pudo resolver la cuenta Siigo de la factura original.');
 
-    const payload = this.buildCreditNotePayload(account, invoice, invoice.subscriber, emitted.siigoInvoiceId, reason, causeCode);
+    const payload = this.buildCreditNotePayload(account, invoice, invoice.subscriber, emitted.siigoInvoiceId, reason, causeCode, await this.codigosSiigo(invoice.items ?? []));
 
     if (!this.live) {
       return {
@@ -415,10 +578,17 @@ export class EinvoiceEmitService {
    * marcados para e-factura (eInvoice=true). El servicio (TV/Internet) de cada
    * factura decide su cuenta Siigo. Procesa de a `limit` y avisa si quedan más.
    */
-  async emitBranch(branchId: string, user?: AuthUser, limit = 100) {
+  async emitBranch(branchId: string, user?: AuthUser, mes?: string, limit = 100) {
+    // El legacy acota SIEMPRE el lote a un mes (`DATE_FORMAT(invoicedate,'%Y-%m') = mes`).
+    // Sin ese corte el lote se comería el atraso histórico (166 mil facturas marcadas desde
+    // 2019) y timbraría ante la DIAN mensualidades de hace años.
+    const periodo = /^\d{4}-\d{2}$/.test(mes ?? '') ? (mes as string) : new Date().toISOString().slice(0, 7);
+    const desde = new Date(`${periodo}-01T00:00:00.000Z`);
+    const hasta = new Date(Date.UTC(desde.getUTCFullYear(), desde.getUTCMonth() + 1, 1));
     const pending = await this.prisma.subInvoice.findMany({
       where: {
         eInvoiceFlag: 'Crear Factura Electronica',
+        invoiceDate: { gte: desde, lt: hasta },
         subscriber: { is: { branchId, eInvoice: true } },
       },
       select: { id: true, tid: true },
@@ -429,6 +599,9 @@ export class EinvoiceEmitService {
     const batch = pending.slice(0, limit);
     let ok = 0;
     let failed = 0;
+    // Las que ya tenían timbre de este mes (casi siempre porque las emitió el legacy) no
+    // son un fallo: se cuentan aparte para que un lote sano no salga lleno de "errores".
+    let omitidas = 0;
     let configReady = true;
     const errors: { tid: number; error: string }[] = [];
     for (const inv of batch) {
@@ -437,21 +610,25 @@ export class EinvoiceEmitService {
         if (r?.dryRun && r.configReady === false) configReady = false;
         if (r?.ok) ok++;
       } catch (e: any) {
+        const msg = e?.message ?? 'Error';
+        if (/ya (tiene factura electr|fue emitida)/i.test(msg)) { omitidas++; continue; }
         failed++;
-        if (errors.length < 8) errors.push({ tid: inv.tid, error: e?.message ?? 'Error' });
+        if (errors.length < 8) errors.push({ tid: inv.tid, error: msg });
       }
     }
     return {
       dryRun: !this.live,
       configReady,
+      periodo,
       processed: batch.length,
       ok,
       failed,
+      omitidas,
       hasMore,
       errors,
       message: !this.live
-        ? `DRY-RUN: se construyeron ${ok} payload(s) de la sede; no se envió nada a la DIAN.`
-        : `Emitidas ${ok} factura(s) de la sede ante la DIAN${failed ? `, ${failed} con error` : ''}.`,
+        ? `DRY-RUN: se construyeron ${ok} payload(s) de la sede (${periodo}); no se envió nada a la DIAN.${omitidas ? ` ${omitidas} ya venían timbradas.` : ''}`
+        : `Emitidas ${ok} factura(s) de la sede (${periodo}) ante la DIAN${failed ? `, ${failed} con error` : ''}.${omitidas ? ` ${omitidas} ya venían timbradas (se omitieron).` : ''}`,
     };
   }
 }

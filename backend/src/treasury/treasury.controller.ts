@@ -4,6 +4,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { extname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Response } from 'express';
+import * as ExcelJS from 'exceljs';
 import { TreasuryService } from './treasury.service';
 import { cashClosePdf, receiptPdf } from '../common/pdf/pdf-docs';
 import { reciboRolloPdf } from '../common/pdf/recibo-rollo';
@@ -194,6 +195,54 @@ export class TreasuryController {
     return this.treasury.list(q, user);
   }
 
+  /**
+   * Excel del listado de movimientos (Ingresos, Egresos, Anulaciones) con los MISMOS
+   * filtros que la tabla — todas las páginas, no la que se ve.
+   */
+  async exportXlsx(q: ListTxQueryDto, res: Response, user: AuthUser) {
+    const rows = await this.treasury.exportRows(q, user);
+    const titulo = q.status === 'ANULADA' ? 'Anulaciones'
+      : q.type === 'EXPENSE' ? 'Egresos'
+      : q.type === 'INCOME' ? 'Ingresos'
+      : 'Movimientos';
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Vestel';
+    const ws = wb.addWorksheet(titulo, { views: [{ state: 'frozen', ySplit: 1 }] });
+    ws.columns = [
+      { header: 'Código', key: 'codigo', width: 10 },
+      // `date` es @db.Date (medianoche UTC): Excel lo pinta como el mismo día.
+      { header: 'Fecha', key: 'date', width: 12, style: { numFmt: 'dd/mm/yyyy' } },
+      { header: 'Hora', key: 'hora', width: 8 },
+      { header: 'Tipo', key: 'tipo', width: 10 },
+      { header: 'Cuenta', key: 'account', width: 24 },
+      { header: q.type === 'EXPENSE' ? 'Beneficiario' : q.type === 'INCOME' ? 'Pagador' : 'Pagador / Beneficiario', key: 'payer', width: 34 },
+      { header: 'Abonado', key: 'abonado', width: 10 },
+      { header: 'Nota', key: 'note', width: 48 },
+      { header: 'Emitido por', key: 'emisor', width: 24 },
+      { header: 'Categoría', key: 'category', width: 20 },
+      { header: 'Factura', key: 'invoiceTid', width: 10 },
+      { header: 'Método', key: 'method', width: 12 },
+      { header: 'Monto', key: 'amount', width: 16, style: { numFmt: '#,##0' } },
+      { header: 'Estado', key: 'estado', width: 10 },
+      { header: 'Comprobante', key: 'comprobante', width: 12 },
+    ];
+    ws.getRow(1).font = { bold: true };
+    const TIPO: Record<string, string> = { INCOME: 'Ingreso', EXPENSE: 'Egreso', TRANSFER: 'Traslado' };
+    for (const r of rows) {
+      ws.addRow({
+        ...r,
+        tipo: TIPO[r.type] ?? r.type,
+        estado: r.status === 'ANULADA' ? 'Anulada' : 'Vigente',
+        comprobante: r.comprobante ? 'Sí' : 'No',
+      });
+    }
+    ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: ws.columns.length } };
+    const buffer = Buffer.from(await wb.xlsx.writeBuffer());
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${titulo.toLowerCase()}-${new Date().toISOString().slice(0, 10)}.xlsx"`);
+    res.send(buffer);
+  }
+
   detail(id: string, user: AuthUser) {
     return this.treasury.detail(id, user);
   }
@@ -282,9 +331,20 @@ export class TreasuryController {
     return this.cobranzas.beneficiaries({ search, category });
   }
 
-  /** Alta rápida de un beneficiario desde el movimiento (por defecto, tercero). */
-  createBeneficiary(dto: BeneficiaryDto) {
-    return this.cobranzas.createBeneficiary(dto);
+  /**
+   * Alta rápida de un beneficiario desde el movimiento (por defecto, tercero).
+   *
+   * La cajera también puede: es quien más egresos de ventanilla registra y sin
+   * esto el pago al señor que vino a pintar se quedaba con el nombre suelto. Lo
+   * que NO puede es tocar el catálogo de PROVEEDORES: sea cual sea la categoría
+   * que mande, la suya entra siempre como TERCERO (3). Dar de alta un proveedor
+   * sigue siendo de contabilidad, en su pantalla.
+   */
+  createBeneficiary(dto: BeneficiaryDto, user?: AuthUser) {
+    const permisos = user?.permissions ?? [];
+    const catalogo = permisos.some((p) =>
+      p === 'system.admin' || p === 'area.contabilidad' || p === 'area.administracion');
+    return this.cobranzas.createBeneficiary(catalogo ? dto : { ...dto, category: 3 });
   }
 
   /** Facturas pendientes de un cliente (para el modal de recaudo). */

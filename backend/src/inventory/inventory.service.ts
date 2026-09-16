@@ -286,7 +286,7 @@ export class InventoryService {
     // única que queda restringida (decisión 2026-07-30).
     const unrestricted = isSuperadmin || UNRESTRICTED_AREAS.some((a) => perms.includes(a));
 
-    const [warehouses, branches, staff, users, consumableIds, mySedes] = await Promise.all([
+    const [warehouses, branches, staff, users, consumableIds, sedesDeCuenta] = await Promise.all([
       this.prisma.materialWarehouse.findMany({
         orderBy: { title: 'asc' },
         include: { _count: { select: { materials: true } }, manager: { select: { id: true, name: true } } },
@@ -299,6 +299,9 @@ export class InventoryService {
       this.consumableCategoryIds(),
       this.userSedes(user.id),
     ]);
+    // La sesión ya trae la sede de la caja cuando la cuenta no tiene sedes marcadas
+    // (`resolverSedes`); leyendo sólo `sedesAccede`, a esa cajera se le abría todo.
+    const mySedes = user.sedes?.length ? user.sedes : sedesDeCuenta;
 
     const branchName = new Map(branches.map((b) => [b.legacyId, b.name]));
     // `technicianRef` viene del legacy y trae basura de captura (mayúsculas
@@ -347,9 +350,27 @@ export class InventoryService {
         technicianName: s?.name ?? null,
         technicianRetired: Boolean(s?.banned),
         managerId: w.managerId, managerName: w.manager?.name ?? null,
+        branchLegacy: w.branchLegacy,
+        branchName: w.branchLegacy != null ? branchName.get(w.branchLegacy) ?? `Sede ${w.branchLegacy}` : null,
         materials: w._count.materials,
       };
     };
+
+    // "Entre bodegas" para la cajera (2026-09-11): sólo dentro de SU sede, igual que
+    // las transferencias de equipos. Entra a una bodega general de su sede —nunca al
+    // almacén de un técnico: eso sería entregarle herramienta por la puerta de atrás
+    // de la regla del consumible— y sale de una bodega de su sede o del almacén de un
+    // técnico de su sede, retirados incluidos, que es como se recupera su material.
+    // Sin sede conocida no ve ninguna (lado seguro, como `network/bodega-scope.ts`).
+    const deMiSede = (w: (typeof warehouses)[number]) =>
+      mySedes.length > 0 && w.branchLegacy != null && mySedes.includes(w.branchLegacy);
+    const tecnicosDeMiSede = new Set(
+      todosLosTecnicos.filter((t) => mySedes.length > 0 && t.linked && sedesOverlap(mySedes, t.sedes)).map((t) => t.warehouseId),
+    );
+    const warehouseTargets = unrestricted ? warehouses : warehouses.filter((w) => !w.technicianRef && deMiSede(w));
+    const warehouseOrigins = unrestricted
+      ? warehouses
+      : warehouses.filter((w) => (w.technicianRef ? tecnicosDeMiSede.has(w.id) : deMiSede(w)));
 
     return {
       // La cajera no elige libremente quién recibe ni qué mueve.
@@ -358,9 +379,10 @@ export class InventoryService {
       // mueven material entre bodegas por el modo de siempre.
       canTechnicianMode: true,
       canReturnMode: false,
-      // El tab "Entre bodegas" es de bodega/admin: abre todo el material y todas
-      // las bodegas, que es justo lo que no se le da a caja.
-      canWarehouseMode: unrestricted,
+      // "Entre bodegas": bodega/admin sobre todo; la cajera, entre las de su sede.
+      canWarehouseMode: unrestricted || warehouseTargets.length > 0,
+      // Sólo en el modo "a técnico": lo que se ENTREGA a una persona. Entre bodegas
+      // la cajera mueve cualquier material, porque no sale de la custodia de la sede.
       onlyConsumable: !unrestricted,
       consumableCategoryIds: consumableIds,
       mySedes, mySedeNames: mySedes.length ? mySedes.map((n) => branchName.get(n) ?? `Sede ${n}`) : branches.map((b) => b.name),
@@ -374,6 +396,9 @@ export class InventoryService {
       // por "entre bodegas", donde el destino se elige por bodega y no por
       // persona). `resolveTransfer` vuelve a exigirlo al emitir.
       originWarehouses: (unrestricted ? warehouses : warehouses.filter((w) => !w.technicianRef)).map(mapWarehouse),
+      // Origen y destino del modo "entre bodegas" (ver arriba).
+      warehouseOrigins: warehouseOrigins.map(mapWarehouse),
+      warehouseTargets: warehouseTargets.map(mapWarehouse),
       technicians,
       // Cuántos almacenes de técnico quedaron fuera por ser de un ex-empleado, y
       // cuánto material siguen guardando: si no se dice, la lista corta parece
@@ -401,7 +426,8 @@ export class InventoryService {
     const bodega = (b: { id: string; title: string }) => ({
       id: b.id, title: b.title, extra: null as string | null,
       isTechnician: false, technicianName: null as string | null, technicianRetired: false,
-      managerId: null as string | null, managerName: null as string | null, materials: 0,
+      managerId: null as string | null, managerName: null as string | null,
+      branchLegacy: null as number | null, branchName: null as string | null, materials: 0,
     });
     return {
       restricted: true,
@@ -416,6 +442,8 @@ export class InventoryService {
       mySedeNames: [...new Set(cajeras.map((t) => t.branchName))],
       warehouses: [...(from ? [bodega(from)] : []), ...cajeras.map(bodega)],
       originWarehouses: from ? [bodega(from)] : [],
+      warehouseOrigins: [] as ReturnType<typeof bodega>[],
+      warehouseTargets: [] as ReturnType<typeof bodega>[],
       technicians: [] as never[],
       retiredTechnicians: 0,
       retiredMaterials: 0,
@@ -683,26 +711,42 @@ export class InventoryService {
     if (!from || !to) throw new NotFoundException('Bodega no encontrada');
 
     if (ctx.restricted) {
-      // 1) sólo entrega a técnicos, 2) de su sede, 3) desde una bodega general.
-      const tech = ctx.technicians.find((t) => t.warehouseId === to.id);
-      if (!tech) throw new ForbiddenException('Sólo puedes entregarle material a un técnico de tu sede.');
-      if (from.isTechnician) throw new ForbiddenException('El material debe salir de una bodega, no del almacén de otro técnico.');
-      // 4) y sólo consumible.
-      const noConsumible = await this.prisma.material.findFirst({
-        where: { id: { in: materialIds }, OR: [{ categoryId: null }, { categoryId: { notIn: ctx.consumableCategoryIds } }] },
-        select: { name: true },
-      });
-      if (noConsumible) throw new ForbiddenException(`"${noConsumible.name}" no es consumible; ese material lo entrega bodega.`);
+      const aTecnico = ctx.technicians.find((t) => t.warehouseId === to.id);
+      if (aTecnico) {
+        // A técnico: 1) de su sede, 2) desde una bodega general, 3) sólo consumible.
+        if (from.isTechnician) throw new ForbiddenException('El material debe salir de una bodega, no del almacén de otro técnico.');
+        const noConsumible = await this.prisma.material.findFirst({
+          where: { id: { in: materialIds }, OR: [{ categoryId: null }, { categoryId: { notIn: ctx.consumableCategoryIds } }] },
+          select: { name: true },
+        });
+        if (noConsumible) throw new ForbiddenException(`"${noConsumible.name}" no es consumible; ese material lo entrega bodega.`);
+      } else {
+        // Entre bodegas: origen y destino de su sede (el destino, bodega general).
+        if (!ctx.warehouseTargets.some((w) => w.id === to.id)) {
+          throw new ForbiddenException('Sólo puedes entregarle material a un técnico de tu sede o moverlo a una bodega de tu sede.');
+        }
+        if (!ctx.warehouseOrigins.some((w) => w.id === from.id)) {
+          throw new ForbiddenException('El material tiene que salir de una bodega de tu sede.');
+        }
+      }
     }
 
     // Quien recibe NO lo elige quien emite: en una bodega de técnico es el técnico
     // (dueño de su material) y en una bodega general su encargado. Si el destino no
     // tiene a nadie, el acta queda sin designado y la puede recibir cualquiera con
     // acceso — es el comportamiento que ya había, no un bloqueo nuevo.
+    //
+    // Excepción: la cajera moviendo a una bodega de su sede SIN encargado (hoy lo son
+    // todas). Sin designado nadie se enteraría del acta; la firma, como en la
+    // devolución del técnico, cualquier cajera de esa sede.
     const tech = ctx.technicians.find((t) => t.warehouseId === to.id);
     const receiver = to.isTechnician
       ? (tech?.userId ? { id: tech.userId, name: tech.name ?? to.title, branchLegacy: null } : null)
-      : (to.managerId ? { id: to.managerId, name: to.managerName ?? to.title, branchLegacy: null } : null);
+      : to.managerId
+        ? { id: to.managerId, name: to.managerName ?? to.title, branchLegacy: null }
+        : ctx.restricted && to.branchLegacy != null
+          ? { id: null, name: `Cajera de ${to.branchName}`, branchLegacy: to.branchLegacy }
+          : null;
 
     return { receiver };
   }
@@ -813,7 +857,7 @@ export class InventoryService {
         motivo: data.assignedBranchLegacy
           // Devolución a una sede sin cajera asignada: el acta existe y el material
           // ya salió, pero no hay quién la firme salvo el superusuario. Decirlo.
-          ? 'Ninguna cajera tiene asignada esa sede, así que no hay quién reciba la devolución (sólo el superusuario puede firmarla en su lugar).'
+          ? 'Ninguna cajera tiene asignada esa sede, así que no hay quién reciba el material (sólo el superusuario puede firmarlo en su lugar).'
           : 'La bodega destino no tiene encargado, así que no hay a quién mandarle el acta.',
       };
     }
@@ -1054,7 +1098,7 @@ export class InventoryService {
     if (a.assignedBranchLegacy != null) {
       const cajeras = await cajerasDeSede(this.prisma, a.assignedBranchLegacy);
       if (!cajeras.some((c) => c.id === user.id)) {
-        throw new ForbiddenException('Esta devolución la recibe la cajera de esa sede.');
+        throw new ForbiddenException('Este traspaso lo recibe la cajera de esa sede.');
       }
     }
   }

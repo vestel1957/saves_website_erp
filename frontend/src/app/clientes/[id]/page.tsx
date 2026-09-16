@@ -1,12 +1,12 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, Suspense, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { Icon } from "@/components/Icon";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import { Select, Textarea } from "@/components/ui/Field";
+import { Field, Input, Select, Textarea } from "@/components/ui/Field";
 import { PagedTable } from "@/components/ui/PagedTable";
 import { TabStrip } from "@/components/ui/TabStrip";
 import { DetailHeader } from "@/components/ui/DetailHeader";
@@ -21,17 +21,22 @@ import { PERM } from "@/lib/auth";
 import {
   SUB_STATUS_LABEL, SUB_STATUS_TONE, INVOICE_KIND_LABEL, INVOICE_RON_LABEL, INVOICE_RON_TONE,
   INVOICE_STATUS_LABEL, INVOICE_STATUS_TONE, SUB_FILE_KIND_OPTS, SUB_FILE_KIND_LABEL, SUB_FILE_KIND_TONE, cop,
-  waLink, initials, antiguedad, STATUS_AVATAR_CLASS,
+  waLink, initials, antiguedad, STATUS_AVATAR_CLASS, ESTRATOS, SUSCRIPCIONES, INSTALL_TECHS,
 } from "@/lib/subscribers";
 import { TICKET_STATUS_LABEL, TICKET_STATUS_TONE } from "@/lib/support";
 import { SERVICE_KIND_LABEL } from "@/lib/plans";
 import { PlayhubPanel } from "@/components/playhub/PlayhubPanel";
 import { CobranzaPanel } from "@/components/cobranzas/CobranzaPanel";
+import { SolicitudesNota } from "@/components/cobranzas/SolicitudesNota";
 import { fmtDate, fmtDiaLargo, fmtHora } from "@/lib/format";
 import { mensajeDeError } from "@/lib/errores";
+import { email, noFutura, numero, telefono } from "@/lib/useValidacion";
 import { UbicacionModal } from "@/components/map/UbicacionModal";
 import { FotoVivienda, fotosDeVivienda } from "@/components/subscribers/FotoVivienda";
+import { FichaReducida } from "@/components/subscribers/FichaReducida";
 import { EstadoConexion } from "@/components/network/EstadoConexion";
+import { Card, Row, CopyBtn, ContactRow, CardEditable, type Borrador } from "@/components/subscribers/FichaCards";
+import { DireccionFields, NOM_KEYS, ZONA_KEYS } from "@/components/subscribers/DireccionFields";
 
 // Modales cargados bajo demanda: su JS NO entra en el chunk inicial de la
 // página (la más pesada de la app); se descarga al abrirlos por primera vez.
@@ -47,6 +52,9 @@ const ClavePortalModal = dynamic(() => import("@/components/subscribers/ClavePor
 const NuevaOrdenModal = dynamic(() => import("@/components/soporte/NuevaOrdenModal").then((m) => m.NuevaOrdenModal), { ssr: false });
 const NuevaFacturaModal = dynamic(() => import("@/components/billing/NuevaFacturaModal").then((m) => m.NuevaFacturaModal), { ssr: false });
 const DevolverEquipoModal = dynamic(() => import("@/components/subscribers/DevolverEquipoModal").then((m) => m.DevolverEquipoModal), { ssr: false });
+const AsignarEquipoModal = dynamic(() => import("@/components/soporte/AsignarEquipoModal").then((m) => m.AsignarEquipoModal), { ssr: false });
+import { AcometidaFibra } from "@/components/subscribers/AcometidaFibra";
+const UbicarEquipoModal = dynamic(() => import("@/components/subscribers/UbicarEquipoModal").then((m) => m.UbicarEquipoModal), { ssr: false });
 // El bloque del contrato entra con la pestaña Resumen: arrastra el lienzo de la
 // firma, que no tiene por qué viajar en el chunk inicial de la ficha.
 const ContratoCard = dynamic(() => import("@/components/subscribers/ContratoCard").then((m) => m.ContratoCard), { ssr: false });
@@ -152,75 +160,28 @@ const fileIcon = (mime: string) => {
   return "file-text";
 };
 
+/**
+ * Qué corrige cada tarjeta de la ficha sin salir de ella (lápiz en su cabecera).
+ *
+ * Es la lista de claves que pueden viajar en el `PATCH /subscribers/:id`; de ahí
+ * sólo salen las que de verdad se toquen. La regla al armarlas fue enseñar lo
+ * que la propia tarjeta ya muestra: los acumulados de dinero y la factura
+ * electrónica no están porque no son datos que se escriban a mano.
+ */
+const CAMPOS_CONTACTO = ["phone1", "phone2", "email", "birthDate", "estrato", ...ZONA_KEYS, ...NOM_KEYS, "addressLine"] as const;
+const CAMPOS_RED = ["pppUsername", "pppPassword", "pppProfile", "ipRemote", "ipLocal", "installTech", "macEquipo", "macOnt", "vlan", "netComment"] as const;
+const CAMPOS_FACTURACION = ["suscripcion", "contractDate"] as const;
+
+/** Lo que se avisa campo por campo antes de mandar nada (ver `lib/useValidacion.ts`). */
+const REGLAS_CONTACTO = {
+  phone1: telefono(),
+  phone2: telefono(),
+  email: email(),
+  birthDate: noFutura("La fecha de nacimiento no puede ser futura."),
+};
+const REGLAS_RED = { vlan: numero({ min: 1, max: 4094, entero: true }) };
+
 /* ── Piezas UI locales ─────────────────────────────────────────── */
-
-function Card({ title, icon, action, children }: { title: string; icon: string; action?: React.ReactNode; children: React.ReactNode }) {
-  return (
-    <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
-      <div className="mb-2.5 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-[13px] font-bold text-text-primary">
-          <Icon name={icon} size={15} className="text-brand" />
-          {title}
-        </div>
-        {action}
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function Row({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="flex justify-between gap-3 border-b border-border-subtle py-1.5 last:border-0">
-      <span className="text-[12px] text-text-tertiary">{label}</span>
-      <span className="text-right text-[12px] font-medium text-text-primary">{value ?? "—"}</span>
-    </div>
-  );
-}
-
-/** Botón de copiar al portapapeles con feedback breve. */
-function CopyBtn({ text }: { text?: string | null }) {
-  const [done, setDone] = useState(false);
-  if (!text) return null;
-  return (
-    <button
-      type="button"
-      title="Copiar"
-      onClick={() => {
-        navigator.clipboard?.writeText(text);
-        setDone(true);
-        setTimeout(() => setDone(false), 1200);
-      }}
-      className="tap shrink-0 text-text-tertiary transition-colors hover:text-text-secondary"
-    >
-      <Icon name={done ? "check" : "copy"} size={13} className={done ? "text-success-text" : ""} />
-    </button>
-  );
-}
-
-/** Fila de contacto accionable: se oculta si no hay valor. */
-function ContactRow({ icon, value, href, onClick, copy }: { icon: string; value?: string | null; href?: string | null; onClick?: () => void; copy?: boolean }) {
-  if (!value) return null;
-  const content = onClick ? (
-    <button type="button" onClick={onClick} className="truncate text-left text-text-primary hover:text-brand hover:underline">
-      {value}
-    </button>
-  ) : href ? (
-    <a href={href} target={href.startsWith("http") ? "_blank" : undefined} rel="noreferrer" className="truncate text-text-primary hover:text-brand hover:underline">
-      {value}
-    </a>
-  ) : (
-    <span className="truncate text-text-primary">{value}</span>
-  );
-  return (
-    <div className="flex items-center gap-2.5 border-b border-border-subtle py-2 text-[13px] last:border-0">
-      <Icon name={icon} size={14} className="shrink-0 text-text-tertiary" />
-      <span className="min-w-0 flex-1">{content}</span>
-      {copy && <CopyBtn text={value} />}
-    </div>
-  );
-}
-
 
 /** Botón de acción con relleno de color suave (para la columna Acciones). */
 const ACTION_TONES: Record<string, string> = {
@@ -284,9 +245,23 @@ function StatCell({ label, tone, destacada, className = "", title, children }: {
 
 /* ── Página ────────────────────────────────────────────────────── */
 
+// `useSearchParams` obliga a un límite de Suspense en el App Router.
 export default function ClienteDetallePage() {
+  return (
+    <Suspense fallback={<PageSkeleton />}>
+      <ClienteDetalle />
+    </Suspense>
+  );
+}
+
+/** Pestañas de la ficha; la clave es la que va en `?tab=` (Resumen va sin parámetro). */
+const FICHA_TABS = ["resumen", "facturas", "cuenta", "cobranza", "ordenes", "equipos", "playhub", "historial", "archivos"] as const;
+type FichaTab = (typeof FICHA_TABS)[number];
+
+function ClienteDetalle() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { loading: authLoading, authFetch, can, isSuperadmin } = useAuth();
   // Tocar una factura desde la ficha —cambiarle fechas o borrarla— es de contabilidad.
   // La cajera llega hasta aquí por su trabajo (ver la deuda, registrar el pago), pero
@@ -296,6 +271,11 @@ export default function ClienteDetallePage() {
   // administración (y el superusuario). El técnico entrega el aparato, pero no es
   // quien lo da de baja del cliente ni decide con qué estado entra a bodega.
   const puedeDevolverEquipo = isSuperadmin || can(PERM.AREA_ADMINISTRACION) || can(PERM.AREA_CAJA);
+  // ENTREGAR un equipo desde la ficha (2026-09-04, a pedido del usuario: «en el tab de
+  // equipos no hay un botón para asignar el equipo»). Se abre además al técnico, que
+  // es quien lo instala y ya podía hacerlo desde su orden: negárselo aquí sería
+  // esconderle en la ficha lo que la orden le deja hacer. El backend lo acota por sede.
+  const puedeAsignarEquipo = puedeDevolverEquipo || can(PERM.AREA_TECNICOS);
   // Emitir una factura nueva SÍ es de ventanilla (2026-08-27): el cobro de una
   // instalación, un traslado o una venta de equipo nace en el mostrador. Es distinto
   // de `puedeTocarFacturas`, que es volver sobre una factura ya emitida.
@@ -313,9 +293,12 @@ export default function ClienteDetallePage() {
   const soloMira =
     !isSuperadmin && can(PERM.AREA_TECNICOS) &&
     !can(PERM.AREA_ADMINISTRACION) && !can(PERM.AREA_CONTABILIDAD) && !can(PERM.AREA_GERENCIA);
+  // Misma llave que /soporte: quien no puede escribir una orden tampoco la abre desde aquí.
+  const puedeAbrirOrden = isSuperadmin || can(PERM.SUPPORT_WRITE);
   const [c, setC] = useState<Detail | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [payOpen, setPayOpen] = useState(false);
+  const [asignarOpen, setAsignarOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [mkOpen, setMkOpen] = useState(false);
   const [wifiOpen, setWifiOpen] = useState(false);
@@ -327,7 +310,22 @@ export default function ClienteDetallePage() {
   const [facturaOpen, setFacturaOpen] = useState(false);
   const [gpsOpen, setGpsOpen] = useState(false);
   const [devolver, setDevolver] = useState<string | null>(null);
-  const [tab, setTab] = useState<"resumen" | "facturas" | "cuenta" | "cobranza" | "ordenes" | "equipos" | "playhub" | "historial" | "archivos">("resumen");
+  /** Equipo cuya caja NAP / puerto se está editando (la VLAN la trae la OLT). */
+  const [ubicar, setUbicar] = useState<import("@/components/subscribers/UbicarEquipoModal").EquipoUbicar | null>(null);
+  /** Sube al guardar un equipo: la acometida vuelve a preguntar a la OLT sin caché. */
+  const [acometidaVer, setAcometidaVer] = useState(0);
+  // La pestaña vive en la URL (`/clientes/:id?tab=facturas`), 2026-09-14, a pedido del
+  // usuario: recargar, volver atrás o pasarle el enlace a otro abre la misma vista. Se
+  // DERIVA de la URL y no se copia a estado — igual que /perfil —, así un enlace a otra
+  // pestaña de la ficha abierta sí la cambia aunque la página no se remonte.
+  const tabURL = searchParams.get("tab");
+  const tab: FichaTab = FICHA_TABS.includes(tabURL as FichaTab) ? (tabURL as FichaTab) : "resumen";
+  const setTab = useCallback((k: FichaTab) => {
+    const q = new URLSearchParams(searchParams.toString());
+    if (k === "resumen") q.delete("tab"); else q.set("tab", k);
+    const qs = q.toString();
+    router.replace(`/clientes/${id}${qs ? `?${qs}` : ""}`, { scroll: false });
+  }, [router, id, searchParams]);
   const [files, setFiles] = useState<any[]>([]);
   // Tipo de documento con el que se va a subir el próximo archivo, y el filtro
   // de la lista. Vacío = sin elegir / todos.
@@ -559,6 +557,15 @@ export default function ClienteDetallePage() {
       </div>
     );
 
+  /* FICHA REDUCIDA — el backend manda `limitado` cuando quien mira es un técnico y
+     este cliente no es de ninguna de sus órdenes (antes eso era un 403 y la pantalla
+     decía "Cliente no encontrado"). Se pinta lo justo para tomar la foto de la
+     vivienda: ver `FichaReducida` y `SubscribersService.fichaReducida`. */
+  if (c.limitado)
+    return (
+      <FichaReducida id={id} cliente={c} fotos={fotosDeVivienda(files)} onCambio={loadFiles} />
+    );
+
   const tone = SUB_STATUS_TONE[c.status ?? ""] ?? "default";
   const wa = waLink(c.phone1) ?? waLink(c.phone2);
   const mail = c.email ? `mailto:${c.email}` : null;
@@ -683,9 +690,13 @@ export default function ClienteDetallePage() {
                   <Icon name="dollar-sign" size={15} /> Registrar pago
                 </Button>
               )}
-              <Button variant="secondary" onClick={() => setOrdenOpen(true)} className="flex-1 sm:flex-none">
-                <Icon name="wrench" size={15} /> Nueva orden
-              </Button>
+              {/* Abrir la orden es de quien la trabaja: quien tiene la ficha en
+                  consulta (`support.write`) ve el historial, no el botón. */}
+              {puedeAbrirOrden && (
+                <Button variant="secondary" onClick={() => setOrdenOpen(true)} className="flex-1 sm:flex-none">
+                  <Icon name="wrench" size={15} /> Nueva orden
+                </Button>
+              )}
             </div>
             <Dropdown
               align="right"
@@ -919,6 +930,62 @@ export default function ClienteDetallePage() {
         </div>
       )}
 
+      {/* LO QUE HAY QUE LLEVARLE (2026-09-04, a pedido del usuario).
+
+          Una instalación, un cambio de equipo, una migración o un "agregar internet"
+          no se atienden con las manos vacías: sale una caja del estante. El sistema ya
+          la aparta a nombre del cliente al abrir la orden, pero eso sólo se veía
+          entrando en la orden — y quien entrega el equipo es la cajera, que lo que
+          abre es esta ficha. Por eso el aviso va arriba del todo y no dentro de la
+          pestaña de órdenes.
+
+          En ámbar cuando a alguna le falta el equipo: ese es el caso que obliga a
+          hacer algo (sacar una unidad de la bodega), y el que no puede leerse igual
+          que "todo listo, llévese la 4711". */}
+      {c.equiposPorLlevar?.length > 0 && (() => {
+        const ordenes: any[] = c.equiposPorLlevar;
+        const falta = ordenes.some((o) => !o.equipo);
+        return (
+          <div className={`mb-2 rounded-lg border p-2.5 ${falta ? "border-warning-border bg-warning-soft" : "border-info-border bg-info-soft"}`}>
+            <div className="flex items-start gap-2">
+              <Icon name={falta ? "package-x" : "package"} size={15} className={`mt-px shrink-0 ${falta ? "text-warning-text" : "text-info-text"}`} />
+              <div className="min-w-0">
+                <div className="text-[13px] font-semibold text-text-primary">
+                  {ordenes.length === 1 ? "Esta visita sale con equipo" : `${ordenes.length} visitas de este cliente salen con equipo`}
+                </div>
+                <ul className="mt-0.5 flex flex-col gap-0.5">
+                  {ordenes.map((o) => (
+                    <li key={o.ticketId} className="text-[11.5px] leading-snug text-text-secondary">
+                      <Link href={`/soporte/${o.ticketId}`} className="font-mono font-semibold text-text-primary hover:text-brand hover:underline">
+                        #{o.code ?? "—"}
+                      </Link>{" "}
+                      {o.type}
+                      {o.agendadaPara ? ` · agendada para el ${fmtDate(o.agendadaPara)}` : ""}
+                      {" — "}
+                      {o.equipo ? (
+                        <>
+                          {o.equipo.origen === "asignado" ? "su equipo es el " : "entréguele el "}
+                          <b className="text-text-primary">equipo {o.equipo.code}</b>
+                          {o.equipo.serial ? ` (S/N ${o.equipo.serial})` : ""}
+                          {o.equipo.bodega ? `, de la bodega ${o.equipo.bodega}` : ""}
+                          {o.equipo.origen === "asignado"
+                            ? ": ya está a su nombre y es el que se instala."
+                            : ": ya está apartado a su nombre."}
+                        </>
+                      ) : (
+                        <span className="font-semibold text-warning-text">
+                          no tiene equipo asignado: sáquele uno de la bodega y asígneselo.
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {payOpen && <RegistrarPagoModal subscriberId={id} open={payOpen} onClose={() => setPayOpen(false)} onDone={reload} />}
       {gpsOpen && (
         <UbicacionModal
@@ -935,6 +1002,23 @@ export default function ClienteDetallePage() {
       {estadoOpen && <CambiarEstadoModal subscriberId={id} current={c.status} motivoActual={c.statusReason} open={estadoOpen} onClose={() => setEstadoOpen(false)} onDone={reload} />}
       {estadoSvcOpen && <EstadoServicioModal subscriberId={id} services={c.services ?? []} open={estadoSvcOpen} onClose={() => setEstadoSvcOpen(false)} onDone={reload} />}
       {clavePortalOpen && <ClavePortalModal subscriberId={id} nombreCliente={c.name} open={clavePortalOpen} onClose={() => setClavePortalOpen(false)} />}
+      {asignarOpen && (
+        <AsignarEquipoModal
+          subscriberId={id}
+          open={asignarOpen}
+          onClose={() => setAsignarOpen(false)}
+          onDone={reload}
+        />
+      )}
+      {ubicar && (
+        <UbicarEquipoModal
+          subscriberId={id}
+          equipo={ubicar}
+          open={!!ubicar}
+          onClose={() => setUbicar(null)}
+          onDone={() => { reload(); setAcometidaVer((n) => n + 1); }}
+        />
+      )}
       {devolver !== null && (
         <DevolverEquipoModal
           subscriberId={id}
@@ -1040,7 +1124,55 @@ export default function ClienteDetallePage() {
       {tab === "resumen" && (
         <>
           <div className="mb-4 grid grid-cols-1 gap-3 lg:grid-cols-3">
-            <Card title="Contacto" icon="user">
+            <CardEditable
+              title="Contacto"
+              icon="user"
+              subscriberId={id}
+              campos={CAMPOS_CONTACTO}
+              puedeEditar={!soloMira}
+              onSaved={setC}
+              reglas={REGLAS_CONTACTO}
+              editor={(f, set, v) => (
+                <div className="flex flex-col gap-3">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+                    <Field label="Celular" error={v.error("phone1")}>
+                      <Input value={f.phone1} onChange={(e) => set({ phone1: e.target.value })} {...v.campo("phone1")} />
+                    </Field>
+                    <Field label="Otro teléfono" error={v.error("phone2")}>
+                      <Input value={f.phone2} onChange={(e) => set({ phone2: e.target.value })} {...v.campo("phone2")} />
+                    </Field>
+                    <Field label="Correo" error={v.error("email")}>
+                      <Input type="email" value={f.email} onChange={(e) => set({ email: e.target.value })} {...v.campo("email")} />
+                    </Field>
+                    <Field label="Nacimiento" error={v.error("birthDate")}>
+                      <Input type="date" value={f.birthDate} onChange={(e) => set({ birthDate: e.target.value })} {...v.campo("birthDate")} />
+                    </Field>
+                    <Field label="Estrato">
+                      <Select value={f.estrato} onChange={(e) => set({ estrato: e.target.value })}>
+                        <option value="">—</option>
+                        {ESTRATOS.map((t) => <option key={t} value={t}>{t}</option>)}
+                      </Select>
+                    </Field>
+                  </div>
+                  {/* La dirección son doce casillas, no un renglón: se edita con el mismo
+                      bloque que usan el alta y el traslado, para que las tres escriban
+                      igual. Por eso la tarjeta se despliega a la fila entera al editar. */}
+                  <div>
+                    <p className="mb-1.5 text-[12px] font-bold text-text-secondary">Dirección</p>
+                    <DireccionFields
+                      value={f}
+                      onChange={set}
+                      hintComercial="Las coordenadas GPS las registra el técnico en la instalación."
+                    />
+                  </div>
+                </div>
+              )}
+            >
+              {/* Quién es, antes de cómo ubicarlo: nombre, documento y sede quedan a
+                  mano para dictarlos o copiarlos sin subir a la cabecera. */}
+              <ContactRow icon="user" value={c.name} copy />
+              <ContactRow icon="contact" value={c.docNumber ? [c.docType, c.docNumber].filter(Boolean).join(" ") : null} copy />
+              <ContactRow icon="landmark" value={c.branch} />
               <ContactRow icon="phone" value={c.phone1} href={c.phone1 ? `tel:${c.phone1}` : null} copy />
               <ContactRow icon="phone" value={c.phone2} href={c.phone2 ? `tel:${c.phone2}` : null} copy />
               <ContactRow icon="mail" value={c.email} href={mail} copy />
@@ -1060,9 +1192,62 @@ export default function ClienteDetallePage() {
               {!c.phone1 && !c.phone2 && !c.email && !c.address && (
                 <p className="py-1 text-[12px] text-text-tertiary">Sin datos de contacto.</p>
               )}
-            </Card>
+            </CardEditable>
 
-            <Card title="Red / Conexión" icon="activity">
+            <CardEditable
+              title="Red / Conexión"
+              icon="activity"
+              subscriberId={id}
+              campos={CAMPOS_RED}
+              puedeEditar={!soloMira}
+              onSaved={setC}
+              reglas={REGLAS_RED}
+              editor={(f, set, v) => (
+                <div className="flex flex-col gap-2">
+                  <p className="text-[12px] text-text-tertiary">
+                    Lo que se guarde aquí viaja al Mikrotik (usuario y clave del secret, perfil,
+                    IPs y comentario). Las MAC no: son inventario del equipo.
+                  </p>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                    <Field label="Usuario PPP" hint="Único: el servidor lo valida contra la base y el router.">
+                      <Input value={f.pppUsername} onChange={(e) => set({ pppUsername: e.target.value })} />
+                    </Field>
+                    <Field label="Clave PPP"><Input value={f.pppPassword} onChange={(e) => set({ pppPassword: e.target.value })} /></Field>
+                    <Field label="Perfil / velocidad"><Input value={f.pppProfile} onChange={(e) => set({ pppProfile: e.target.value })} /></Field>
+                    <Field label="IP remota" hint="Vacía = la asigna el alta en el router.">
+                      <Input value={f.ipRemote} onChange={(e) => set({ ipRemote: e.target.value })} placeholder="automática" />
+                    </Field>
+                    <Field label="IP local" hint="La del concentrador; en blanco si la pone el router.">
+                      <Input value={f.ipLocal} onChange={(e) => set({ ipLocal: e.target.value })} placeholder="—" />
+                    </Field>
+                    <Field label="Tecnología">
+                      <Select value={f.installTech} onChange={(e) => set({ installTech: e.target.value })}>
+                        <option value="">— Seleccionar —</option>
+                        {INSTALL_TECHS.map((t) => <option key={t} value={t}>{t}</option>)}
+                      </Select>
+                    </Field>
+                    <Field label="MAC equipo" hint="La pone la asignación de equipo; aquí se corrige.">
+                      <Input value={f.macEquipo} onChange={(e) => set({ macEquipo: e.target.value })} placeholder="AA:BB:CC:DD:EE:FF" />
+                    </Field>
+                    <Field label="MAC ONT">
+                      <Input value={f.macOnt} onChange={(e) => set({ macOnt: e.target.value })} placeholder="AA:BB:CC:DD:EE:FF" />
+                    </Field>
+                    <Field label="VLAN" hint="1 a 4094. Se guarda dentro del comentario." error={v.error("vlan")}>
+                      <Input type="number" min={1} max={4094} value={f.vlan} onChange={(e) => set({ vlan: e.target.value })} placeholder="sin VLAN" {...v.campo("vlan")} />
+                    </Field>
+                  </div>
+                  <Field label="Comentario de red" hint="Barrio, nº de abonado, VLAN y tecnología.">
+                    <Textarea rows={2} value={f.netComment} onChange={(e) => set({ netComment: e.target.value })} placeholder="MIRADOR 54519 VLAN 200 FTTH" />
+                  </Field>
+                  {/* Que quede dicho: esto corrige el DATO, no la red. La VLAN por la que
+                      navega de verdad la fija el service-port de la OLT. */}
+                  <p className="text-[12px] text-text-tertiary">
+                    Cambiar la VLAN aquí corrige la ficha (y el legacy), no la configuración de
+                    la OLT: para mover la VLAN de verdad hay que tocar el service-port.
+                  </p>
+                </div>
+              )}
+            >
               {/* Semáforo en vivo: lo de abajo es lo guardado, esto es lo que el
                   router dice AHORA (verde navegando / rojo sin navegar). */}
               <EstadoConexion subscriberId={id} pppUsername={c.network?.pppUsername} />
@@ -1110,9 +1295,38 @@ export default function ClienteDetallePage() {
                   <Icon name="wifi" size={14} /> Cambiar clave del WiFi
                 </Button>
               )}
-            </Card>
+            </CardEditable>
 
-            <Card title="Facturación" icon="file-text">
+            <CardEditable
+              title="Facturación"
+              icon="file-text"
+              subscriberId={id}
+              campos={CAMPOS_FACTURACION}
+              puedeEditar={!soloMira}
+              onSaved={setC}
+              editor={(f, set) => (
+                <div className="flex flex-col gap-2">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <Field label="Suscripción">
+                      <Select value={f.suscripcion} onChange={(e) => set({ suscripcion: e.target.value })}>
+                        <option value="">—</option>
+                        {SUSCRIPCIONES.map((t) => <option key={t} value={t}>{t}</option>)}
+                      </Select>
+                    </Field>
+                    <Field label="Fecha contrato" hint="De ella cuelga la permanencia.">
+                      <Input type="date" value={f.contractDate} onChange={(e) => set({ contractDate: e.target.value })} />
+                    </Field>
+                  </div>
+                  {/* Lo demás de esta tarjeta no se escribe a mano: el débito y el crédito
+                      los mueven los pagos y las facturas, y la factura electrónica se
+                      marca desde su propia pantalla. */}
+                  <p className="text-[12px] text-text-tertiary">
+                    Los acumulados y la factura electrónica no se editan aquí: el débito y el
+                    crédito salen de las facturas y los pagos.
+                  </p>
+                </div>
+              )}
+            >
               <Row label="Suscripción" value={c.suscripcion} />
               <Row label="Fecha contrato" value={fmtDate(c.contractDate)} />
               {/* La antigüedad venía en la franja de arriba, donde ahora va el plan. */}
@@ -1134,12 +1348,12 @@ export default function ClienteDetallePage() {
                   )
                 }
               />
-            </Card>
+            </CardEditable>
           </div>
 
           {/* Contrato: permanencia, firma, huella y los dos PDF. */}
           <div className="mb-4">
-            <ContratoCard subscriberId={id} nombre={c.name} openPdf={openPdf} />
+            <ContratoCard subscriberId={id} nombre={c.name} openPdf={openPdf} puedeEditar={!soloMira} onSaved={setC} />
           </div>
 
           {/* Notas */}
@@ -1209,36 +1423,32 @@ export default function ClienteDetallePage() {
       {/* ── Equipos ── */}
       {tab === "equipos" && (
         <div className="flex flex-col gap-3">
-        {puedeDevolverEquipo && !!c.equipment?.length && (
-          <div className="flex justify-end">
-            <Button variant="secondary" onClick={() => setDevolver("")}>
-              <Icon name="package-x" size={15} /> Devolver equipo
-            </Button>
+        {(puedeAsignarEquipo || (puedeDevolverEquipo && !!c.equipment?.length)) && (
+          <div className="flex flex-wrap justify-end gap-2">
+            {/* Entregar. Va el primero y como acción principal: en esta pestaña lo que
+                se hace a diario es dar un equipo, no recogerlo. */}
+            {puedeAsignarEquipo && (
+              <Button onClick={() => setAsignarOpen(true)}>
+                <Icon name="package" size={15} /> Asignar equipo
+              </Button>
+            )}
+            {puedeDevolverEquipo && !!c.equipment?.length && (
+              <Button variant="secondary" onClick={() => setDevolver("")}>
+                <Icon name="package-x" size={15} /> Devolver equipo
+              </Button>
+            )}
           </div>
         )}
-        <PagedTable
-          rows={c.equipment ?? []}
-          empty="Sin equipos asignados."
-          columns={[
-            { key: "code", header: "Código", render: (e: any) => <span className="font-mono font-semibold text-text-secondary">{e.code ?? "—"}</span> },
-            { key: "mac", header: "MAC", render: (e: any) => <span className="font-mono text-[12px]">{e.mac || "—"}</span> },
-            { key: "serial", header: "Serial", render: (e: any) => <span className="font-mono text-[12px]">{e.serial || "—"}</span> },
-            { key: "status", header: "Estado", render: (e: any) => (e.status?.trim() ? <Badge label={e.status.trim()} tone={/bueno|activo/i.test(e.status) ? "success" : "default"} /> : <span className="text-text-tertiary">—</span>) },
-            { key: "brand", header: "Marca", render: (e: any) => e.brand || "—" },
-            { key: "installType", header: "Tipo instalación", render: (e: any) => e.installType || "—" },
-            { key: "vlan", header: "Vlan", align: "right", render: (e: any) => e.vlan ?? "—" },
-            { key: "port", header: "Puerto Nat", align: "right", render: (e: any) => e.port ?? "—" },
-            { key: "nat", header: "Caja Nat", align: "right", render: (e: any) => e.nat ?? "—" },
-            { key: "observation", header: "Observación", render: (e: any) => (e.observation?.trim() ? <span className="text-text-secondary">{e.observation.trim()}</span> : <span className="text-text-tertiary">—</span>) },
-            ...(puedeDevolverEquipo ? [{
-              key: "acciones", header: "", align: "right" as const, sortable: false,
-              render: (e: any) => (
-                <Button size="sm" variant="secondary" onClick={() => setDevolver(e.id)}>
-                  <Icon name="package-x" size={14} /> Devolver
-                </Button>
-              ),
-            }] : []),
-          ]}
+        {/* La fibra recorrida de la OLT a la casa, con el detalle de cada tramo
+            (opción A del lienzo "Equipo y ONU en la ficha", 2026-09-14). */}
+        <AcometidaFibra
+          subscriberId={id}
+          equipos={c.equipment ?? []}
+          puedeEditar={puedeAsignarEquipo}
+          puedeDevolver={puedeDevolverEquipo}
+          onEditar={(e) => setUbicar(e)}
+          onDevolver={(eid) => setDevolver(eid)}
+          refrescarTras={acometidaVer}
         />
         </div>
       )}
@@ -1246,7 +1456,12 @@ export default function ClienteDetallePage() {
       {/* ── Historial de estados ── */}
       {tab === "playhub" && <PlayhubPanel subscriberId={id} email={c.email} />}
 
-      {tab === "cobranza" && <CobranzaPanel subscriberId={id} />}
+      {tab === "cobranza" && (
+        <div className="flex flex-col gap-4">
+          <SolicitudesNota subscriberId={id} />
+          <CobranzaPanel subscriberId={id} />
+        </div>
+      )}
 
       {tab === "historial" && (
         <Card title="Historial de estados" icon="history">
@@ -1421,7 +1636,9 @@ export default function ClienteDetallePage() {
             { key: "total", header: "Total", align: "right", render: (r: any) => (
               <div className="flex flex-col items-end leading-tight">
                 <span className="font-medium">{cop(r.total)}</span>
-                {r.status === "PARTIAL" && <span className="text-[11px] font-medium text-warning-text">Abonó {cop(r.paid)} · debe {cop(r.balance)}</span>}
+                {/* Sobrepagada (pago de varios meses cargado entero a una factura del legacy):
+                    el resto no es deuda, es plata a favor. */}
+                {r.status === "PARTIAL" && <span className="text-[11px] font-medium text-warning-text">Abonó {cop(r.paid)} · {r.balance < 0 ? `a favor ${cop(-r.balance)}` : `debe ${cop(r.balance)}`}</span>}
                 {r.status === "DUE" && <span className="text-[11px] font-medium text-error-text">Debe {cop(r.balance)}</span>}
                 {r.status === "PAID" && <span className="text-[11px] text-success-text">Cancelada</span>}
               </div>

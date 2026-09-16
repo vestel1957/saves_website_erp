@@ -5,6 +5,8 @@ import { PostingService } from '../accounting/posting.service';
 import { nextTid, TID_SEQ } from '../common/tid';
 import { num, round2 } from '../common/money';
 import { hoyEnColombia } from '../common/fecha-colombia';
+import { exigirSedeSuscriptor } from '../common/sede-scope';
+import type { AuthUser } from '../auth/current-user.decorator';
 import type { CargoDeOrden } from './cargos-orden';
 
 /**
@@ -41,6 +43,9 @@ import type { CargoDeOrden } from './cargos-orden';
 
 export type ModoCargo = 'on' | 'informe' | 'off';
 
+const normalizar = (v?: string | null) =>
+  (v ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
+
 export type TarifaCargo = {
   /** Base sin IVA, al peso. */
   precio: number;
@@ -63,6 +68,32 @@ export type ResultadoCargo = {
   /** En una línea, para el log y para quien abrió la orden. */
   mensaje: string;
 };
+
+/**
+ * Una factura que YA cobra este trabajo y todavía no tiene orden detrás.
+ *
+ * Es lo que hay que enseñarle a quien abre la orden a mano ANTES de guardarla: si el
+ * cliente ya pagó los 30.000 en ventanilla, abrir la orden emitiría la segunda.
+ */
+export type FacturaYaCobrada = {
+  tid: number;
+  /** Fecha de emisión (YYYY-MM-DD). */
+  fecha: string;
+  total: number;
+  status: string;
+  /** El concepto del primer renglón, para reconocerla de un vistazo. */
+  concepto: string | null;
+  notes: string | null;
+  /** true = su renglón es justamente el producto de este cargo (candidata segura). */
+  mismoConcepto: boolean;
+};
+
+/**
+ * Cuánto se mira hacia atrás buscando esa factura. Un mes: el cliente pide el trabajo,
+ * paga en ventanilla y la orden se abre en días, no en meses — y más atrás empezarían a
+ * salir los cargos de trabajos anteriores ya hechos.
+ */
+const DIAS_ATRAS_YA_COBRADA = 30;
 
 export class CargoOrdenService {
   private readonly logger = new Logger(CargoOrdenService.name);
@@ -111,6 +142,95 @@ export class CargoOrdenService {
       concepto: fila.name,
       delCatalogo: true,
     };
+  }
+
+  /**
+   * Las facturas de este cliente que YA cobran este trabajo y NO tienen orden detrás.
+   *
+   * POR QUÉ EXISTE. Un mismo trabajo se puede cobrar por dos caminos —la factura
+   * primero (motivo de `motivos-factura.ts`, la orden nace al pagarse) o la orden
+   * primero (el cargo automático de aquí)— y la cajera que factura a mano en
+   * ventanilla y luego abre la orden recorre los dos: el cliente acaba con dos
+   * facturas de 30.000 del mismo trabajo. Pasó el 2026-09-08 con la factura #505077
+   * («Agregar internet», pagada) de un cliente que todavía no tenía su orden.
+   *
+   * NO se descuenta sola: se ENSEÑA, y quien abre la orden dice si es esa
+   * (`yaFacturadaTid`). Adivinar sería peor — un cliente puede pedir dos traslados en
+   * el mismo mes y el segundo se cobra igual.
+   *
+   * Se deja fuera lo que ya tiene dueño:
+   *   · las anuladas;
+   *   · las que emitió una orden (llevan `chargeInvoiceTid` apuntándolas, y además
+   *     dicen «orden #…» en la observación — que es el filtro que aguanta cuando el
+   *     writeback les cambia el número y el `chargeInvoiceTid` se queda viejo);
+   *   · las que tienen un `PendingOrder` — ésas abren su orden solas al pagarse.
+   */
+  async facturasYaCobradas(
+    cargo: CargoDeOrden,
+    subscriberId: string,
+    user?: AuthUser,
+  ): Promise<FacturaYaCobrada[]> {
+    // Las facturas de un cliente son dato suyo: se pasa por el mismo acotado por sede
+    // que la creación de la orden, para que preguntar por ellas no sea la puerta de
+    // atrás del filtro (ver `sede-scope`).
+    if (user) await exigirSedeSuscriptor(this.prisma, user, subscriberId);
+    const desde = new Date(Date.now() - DIAS_ATRAS_YA_COBRADA * 86_400_000);
+    const facturas = await this.prisma.subInvoice
+      .findMany({
+        where: {
+          subscriberId,
+          // Los cargos son siempre factura aparte de un renglón: la mensualidad del
+          // cliente no cobra un traslado y ofrecerla sería invitar a atarla mal.
+          kind: 'FIJA',
+          status: { not: 'CANCELED' },
+          createdAt: { gte: desde },
+          pendingOrder: null,
+          // Las que emitió una orden llevan «orden #…» escrito por `emitir`. Se
+          // filtran por el texto además de por `chargeInvoiceTid` porque el
+          // writeback renumera las facturas al empujarlas al legacy y hasta hoy
+          // dejaba ese puntero apuntando a un número que ya no existe.
+          NOT: { notes: { contains: 'orden #' } },
+        },
+        orderBy: { invoiceDate: 'desc' },
+        take: 10,
+        select: {
+          tid: true, invoiceDate: true, total: true, status: true, notes: true,
+          items: { take: 1, select: { productName: true, description: true } },
+        },
+      })
+      .catch(() => []);
+    if (!facturas.length) return [];
+
+    // Las que ya son de una orden. Se pregunta por `chargeInvoiceTid` y también por
+    // `moveInvoiceTid`, que es la columna que llevan escrita los traslados de agosto.
+    const tids = facturas.map((f) => f.tid);
+    const conOrden = await this.prisma.ticket
+      .findMany({
+        where: { OR: [{ chargeInvoiceTid: { in: tids } }, { moveInvoiceTid: { in: tids } }] },
+        select: { chargeInvoiceTid: true, moveInvoiceTid: true },
+      })
+      .catch(() => []);
+    const tomadas = new Set<number>();
+    for (const t of conOrden) {
+      if (t.chargeInvoiceTid) tomadas.add(t.chargeInvoiceTid);
+      if (t.moveInvoiceTid) tomadas.add(t.moveInvoiceTid);
+    }
+
+    const producto = normalizar(cargo.producto);
+    return facturas
+      .filter((f) => !tomadas.has(f.tid))
+      .map((f) => {
+        const concepto = f.items[0]?.productName ?? f.items[0]?.description ?? null;
+        return {
+          tid: f.tid,
+          fecha: f.invoiceDate.toISOString().slice(0, 10),
+          total: round2(num(f.total)),
+          status: f.status,
+          concepto,
+          notes: f.notes,
+          mismoConcepto: normalizar(concepto) === producto,
+        };
+      });
   }
 
   /**

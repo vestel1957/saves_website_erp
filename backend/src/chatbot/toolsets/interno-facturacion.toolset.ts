@@ -2,7 +2,6 @@ import type { Toolset, ToolContext, ToolDef } from '@s4gk/wa-agent';
 import { APP_PERMISSIONS as P } from '../../auth/permissions.catalog';
 import { BillingService } from '../../billing/billing.service';
 import { FacturasService } from '../../billing/facturas.service';
-import { RecurringService } from '../../billing/recurring.service';
 import { EinvoiceService } from '../../einvoice/einvoice.service';
 import { ChatbotDocsService, enviarDoc } from '../chatbot-docs.service';
 import { authUserOf } from '../chatbot.identity';
@@ -17,7 +16,7 @@ const EFACTURA = [P.AREA_CONTABILIDAD];
 
 /**
  * Facturación para el agente interno: qué se facturó, qué está pendiente, cómo está
- * la cartera por edades, las notas crédito y las facturaciones recurrentes.
+ * la cartera por edades y las notas crédito.
  *
  * SOLO LECTURA. La generación masiva (`generate`) factura a más de 20.000 abonados de
  * un golpe y anular una factura mueve contabilidad y cartera: eso NO se dispara desde
@@ -31,7 +30,6 @@ export class InternoFacturacionToolset implements Toolset {
   constructor(
     private readonly billing: BillingService,
     private readonly facturas: FacturasService,
-    private readonly recurring: RecurringService,
     private readonly einvoice: EinvoiceService,
     private readonly docs: ChatbotDocsService,
   ) {}
@@ -95,13 +93,6 @@ export class InternoFacturacionToolset implements Toolset {
             properties: { q: { type: 'string', description: 'Cliente o número. Opcional.' } },
           },
         },
-        {
-          name: 'facturacion_recurrente',
-          description:
-            'Facturaciones automáticas configuradas (cargos que se repiten cada mes): cuáles hay, ' +
-            'a quién y si están activas.',
-          input_schema: { type: 'object', properties: {} },
-        },
       ]),
       ...gated(canAny(ctx, EFACTURA), [
         {
@@ -135,8 +126,6 @@ export class InternoFacturacionToolset implements Toolset {
         return safe(() => this.edades());
       case 'notas_credito':
         return safe(() => this.notas(input, ctx));
-      case 'facturacion_recurrente':
-        return safe(() => this.recurrente());
       default:
         return `Herramienta no disponible: ${name}`;
     }
@@ -231,18 +220,6 @@ export class InternoFacturacionToolset implements Toolset {
         `${n.description ? `: ${n.description}` : ''}${n.author ? ` · la hizo ${n.author}` : ''} · ${fecha(n.date)}`,
     );
     return `${res.total} nota(s):\n${lineas.join('\n')}`;
-  }
-
-  private async recurrente(): Promise<string> {
-    const [s, res]: any[] = await Promise.all([this.recurring.stats(), this.recurring.list({ pageSize: 8 })]);
-    if (!res.items?.length) return 'No hay facturaciones recurrentes configuradas.';
-    const lineas = res.items.map(
-      (r: any) => `• #${r.tid} ${r.subscriber} (ab. ${r.abonado ?? '—'}) — ${cop(r.total)} · ` +
-        `${r.rec ?? 'periódica'} · ${r.active ? 'activa' : 'INACTIVA'}`,
-    );
-    const cab = s ? `${s.total ?? res.total} plantilla(s) recurrente(s)${s.activas != null ? `, ${s.activas} activa(s)` : ''}.` : '';
-    const extra = res.total > res.items.length ? `\n(+${res.total - res.items.length} más)` : '';
-    return [cab, lineas.join('\n') + extra].filter(Boolean).join('\n');
   }
 
   private async efactura(): Promise<string> {

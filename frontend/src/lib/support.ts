@@ -21,6 +21,20 @@ export function esTecnico(user: Pick<AuthUser, "permissions"> | null | undefined
   return can(user, PERM.AREA_TECNICOS);
 }
 
+/**
+ * ¿Puede TOCAR una orden —abrirla, corregirla, asignarla, cambiarle el estado,
+ * documentarla, firmarla, descargarle equipo o material—, o solo mirarla?
+ *
+ * Entrar a /soporte y modificar lo que hay dentro eran, hasta ahora, la misma
+ * llave. Se separaron (`support.write`) para que una jefatura pueda seguir el
+ * trabajo de los técnicos sin poder alterarlo. Quien no lo tiene ve la lista, el
+ * detalle, el PDF y el Excel; no se le pinta ni un control que el servidor le
+ * fuera a rechazar — los mismos 14 endpoints lo exigen en `support.router.ts`.
+ */
+export function puedeEditarOrdenes(user: Pick<AuthUser, "permissions"> | null | undefined): boolean {
+  return can(user, PERM.SUPPORT_WRITE);
+}
+
 /** Una orden de la cola del técnico, tal como la manda `/support/mi-jornada`. */
 export type OrdenDeJornada = {
   id: string; code: number | null; subject: string; type: string; status: string;
@@ -64,7 +78,7 @@ export type MiRendimiento = {
   porTipo: { tipo: string; cerradas: number; revisitas: number; revisitaPct: number | null }[];
   casos: { id: string; code: number | null; tipo: string; fecha: string; abonado: string | null; cliente: string | null; queja: string | null; quejaFecha: string | null }[];
 };
-export type TicketRow = { id: string; code: number | null; legacyId: number; subject: string; type: string; description: string | null; priority: string | null; created: string; status: string; assigned: string | null; generadaPor: string | null; client: string | null; subscriberId: string | null; sede: string | null; barrio: string | null; finalDate: string | null };
+export type TicketRow = { id: string; code: number | null; legacyId: number; subject: string; type: string; servicio: ServicioContratado | null; description: string | null; priority: string | null; created: string; status: string; assigned: string | null; generadaPor: string | null; client: string | null; subscriberId: string | null; sede: string | null; barrio: string | null; finalDate: string | null };
 export type SupportStats = { total: number; pendientes: number; resueltos: number; anuladas: number; status: Record<string, number>; topTypes: { type: string; count: number }[]; topTechs: { tec: string; count: number }[]; todosPending: number };
 export type Paged<T> = { items: T[]; total: number; page: number; pageSize: number; pages: number };
 
@@ -89,6 +103,41 @@ export const TICKET_STATUS_TONE: Record<string, "success" | "warning" | "error" 
  * una orden abierta" y cualquier filtro futuro pregunten por lo mismo.
  */
 export const TICKET_ESTADOS_ABIERTOS = ["PENDIENTE", "REALIZANDO"] as const;
+
+/**
+ * QUÉ TIENE CONTRATADO EL CLIENTE de la orden: sólo televisión, sólo internet, o
+ * los dos. Lo calcula el servidor a partir de su última factura recurrente
+ * (`common/servicios-del-abonado.ts`) y viaja en cada fila del listado y de la
+ * agenda.
+ *
+ * `null` en dos casos, y en los dos se pinta sin cartel: la orden no va de un
+ * servicio ('Instalacion', 'Cambio de equipo' — colgarles un cartel sería ruido en
+ * media lista) o del cliente no consta el plan. Aquí sólo se pinta lo que el
+ * servidor afirma.
+ */
+export type ServicioContratado = "TV" | "INTERNET" | "COMBO";
+
+/**
+ * El cartel de servicio: cómo se escribe y con qué icono se escanea.
+ *
+ * Nació el 2026-09-10 de una queja concreta: en la lista no se veía si una
+ * reconexión era sólo de televisión y había que abrirlas una a una para saberlo.
+ * La primera versión leía el NOMBRE de la orden y por eso marcaba "TV" a 33
+ * clientes que también tienen internet; dice "Solo TV" porque eso es justo lo que
+ * hay que poder creerse: que a ése no hay que tocarle el internet.
+ *
+ * El texto va CORTO porque el chip vive pegado al detalle de la orden, que ya dice
+ * el nombre entero; el icono es lo que se lee de un barrido, y el texto lo que
+ * impide que el color y el dibujo sean la única señal.
+ */
+export const SERVICIO_CONTRATADO: Record<ServicioContratado, { label: string; corto: string; icono: "tv" | "wifi" | "layers" }> = {
+  TV: { label: "Solo televisión", corto: "Solo TV", icono: "tv" },
+  INTERNET: { label: "Solo internet", corto: "Solo internet", icono: "wifi" },
+  COMBO: { label: "TV + internet", corto: "Combo", icono: "layers" },
+};
+
+/** Los tres, en el orden en que se ofrecen en el filtro. */
+export const SERVICIOS_CONTRATADOS: readonly ServicioContratado[] = ["TV", "INTERNET", "COMBO"];
 
 // Tipos de orden válidos (detalle). Fuente única: usada por Nueva orden y el filtro.
 export const TICKET_TYPES = [

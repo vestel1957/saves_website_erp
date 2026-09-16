@@ -5,17 +5,17 @@
  * controlador. Cablea HTTP -> método: extrae los argumentos de `req` y llama.
  * La lógica sigue viviendo en NetworkController, que ya no lleva decoradores.
  *
- * Endpoints: 49
+ * Endpoints: 52
  */
 import { crearRouter, manejar } from '../core/http/ruta';
 import { validar, validarQuery } from '../core/http/validar';
 import { autenticar, exigirArea, exigirAreaCon, exigirPermisos, moduloRed, abiertoAlTecnico, usuarioDe } from '../core/auth/instancias';
-import { NetworkController, BatchIdsDto, MessageBatchDto, RestoreBranchDto, TransferOtpDto } from './network.controller';
+import { NetworkController, BatchIdsDto, EstadoMikrotikDto, MessageBatchDto, RestoreBranchDto, TransferOtpDto } from './network.controller';
 import { mikrotikService, networkService, networkWriteService } from '../core/contenedor';
 import type { Response } from 'express';
 import { IsArray, IsIn, IsOptional, IsString, ArrayNotEmpty } from 'class-validator';
 import { NetworkService } from './network.service';
-import { NetworkWriteService, EquipTransferDto, AssignPortDto, AssignEquipmentSubDto, CreateEquipmentDto, CreateIpPoolDto, CreateNapDto, CreateVlanDto, ReceiveTransferDto, RejectTransferDto, SignTransferDto, UpdateIpPoolDto, UpdateNapDto } from './network-write.service';
+import { NetworkWriteService, EquipTransferDto, AssignPortDto, AssignEquipmentSubDto, CreateEquipmentDto, CreateIpPoolDto, CreateNapDto, CreateVlanDto, ReceiveTransferDto, RejectTransferDto, SignTransferDto, UpdateEquipmentDto, UpdateIpPoolDto, UpdateNapDto } from './network-write.service';
 import { MikrotikService } from './mikrotik.service';
 import { INV_PERMISSIONS, APP_PERMISSIONS } from '../auth/permissions.catalog';
 import { ListNapsQueryDto } from './dto/naps.dto';
@@ -53,9 +53,17 @@ networkRouter.get(
 networkRouter.post(
   '/equipment',
   autenticar,
-  exigirArea('tecnicos', 'administracion'),
+  exigirAreaCon({ areas: ['tecnicos', 'administracion'], orPermission: [INV_PERMISSIONS.ADMIN] }),
   moduloRed,
   manejar((req) => network.createEquipment(validar(CreateEquipmentDto, req.body), usuarioDe(req))),
+);
+
+networkRouter.patch(
+  '/equipment/:id',
+  autenticar,
+  exigirAreaCon({ areas: ['tecnicos', 'administracion'], orPermission: [INV_PERMISSIONS.ADMIN] }),
+  moduloRed,
+  manejar((req) => network.updateEquipment(req.params.id, validar(UpdateEquipmentDto, req.body), usuarioDe(req))),
 );
 
 networkRouter.post(
@@ -72,6 +80,14 @@ networkRouter.post(
   exigirArea('tecnicos', 'administracion'),
   moduloRed,
   manejar((req) => network.unassignEquipment(req.params.id)),
+);
+
+networkRouter.get(
+  '/equipment-available',
+  autenticar,
+  exigirAreaCon({ areas: ['administracion', 'caja'], orPermission: [INV_PERMISSIONS.ADMIN] }),
+  moduloRed,
+  manejar((req) => network.equipmentAvailable(usuarioDe(req), req.query.branch as string, req.query.search as string, req.query.page as string, req.query.pageSize as string)),
 );
 
 networkRouter.get(
@@ -282,6 +298,15 @@ networkRouter.post(
   exigirPermisos(APP_PERMISSIONS.NETWORK_CUT),
   moduloRed,
   manejar((req) => network.cut(req.params.id, usuarioDe(req))),
+);
+
+networkRouter.post(
+  '/subscribers/:id/estado-mikrotik',
+  autenticar,
+  exigirArea('tecnicos', 'administracion'),
+  exigirPermisos(APP_PERMISSIONS.NETWORK_MOROSOS_TOGGLE),
+  moduloRed,
+  manejar((req) => network.estadoMikrotik(req.params.id, validar(EstadoMikrotikDto, req.body), usuarioDe(req))),
 );
 
 networkRouter.get(

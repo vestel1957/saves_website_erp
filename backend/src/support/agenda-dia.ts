@@ -9,13 +9,29 @@ import { Prisma } from '@prisma/client';
  * una visita que sale en un sitio y no en el otro. Meterlo en `AgendaService` habría
  * creado además un ciclo de imports con `SupportService`.
  *
- * **Aquí no hay candado, pero sí lo que el candado lee.** El turno obligatorio —una
- * visita a la vez, y la siguiente sólo al cerrar la de ahora— vive en `turno.ts`, y
- * calcula "la que toca" con las funciones de este fichero: el mismo `whereDelDia` y
- * el mismo `ORDEN_AGENDA` que usa la pantalla. Es la única forma de que no discrepen
- * — si el candado ordenara por su cuenta, al técnico se le ofrecería una visita y se
- * le negaría otra. (El turno estuvo retirado del 2026-08-28 al 2026-09-02.)
+ * **Aquí no hay candado, pero sí lo que el candado lee.** "Una orden a la vez" —para
+ * todo el personal desde el 2026-09-09— vive en `turno.ts`, y calcula la orden que
+ * ancla a cada quien con dos cosas de este fichero: `ORDEN_AGENDA` (para que "la
+ * primera" sea la misma que ve la pantalla) y `DIAS_REZAGO` (para no anclar a nadie a
+ * un fantasma de 2021). Lo que ya NO comparte es `whereDelDia`: el candado mira todas
+ * sus órdenes abiertas, agendadas o no, y no sólo las del día.
  */
+
+/**
+ * A partir de aquí una orden abierta ya no es trabajo del día: es rezago.
+ *
+ * No es un capricho. De las 509 órdenes abiertas de la empresa, 164 llevan MÁS DE UN
+ * AÑO sin cerrar y las más viejas son de 2021 — nadie las va a atender hoy. Metidas en
+ * la misma lista y ordenadas por antigüedad (que es lo correcto para el trabajo real),
+ * copaban las primeras pantallas y enterraban lo de esta semana.
+ *
+ * Vive aquí, y no dentro de `SupportService` como nació, porque desde el 2026-09-09 lo
+ * lee también el candado de "una orden a la vez" (`turno.ts`): la orden que ancla a un
+ * funcionario tiene que ser trabajo vivo, no un fantasma de 2021 que nadie va a cerrar.
+ * Con dos constantes separadas, el panel diría "esto es rezago" y el candado seguiría
+ * exigiendo cerrarlo.
+ */
+export const DIAS_REZAGO = 90;
 
 /** Estados en los que una visita todavía cuenta como trabajo por hacer. */
 export const ABIERTA = ['PENDIENTE', 'REALIZANDO'] as const;
@@ -107,4 +123,49 @@ export function celdaDelDia(scheduledFor: Date, status: string, hoy: Date): stri
   const atrasada =
     scheduledFor.getTime() < hoy.getTime() && (ABIERTA as readonly string[]).includes(status);
   return (atrasada ? hoy : scheduledFor).toISOString().slice(0, 10);
+}
+
+/**
+ * El TRABAJO DE HOY de una persona: lo que se le enseña al técnico de campo en
+ * `/soporte` (2026-09-10, a pedido del usuario: «mostrar únicamente las órdenes
+ * asignadas al técnico para el día actual; no deben visualizar el historial completo
+ * de órdenes realizadas»).
+ *
+ * Hasta hoy su bandeja traía TODAS sus órdenes desde siempre —966 en el caso de
+ * Miguel Ángel, con las de 2021 dentro—. Su día es lo que tiene que ver.
+ *
+ * Qué cuenta como "hoy", y por qué cada renglón:
+ *
+ *  · **Lo agendado para hoy y lo atrasado que sigue abierto** — exactamente lo que
+ *    `whereDelDia` le pinta en `/mi-agenda`. Las dos pantallas tienen que decir lo
+ *    mismo o el técnico creerá que perdió una visita.
+ *  · **Lo EMPEZADO** (`REALIZANDO`), esté agendado o no: si lo tiene a medias es
+ *    trabajo de hoy por definición — y es además lo que le ancla el turno
+ *    (`turno.ts`), así que esconderlo lo dejaría bloqueado sin ver por qué.
+ *  · **Lo asignado hoy sin agendar y todavía abierto.** No es un adorno: de 416
+ *    órdenes cerradas en dos semanas, 112 nunca se agendaron —las abre la cajera y
+ *    las cierra el técnico el mismo día—. Sin este renglón ese trabajo desaparecía
+ *    de su pantalla en el momento en que se le asigna. Lo de días anteriores sin
+ *    agendar no entra: eso es cola, y para eso está el agendamiento.
+ *  · **Lo que cerró o apartó HOY**, para que vea lo que lleva hecho. Sin esto, cerrar
+ *    una orden la borraba de la pantalla y el día terminado se veía como uno en
+ *    blanco.
+ *
+ * Lo de días anteriores ya cerrado NO entra: para eso está su historial
+ * (`/mi-agenda/historial`), que lo enseña por día de trabajo.
+ */
+export function whereTrabajoDelDia(hoy: Date): Prisma.TicketWhereInput {
+  // `skippedAt` y `resolvedAt` son instantes; `created`, `scheduledFor` y `finalDate`
+  // son columnas `date` que se comparan contra la medianoche de Colombia.
+  const finDelDia = new Date(hoy.getTime() + 86_400_000 - 1);
+  return {
+    OR: [
+      whereDelDia(hoy, hoy),
+      { status: 'REALIZANDO' },
+      { scheduledFor: null, status: { in: [...ABIERTA] }, created: hoy },
+      { finalDate: hoy },
+      { resolvedAt: { gte: hoy, lte: finDelDia } },
+      { skippedAt: { gte: hoy, lte: finDelDia } },
+    ],
+  };
 }

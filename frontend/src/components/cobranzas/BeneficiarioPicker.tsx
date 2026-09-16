@@ -60,8 +60,10 @@ export function BeneficiarioPicker({
   autoFocus?: boolean;
 }) {
   const { authFetch, can } = useAuth();
-  // Mismo criterio que el POST del backend: quien no es de contabilidad ni de
-  // administración (la cajera) elige y punto.
+  // La cajera elige del desplegable y punto: aquí se paga a un PROVEEDOR, y el
+  // catálogo de proveedores es de contabilidad. Si a quien se le paga no está en
+  // la lista, su salida es la pestaña «No registrado», donde sí puede escribir el
+  // nombre con su NIT o cédula y dejarlo en el directorio como tercero.
   const puedeEscribir = can(["area.contabilidad", "area.administracion"]);
   const [q, setQ] = useState("");
   const [items, setItems] = useState<Beneficiario[]>([]);

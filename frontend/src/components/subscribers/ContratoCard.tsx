@@ -11,6 +11,8 @@ import { fmtDate } from "@/lib/format";
 import { mensajeDeError } from "@/lib/errores";
 import { ACCEPT_IMAGEN } from "@/lib/adjuntos";
 import { FirmaModal } from "./FirmaModal";
+import { CardEditable, type FichaDetalle } from "./FichaCards";
+import { Field, Select } from "@/components/ui/Field";
 
 type Estado = {
   contractDate: string | null;
@@ -54,10 +56,16 @@ export function ContratoCard({
   subscriberId,
   nombre,
   openPdf,
+  puedeEditar = false,
+  onSaved,
 }: {
   subscriberId: string;
   nombre?: string | null;
   openPdf: (path: string) => void | Promise<void>;
+  /** Enseñar el lápiz para cambiar la cláusula de permanencia desde aquí. */
+  puedeEditar?: boolean;
+  /** La ficha fresca que devuelve el guardado, para que la página se repinte. */
+  onSaved?: (detalle: FichaDetalle) => void;
 }) {
   const { authFetch } = useAuth();
   const [estado, setEstado] = useState<Estado | null>(null);
@@ -65,6 +73,8 @@ export function ContratoCard({
   const [huellaUrl, setHuellaUrl] = useState<string | null>(null);
   const [firmando, setFirmando] = useState(false);
   const [subiendo, setSubiendo] = useState(false);
+  /** Catálogo de permanencias vigentes (sólo se pide al abrir el lápiz). */
+  const [clausulas, setClausulas] = useState<{ legacyId: number | null; nombre: string; meses: number }[]>([]);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const cargar = useCallback(() => {
@@ -75,6 +85,16 @@ export function ContratoCard({
   }, [authFetch, subscriberId]);
 
   useEffect(cargar, [cargar]);
+
+  // Sólo las activas, igual que el alta: el catálogo tiene cláusulas retiradas que
+  // siguen imprimiéndose en contratos viejos pero ya no se le ponen a nadie.
+  useEffect(() => {
+    if (!puedeEditar) return;
+    void authFetch("/clausulas?soloActivas=1")
+      .then((r) => (r.ok ? r.json() : []))
+      .then(setClausulas)
+      .catch(() => {});
+  }, [authFetch, puedeEditar]);
 
   // Las imágenes van por la API con token, así que no se pueden poner en un <img
   // src>: se piden por fetch y se muestran como blob. Se revoca al cambiar para no
@@ -141,12 +161,14 @@ export function ContratoCard({
   const valorHoy = c && mes && mes >= 1 && mes <= c.valores.length ? c.valores[mes - 1] : null;
 
   return (
-    <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
-      <div className="mb-2.5 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-[13px] font-bold text-text-primary">
-          <Icon name="file-signature" size={15} className="text-brand" />
-          Contrato
-        </div>
+    <CardEditable
+      title="Contrato"
+      icon="file-signature"
+      subscriberId={subscriberId}
+      campos={["clausula"]}
+      puedeEditar={puedeEditar}
+      onSaved={(d) => { cargar(); onSaved?.(d); }}
+      accion={
         <div className="flex gap-1.5">
           <Button variant="secondary" className="!px-2 !py-1 !text-[11px]" onClick={() => void openPdf(`/subscribers/${subscriberId}/contract.pdf`)}>
             <Icon name="file-text" size={13} /> Contrato
@@ -155,7 +177,31 @@ export function ContratoCard({
             <Icon name="scroll-text" size={13} /> Anexo
           </Button>
         </div>
-      </div>
+      }
+      editor={(f, set) => (
+        <div className="flex flex-col gap-2">
+          <Field
+            label="Cláusula de permanencia"
+            hint="Sin cláusula, el cliente puede terminar el contrato cuando quiera sin pagar nada por ese concepto."
+          >
+            <Select value={f.clausula} onChange={(e) => set({ clausula: e.target.value })}>
+              <option value="">— Sin permanencia —</option>
+              {/* Si la que tiene puesta ya no está en el catálogo, se muestra igual:
+                  cambiar de cláusula no puede ser el efecto de abrir el desplegable. */}
+              {f.clausula && !clausulas.some((c2) => String(c2.legacyId) === f.clausula) && (
+                <option value={f.clausula}>Cláusula {f.clausula} (retirada del catálogo)</option>
+              )}
+              {clausulas.map((c2) => (
+                <option key={c2.legacyId} value={String(c2.legacyId)}>{c2.nombre} — {c2.meses} meses</option>
+              ))}
+            </Select>
+          </Field>
+          <p className="text-[12px] text-text-tertiary">
+            La fecha del contrato, de la que se cuentan los meses, se corrige en la tarjeta de Facturación.
+          </p>
+        </div>
+      )}
+    >
 
       {/* ── Permanencia ── */}
       {c ? (
@@ -266,6 +312,6 @@ export function ContratoCard({
         nombre={nombre}
         onSaved={cargar}
       />
-    </div>
+    </CardEditable>
   );
 }

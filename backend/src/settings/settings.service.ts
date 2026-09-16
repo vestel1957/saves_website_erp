@@ -39,6 +39,8 @@ export const SETTING_DEFS: SettingDef[] = [
   // Lo que se le rebaja al que paga en ventanilla un mes que aún no se ha facturado.
   // No es una promoción: la promo se aplica a una factura y esa factura todavía no
   // existe. Ver `billing/anticipos.ts` → `concederDescuentosAdelantados`.
+  // Estuvo apagado (0) del 2026-09-08 al 16; desde el 16 vuelve al 5% a pedido del
+  // usuario: el que adelanta un mes siempre lleva el descuento.
   { key: 'billing.advanceDiscountPct', group: 'billing', label: 'Descuento por pagar un mes por adelantado (%)', default: '5', placeholder: '5' },
   { key: 'network.mikrotikLive', group: 'red', label: 'Ejecutar cortes/reconexiones REALES en Mikrotik', default: 'false', placeholder: 'true | false' },
   { key: 'network.oltLive', group: 'red', label: 'Ejecutar aprovisionamiento REAL en OLT', default: 'false', placeholder: 'true | false' },

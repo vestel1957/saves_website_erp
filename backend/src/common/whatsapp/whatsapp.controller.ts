@@ -1,7 +1,7 @@
 import { WhatsappService } from './whatsapp.service';
 import { WhatsappLogService } from './whatsapp-log.service';
 import { WhatsappCampaignService } from './whatsapp-campaign.service';
-import { CreateCampaignDto, TemplateDto } from './dto/campaign.dto';
+import { CampaignPreviewDto, CampaignTestDto, CreateCampaignDto, TemplateDto } from './dto/campaign.dto';
 import { APP_PERMISSIONS } from '../../auth/permissions.catalog';
 import { type AuthUser } from '../../auth/current-user.decorator';
 
@@ -27,9 +27,10 @@ export class WhatsappController {
    * Salud REAL del número contra Kapso/Meta: calidad (GREEN/YELLOW/RED) y tier de
    * mensajería (clientes únicos/24h). Es lo que hay que vigilar en campañas masivas:
    * calidad en rojo o tier bajo = Meta va a rechazar o castigar los envíos.
+   * Trae además cuánto del cupo de 24 h ya se gastó.
    */
   health() {
-    return this.whatsapp.probe();
+    return this.campaigns.salud();
   }
 
   /** Historial de conversación (entrantes + salientes). */
@@ -71,6 +72,21 @@ export class WhatsappController {
 
   createCampaign(dto: CreateCampaignDto, user: AuthUser) {
     return this.campaigns.createCampaign(dto, user);
+  }
+
+  /** Sedes, planes y estados para armar el público de una campaña. */
+  campaignOptions() {
+    return this.campaigns.opcionesCampana();
+  }
+
+  /** A quién le llegaría, cuántos se caen y por qué, y cómo se reparte en el cupo diario. */
+  previewCampaign(dto: CampaignPreviewDto) {
+    return this.campaigns.previewCampaign(dto);
+  }
+
+  /** Envío de prueba de la plantilla a un celular, con los datos de un cliente real. */
+  testCampaign(dto: CampaignTestDto, user: AuthUser) {
+    return this.campaigns.testCampaign(dto, user);
   }
 
   campaignReport(

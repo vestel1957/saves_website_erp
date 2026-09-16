@@ -26,11 +26,14 @@ function armar(opts: { tvOk?: boolean; conTv?: boolean; detalle?: string } = {})
     },
     subscriberService: {
       count: jest.fn().mockResolvedValue(conTv ? 1 : 0),
-      updateMany: jest.fn(async (a: any) => { serviciosMarcados.push(a.data); return { count: 1 }; }),
+      updateMany: jest.fn(async (a: any) => { serviciosMarcados.push({ ...a.data, _where: a.where }); return { count: 1 }; }),
     },
     subscriberStatusHistory: { create: jest.fn(async (a: any) => { historial.push(a.data); return {}; }) },
     subInvoice: {
       findFirst: jest.fn().mockResolvedValue(null),
+      // La factura vigente del abonado, cortada: es lo que la ficha pinta en rojo y lo
+      // que la reconexión tiene que levantar (`levantarCorteEnFactura`).
+      findUnique: jest.fn().mockResolvedValue({ estadoCombo: 'CORTADO', estadoTv: 'CORTADO', ron: 'CORTADO' }),
       update: jest.fn(async (a: any) => { facturaMarcada.push(a.data); return {}; }),
     },
     $queryRaw: jest.fn().mockResolvedValue([{ id: 'fac-1' }]),
@@ -76,7 +79,7 @@ describe('cascada de cierre por servicio', () => {
     expect(genieacs.tvBatchBySubscribers).toHaveBeenCalledWith(['sub-1'], true, undefined);
     expect(mikrotik.reconnect).not.toHaveBeenCalled();
     expect(c.tv).toMatchObject({ ok: true, via: 'TR069' });
-    expect(serviciosMarcados).toEqual([{ status: 'ACTIVO' }]);
+    expect(serviciosMarcados.map((x: any) => x.status)).toEqual(['ACTIVO']);
   });
 
   it('una orden de TV no cambia el estado del abonado', async () => {
@@ -91,7 +94,7 @@ describe('cascada de cierre por servicio', () => {
     const c = await cascada('Corte Television');
     expect(mikrotik.cut).not.toHaveBeenCalled();
     expect(c.tv.ok).toBe(true);
-    expect(serviciosMarcados).toEqual([{ status: 'CORTADO' }]);
+    expect(serviciosMarcados.map((x: any) => x.status)).toEqual(['CORTADO']);
   });
 
   it('si el equipo no pudo, lo dice en la cara de quien cierra', async () => {
@@ -105,7 +108,33 @@ describe('cascada de cierre por servicio', () => {
   it('aun fallando el equipo, la ficha queda al día: la cerró una persona', async () => {
     const { cascada, serviciosMarcados } = armar({ tvOk: false });
     await cascada('Reconexion Television');
-    expect(serviciosMarcados).toEqual([{ status: 'ACTIVO' }]);
+    expect(serviciosMarcados.map((x: any) => x.status)).toEqual(['ACTIVO']);
+  });
+
+  it('cerrar la reconexión de internet TAMBIÉN borra el corte de la línea de servicio', async () => {
+    // El chip rojo de la ficha no lo pinta el estado del abonado: manda el corte de
+    // `SubscriberService`, que el lote de corte escribe y nadie borraba. Abonado 17842,
+    // 10-09-2026: reconectado en el router, factura limpia y ficha en rojo.
+    const { cascada, prisma } = armar();
+    await cascada('Reconexion Internet');
+    expect(prisma.subscriberService.updateMany).toHaveBeenCalledWith({
+      where: { subscriberId: 'sub-1', kind: 'INTERNET', status: 'CORTADO' },
+      data: { status: 'ACTIVO' },
+    });
+  });
+
+  it('sólo levanta lo CORTADO: una suspensión no la deshace una reconexión', async () => {
+    const { cascada, prisma } = armar();
+    await cascada('Reconexion Internet');
+    const llamada = prisma.subscriberService.updateMany.mock.calls.at(-1)[0];
+    expect(llamada.where.status).toBe('CORTADO');
+  });
+
+  it('una reconexión de sólo TV no toca la línea del internet', async () => {
+    const { cascada, prisma } = armar();
+    await cascada('Reconexion Television');
+    const kinds = prisma.subscriberService.updateMany.mock.calls.map((c: any[]) => c[0].where.kind);
+    expect(kinds).not.toContainEqual('INTERNET');
   });
 
   it('la reconexión de internet sigue yendo al router y activando al cliente', async () => {
@@ -191,6 +220,65 @@ describe('cascada de cierre por servicio', () => {
     expect(facturaMarcada[0]).toMatchObject({ ron: 'SUSPENDIDO', estadoTv: 'SUSPENDIDO', estadoCombo: 'SUSPENDIDO' });
   });
 
+  /**
+   * El espejo que faltaba. El cierre sabía ESCRIBIR el corte en la factura
+   * (`marcarBajaEnFactura`) pero no borrarlo, y la ficha lee de ahí qué servicio está
+   * caído: se cerraba la 'Reconexion Internet', el router devolvía al abonado a ACTIVOS
+   * y su ficha seguía pintando el internet en rojo (orden #505799, 09-09-2026).
+   */
+  it('cerrar una reconexión de internet levanta el corte de la factura', async () => {
+    const { cascada, facturaMarcada } = armar();
+    const c = await cascada('Reconexion Internet');
+
+    expect(c.facturaReconexion).toMatchObject({ ok: true });
+    expect(facturaMarcada[0]).toMatchObject({ estadoCombo: null });
+    expect(facturaMarcada[0].estadoTv).toBeUndefined();  // no se le regala la televisión
+    expect(facturaMarcada[0].ron).toBeUndefined();       // le queda la TV cortada: el eje no sube
+    // Sin la marca, la ida del sync devuelve el 'Cortado' del legacy a los 15 minutos.
+    expect(facturaMarcada[0].serviceStatusAt).toBeInstanceOf(Date);
+  });
+
+  it('el combo levanta los dos servicios y sube el `ron` de la factura', async () => {
+    const { cascada, facturaMarcada } = armar();
+    await cascada('Reconexion Combo');
+    expect(facturaMarcada[0]).toMatchObject({ estadoCombo: null, estadoTv: null, ron: 'ACTIVO' });
+  });
+
+  /**
+   * Una SUSPENSIÓN no la deshace una reconexión: la pidió el cliente y se levanta por
+   * su propio trámite. Sólo se borra lo que dice 'Cortado'.
+   */
+  it('una reconexión no levanta un servicio SUSPENDIDO', async () => {
+    const { cascada, prisma, facturaMarcada } = armar();
+    prisma.subInvoice.findUnique.mockResolvedValue({ estadoCombo: 'SUSPENDIDO', estadoTv: null, ron: 'SUSPENDIDO' });
+    const c = await cascada('Reconexion Internet');
+    expect(c.facturaReconexion).toMatchObject({ sinCambio: true });
+    expect(facturaMarcada).toHaveLength(0);
+  });
+
+  /**
+   * Y la reconexión deja CONSTANCIA, que es de donde el writeback saca a quién empujar
+   * al legacy (`pushEstados`/`pushReconexiones`). Hasta el 09-09-2026 el estado lo movía
+   * en silencio `MikrotikService.markStatus`, sin fila de historial: la reconexión no
+   * llegaba allá y la ida devolvía el 'Cortado' quince minutos después.
+   */
+  it('una reconexión de internet deja fila de historial', async () => {
+    const { cascada, prisma, historial } = armar();
+    prisma.subscriber.findUnique.mockResolvedValue({ status: 'CORTADO' }); // venía cortado por mora
+    await cascada('Reconexion Internet');
+    expect(historial[0]).toMatchObject({ status: 'ACTIVO', originTicketId: 504994 });
+    expect(historial[0].note).toContain('Reconexión');
+  });
+
+  /** El ACUERDO DE PAGO se respeta: vuelve el servicio, no se borra el compromiso. */
+  it('reconectar a un COMPROMISO no lo pone ACTIVO', async () => {
+    const { cascada, prisma, historial, subscriberUpdates } = armar();
+    prisma.subscriber.findUnique.mockResolvedValue({ status: 'COMPROMISO' });
+    await cascada('Reconexion Internet');
+    expect(historial).toHaveLength(0);
+    expect(subscriberUpdates).toHaveLength(0);
+  });
+
   it('cerrar un corte de TV lo deja CORTADO en la factura (no suspendido)', async () => {
     const { cascada, facturaMarcada } = armar();
     await cascada('Corte Television');
@@ -208,9 +296,11 @@ describe('cascada de cierre por servicio', () => {
 
   it('sin módulo de equipos no se inventa que la TV volvió', async () => {
     const prisma: any = {
-      subscriber: { update: jest.fn() },
+      subscriber: { update: jest.fn(), findUnique: jest.fn().mockResolvedValue({ status: 'CORTADO' }) },
       subscriberService: { count: jest.fn().mockResolvedValue(1), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
-      subInvoice: { findFirst: jest.fn().mockResolvedValue(null) },
+      subInvoice: { findFirst: jest.fn().mockResolvedValue(null), findUnique: jest.fn().mockResolvedValue(null), update: jest.fn() },
+      subscriberStatusHistory: { create: jest.fn() },
+      $queryRaw: jest.fn().mockResolvedValue([]),
       appSetting: { findUnique: jest.fn().mockResolvedValue(null) },
     };
     const srv = new SupportWriteService(prisma, { reconnect: jest.fn() } as any, {} as any, {} as any, {} as any, {} as any, {} as any);

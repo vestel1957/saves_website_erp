@@ -1,5 +1,5 @@
 import {
-  IsArray, IsBoolean, IsInt, IsObject, IsOptional, IsString, MinLength, ValidateNested,
+  IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsObject, IsOptional, IsString, Min, MinLength, ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -48,7 +48,7 @@ export class TemplateDto {
   submitToMeta?: boolean;
 }
 
-/** Filtro simple de destinatarios (cuando no se pasan ids explícitos). */
+/** Filtro de destinatarios (cuando no se pasan ids explícitos). */
 export class CampaignFilterDto {
   @IsOptional() @IsString()
   status?: string; // ACTIVO | CORTADO | CARTERA | ...
@@ -58,6 +58,33 @@ export class CampaignFilterDto {
 
   @IsOptional() @IsString()
   search?: string;
+
+  /** Varios estados a la vez (se suman a `status`). */
+  @IsOptional() @IsArray() @IsString({ each: true })
+  statuses?: string[];
+
+  /** Varias sedes a la vez (se suman a `branchId`). */
+  @IsOptional() @IsArray() @IsString({ each: true })
+  branchIds?: string[];
+
+  /** Clientes que tienen alguno de estos planes del catálogo. */
+  @IsOptional() @IsArray() @IsString({ each: true })
+  planIds?: string[];
+
+  /** `con` = con deuda exigible ≥ `deudaMin` · `sin` = al día. Vacío = no importa. */
+  @IsOptional() @IsIn(['con', 'sin'])
+  deuda?: 'con' | 'sin';
+
+  @IsOptional() @IsNumber() @Min(0)
+  deudaMin?: number;
+
+  /** Solo celulares colombianos: a un fijo WhatsApp no llega y el envío sale FAILED. */
+  @IsOptional() @IsBoolean()
+  soloMoviles?: boolean;
+
+  /** Saltar a quien tiene la conversación en manos de una persona en la bandeja. */
+  @IsOptional() @IsBoolean()
+  omitirEnAtencion?: boolean;
 }
 
 /** Crear y lanzar una campaña de envío masivo por plantilla. */
@@ -84,4 +111,30 @@ export class CreateCampaignDto {
   /** Override de las variables (si no se usan las guardadas en la plantilla). */
   @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => TemplateVariableDto)
   variables?: TemplateVariableDto[];
+}
+
+/** Calcular a quién le llegaría una campaña, sin crearla. */
+export class CampaignPreviewDto {
+  /** Opcional: sin plantilla se cuenta el público pero no se arma el mensaje de ejemplo. */
+  @IsOptional() @IsString()
+  templateName?: string;
+
+  @IsOptional() @IsArray() @IsString({ each: true })
+  subscriberIds?: string[];
+
+  @IsOptional() @IsObject() @ValidateNested() @Type(() => CampaignFilterDto)
+  filter?: CampaignFilterDto;
+}
+
+/** Mandar UNA plantilla de prueba a un celular antes de lanzar la campaña. */
+export class CampaignTestDto {
+  @IsString() @MinLength(1)
+  templateName!: string;
+
+  @IsString() @MinLength(7)
+  phone!: string;
+
+  /** Cliente con cuyos datos se llenan las variables. Sin él, valores de ejemplo. */
+  @IsOptional() @IsString()
+  subscriberId?: string;
 }

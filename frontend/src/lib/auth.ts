@@ -60,6 +60,16 @@ export const PERM = {
   WHATSAPP_INBOX: "whatsapp.inbox",
   SYSTEM_ADMIN: "system.admin",
   PURCHASES_APPROVE: "purchases.approve",
+  // Escribir en una orden de servicio. Sin él, /soporte es de consulta.
+  SUPPORT_WRITE: "support.write",
+  // Emitir notas crédito/débito (las de /facturacion/notas y la nota crédito DIAN).
+  // Permiso NOMINAL: se concede persona a persona y NO lo hereda el superusuario;
+  // por eso se pregunta con `puedeEmitirNotas()` y nunca con `can()`.
+  BILLING_NOTES_EMIT: "billing.notes.emit",
+  // Activar/Desactivar la IP del abonado en la lista MOROSOS del Mikrotik (el
+  // interruptor manual del legacy). Permiso NOMINAL como el anterior: se pregunta
+  // con `puedeMoverMorosos()`, nunca con `can()`.
+  NETWORK_MOROSOS_TOGGLE: "network.morosos.toggle",
   // áreas de acceso Vestel (visibilidad de secciones del sidebar)
   AREA_GERENCIA: "area.gerencia",
   AREA_ADMINISTRACION: "area.administracion",
@@ -126,6 +136,37 @@ export function can(
   if (list.length === 0) return true;
   const hasInvAdmin = granted.includes(PERM.INV_ADMIN);
   return list.some((p) => granted.includes(p) || (hasInvAdmin && p.startsWith("inventory.")));
+}
+
+/**
+ * ¿Puede emitir notas crédito/débito? (2026-09-10)
+ *
+ * Va aparte de `can()` a propósito: `can()` le da por buena cualquier
+ * comprobación a `system.admin`, y aquí eso lo abriría a los trece superusuarios
+ * —incluidos los dos autorizados, que también lo son—, o sea que no restringiría
+ * a nadie. Se mira el permiso TAL CUAL, sin atajo, igual que hace el backend en
+ * `billing/emisor-de-notas.ts`. Las dos reglas tienen que decir lo mismo: si la
+ * pantalla pinta el botón y el servidor responde 403, el usuario ve un error en
+ * vez de entender que no le toca.
+ */
+export function puedeEmitirNotas(
+  user: Pick<AuthUser, "permissions"> | null | undefined,
+): boolean {
+  return !!user?.permissions?.includes(PERM.BILLING_NOTES_EMIT);
+}
+
+/**
+ * ¿Puede mover a mano la IP de un abonado dentro/fuera de la lista MOROSOS? (2026-09-10)
+ *
+ * Mismo motivo que `puedeEmitirNotas`: se pidió "sólo para Santiago García" y con
+ * veinte superusuarios activos `can()` —que le da por buena cualquier comprobación a
+ * `system.admin`— no restringiría a nadie. Se mira el permiso tal cual, igual que hace
+ * el backend en `MikrotikService.toggleMoroso`.
+ */
+export function puedeMoverMorosos(
+  user: Pick<AuthUser, "permissions"> | null | undefined,
+): boolean {
+  return !!user?.permissions?.includes(PERM.NETWORK_MOROSOS_TOGGLE);
 }
 
 /** Global superadmin only (system.admin). Inventory admin is NOT global. */

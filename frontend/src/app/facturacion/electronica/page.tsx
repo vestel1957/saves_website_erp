@@ -4,7 +4,7 @@ import { Fragment, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
-import { Input, Select } from "@/components/ui/Field";
+import { Field, Input, Select } from "@/components/ui/Field";
 import { Badge } from "@/components/ui/Badge";
 import { DataTable } from "@/components/ui/DataTable";
 import { Pagination } from "@/components/ui/Pagination";
@@ -35,6 +35,9 @@ export default function EfacturaPage() {
   const [branches, setBranches] = useState<Branch[] | null>(null);
   const [emittingBranch, setEmittingBranch] = useState<string | null>(null);
   const [confirmar, setConfirmar] = useState<Branch | null>(null);
+  // Mes que se timbra. El lote SIEMPRE va acotado a un mes (como el legacy): sin ese
+  // corte se timbraría el atraso histórico de facturas marcadas desde 2019.
+  const [mes, setMes] = useState(() => new Date().toISOString().slice(0, 7));
 
   // Histórico
   const [stats, setStats] = useState<any>(null);
@@ -117,7 +120,7 @@ export default function EfacturaPage() {
   async function emitBranch(b: Branch) {
     setEmittingBranch(b.id);
     try {
-      const res = await authFetch(`/einvoice/emit-branch/${b.id}`, { method: "POST" });
+      const res = await authFetch(`/einvoice/emit-branch/${b.id}?mes=${mes}`, { method: "POST" });
       const d = await res.json().catch(() => null);
       if (!res.ok) throw new Error(d?.message || "No se pudo emitir la facturación de la sede");
       let msg = d.message as string;
@@ -160,6 +163,11 @@ export default function EfacturaPage() {
         !canEmit ? (
           <div className="rounded-xl border border-border-subtle bg-surface p-6 text-[13px] text-text-secondary">Solo contabilidad puede gestionar la facturación electrónica por sede.</div>
         ) : !branches ? <PageSkeleton /> : (
+          <>
+          <div className="mb-3 flex flex-wrap items-end gap-2">
+            <Field label="Mes a timbrar"><Input type="month" value={mes} onChange={(e) => setMes(e.target.value)} className="w-44" /></Field>
+            <p className="pb-2 text-[12px] text-text-tertiary">Se emiten solo las facturas de ese mes que estén pendientes por timbrar.</p>
+          </div>
           <DataTable
             rows={branches}
             empty="Sin sedes."
@@ -183,6 +191,7 @@ export default function EfacturaPage() {
               ) },
             ]}
           />
+          </>
         )
       )}
 
@@ -280,8 +289,8 @@ export default function EfacturaPage() {
           message={
             eMode?.live ? (
               <>
-                Se timbrarán ante la DIAN, de una sola vez, las facturas pendientes de todos los
-                clientes marcados de <b>{confirmar.name}</b> ({n(confirmar.tv)} con TV y{" "}
+                Se timbrarán ante la DIAN, de una sola vez, las facturas de <b>{mes}</b> pendientes
+                de todos los clientes marcados de <b>{confirmar.name}</b> ({n(confirmar.tv)} con TV y{" "}
                 {n(confirmar.internet)} con Internet, sobre {n(confirmar.subscribers)} clientes).{" "}
                 <b className="text-error-text">Cada una queda emitida legalmente y no se puede
                 deshacer</b>: corregirlas exige una nota crédito por factura.
@@ -289,7 +298,7 @@ export default function EfacturaPage() {
             ) : (
               <>
                 Estás en <b>modo prueba (dry-run)</b>: se construyen los payloads de las facturas
-                pendientes de <b>{confirmar.name}</b> ({n(confirmar.tv)} marcados TV y{" "}
+                de <b>{mes}</b> pendientes de <b>{confirmar.name}</b> ({n(confirmar.tv)} marcados TV y{" "}
                 {n(confirmar.internet)} marcados Internet) solo para validarlos. No se envía nada
                 a la DIAN.
               </>

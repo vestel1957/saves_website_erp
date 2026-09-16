@@ -28,7 +28,7 @@ function armar(abierta: any = null) {
 }
 
 describe('órdenes que abre el sistema', () => {
-  it('abre la orden PENDIENTE y avisa a quien reparte el trabajo', async () => {
+  it('abre la orden PENDIENTE y NO le suena a nadie', async () => {
     const { srv, porCargo, creados } = armar();
     const o = await srv.abrirSiNoHay({
       subscriberId: 'sub-1', type: 'Reconexion Television', problem: 'El cliente pagó y no volvió la TV.',
@@ -36,7 +36,12 @@ describe('órdenes que abre el sistema', () => {
 
     expect(o).toMatchObject({ nueva: true, type: 'Reconexion Television' });
     expect(creados[0]).toMatchObject({ status: 'PENDIENTE', subject: 'servicio', subscriberId: 'sub-1', code: 500123 });
-    expect(porCargo.notifyPost).toHaveBeenCalledWith('soporte-tecnico', expect.objectContaining({ link: '/soporte/t-1' }));
+    // El aviso se retiró el 2026-08-29 (decisión del usuario): una orden automática
+    // —38 al día, casi todas reconexiones por pago— no es trabajo que nadie tenga
+    // que ir a hacer en ese momento, y avisarla una a una llenaba 31 campanitas con
+    // 4.688 avisos en cuatro días. Se reparten desde la bandeja de "sin agendar", y
+    // al técnico se le avisa cuando la orden pasa a ser SUYA (`AvisoTecnicoService`).
+    expect(porCargo.notifyPost).not.toHaveBeenCalled();
   });
 
   it('si ya hay una orden abierta igual, la reusa en vez de duplicar el trabajo', async () => {

@@ -2,7 +2,7 @@ import { BadRequestException, ForbiddenException, NotFoundException } from '../c
 import { Logger } from '../core/logger';
 import { orden } from '../common/pagination-params';
 import { Type } from 'class-transformer';
-import { IsArray, IsInt, IsOptional, IsString, Max, Min, MinLength } from 'class-validator';
+import { IsArray, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
@@ -75,6 +75,20 @@ export class CreateEquipmentDto {
   @IsOptional() @IsString() status?: string;
   @IsOptional() @IsString() observation?: string;
 }
+/**
+ * Edición de un equipo desde inventario (2026-09-14). Los topes son los de las
+ * columnas de `equipos` en el legacy (`invEquipo` en writeback-legacy.js): más largo
+ * se recortaría al subir. La bodega NO va aquí: moverla es una transferencia.
+ */
+export class UpdateEquipmentDto {
+  @IsOptional() @IsString() @MaxLength(20) brand?: string;
+  @IsOptional() @IsString() @MaxLength(100) mac?: string;
+  @IsOptional() @IsString() @MaxLength(100) serial?: string;
+  @IsOptional() @IsString() @MaxLength(16) status?: string;
+  @IsOptional() @IsString() @MaxLength(200) observation?: string;
+}
+/** Estados que se pueden poner a mano. "Asignado"/"Reservado" los ponen la asignación y la reserva. */
+export const ESTADOS_EQUIPO_EDITABLES = ['Disponible', 'Bueno', 'Malo', 'Depurado'];
 export class CreateVlanDto {
   @IsString() @MinLength(1) branchId!: string;
   @Type(() => Number) @IsInt() @Min(1) @Max(4094) vlan!: number;
@@ -121,6 +135,8 @@ export class NetworkWriteService {
     private readonly firma: SignatureOtpService,
     private readonly whatsapp: WhatsappService,
     private readonly avisos: NotificationsService,
+    /** Opcional: sin él el equipo se suelta igual, pero su ONU sigue dada de alta en la OLT. */
+    private readonly onuAlDevolver?: import('./onu-al-devolver.service').OnuAlDevolverService,
   ) {}
 
   // ── Transferencias de equipos: sede y firmas ────────────────────────────────
@@ -894,12 +910,19 @@ export class NetworkWriteService {
   async assignEquipmentToSubscriber(equipmentId: string, dto: AssignEquipmentSubDto) {
     const eq = await this.prisma.equipment.findUnique({ where: { id: equipmentId } });
     if (!eq) throw new NotFoundException('Equipo no encontrado');
-    const sub = await this.prisma.subscriber.findUnique({ where: { id: dto.subscriberId }, select: { id: true } });
+    const sub = await this.prisma.subscriber.findUnique({ where: { id: dto.subscriberId }, select: { id: true, legacyId: true } });
     if (!sub) throw new NotFoundException('Cliente no encontrado');
     await this.prisma.equipment.update({
       where: { id: equipmentId },
       data: {
         subscriberId: dto.subscriberId, status: 'Asignado', editedAt: new Date(),
+        // El mismo dueño en la casilla del legacy (`equipos.asignado`). `editedAt` no
+        // basta: el writeback empuja `assignedRaw` y acto seguido suelta el blindaje,
+        // así que sin esto la ida devolvía el equipo a "sin dueño" en la pasada
+        // siguiente. Ver la misma regla en `EquipoReservaService` y `assignEquipment`.
+        ...(sub.legacyId == null ? {} : { assignedRaw: String(sub.legacyId) }),
+        // Deja de ser una reserva: esto ya es la entrega.
+        reservedTicketId: null,
         // Vuelve a estar instalado: la fecha de la devolución anterior ya no habla
         // de este equipo (si no, en inventario figuraría a la vez "en casa de un
         // cliente" y "devuelto el…").
@@ -916,7 +939,8 @@ export class NetworkWriteService {
     await this.prisma.equipment.update({
       where: { id: equipmentId },
       data: {
-        subscriberId: null, status: 'Disponible', editedAt: new Date(),
+        subscriberId: null, assignedRaw: null, status: 'Disponible', editedAt: new Date(),
+        reservedTicketId: null,
         // Soltar desde inventario también es "el equipo dejó de estar en casa de un
         // cliente": queda fechado hoy. Aquí no se pregunta el día (la devolución con
         // fecha elegible es la de la ficha del cliente), y si el equipo ya estaba
@@ -925,6 +949,109 @@ export class NetworkWriteService {
       },
     });
     return { id: equipmentId, unassigned: true };
+  }
+
+  /**
+   * Corrige los datos de un equipo: marca, MAC, serial, estado y observación.
+   *
+   * - Sella `editedAt`: sin eso la próxima pasada del sync repone lo del legacy, y con
+   *   él el writeback de inventario lleva el cambio allá.
+   * - El estado sólo se elige entre los manuales, y no se toca mientras el equipo esté
+   *   reservado para una orden (lo suelta o confirma la propia reserva).
+   * - No deja poner un serial que ya tenga OTRO equipo: la autenticación de la ONU y
+   *   la reserva identifican el equipo por serial, y dos iguales la confunden.
+   */
+  async updateEquipment(equipmentId: string, dto: UpdateEquipmentDto, user: AuthUser) {
+    if (esTecnicoDeCampo(user)) {
+      throw new ForbiddenException('No puedes editar equipos: tu acceso al inventario es de consulta sobre los que tienes asignados.');
+    }
+    const eq = await this.prisma.equipment.findUnique({ where: { id: equipmentId } });
+    if (!eq) throw new NotFoundException('Equipo no encontrado');
+
+    const limpio = (v: string | undefined) => (v === undefined ? undefined : v.trim() || null);
+    const nuevo = {
+      brand: limpio(dto.brand), mac: limpio(dto.mac), serial: limpio(dto.serial),
+      status: limpio(dto.status), observation: limpio(dto.observation),
+    };
+    const data: Prisma.EquipmentUpdateInput = {};
+    for (const campo of Object.keys(nuevo) as (keyof typeof nuevo)[]) {
+      const v = nuevo[campo];
+      if (v !== undefined && v !== (eq[campo] ?? null)) data[campo] = v;
+    }
+    if (!Object.keys(data).length) return { id: eq.id, code: eq.code, cambios: 0 };
+
+    if ('status' in data) {
+      if ((eq.status ?? '').toLowerCase() === 'reservado' || eq.reservedTicketId) {
+        throw new BadRequestException('El equipo está reservado para una orden: su estado no se cambia a mano.');
+      }
+      if (!ESTADOS_EQUIPO_EDITABLES.includes(String(data.status))) {
+        throw new BadRequestException(`Estado no válido. Elige uno de: ${ESTADOS_EQUIPO_EDITABLES.join(', ')}.`);
+      }
+    }
+
+    if ('serial' in data && data.serial) {
+      const sn = String(data.serial).replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+      if (sn.length >= 6) {
+        const otro = await this.prisma.$queryRaw<{ code: number }[]>`
+          SELECT code FROM "Equipment"
+           WHERE id <> ${eq.id}
+             AND upper(regexp_replace(coalesce(serial, ''), '[^A-Za-z0-9]', '', 'g')) = ${sn}
+           LIMIT 1`;
+        if (otro.length) throw new BadRequestException(`Ese serial ya lo tiene el equipo #${otro[0].code}.`);
+      }
+    }
+
+    // Un equipo en Disponible/Bueno/Malo/Depurado ya no está en casa de nadie. Antes
+    // se cambiaba solo el estado y el dueño seguía puesto (2026-09-15, equipo 311071):
+    // la ficha lo enseñaba a nombre del cliente viejo, su puerto NAP seguía "Ocupado"
+    // y al entregárselo a otro el modal respondía "la MAC ya está asignada a otro
+    // cliente". Se suelta como en la devolución (`returnEquipment`), sin mover de bodega.
+    const dueño = 'status' in data && eq.subscriberId ? eq.subscriberId : null;
+    if (!dueño) {
+      await this.prisma.equipment.update({ where: { id: eq.id }, data: { ...data, editedAt: new Date() } });
+      this.logger.log(`Equipo #${eq.code} editado por ${user?.email ?? 'sistema'}: ${Object.keys(data).join(', ')}`);
+      return { id: eq.id, code: eq.code, cambios: Object.keys(data).length };
+    }
+
+    const restantes = await this.prisma.equipment.findMany({
+      where: { subscriberId: dueño, id: { not: eq.id } },
+      select: { mac: true, port: true },
+      orderBy: { arrival: 'desc' },
+    });
+    await this.prisma.$transaction(async (tx) => {
+      await tx.equipment.update({
+        where: { id: eq.id },
+        data: {
+          ...data,
+          subscriber: { disconnect: true }, assignedRaw: null, installType: null, port: null, vlan: null, nat: null,
+          returnedAt: hoyEnColombia(), editedAt: new Date(),
+        },
+      });
+      // `equipos.puerto` es el id de la FILA del puerto (`Port.legacyId`), no su número.
+      if (eq.port != null && !restantes.some((r) => r.port === eq.port)) {
+        await tx.port.updateMany({
+          where: { subscriberId: dueño, legacyId: eq.port },
+          data: { subscriberId: null, assignedLegacy: 0, status: 'Disponible' },
+        });
+      }
+      await tx.subscriber.update({
+        where: { id: dueño },
+        data: { macEquipo: restantes.find((r) => r.mac?.trim())?.mac?.trim() ?? 'sin asignar' },
+      });
+      await tx.subscriberNote.create({
+        data: {
+          subscriberId: dueño,
+          body: `Equipo código ${eq.code}${eq.mac ? ` · MAC ${eq.mac}` : ''} marcado "${data.status}" desde el inventario: deja de estar a nombre del cliente.`,
+          authorName: user?.name || user?.email || 'sistema',
+        },
+      });
+    });
+    // Fuera de la casa del cliente ⇒ fuera de la OLT (en segundo plano, ver `OnuAlDevolverService`).
+    void this.onuAlDevolver?.desautenticar({
+      serial: eq.serial, code: eq.code, subscriberId: dueño, motivo: `Marcado "${data.status}" en el inventario`, user,
+    });
+    this.logger.log(`Equipo #${eq.code} editado por ${user?.email ?? 'sistema'}: ${Object.keys(data).join(', ')} · soltado del abonado ${dueño}`);
+    return { id: eq.id, code: eq.code, cambios: Object.keys(data).length, soltado: true };
   }
 
   // ── Pools de IP (ips_users_mk) ──────────────────────────────────────────────

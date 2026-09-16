@@ -11,8 +11,10 @@ import { Badge } from "@/components/ui/Badge";
 import { Modal } from "@/components/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { DataTable } from "@/components/ui/DataTable";
+import { ConsumirMaterialModal } from "@/components/inventory/ConsumirMaterialModal";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { toast } from "@/components/ui/Toast";
+import { useValidacion, requerido } from "@/lib/useValidacion";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import { mensajeDeError } from "@/lib/errores";
@@ -64,19 +66,30 @@ function HitoModal({
 
   useEffect(() => {
     if (!open) return;
+    // Se olvida lo ya marcado: el hito nuevo no debe estrenarse con el rojo que
+    // dejó el intento anterior.
+    v.limpiar();
     setForm(hito
       ? { name: hito.name ?? "", startDate: toDateInput(hito.startDate), endDate: toDateInput(hito.endDate), detail: hito.detail ?? "", color: hito.color || "#6366f1" }
       : emptyMilestone);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, hito]);
 
   const setF = (k: string, v: string) => setForm((f: any) => ({ ...f, [k]: v }));
 
+  const v = useValidacion(
+    { name: form.name, startDate: form.startDate, endDate: form.endDate },
+    {
+      name: requerido("El nombre del hito es obligatorio."),
+      endDate: (valor, f) =>
+        f.startDate && valor && String(f.startDate) > String(valor)
+          ? "No puede ser anterior a la fecha de inicio."
+          : undefined,
+    },
+  );
+
   const submit = useCallback(async () => {
-    if (!String(form.name ?? "").trim()) { toast("El nombre del hito es obligatorio.", "alert-triangle"); return; }
-    if (form.startDate && form.endDate && form.startDate > form.endDate) {
-      toast("La fecha de fin no puede ser anterior a la de inicio.", "alert-triangle");
-      return;
-    }
+    if (!v.revisar()) return;
     setSaving(true);
     try {
       const body: any = { name: String(form.name).trim(), color: form.color || undefined };
@@ -95,21 +108,21 @@ function HitoModal({
     } finally {
       setSaving(false);
     }
-  }, [authFetch, editing, form, hito, projectId, onSaved, onClose]);
+  }, [v, authFetch, editing, form, hito, projectId, onSaved, onClose]);
 
   return (
     <Modal open={open} onClose={onClose} title={editing ? "Editar hito" : "Nuevo hito"}>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="sm:col-span-2">
-          <Field label="Nombre" required>
-            <Input value={form.name} onChange={(e) => setF("name", e.target.value)} placeholder="Nombre del hito" />
+          <Field label="Nombre" required error={v.error("name")}>
+            <Input value={form.name} onChange={(e) => setF("name", e.target.value)} placeholder="Nombre del hito" {...v.campo("name")} />
           </Field>
         </div>
         <Field label="Fecha de inicio">
           <Input type="date" value={form.startDate} onChange={(e) => setF("startDate", e.target.value)} />
         </Field>
-        <Field label="Fecha de fin">
-          <Input type="date" value={form.endDate} onChange={(e) => setF("endDate", e.target.value)} />
+        <Field label="Fecha de fin" error={v.error("endDate")}>
+          <Input type="date" value={form.endDate} onChange={(e) => setF("endDate", e.target.value)} {...v.campo("endDate")} />
         </Field>
         <Field label="Color">
           <Input type="color" className="h-9 p-1" value={form.color} onChange={(e) => setF("color", e.target.value)} />
@@ -158,6 +171,9 @@ export default function ProyectoDetallePage() {
   const [editHito, setEditHito] = useState<any>(null);
   const [delHito, setDelHito] = useState<any>(null);
   const [deleting, setDeleting] = useState(false);
+  const [openMaterial, setOpenMaterial] = useState(false);
+  const [delMaterial, setDelMaterial] = useState<any>(null);
+  const [delMatBusy, setDelMatBusy] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -200,6 +216,22 @@ export default function ProyectoDetallePage() {
       toast(mensajeDeError(e, "No se pudo eliminar el hito."), "alert-triangle");
     } finally {
       setDeleting(false);
+    }
+  }
+
+  async function removeMaterial() {
+    if (!delMaterial) return;
+    setDelMatBusy(true);
+    try {
+      const res = await authFetch(`/projects/materials/${delMaterial.id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.message || "Error");
+      toast("Cargo eliminado; el material volvió a la bodega.", "check");
+      setDelMaterial(null);
+      load();
+    } catch (e) {
+      toast(mensajeDeError(e, "No se pudo eliminar el cargo."), "alert-triangle");
+    } finally {
+      setDelMatBusy(false);
     }
   }
 
@@ -287,13 +319,57 @@ export default function ProyectoDetallePage() {
         )}
       </div>
 
+      <div className="mb-4 rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-[13px] font-bold text-text-primary"><Icon name="package" size={15} /> Material</div>
+          <Button size="sm" variant="secondary" onClick={() => setOpenMaterial(true)}>
+            <Icon name="package-check" size={14} />
+            Asignar material
+          </Button>
+        </div>
+        <DataTable
+          rows={data.materials ?? []}
+          empty="Sin material asignado."
+          columns={[
+            { key: "name", header: "Material", render: (r: any) => <span className="font-medium text-text-primary">{r.name}</span> },
+            { key: "qty", header: "Cant.", render: (r: any) => r.qty },
+            { key: "price", header: "Precio", render: (r: any) => cop(r.price) },
+            { key: "total", header: "Total", render: (r: any) => cop(r.total) },
+            { key: "warehouse", header: "Bodega", render: (r: any) => <span className="text-text-secondary">{r.warehouse ?? "—"}</span> },
+            { key: "employee", header: "Registró", render: (r: any) => <span className="text-text-secondary">{r.employee ?? "—"}</span> },
+            { key: "createdAt", header: "Fecha", render: (r: any) => fmtDate(r.createdAt) },
+            {
+              key: "acciones", header: "", render: (r: any) => (
+                <Button size="sm" variant="ghost" aria-label="Quitar material" onClick={() => setDelMaterial(r)}>
+                  <Icon name="trash" size={14} className="text-error-text" />
+                </Button>
+              ),
+            },
+          ]}
+        />
+        {(data.materials?.length ?? 0) > 0 && (
+          <div className="mt-3 flex flex-wrap items-center justify-end gap-4 border-t border-border-subtle pt-3 text-[13px]">
+            <span className="text-text-secondary">Gastado en material</span>
+            <span className="font-bold text-text-primary">{cop(data.materialTotal ?? 0)}</span>
+            {/* Contra el presupuesto: lo que de verdad se quiere saber de una obra. */}
+            {data.worth > 0 && (
+              <span className={`text-[12px] ${(data.materialTotal ?? 0) > data.worth ? "text-error-text" : "text-text-tertiary"}`}>
+                {Math.round(((data.materialTotal ?? 0) / data.worth) * 100)}% del presupuesto
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+
       <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
         <div className="mb-3 flex items-center gap-2 text-[13px] font-bold text-text-primary"><Icon name="check" size={15} /> Tareas</div>
         <DataTable
           rows={data.tasks ?? []}
           empty="Sin tareas."
           columns={[
-            { key: "name", header: "Tarea", render: (r: any) => <span className="font-medium text-text-primary">{r.name}</span> },
+            // El nombre lleva a la ficha de la tarea, que es donde está su
+            // seguimiento: desde el proyecto se ve qué falta y por qué.
+            { key: "name", header: "Tarea", render: (r: any) => <Link href={`/tareas/${r.id}`} className="font-medium text-text-primary hover:text-brand hover:underline">{r.name}</Link> },
             { key: "status", header: "Estado", render: (r: any) => <Badge label={TASK_LABEL[r.status] ?? r.status} tone={taskTone(r.status)} /> },
             { key: "start", header: "Inicio", render: (r: any) => fmtDate(r.start) },
             { key: "dueDate", header: "Vence", render: (r: any) => fmtDate(r.dueDate) },
@@ -304,6 +380,24 @@ export default function ProyectoDetallePage() {
       </div>
 
       <HitoModal projectId={id} hito={editHito} open={openHito} onClose={() => setOpenHito(false)} onSaved={load} />
+      <ConsumirMaterialModal
+        open={openMaterial}
+        onClose={() => setOpenMaterial(false)}
+        onDone={load}
+        buscarUrl="/projects/materials/search"
+        guardarUrl={`/projects/${id}/materials`}
+        title="Asignar material al proyecto"
+        ayuda="Busca y agrega el material que se va en el proyecto."
+      />
+      <ConfirmDialog
+        open={Boolean(delMaterial)}
+        title="Quitar material"
+        message={<>¿Quitar <strong>{delMaterial?.qty}× {delMaterial?.name}</strong> del proyecto? Las unidades vuelven a la bodega.</>}
+        confirmLabel="Quitar"
+        busy={delMatBusy}
+        onConfirm={removeMaterial}
+        onClose={() => setDelMaterial(null)}
+      />
       <ConfirmDialog
         open={Boolean(delHito)}
         title="Eliminar hito"

@@ -16,7 +16,7 @@ import { PromocionModal } from "@/components/promotions/PromocionModal";
 import {
   type Promotion, type PromotionCatalogs, type PromotionTargetLog,
   type PromotionApplication,
-  INVOICE_SCOPE_OPTIONS, discountLabel, isBeforeTaxDiscount,
+  alcanceFacturasLabel, discountLabel, isBeforeTaxDiscount,
 } from "@/lib/promotions";
 
 const statusText = (s: string) => SUB_STATUS_LABEL[s] ?? s;
@@ -257,14 +257,8 @@ export default function PromocionesPage() {
                       {p.vigente ? <Badge tone="success" label="Vigente" /> : <Badge tone="default" label={p.active ? "Fuera de fecha" : "Inactiva"} />}
                       {isBeforeTaxDiscount(p.discountFormat) && <Badge tone="default" label="Antes de imp." />}
                       {/* A qué facturas llega en ventanilla: una campaña de cartera dejada
-                          en "mensualidad del mes" no descuenta nada, y eso no se veía. */}
-                      <Badge
-                        tone="default"
-                        label={
-                          INVOICE_SCOPE_OPTIONS.find((o) => o.value === p.invoiceScope)?.label
-                          ?? INVOICE_SCOPE_OPTIONS[0].label
-                        }
-                      />
+                          en "sólo las de este mes" no descuenta nada, y eso no se veía. */}
+                      <Badge tone="default" label={alcanceFacturasLabel(p)} />
                       {p.portalPreapply && <Badge tone="brand" label="Portal cobra rebajado" />}
                       {p.portalPublish && (
                         <Badge

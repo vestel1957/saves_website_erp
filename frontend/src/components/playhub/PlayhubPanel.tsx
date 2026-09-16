@@ -28,17 +28,27 @@ export function PlayhubPanel({ subscriberId, email }: { subscriberId: string; em
   const [busy, setBusy] = useState(false);
   const [toUnsub, setToUnsub] = useState<LocalSub | null>(null);
   const [eleg, setEleg] = useState<Elegibilidad | null>(null);
+  const [vetado, setVetado] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      // El 403 se marca aparte: si se traga como "sin datos", el panel acaba
+      // diciendo "PlayHub no configurado" y parece una avería del servicio cuando
+      // lo que falta es permiso (le pasaba a la cajera antes del 2026-09-04).
+      let sinPermiso = false;
+      const leer = async <T,>(url: string, vacio: T): Promise<T> => {
+        const r = await authFetch(url);
+        if (r.status === 403) { sinPermiso = true; return vacio; }
+        return r.ok ? ((await r.json()) as T) : vacio;
+      };
       const [st, cat, loc, el] = await Promise.all([
-        authFetch("/playhub/status").then((r) => (r.ok ? r.json() : null)),
-        authFetch("/playhub/catalog").then((r) => (r.ok ? r.json() : [])),
-        authFetch(`/playhub/subscribers/${subscriberId}/local`).then((r) => (r.ok ? r.json() : [])),
-        authFetch(`/playhub/subscribers/${subscriberId}/eligibility`).then((r) => (r.ok ? r.json() : null)),
+        leer<{ configured: boolean } | null>("/playhub/status", null),
+        leer<CatalogItem[]>("/playhub/catalog", []),
+        leer<LocalSub[]>(`/playhub/subscribers/${subscriberId}/local`, []),
+        leer<Elegibilidad | null>(`/playhub/subscribers/${subscriberId}/eligibility`, null),
       ]);
-      setStatus(st); setCatalog(cat); setLocal(loc); setEleg(el);
+      setStatus(st); setCatalog(cat); setLocal(loc); setEleg(el); setVetado(sinPermiso);
     } finally { setLoading(false); }
   }, [authFetch, subscriberId]);
   useEffect(() => { void load(); }, [load]);
@@ -79,6 +89,12 @@ export function PlayhubPanel({ subscriberId, email }: { subscriberId: string; em
   }
 
   if (loading) return <div className="rounded-xl border border-border-subtle bg-surface p-8 text-center text-[13px] text-text-tertiary">Cargando PlayHub…</div>;
+
+  if (vetado) return (
+    <div className="rounded-xl border border-border-subtle bg-surface p-8 text-center text-[13px] text-text-tertiary">
+      No tienes permiso para ver PlayHub de este cliente.
+    </div>
+  );
 
   return (
     <div className="flex flex-col gap-4">

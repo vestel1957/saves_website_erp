@@ -82,12 +82,13 @@ export function EstadoServicioModal({
         method: "PATCH",
         body: JSON.stringify({ servicio, estado, note: note.trim() || undefined }),
       });
-      if (!res.ok) {
-        const msg = await res.json().catch(() => null);
-        throw new Error(msg?.message || "No se pudo cambiar el estado del servicio");
-      }
+      const body = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(body?.message || "No se pudo cambiar el estado del servicio");
       const nombre = SERVICIOS.find((s) => s.kind === servicio)?.label ?? servicio;
-      toast(`${nombre}: ${etiquetaEstado(estado).toLowerCase()}`, "check");
+      // El número de la orden se dice en el toast: es la constancia del trabajo y lo
+      // que hay que buscar después en soporte o en el sistema anterior.
+      const orden = body?.orden?.code ? ` · orden #${body.orden.code}` : "";
+      toast(`${nombre}: ${etiquetaEstado(estado).toLowerCase()}${orden}`, "check");
       onDone?.();
       onClose();
     } catch (e) {
@@ -157,7 +158,8 @@ export function EstadoServicioModal({
             <p className="text-[11px] text-text-tertiary">
               Se anota en la factura vigente del cliente —que es de donde la ficha lee qué está
               caído— y viaja al sistema anterior. Es administrativo: no corta ni enciende el
-              servicio en los equipos.
+              servicio en los equipos, así que se da por hecho a mano y queda la orden de
+              servicio correspondiente ya cerrada.
             </p>
 
             <div className="flex justify-end gap-2">

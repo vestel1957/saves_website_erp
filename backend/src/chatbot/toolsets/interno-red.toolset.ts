@@ -228,7 +228,7 @@ export class InternoRedToolset implements Toolset {
 
   /** "-18.50" → -18.5. Devuelve null cuando la OLT no dio lectura ("-", vacío). */
   private dbm(raw?: string): number | null {
-    const n = Number(String(raw ?? '').replace(',', '.').replace(/[^\d.\-]/g, ''));
+    const n = Number(String(raw ?? '').replace(',', '.').replace(/[^\d.-]/g, ''));
     return Number.isFinite(n) && n !== 0 ? n : null;
   }
 

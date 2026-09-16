@@ -92,7 +92,13 @@ const ROUTE_AREA: [RegExp, string[]][] = [
   // específica ANTES de /soporte, que sí es suyo.
   [/^\/mi-agenda(\/|$)/, ["tecnicos"]],
   [/^\/soporte\/agenda(\/|$)/, ["caja", "administracion"]],
-  [/^\/soporte(\/|$)/, ["tecnicos", "caja"]],
+  // Administración entra también (2026-09-07): la API ya le abría todas las rutas
+  // de tickets y ya tenía el agendamiento, que trabaja sobre estas mismas órdenes
+  // — este gate era lo único que la dejaba fuera de la pantalla, y con él una
+  // jefatura no podía ni MIRAR el trabajo de los técnicos. Quién ve el enlace lo
+  // sigue decidiendo la llave de pantalla (`screen.soporte`), que el área no trae
+  // por rol; y quién puede TOCAR la orden, `support.write`.
+  [/^\/soporte(\/|$)/, ["tecnicos", "caja", "administracion"]],
   // Transferencias tienen flujo multi-área: técnico solicita, inventario
   // (administración) aprueba/despacha, caja recibe. Regla específica ANTES de /red.
   [/^\/red\/transferencias(\/|$)/, ["tecnicos", "administracion", "caja"]],
@@ -103,6 +109,9 @@ const ROUTE_AREA: [RegExp, string[]][] = [
   // Lo ÚNICO de /red que le queda al técnico: sus equipos. Va ANTES de la regla
   // general, que ya no lo incluye.
   [/^\/red\/bodegas(\/|$)/, ["tecnicos", "administracion"]],
+  // Equipos disponibles por sede: administración y la cajera (el backend la acota a
+  // sus sedes). El jefe de bodega entra por RUTAS_JEFE_BODEGA.
+  [/^\/red\/disponibles(\/|$)/, ["administracion", "caja"]],
   // RED / ISP y MIKROTIK salieron del perfil del técnico (2026-07-31): conexiones,
   // NAPs, OLT, GenieACS y los routers son de administración. El backend lo repite
   // por su cuenta (`network/modulo-red.guard.ts`); esto sólo evita el viaje.
@@ -114,6 +123,9 @@ const ROUTE_AREA: [RegExp, string[]][] = [
   [/^\/mikrotik(\/|$)/, ["administracion"]],
   // La bandeja de WhatsApp la atiende quien atiende clientes; configurar el canal
   // sigue siendo de sistemas y vive bajo /configuracion.
+  // Los mensajes masivos no son atender clientes: los lanza quien administra el
+  // canal (la API pide `system.whatsapp`). Regla específica ANTES de /whatsapp.
+  [/^\/whatsapp\/masivo(\/|$)/, ["sistemas"]],
   [/^\/whatsapp(\/|$)/, ["administracion", "caja", "sistemas"]],
   // El puntaje de las órdenes lo fija gerencia (es con qué se mide al técnico),
   // aunque la pantalla viva con el resto de catálogos. Regla específica ANTES de
@@ -135,7 +147,8 @@ const ROUTE_AREA: [RegExp, string[]][] = [
   // `grupos` queda fuera a propósito: es otra pantalla, no una ficha.
   [/^\/clientes\/(?!grupos(\/|$))[^/]+/, ["administracion", "caja", "tecnicos"]],
   [/^\/clientes(\/|$)/, ["administracion", "caja"]],
-  [/^\/playhub(\/|$)/, ["administracion"]],
+  // PlayHub: la cajera lo trabaja en ventanilla; el reporte le sale acotado a su sede.
+  [/^\/playhub(\/|$)/, ["administracion", "caja"]],
   // Traspasos de material: la cajera le entrega material al técnico (traspaso a su
   // almacén) y —desde 2026-09-03— el TÉCNICO devuelve a la bodega de su sede lo que
   // le sobró. Cada uno ve un formulario distinto: el backend
@@ -155,7 +168,14 @@ const ROUTE_AREA: [RegExp, string[]][] = [
   [/^\/inventario\/actas(\/|$)/, ["administracion", "tecnicos", "caja"]],
   [/^\/inventario(\/|$)/, ["administracion"]],
   // Compras salió del perfil de caja (2026-07-29): quien recauda no ordena compras.
-  [/^\/ordenes(\/|$)/, ["administracion"]],
+  // Matiz de 2026-09-08 (a pedido del usuario): la cajera entra a MIRAR la orden y a
+  // subirle el papel —la factura del proveedor, el comprobante del pago—, que es lo
+  // que tiene en la mano en ventanilla. Ordenar la compra sigue sin ser suyo: crear
+  // (/nueva) y los catálogos (categorías) quedan fuera con reglas específicas ANTES de
+  // la general, y la API le niega todo lo que no sea leer o adjuntar.
+  [/^\/ordenes\/nueva(\/|$)/, ["administracion"]],
+  [/^\/ordenes\/categorias(\/|$)/, ["administracion"]],
+  [/^\/ordenes(\/|$)/, ["administracion", "caja"]],
   [/^\/proveedores(\/|$)/, ["administracion"]],
   [/^\/devoluciones(\/|$)/, ["administracion"]],
   // El archivo de documentos bajó a PERSONAS / PROYECTOS (2026-08-05): dejó de ser
@@ -164,6 +184,11 @@ const ROUTE_AREA: [RegExp, string[]][] = [
   // OJO: no confundir con /documentacion (los manuales), que no lleva gate.
   [/^\/documentos(\/|$)/, ["administracion", "sistemas"]],
   [/^\/proyectos(\/|$)/, ["administracion"]],
+  // El Panel de Tareas salió del perfil del TÉCNICO (2026-09-10, a pedido del
+  // usuario: «sus actividades se gestionan mediante el agendamiento diario»). Le
+  // queda a administración, gerencia y caja; la API repite lo mismo por su cuenta
+  // (`tasks.router.ts`) y el permiso `screen.tareas` se le retiró al rol.
+  [/^\/tareas(\/|$)/, ["administracion", "gerencia", "caja"]],
   [/^\/agenda(\/|$)/, ["administracion", "caja"]],
 ];
 
@@ -188,7 +213,7 @@ const AREA_LANDING: Record<string, string> = {
  * `/api/network`—, ni una más. Darle un área entera en su lugar le habría abierto
  * también los datos de esa área, que no es lo que se quiere.
  */
-const RUTAS_JEFE_BODEGA: RegExp[] = [/^\/red\/transferencias(\/|$)/];
+const RUTAS_JEFE_BODEGA: RegExp[] = [/^\/red\/transferencias(\/|$)/, /^\/red\/disponibles(\/|$)/];
 
 /** Su aterrizaje: la única pantalla que tiene. */
 const LANDING_JEFE_BODEGA = "/red/transferencias";

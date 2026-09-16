@@ -12,6 +12,8 @@ import { autenticar, usuarioDe } from '../core/auth/instancias';
 import { SearchController } from './search.controller';
 import { searchService } from '../core/contenedor';
 import { SearchService } from './search.service';
+import { esTecnicoDeCampo } from '../common/tecnico-scope';
+import { ForbiddenException } from '../core/http/errores';
 
 /** Instancia única del controlador. Las dependencias salen del contenedor. */
 const search = new SearchController(searchService);

@@ -43,6 +43,17 @@ export type SubscriberStats = {
 
 export type Branch = { id: string; name: string };
 
+/* Catálogos de valores fijos de la ficha del cliente (tomados literal del legacy
+   `customers/edit.php`). Viven aquí porque ya son dos los formularios que los
+   ofrecen: el wizard de alta/edición y las tarjetas de la ficha, que se editan
+   en sitio. Dos copias acabarían ofreciendo listas distintas. */
+export const CUSTOMER_TYPES = ["Natural", "Juridico", "Gubernamental", "Militar"];
+export const DOC_TYPES = ["CC", "CE", "NIT", "PAS", "PPT"];
+export const SUSCRIPCIONES = ["Residencial", "Corporativo", "Dedicado"];
+export const ESTRATOS = ["Estrato 1", "Estrato 2", "Estrato 3", "Estrato 4", "Estrato 5", "Estrato 6", "Estrato 7", "Estrato 8"];
+/** Tecnologías de instalación (enum `InstallTech` del backend). */
+export const INSTALL_TECHS = ["GPON", "EPON", "EOC", "RADIO", "FIBRA"];
+
 /** Estados del ciclo de vida y su presentación. */
 export const SUB_STATUS_LABEL: Record<string, string> = {
   ACTIVO: "Activo", CARTERA: "Cartera", COMPROMISO: "Compromiso", CORTADO: "Cortado",
@@ -81,9 +92,11 @@ export const SUB_CUENTA_OPTS: { value: string; label: string }[] = [
   { value: "", label: "Toda la cuenta" },
   { value: "aldia", label: "Al día" },
   { value: "debe", label: "Con deuda" },
-  // Por PLATA (lo que se mira para cortar) vs. por número de documentos
-  // abiertos, que no es lo mismo: ver `debtIds` en el backend.
-  { value: "debeFija", label: "Debe su mensualidad o más" },
+  // Por PLATA YA VENCIDA (lo que se mira para cortar) vs. por número de documentos
+  // abiertos, que no es lo mismo: ver `debtIds` en el backend. Lo de "vencida" no es
+  // un matiz: la factura del mes sale el día 1 y vence el 20, así que sin eso el que
+  // está al día figura como deudor de una mensualidad desde el día 1.
+  { value: "debeFija", label: "Debe una mensualidad o más ya vencida" },
   { value: "debe1", label: "Tiene 1 factura sin pagar" },
   { value: "debeGt2", label: "Tiene +2 facturas sin pagar" },
   { value: "compromiso", label: "En compromiso" },

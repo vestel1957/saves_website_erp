@@ -5,14 +5,15 @@
  * controlador. Cablea HTTP -> método: extrae los argumentos de `req` y llama.
  * La lógica sigue viviendo en ProjectsController, que ya no lleva decoradores.
  *
- * Endpoints: 8
+ * Endpoints: 12
  */
 import { crearRouter, manejar } from '../core/http/ruta';
 import { validar } from '../core/http/validar';
-import { autenticar, exigirArea } from '../core/auth/instancias';
+import { autenticar, exigirArea, usuarioDe } from '../core/auth/instancias';
 import { ProjectsController } from './projects.controller';
 import { projectsService } from '../core/contenedor';
-import { ProjectsService, CreateProjectDto, MilestoneDto, UpdateProjectDto } from './projects.service';
+import { ProjectsService, CreateProjectDto, MilestoneDto, ProjectMaterialsDto, UpdateProjectDto } from './projects.service';
+import { respuestaMaterial } from '../common/material-stock';
 
 /** Instancia única del controlador. Las dependencias salen del contenedor. */
 const projects = new ProjectsController(projectsService);
@@ -30,6 +31,27 @@ projectsRouter.post(
   autenticar,
   exigirArea('administracion', 'gerencia'),
   manejar((req) => projects.create(validar(CreateProjectDto, req.body))),
+);
+
+projectsRouter.get(
+  '/materials/search',
+  autenticar,
+  exigirArea('administracion', 'gerencia'),
+  manejar((req) => projects.searchMaterials(usuarioDe(req), req.query.search as string, req.query.warehouseId as string, req.query.categoryId as string, req.query.page as string, req.query.pageSize as string)),
+);
+
+projectsRouter.get(
+  '/materials/warehouses',
+  autenticar,
+  exigirArea('administracion', 'gerencia'),
+  manejar((req) => projects.materialWarehouses(usuarioDe(req), req.query.search as string)),
+);
+
+projectsRouter.delete(
+  '/materials/:mid',
+  autenticar,
+  exigirArea('administracion', 'gerencia'),
+  manejar((req) => projects.deleteMaterial(req.params.mid)),
 );
 
 projectsRouter.delete(
@@ -65,6 +87,13 @@ projectsRouter.patch(
   autenticar,
   exigirArea('administracion', 'gerencia'),
   manejar((req) => projects.update(req.params.id, validar(UpdateProjectDto, req.body))),
+);
+
+projectsRouter.post(
+  '/:id/materials',
+  autenticar,
+  exigirArea('administracion', 'gerencia'),
+  manejar((req) => projects.addMaterials(req.params.id, validar(ProjectMaterialsDto, req.body), usuarioDe(req))),
 );
 
 projectsRouter.post(

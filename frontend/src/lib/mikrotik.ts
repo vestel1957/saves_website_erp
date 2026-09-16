@@ -67,6 +67,7 @@ export const MK_ADMIN_ACTION_LABEL: Record<string, string> = {
   STATUS: "Consulta estado",
   PROVISION: "Alta PPPoE",
   PROFILE: "Cambio de perfil",
+  EDIT: "Edición de la ficha",
 };
 
 /** Tecnologías del legacy (mikrotiks/index2 <select tegnologia>). */

@@ -84,6 +84,36 @@ export class NotificationsService {
     }
   }
 
+  /**
+   * Retira un aviso de la campanita de quien ya no le corresponde.
+   *
+   * El contrapeso de `notify`: la regla de oro dice "sólo se notifica lo que alguien
+   * tiene que HACER", y en cuanto deja de tener que hacerlo el aviso sobra. El caso
+   * que lo trajo (2026-09-04) es la orden que se le pasa a otro técnico: el anterior
+   * se quedaba con un "te asignaron esta orden" de un trabajo que ya no es suyo —
+   * Brayan tenía cuatro de órdenes que hacía días eran de Miguel Ángel—.
+   *
+   * Se BORRA en vez de marcarse leída a propósito: un aviso leído sigue en la lista
+   * de los 30 y sigue ocupando sitio en la campanita del técnico, que es justo lo
+   * que se viene a quitar. Nunca lanza, por lo mismo que `notify`.
+   */
+  async retirar(groupKey: string, kind: string, exceptoUserIds: string[] = []): Promise<number> {
+    if (!groupKey) return 0;
+    try {
+      const r = await this.prisma.notification.deleteMany({
+        where: {
+          groupKey,
+          kind,
+          ...(exceptoUserIds.filter(Boolean).length ? { userId: { notIn: [...new Set(exceptoUserIds.filter(Boolean))] } } : {}),
+        },
+      });
+      return r.count;
+    } catch (e) {
+      this.logger.warn(`No se pudo retirar el aviso ${kind}/${groupKey}: ${(e as Error).message}`);
+      return 0;
+    }
+  }
+
   /** Lo que pinta la campanita: sin leer primero, recientes antes. */
   async list(userId: string) {
     const [items, unread] = await Promise.all([

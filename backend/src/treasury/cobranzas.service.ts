@@ -601,6 +601,17 @@ export class CobranzasService {
             + `${prop.meses.map((m) => m.label).join(', ')}: son $${Math.round(prop.neto).toLocaleString('es-CO')} además de la deuda.`,
           );
         }
+        // Y por ENCIMA tampoco: lo que sobre del mes adelantado no lleva descuento y
+        // quedaría como saldo a favor suelto para el mes siguiente (2026-09-16: 85.000
+        // cobrados por un mes de 80.750 → "noviembre $4.250" en el recibo). Con la
+        // casilla puesta el monto es exacto; quien quiera dejar más, sin la casilla.
+        if (excedente > prop.neto + 1) {
+          throw new BadRequestException(
+            `El monto trae $${Math.round(excedente - prop.neto).toLocaleString('es-CO')} de más: `
+            + `${prop.meses.map((m) => m.label).join(', ')} por adelantado vale `
+            + `$${Math.round(prop.neto).toLocaleString('es-CO')}${prop.pct > 0 ? ` con el ${prop.pct}% de descuento` : ''}.`,
+          );
+        }
         adelanto = {
           pct: prop.pct,
           descuento: prop.descuento,
@@ -755,7 +766,21 @@ export class CobranzasService {
         // promoción. La cajera lo canta y el recibo lo lleva como nota crédito.
         promo,
       };
-    });
+    },
+    // El tope por defecto de una transacción interactiva de Prisma son 5 s, y a este
+    // recaudo se le quedan cortos cuando Postgres está ocupado —es una base compartida
+    // por seis aplicaciones (ver `postgres-conexiones-compartidas`)—. Ha reventado dos
+    // veces en producción: una cajera el 02-09 (9.376 ms) y el PRIMER pago del portal de
+    // pagos en línea el 10-09 (15.304 ms). Prisma revierte la transacción entera, así que
+    // no quedan escrituras a medias; el problema es lo que pasa después:
+    //   · en ventanilla la cajera ve un 500 y vuelve a cobrar;
+    //   · por el portal NO hay nadie que reintente. El webhook de Wompi es un disparo y
+    //     `Tickets::data_reception_wompi` sólo llama al pago mientras la orden esté en
+    //     'Inicial', que él mismo acaba de cambiar. Un timeout ahí es un cliente que
+    //     pagó y cuya factura no se salda.
+    // De ahí los dos frenos: este tope y la RED DE SEGURIDAD del puente
+    // (`OnlinePaymentsService.aplicarAprobadosSinAplicar`), que recoge lo que se caiga.
+    { timeout: 30_000, maxWait: 10_000 });
     // Contabilización automática del recaudo (DR banco/caja, CR cartera). "Balance"
     // se paga con saldo a favor del cliente: no mueve efectivo → no se contabiliza aquí.
     //
@@ -1564,9 +1589,10 @@ export class CobranzasService {
     });
     if (!cuenta) throw new NotFoundException('Caja no encontrada');
 
-    const [efectivo, yaCerrado] = await Promise.all([
+    const [efectivo, yaCerrado, actividad] = await Promise.all([
       this.efectivoDeCaja(dto.cashAccountId, d),
       this.cierreDelDia(dto.cashAccountId, d),
+      this.actividadDelDia(dto.cashAccountId, dto.date),
     ]);
     const habil = proximoDiaHabil(d);
     const base = { cashAccountId: dto.cashAccountId, date: d, accountName: cuenta.holder, excedente: efectivo, proximoDiaHabil: habil };
@@ -1575,6 +1601,19 @@ export class CobranzasService {
     // excedente que se barrió entonces, no el de ahora.
     if (yaCerrado) {
       return { ...base, excedente: round2(num(yaCerrado.debit)), escrito: false, motivo: 'ya-cerrado' as const };
+    }
+    // Un día sin movimientos PROPIOS no se cierra, aunque el cajón tenga plata: lo
+    // único que hay dentro es el arrastre que dejó el cierre anterior, y barrerlo lo
+    // empuja otra vez al día siguiente dejando este día MARCADO COMO CERRADO sin que
+    // haya pasado nada.
+    //
+    // No es teórico: el 2026-09-04 la cajera de Yopal abrió esta pantalla —que viene
+    // puesta en HOY—, vio el arrastre de ayer en el cajón creyendo que era el cierre
+    // de ayer sin hacer, y cerró el día de hoy a las 7:48 de la mañana. A partir de
+    // ahí su panel decía "Caja cerrada" y ya no le ofrecía el botón de abrir: un día
+    // cerrado no se reabre, y no tenía por dónde salir.
+    if (actividad.movimientos === 0) {
+      return { ...base, escrito: false, motivo: 'sin-actividad' as const };
     }
     // El legacy sólo arrastra saldos positivos. Un cajón vacío (o en negativo por un
     // descuadre) no genera movimiento: no hay nada que llevar al día siguiente.

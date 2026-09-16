@@ -10,6 +10,7 @@ import { Input, Select, Field, Textarea } from "@/components/ui/Field";
 import { Badge } from "@/components/ui/Badge";
 import { Modal } from "@/components/Modal";
 import { FirmaOtpModal } from "@/components/FirmaOtpModal";
+import { ConsignacionCampos, consignacionVacia, type Consignacion } from "@/components/orders/ConsignacionCampos";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
@@ -23,6 +24,9 @@ import { ComprobanteCell } from "@/components/treasury/ComprobanteCell";
 
 type EditRow = { product: string; qty: string; price: string; taxRate: string };
 
+/** Los estados de una orden. Espejo de `ESTADOS_ORDEN` en el backend. */
+const ESTADOS_ORDEN = ["pendiente", "aprobado", "abonado", "recibido parcial", "recibido", "finalizado", "cancelado", "anulado"];
+
 function statusTone(status: string): "default" | "success" | "error" | "warning" {
   if (status === "recibido" || status === "finalizado") return "success";
   if (status === "cancelado" || status === "anulado") return "error";
@@ -35,7 +39,7 @@ function fmtDate(d?: string) {
 }
 
 export default function OrdenDetallePage() {
-  const { loading: authLoading, authFetch, can } = useAuth();
+  const { loading: authLoading, authFetch, can, isSuperadmin } = useAuth();
   const params = useParams();
   const id = String(params?.id ?? "");
 
@@ -75,6 +79,11 @@ export default function OrdenDetallePage() {
   const [editDate, setEditDate] = useState("");
   const [editDue, setEditDue] = useState("");
   const [editNotes, setEditNotes] = useState("");
+  const [editStatus, setEditStatus] = useState("");
+  const [editConsig, setEditConsig] = useState<Consignacion>(consignacionVacia);
+  // Los ítems tal como se abrieron: si nadie los tocó no se mandan, y así cambiar solo
+  // el estado no reemplaza las líneas (ni deja un "Ítems reemplazados" falso en la bitácora).
+  const [editRowsIniciales, setEditRowsIniciales] = useState("");
   const [editSaving, setEditSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   // Adjunto elegido que TODAVÍA no se ha subido: mientras esté aquí se pregunta si es
@@ -83,6 +92,15 @@ export default function OrdenDetallePage() {
   const [adjuntoPendiente, setAdjuntoPendiente] = useState<File | null>(null);
   const [adjuntoPago, setAdjuntoPago] = useState("");
   const puedeAprobar = can(PERM.PURCHASES_APPROVE);
+  // La CAJERA entra a compras sólo a MIRAR la orden y a ponerle el papel (2026-09-08, a
+  // pedido del usuario): sube la factura del proveedor y el comprobante del pago, que es
+  // lo que tiene en la mano en ventanilla. Todo lo que MUEVE la orden —editarla,
+  // cancelarla, finalizarla, recibir material, registrar el pago, notas/retenciones y
+  // borrar un adjunto— no es suyo y no se le pinta. El freno de verdad está en la API
+  // (esas rutas siguen exigiendo `administracion`); esto evita el botón que muere en 403.
+  const soloAdjunta =
+    !isSuperadmin && can(PERM.AREA_CAJA) &&
+    !can(PERM.AREA_ADMINISTRACION) && !can(PERM.AREA_CONTABILIDAD) && !can(PERM.AREA_GERENCIA);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -103,11 +121,12 @@ export default function OrdenDetallePage() {
 
   const canReceive = useMemo(() => {
     if (!order) return false;
+    if (soloAdjunta) return false; // la cajera no recibe material de compras
     if (["recibido", "finalizado", "cancelado", "anulado"].includes(order.status)) return false;
     // Órdenes del flujo nuevo: recibir solo después de aprobar.
     if (order.approval?.awaiting) return false;
     return true;
-  }, [order]);
+  }, [order, soloAdjunta]);
   const saldo = useMemo(() => order ? Math.max(0, (order.total ?? 0) - (order.paid ?? 0)) : 0, [order]);
 
   function openPay() {
@@ -265,10 +284,15 @@ export default function OrdenDetallePage() {
   };
 
   const abrirEditar = () => {
-    setEditRows((order?.items ?? []).map((it: any) => ({ product: it.product ?? "", qty: String(it.qty), price: String(it.price), taxRate: String(it.taxRate ?? 0) })));
+    const filas = (order?.items ?? []).map((it: any) => ({ product: it.product ?? "", qty: String(it.qty), price: String(it.price), taxRate: String(it.taxRate ?? 0) }));
+    setEditRows(filas);
+    setEditRowsIniciales(JSON.stringify(filas));
+    setEditStatus(order?.status ?? "");
     setEditDate(order?.date ? String(order.date).slice(0, 10) : "");
     setEditDue(order?.dueDate ? String(order.dueDate).slice(0, 10) : "");
     setEditNotes(order?.notes ?? "");
+    const c = order?.consignment;
+    setEditConsig({ payBank: c?.bank ?? "", payAccountType: c?.accountType ?? "", payAccount: c?.account ?? "", payHolder: c?.holder ?? "", payHolderDoc: c?.holderDoc ?? "" });
     setEditOpen(true);
   };
 
@@ -277,11 +301,17 @@ export default function OrdenDetallePage() {
       .filter((r) => r.product.trim() && Number(r.qty) > 0)
       .map((r) => ({ product: r.product.trim(), qty: Number(r.qty), price: Number(r.price) || 0, taxRate: Number(r.taxRate) || 0 }));
     if (!items.length) { toast("La orden necesita al menos un ítem", "alert-triangle"); return; }
+    const itemsTocados = JSON.stringify(editRows) !== editRowsIniciales;
     setEditSaving(true);
     try {
       const res = await authFetch(`/orders/${id}`, {
         method: "PATCH",
-        body: JSON.stringify({ items, orderDate: editDate || undefined, dueDate: editDue || undefined, notes: editNotes }),
+        body: JSON.stringify({
+          items: itemsTocados ? items : undefined,
+          orderDate: editDate || undefined, dueDate: editDue || undefined, notes: editNotes,
+          ...editConsig,
+          status: isSuperadmin && editStatus && editStatus !== order?.status ? editStatus : undefined,
+        }),
       });
       const d = await res.json();
       if (!res.ok) throw new Error(d?.message || "No se pudo guardar");
@@ -398,9 +428,9 @@ export default function OrdenDetallePage() {
           <Badge label={isCompra ? "Compra" : "Servicio"} tone={isCompra ? "brand" : "info"} />
           <Badge label={order.status} tone={statusTone(order.status)} />
           <Button variant="secondary" size="sm" onClick={abrirPdf}><Icon name="file-text" size={14} /> PDF</Button>
-          {esPendiente && <Button variant="secondary" size="sm" onClick={abrirEditar}><Icon name="pencil" size={14} /> Editar</Button>}
-          {!terminal && <Button variant="secondary" size="sm" onClick={() => setConfirmar({ kind: "cancelar" })}><Icon name="x" size={14} className="text-error-text" /> Cancelar orden</Button>}
-          {!terminal && !esPendiente && saldo <= 0 && (
+          {!soloAdjunta && (esPendiente || isSuperadmin) && <Button variant="secondary" size="sm" onClick={abrirEditar}><Icon name="pencil" size={14} /> Editar</Button>}
+          {!soloAdjunta && !terminal && <Button variant="secondary" size="sm" onClick={() => setConfirmar({ kind: "cancelar" })}><Icon name="x" size={14} className="text-error-text" /> Cancelar orden</Button>}
+          {!soloAdjunta && !terminal && !esPendiente && saldo <= 0 && (
             <Button variant="primary" size="sm" onClick={() => setConfirmar({ kind: "finalizar" })} disabled={flowBusy}><Icon name="check" size={14} /> Finalizar</Button>
           )}
         </div>
@@ -471,9 +501,27 @@ export default function OrdenDetallePage() {
           <div className="mt-1 flex justify-between border-t border-border-subtle pt-1 text-[14px] font-bold text-text-primary"><span>Total neto</span><span>{cop(order.total ?? 0)}</span></div>
           <div className="mt-1 flex justify-between text-[13px]"><span className="text-text-tertiary">Pagado</span><span className="text-success-text">{cop(order.paid ?? 0)}</span></div>
           <div className="flex justify-between text-[13px]"><span className="text-text-tertiary">Saldo</span><span className={saldo > 0 ? "font-semibold text-error-text" : "text-text-tertiary"}>{cop(saldo)}</span></div>
-          {saldo > 0 && !terminal && !awaiting && <Button variant="secondary" size="sm" className="mt-2 w-full" onClick={openPay}><Icon name="hand-coins" size={14} /> Registrar pago</Button>}
-          {saldo > 0 && awaiting && <p className="mt-2 text-[11px] text-warning-text">El pago se habilita cuando la orden esté aprobada.</p>}
+          {!soloAdjunta && saldo > 0 && !terminal && !awaiting && <Button variant="secondary" size="sm" className="mt-2 w-full" onClick={openPay}><Icon name="hand-coins" size={14} /> Registrar pago</Button>}
+          {!soloAdjunta && saldo > 0 && awaiting && <p className="mt-2 text-[11px] text-warning-text">El pago se habilita cuando la orden esté aprobada.</p>}
         </div>
+      </div>
+
+      <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
+        <h2 className="mb-2 text-[11px] font-semibold uppercase text-text-tertiary">Datos de la consignación</h2>
+        {order.consignment ? (
+          <>
+            <div className="grid grid-cols-1 gap-x-6 gap-y-1 text-[13px] sm:grid-cols-2 lg:grid-cols-3">
+              <div className="flex justify-between gap-2"><span className="text-text-tertiary">Banco</span><span className="text-text-primary">{order.consignment.bank || "—"}</span></div>
+              <div className="flex justify-between gap-2"><span className="text-text-tertiary">Tipo de cuenta</span><span className="text-text-primary">{order.consignment.accountType || "—"}</span></div>
+              <div className="flex justify-between gap-2"><span className="text-text-tertiary">N° de cuenta</span><span className="font-semibold text-text-primary">{order.consignment.account || "—"}</span></div>
+              <div className="flex justify-between gap-2"><span className="text-text-tertiary">Titular</span><span className="text-text-primary">{order.consignment.holder || "—"}</span></div>
+              <div className="flex justify-between gap-2"><span className="text-text-tertiary">NIT / C.C.</span><span className="text-text-primary">{order.consignment.holderDoc || "—"}</span></div>
+            </div>
+            {order.consignment.fromSupplier && <p className="mt-2 text-[11px] text-text-tertiary">Esta orden no guardó cuenta: se muestra la que el proveedor tiene hoy.</p>}
+          </>
+        ) : (
+          <p className="text-[12px] text-text-tertiary">Sin datos de consignación. Se agregan con Editar.</p>
+        )}
       </div>
 
       {order.notes ? (
@@ -505,7 +553,7 @@ export default function OrdenDetallePage() {
       <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="flex items-center gap-1.5 text-[13px] font-bold text-text-primary"><Icon name="hand-coins" size={16} /> Pagos</h2>
-          {saldo > 0 && !terminal && !awaiting && <Button variant="secondary" size="sm" onClick={openPay}><Icon name="plus" size={14} /> Registrar pago</Button>}
+          {!soloAdjunta && saldo > 0 && !terminal && !awaiting && <Button variant="secondary" size="sm" onClick={openPay}><Icon name="plus" size={14} /> Registrar pago</Button>}
         </div>
         <DataTable
           rows={order.payments ?? []}
@@ -528,10 +576,14 @@ export default function OrdenDetallePage() {
       <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="flex items-center gap-1.5 text-[13px] font-bold text-text-primary"><Icon name="file-text" size={16} /> Notas y retenciones</h2>
-          <Button variant="secondary" size="sm" onClick={openNote}><Icon name="plus" size={14} /> Agregar nota</Button>
+          {!soloAdjunta && <Button variant="secondary" size="sm" onClick={openNote}><Icon name="plus" size={14} /> Agregar nota</Button>}
         </div>
         {(order.noteLines ?? []).length === 0 ? (
-          <p className="text-[12px] text-text-tertiary">Sin notas ni retenciones. Usa «Agregar nota» para registrar una nota crédito/débito o una retención (ReteFuente/ReteICA).</p>
+          <p className="text-[12px] text-text-tertiary">
+            {soloAdjunta
+              ? "Sin notas ni retenciones."
+              : "Sin notas ni retenciones. Usa «Agregar nota» para registrar una nota crédito/débito o una retención (ReteFuente/ReteICA)."}
+          </p>
         ) : (
           <div className="flex flex-col gap-2">
             {(order.noteLines ?? []).map((n: any) => (
@@ -541,7 +593,7 @@ export default function OrdenDetallePage() {
                   {n.description ? <span className="ml-2 text-[12px] text-text-tertiary">{n.description}</span> : null}
                 </div>
                 <span className={`text-[13px] font-semibold ${n.amount < 0 ? "text-warning-text" : "text-text-secondary"}`}>{n.amount < 0 ? "-" : "+"}{cop(Math.abs(n.amount))}</span>
-                <button onClick={() => setConfirmar({ kind: "borrar-nota", nota: n })} className="tap text-text-tertiary hover:text-error-text" title="Eliminar nota"><Icon name="trash" size={15} /></button>
+                {!soloAdjunta && <button onClick={() => setConfirmar({ kind: "borrar-nota", nota: n })} className="tap text-text-tertiary hover:text-error-text" title="Eliminar nota"><Icon name="trash" size={15} /></button>}
               </div>
             ))}
           </div>
@@ -596,7 +648,7 @@ export default function OrdenDetallePage() {
               <div key={f.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border-subtle px-3 py-2">
                 <button onClick={() => void verAdjunto(f)} className="min-w-0 flex-1 truncate text-left text-[13px] font-medium text-brand hover:underline">{f.name}</button>
                 <span className="text-[11px] text-text-tertiary">{(f.size / 1024).toFixed(0)} KB · {f.by ?? "—"} · {fmtDate(f.at)}</span>
-                <button onClick={() => setConfirmar({ kind: "borrar-adjunto", file: f })} className="tap text-text-tertiary hover:text-error-text" title="Eliminar adjunto"><Icon name="trash" size={15} /></button>
+                {!soloAdjunta && <button onClick={() => setConfirmar({ kind: "borrar-adjunto", file: f })} className="tap text-text-tertiary hover:text-error-text" title="Eliminar adjunto"><Icon name="trash" size={15} /></button>}
               </div>
             ))}
           </div>
@@ -635,11 +687,29 @@ export default function OrdenDetallePage() {
         firmar={firmarAprobacion}
       />
 
-      {/* Editar orden (solo pendiente): cabecera + reemplazo de ítems. */}
+      {/* Editar orden (pendiente, o en cualquier estado si es superusuario): cabecera + ítems. */}
       <Modal open={editOpen} onClose={() => setEditOpen(false)} title={`Editar orden ${order.tid}`} maxWidth="max-w-3xl">
+        {!esPendiente && (
+          <p className="mb-3 rounded-md bg-warning-soft px-3 py-2 text-[12px] text-warning-text">
+            Esta orden está <b>{order.status}</b>. La está corrigiendo como superusuario: las firmas de
+            aprobación y lo ya recibido se conservan, y el cambio queda en el historial de la orden.
+          </p>
+        )}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Fecha de la orden"><Input type="date" value={editDate} onChange={(e) => setEditDate(e.target.value)} /></Field>
           <Field label="Vence"><Input type="date" value={editDue} onChange={(e) => setEditDue(e.target.value)} /></Field>
+          {isSuperadmin && (
+            <div className="sm:col-span-2">
+              <Field
+                label="Estado"
+                hint="Solo el superusuario. Cambiarlo aquí NO mueve dinero ni stock: para eso están Aprobar, Registrar pago, Recibir material y Finalizar."
+              >
+                <Select value={editStatus} onChange={(e) => setEditStatus(e.target.value)}>
+                  {ESTADOS_ORDEN.map((e) => <option key={e} value={e}>{e}</option>)}
+                </Select>
+              </Field>
+            </div>
+          )}
         </div>
         <div className="mt-3">
           <div className="mb-2 flex items-center justify-between">
@@ -658,8 +728,12 @@ export default function OrdenDetallePage() {
             ))}
           </div>
         </div>
+        <div className="mt-3">
+          <span className="mb-2 block text-[12px] font-semibold text-text-secondary">Datos de la consignación</span>
+          <ConsignacionCampos value={editConsig} onChange={setEditConsig} />
+        </div>
         <div className="mt-3"><Field label="Nota"><Textarea rows={2} value={editNotes} onChange={(e) => setEditNotes(e.target.value)} /></Field></div>
-        <p className="mt-2 text-[12px] text-text-tertiary">Al editar los ítems, cualquier firma de aprobación previa se reinicia (lo firmado ya no es lo mismo).</p>
+        {esPendiente && <p className="mt-2 text-[12px] text-text-tertiary">Al editar los ítems, cualquier firma de aprobación previa se reinicia (lo firmado ya no es lo mismo).</p>}
         <div className="mt-3 flex justify-end gap-2">
           <Button variant="secondary" onClick={() => setEditOpen(false)} disabled={editSaving}>Cancelar</Button>
           <Button variant="primary" onClick={guardarEdicion} disabled={editSaving}>{editSaving ? "Guardando…" : "Guardar cambios"}</Button>

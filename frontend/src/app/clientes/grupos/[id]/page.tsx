@@ -133,10 +133,22 @@ export default function SedeClientesPage() {
           title={sedeName || "Sede"}
           subtitle={data ? `${data.total.toLocaleString("es-CO")} clientes en esta sede` : "Clientes de la sede"}
         />
-        <Button size="sm" variant="secondary" onClick={exportar} disabled={exporting || !data?.total}>
-          <Icon name={exporting ? "loader" : "download"} size={14} className={exporting ? "animate-spin" : ""} />
-          {exporting ? "Exportando…" : "Exportar Excel"}
-        </Button>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          {/* La campaña a la sede entera se arma en Mensajes masivos, con filtros y
+              tope diario; aquí abajo queda el envío a los abonados marcados a mano. */}
+          {canWhatsapp && (
+            <Link
+              href={`/whatsapp/masivo?sede=${encodeURIComponent(String(id))}`}
+              className="inline-flex min-h-8 items-center justify-center gap-1.5 rounded-lg border border-border-subtle bg-surface px-3 text-[13px] font-medium text-text-primary hover:bg-surface-2"
+            >
+              <Icon name="send" size={14} /> Campaña a esta sede
+            </Link>
+          )}
+          <Button size="sm" variant="secondary" onClick={exportar} disabled={exporting || !data?.total}>
+            <Icon name={exporting ? "loader" : "download"} size={14} className={exporting ? "animate-spin" : ""} />
+            {exporting ? "Exportando…" : "Exportar Excel"}
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-2">

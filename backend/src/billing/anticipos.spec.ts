@@ -126,12 +126,16 @@ describe('propuestaAdelanto', () => {
     expect(p!.meses[0].label).toBe('octubre');
   });
 
-  it('sin ajuste usa el 5% por defecto, y con 0 no rebaja nada', async () => {
+  // Sin ajuste se rebaja el 5% (2026-09-16): el que adelanta un mes siempre lleva el
+  // descuento. Apagarlo exige escribir 0 a propósito en `billing.advanceDiscountPct`.
+  it('sin ajuste rebaja el 5%; sólo un 0 escrito lo apaga', async () => {
     const base = {
       ultimaFactura: { invoiceDate: new Date(Date.UTC(2026, 8, 1)), total: 0 },
       servicios: [{ price: 50000, qty: 1, taxRate: 19 }],
     };
     expect((await propuestaAdelanto(txFalso({ ...base }).tx, 's1'))!.descuento).toBe(2975);
+    expect((await propuestaAdelanto(txFalso({ ...base, pct: 'x' }).tx, 's1'))!.descuento).toBe(2975);
+    expect((await propuestaAdelanto(txFalso({ ...base, pct: '5' }).tx, 's1'))!.descuento).toBe(2975);
     expect((await propuestaAdelanto(txFalso({ ...base, pct: '0' }).tx, 's1'))!.descuento).toBe(0);
   });
 
@@ -170,6 +174,22 @@ describe('concederDescuentosAdelantados', () => {
     expect(notas[0].opts.type).toBe('CREDITO');
     expect(notas[0].opts.description).toContain(NOTA_ADELANTO);
     expect(updates[0].data).toEqual({ discountApplied: 5000 });
+  });
+
+  it('deja la factura clavada en el neto cobrado aunque el total difiera en centavos', async () => {
+    const { tx } = txFalso({
+      anticipos: [{ ...anticipoConDescuento, discountAmount: 4250, monthlyNet: 80750 }],
+      pendientes: [facturaDe(500900, 9, 85000.11)], // IVA redondeado por renglón
+    });
+    const r = await concederDescuentosAdelantados(tx, 's1');
+    expect(r.facturas).toEqual([{ tid: 500900, monto: 4250.11 }]);
+    // Pero una diferencia de un peso o más ya es otro precio: se concede lo prometido.
+    notas.length = 0;
+    const otro = txFalso({
+      anticipos: [{ ...anticipoConDescuento, discountAmount: 4250, monthlyNet: 80750 }],
+      pendientes: [facturaDe(500901, 9, 90000)],
+    });
+    expect((await concederDescuentosAdelantados(otro.tx, 's1')).facturas).toEqual([{ tid: 500901, monto: 4250 }]);
   });
 
   it('NO rebaja la mora: sólo meses posteriores al recaudo', async () => {

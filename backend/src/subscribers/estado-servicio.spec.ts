@@ -23,11 +23,14 @@ function armar(factura: any = { id: 'fac-1', serviceTv: 'Television26', serviceC
     $queryRaw: jest.fn().mockResolvedValue(factura ? [factura] : []),
   };
   const events: any = { emit: jest.fn((n: string, p: any) => { emitidos.push([n, p]); return true; }) };
-  const srv = new SubscribersService(prisma, {} as any, {} as any, {} as any, events);
+  const ordenes: any = {
+    registrarResuelta: jest.fn(async (i: any) => ({ id: 'ord-1', code: 500123, type: i.type, nueva: true, estado: 'RESUELTO' })),
+  };
+  const srv = new SubscribersService(prisma, {} as any, {} as any, {} as any, events, ordenes);
   // La ficha completa no se prueba aquí: sólo lo que este método escribe.
   (srv as any).detail = jest.fn().mockResolvedValue({ ok: true });
   const cambiar = (dto: any) => srv.cambiarEstadoDeServicio('sub-1', dto, { name: 'Nayme' } as any);
-  return { cambiar, facturas, servicios, notas, emitidos };
+  return { cambiar, facturas, servicios, notas, emitidos, ordenes };
 }
 
 describe('cambio manual del estado de un servicio', () => {
@@ -71,5 +74,57 @@ describe('cambio manual del estado de un servicio', () => {
   it('sin factura recurrente no hay dónde anotarlo, y se dice', async () => {
     const { cambiar } = armar(null);
     await expect(cambiar({ servicio: 'TV', estado: 'SUSPENDIDO' })).rejects.toThrow(/factura recurrente/i);
+  });
+
+  /**
+   * El corte de TV se hace A MANO —el TR-069 no alcanza a la mayoría de los equipos—,
+   * así que la orden que lo respalda tiene que nacer aquí: sin ella el trabajo no
+   * existe para nadie (ni ficha, ni informes de campo, ni legacy) y la señal de
+   * "¿sigue cortado?" mira un corte sin rastro.
+   */
+  it('el corte manual de TV deja su orden, ya cerrada', async () => {
+    const { cambiar, ordenes } = armar();
+    await cambiar({ servicio: 'TV', estado: 'CORTADO', note: 'corte por mora' });
+
+    expect(ordenes.registrarResuelta).toHaveBeenCalledWith(
+      expect.objectContaining({ subscriberId: 'sub-1', type: 'Corte Television', subject: 'servicio', autor: 'Nayme' }),
+    );
+    // El detalle largo cuenta por qué no hay rastro en los equipos, y arrastra el motivo.
+    const arg = ordenes.registrarResuelta.mock.calls[0][0];
+    expect(arg.section).toContain('manualmente');
+    expect(arg.section).toContain('corte por mora');
+  });
+
+  it('cada estado tiene su orden, y por servicio', async () => {
+    for (const [servicio, estado, tipo] of [
+      ['TV', 'SUSPENDIDO', 'Suspension Television'],
+      ['TV', 'ACTIVO', 'Reconexion Television'],
+      ['INTERNET', 'CORTADO', 'Corte Internet'],
+      ['INTERNET', 'ACTIVO', 'Reconexion Internet'],
+    ] as const) {
+      const { cambiar, ordenes } = armar();
+      await cambiar({ servicio, estado });
+      expect(ordenes.registrarResuelta.mock.calls[0][0].type).toBe(tipo);
+    }
+  });
+
+  it('la reconexión NO se lleva por delante una "…2": ésa hay que cobrarla al cerrarla', async () => {
+    const { cambiar, ordenes } = armar();
+    await cambiar({ servicio: 'TV', estado: 'ACTIVO' });
+    expect(ordenes.registrarResuelta.mock.calls[0][0].tiposEquivalentes).toBeUndefined();
+  });
+
+  it('el número de la orden viaja en la respuesta (el toast lo enseña)', async () => {
+    const { cambiar } = armar();
+    await expect(cambiar({ servicio: 'TV', estado: 'CORTADO' })).resolves.toMatchObject({
+      orden: { code: 500123, type: 'Corte Television' },
+    });
+  });
+
+  it('si la orden no se puede escribir, el cambio de estado se guarda igual', async () => {
+    const { cambiar, facturas, ordenes } = armar();
+    ordenes.registrarResuelta.mockResolvedValueOnce(null);
+    await expect(cambiar({ servicio: 'TV', estado: 'CORTADO' })).resolves.toMatchObject({ orden: null });
+    expect(facturas[0]).toMatchObject({ estadoTv: 'CORTADO' });
   });
 });

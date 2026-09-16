@@ -1,6 +1,6 @@
 import type { Response } from 'express';
 import { CollectionsService, AgreementFilter } from './collections.service';
-import { CreateCallDto } from './dto/collections.dto';
+import { CreateCallDto, CreateNoteRequestDto, ResolveNoteRequestDto } from './dto/collections.dto';
 import { AuthUser } from '../auth/current-user.decorator';
 
 const csvCell = (v: unknown) => {
@@ -49,4 +49,12 @@ export class CollectionsController {
 
   create(dto: CreateCallDto, user: AuthUser) { return this.collections.create(dto, user); }
   remove(id: string) { return this.collections.remove(id); }
+
+  /** Solicitudes de nota crédito/débito (pestaña Cobranza del cliente). */
+  noteRequestAssignees() { return this.collections.emisoresDeNotas(); }
+  noteRequests(subscriberId: string) { return this.collections.solicitudesNota(subscriberId); }
+  createNoteRequest(dto: CreateNoteRequestDto, user: AuthUser) { return this.collections.solicitarNota(dto, user); }
+  resolveNoteRequest(id: string, dto: ResolveNoteRequestDto, user: AuthUser) {
+    return this.collections.resolverSolicitudNota(id, dto, user);
+  }
 }

@@ -128,7 +128,7 @@ describe('rutasTapadas', () => {
 describe('las rutas reales del proyecto', () => {
   it('no tiene ninguna ruta inalcanzable', () => {
     // Import perezoso: arrastra los 48 routers y con ellos el contenedor.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { RUTAS } = require('../rutas') as typeof import('../rutas');
 
     const conflictos = rutasTapadas(RUTAS);

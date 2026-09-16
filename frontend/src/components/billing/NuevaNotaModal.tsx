@@ -118,11 +118,17 @@ export function NuevaNotaModal({
   open,
   onClose,
   onDone,
+  inicial,
 }: {
   open: boolean;
   onClose: () => void;
   /** Se llama tras aplicar con éxito para refrescar el listado. */
   onDone?: () => void;
+  /**
+   * Arranque ya lleno: lo usa la solicitud de nota de la pestaña Cobranza, que ya
+   * sabe el cliente, el tipo, el monto sugerido y el porqué.
+   */
+  inicial?: { sub: PickedSub; type: "CREDITO" | "DEBITO"; amount?: number | null; description?: string };
 }) {
   const { authFetch } = useAuth();
   const [sub, setSub] = useState<PickedSub | null>(null);
@@ -140,10 +146,18 @@ export function NuevaNotaModal({
 
   // Reset al cerrar para que la próxima apertura arranque limpia.
   useEffect(() => {
-    if (open) return;
+    if (open) {
+      if (inicial) {
+        setSub(inicial.sub); setType(inicial.type);
+        setAmount(inicial.amount ? String(inicial.amount) : ""); setDescription(inicial.description ?? "");
+      }
+      return;
+    }
     setSub(null); setDeuda(null); setTodas(false); setInvoiceIds([]);
     setType("CREDITO"); setModo("CADA"); setAmount(""); setDescription(""); setRetentionType("");
     setErr(null); setSaving(false);
+    // `inicial` sólo cuenta al abrir: re-rellenar mientras se edita borraría lo tecleado.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   // Facturas del cliente elegido. `todas` alterna entre lo que debe y el histórico.

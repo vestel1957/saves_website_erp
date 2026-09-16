@@ -18,6 +18,11 @@ function armar(opts: { cobro?: any } = {}) {
   const creados: any[] = [];
   const prisma = {
     subscriber: { findUnique: jest.fn().mockResolvedValue({ id: 'sub-1', nomenclature: {}, addressLine: null, neighborhood: '77' }) },
+    // Desde 2026-09-07 'AgregarInternet' lleva plan de internet destino: sin él la
+    // orden no se abre (ver `agregar-internet-cierre.spec.ts`). Aquí sólo se mira el
+    // cargo, pero la orden tiene que poder nacer.
+    plan: { findUnique: jest.fn().mockResolvedValue({ id: 'plan-300', name: '300 Megas --', kind: 'INTERNET', megas: 300, active: true }) },
+    subscriberService: { findMany: jest.fn().mockResolvedValue([]) },
     ticket: { update: jest.fn().mockResolvedValue({}) },
     $transaction: jest.fn(async (fn: any) =>
       fn({
@@ -69,7 +74,7 @@ describe('orden de agregar internet', () => {
     const { srv, cargo, prisma } = armar();
 
     const creada: any = await srv.createTicket(
-      { subscriberId: 'sub-1', subject: 'servicio', type: 'AgregarInternet' } as any, USUARIO,
+      { subscriberId: 'sub-1', subject: 'servicio', type: 'AgregarInternet', planToId: 'plan-300' } as any, USUARIO,
     );
 
     expect(cargo.cobrar).toHaveBeenCalledWith(
@@ -89,7 +94,7 @@ describe('orden de agregar internet', () => {
   it('si el cobro falla, la orden se abre igual y lo dice', async () => {
     const { srv, prisma } = armar({ cobro: { cobrado: false, modo: 'on', precio: 30000, mensaje: 'No se pudo facturar agregar internet: sin cuenta contable.' } });
 
-    const creada: any = await srv.createTicket({ subscriberId: 'sub-1', type: 'AgregarInternet' } as any, USUARIO);
+    const creada: any = await srv.createTicket({ subscriberId: 'sub-1', type: 'AgregarInternet', planToId: 'plan-300' } as any, USUARIO);
 
     expect(creada.code).toBe(500123);
     expect(creada.cargo).toMatchObject({ factura: null, cobrado: false });
@@ -101,6 +106,71 @@ describe('orden de agregar internet', () => {
     const creada: any = await srv.createTicket({ subscriberId: 'sub-1', type: 'AgregarTelevision' } as any, USUARIO);
     expect(cargo.cobrar).not.toHaveBeenCalled();
     expect(creada.cargo).toBeUndefined();
+  });
+});
+
+/**
+ * «ESTO YA SE PAGÓ»: la orden que se abre sobre un trabajo ya facturado en ventanilla.
+ *
+ * El mismo trabajo se cobra por dos caminos —la factura primero (motivo, y la orden
+ * nace al pagarse) o la orden primero (el cargo automático)—, y quien recorre los dos
+ * le deja al cliente dos facturas de 30.000. Pasó el 2026-09-08 con la #505077. Aquí
+ * se comprueba que decirlo apaga el cargo, y que no se pueda decir cualquier cosa: el
+ * número viaja en el cuerpo de la petición.
+ */
+describe('la orden que ya venía facturada', () => {
+  const FACTURA = {
+    tid: 505077, subscriberId: 'sub-1', status: 'PAID',
+    items: [{ productName: 'Afiliacion 2021', description: 'Agregar internet' }],
+  };
+
+  function conFactura(factura: any = FACTURA, ticketConEsaFactura: any = null) {
+    const armado = armar();
+    (armado.prisma as any).subInvoice = { findUnique: jest.fn().mockResolvedValue(factura) };
+    (armado.prisma as any).ticket.findFirst = jest.fn().mockResolvedValue(ticketConEsaFactura);
+    return armado;
+  }
+
+  it('no vuelve a cobrar y ata la orden a la factura que el cliente ya pagó', async () => {
+    const { srv, cargo, prisma } = conFactura();
+
+    const creada: any = await srv.createTicket(
+      { subscriberId: 'sub-1', type: 'AgregarInternet', planToId: 'plan-300', yaFacturadaTid: 505077 } as any,
+      USUARIO,
+    );
+
+    expect(cargo.cobrar).not.toHaveBeenCalled();
+    expect(prisma.ticket.update).toHaveBeenCalledWith({
+      where: { id: 't-1' },
+      data: { chargeInvoiceTid: 505077, chargeConcept: 'Afiliacion 2021' },
+    });
+    expect(creada.code).toBe(500123);
+  });
+
+  it('no acepta la factura de otro cliente', async () => {
+    const { srv, cargo } = conFactura({ ...FACTURA, subscriberId: 'sub-2' });
+    await expect(srv.createTicket(
+      { subscriberId: 'sub-1', type: 'AgregarInternet', planToId: 'plan-300', yaFacturadaTid: 505077 } as any, USUARIO,
+    )).rejects.toThrow(/no es de este cliente/i);
+    expect(cargo.cobrar).not.toHaveBeenCalled();
+  });
+
+  it('no acepta una factura anulada ni una que ya es de otra orden', async () => {
+    const anulada = conFactura({ ...FACTURA, status: 'CANCELED' });
+    await expect(anulada.srv.createTicket(
+      { subscriberId: 'sub-1', type: 'AgregarInternet', planToId: 'plan-300', yaFacturadaTid: 505077 } as any, USUARIO,
+    )).rejects.toThrow(/anulada/i);
+
+    const tomada = conFactura(FACTURA, { code: 505552 });
+    await expect(tomada.srv.createTicket(
+      { subscriberId: 'sub-1', type: 'AgregarInternet', planToId: 'plan-300', yaFacturadaTid: 505077 } as any, USUARIO,
+    )).rejects.toThrow(/ya es de la orden #505552/i);
+  });
+
+  it('sin el número, la orden cobra como siempre', async () => {
+    const { srv, cargo } = conFactura();
+    await srv.createTicket({ subscriberId: 'sub-1', type: 'AgregarInternet', planToId: 'plan-300' } as any, USUARIO);
+    expect(cargo.cobrar).toHaveBeenCalled();
   });
 });
 
@@ -170,5 +240,49 @@ describe('la factura del cargo', () => {
 
     expect(r.cobrado).toBe(false);
     expect(r.mensaje).toMatch(/no se pudo facturar/i);
+  });
+});
+
+/**
+ * LAS CANDIDATAS: qué facturas se le enseñan a quien abre la orden para que pueda
+ * decir «ésta ya es». Lo que importa es lo que se deja FUERA — ofrecer una factura
+ * que ya es de otra orden sería regalar el cargo.
+ */
+describe('facturas que ya cobran este trabajo', () => {
+  function armarCandidatas(facturas: any[], tickets: any[] = []) {
+    const prisma = {
+      subInvoice: { findMany: jest.fn().mockResolvedValue(facturas) },
+      ticket: { findMany: jest.fn().mockResolvedValue(tickets) },
+    };
+    return { prisma, srv: new CargoOrdenService(prisma as any, {} as any) };
+  }
+
+  const FIJA = (tid: number, concepto: string) => ({
+    tid, invoiceDate: new Date('2026-09-08T00:00:00Z'), total: 30000, status: 'PAID',
+    notes: null, items: [{ productName: concepto, description: concepto }],
+  });
+
+  it('las enseña con su concepto y marca la que es justo este cargo', async () => {
+    const { srv, prisma } = armarCandidatas([FIJA(505077, 'Afiliacion 2021'), FIJA(505090, 'Agregar Internet')]);
+
+    const r = await srv.facturasYaCobradas(CARGO_AGREGAR_INTERNET, 'sub-1');
+
+    expect(r).toEqual([
+      { tid: 505077, fecha: '2026-09-08', total: 30000, status: 'PAID', concepto: 'Afiliacion 2021', notes: null, mismoConcepto: false },
+      { tid: 505090, fecha: '2026-09-08', total: 30000, status: 'PAID', concepto: 'Agregar Internet', notes: null, mismoConcepto: true },
+    ]);
+    // Sólo facturas sueltas del cliente, sin anular y sin orden programada detrás.
+    const where = prisma.subInvoice.findMany.mock.calls[0][0].where;
+    expect(where).toMatchObject({ subscriberId: 'sub-1', kind: 'FIJA', pendingOrder: null });
+    expect(where.status).toEqual({ not: 'CANCELED' });
+  });
+
+  it('deja fuera la que ya es de una orden', async () => {
+    const { srv } = armarCandidatas(
+      [FIJA(505077, 'Afiliacion 2021'), FIJA(505076, 'Traslado')],
+      [{ chargeInvoiceTid: 505076, moveInvoiceTid: 505076 }],
+    );
+    const r = await srv.facturasYaCobradas(CARGO_AGREGAR_INTERNET, 'sub-1');
+    expect(r.map((f) => f.tid)).toEqual([505077]);
   });
 });

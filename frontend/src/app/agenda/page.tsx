@@ -1,313 +1,219 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
 import { Button } from "@/components/ui/Button";
-import { Input, Select, Textarea, Field } from "@/components/ui/Field";
-import { DataTable } from "@/components/ui/DataTable";
-import { ListToolbar } from "@/components/ui/ListToolbar";
-import { Pagination } from "@/components/ui/Pagination";
+import { Input, Select, Field } from "@/components/ui/Field";
+import { Segmented } from "@/components/ui/Segmented";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { LoadError } from "@/components/ui/LoadError";
-import { Modal } from "@/components/Modal";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { useRequest } from "@/lib/useRequest";
-import { useOrden } from "@/lib/useOrden";
-import { mensajeDeError } from "@/lib/errores";
-import { TICKET_PRIORITIES, TICKET_PRIORITY_TONE } from "@/lib/support";
+import { TICKET_PRIORITIES } from "@/lib/support";
+import { EventoModal } from "@/components/agenda/EventoModal";
+import { MiniCalendario } from "@/components/agenda/MiniCalendario";
+import { VistaMes } from "@/components/agenda/VistaMes";
+import { VistaTabla } from "@/components/agenda/VistaTabla";
+import { VistaTiempo } from "@/components/agenda/VistaTiempo";
+import {
+  inicioDeDia, nombreDeMes, rejillaDeMes, semanaDe, sumarDias, sumarMeses,
+  ventanaDe, type Evento,
+} from "@/components/agenda/calendario";
 
-/** Mismo pintado de prioridad que en soporte: un color por nivel. */
-const TONO_BADGE: Record<string, string> = {
-  error: "bg-error-soft text-error-text",
-  warning: "bg-warning-soft text-warning-text",
-  info: "bg-info-soft text-info-text",
-  success: "bg-success-soft text-success-text",
-  default: "bg-surface-2 text-text-secondary",
-};
+type Vista = "mes" | "semana" | "dia" | "lista";
 
-const toLocalInput = (iso: string | null) => {
-  if (!iso) return "";
-  const d = new Date(iso); const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
-};
-
-const fechaCorta = (iso: string | null) =>
-  iso ? new Date(iso).toLocaleDateString("es-CO", { day: "2-digit", month: "short", year: "numeric" }) : "—";
-
-/**
- * Los filtros de la vista, en un solo objeto.
- *
- * Van juntos a propósito: son la dependencia de la carga y lo que hay que vaciar
- * al pulsar "Limpiar". Sueltos en cinco `useState` había que acordarse de tocar
- * los cinco en los tres sitios, que es como se quedan filtros huérfanos que la
- * tabla aplica y el botón de limpiar no.
- */
-type Filtros = { search: string; from: string; to: string; priority: string; assignedBy: string };
-const SIN_FILTROS: Filtros = { search: "", from: "", to: "", priority: "", assignedBy: "" };
-const cuantosFiltros = (f: Filtros) => Object.values(f).filter((v) => v.trim() !== "").length;
-
-/** `YYYY-MM-DD` de un `Date`, leído en Colombia — la misma zona que usa el backend. */
-const diaISO = (d: Date) =>
-  new Intl.DateTimeFormat("en-CA", { timeZone: "America/Bogota", year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
-
-/**
- * Atajos del rango. La agenda arrastra cinco años de eventos: escribir dos fechas a
- * mano para ver "lo de este mes" es el paso que hace que nadie use el filtro.
- */
-const ATAJOS: { etiqueta: string; rango: () => { from: string; to: string } }[] = [
-  { etiqueta: "Hoy", rango: () => { const h = diaISO(new Date()); return { from: h, to: h }; } },
-  {
-    etiqueta: "Últimos 7 días",
-    rango: () => ({ from: diaISO(new Date(Date.now() - 6 * 86400000)), to: diaISO(new Date()) }),
-  },
-  {
-    etiqueta: "Este mes",
-    rango: () => { const h = diaISO(new Date()); return { from: `${h.slice(0, 7)}-01`, to: h }; },
-  },
-  {
-    etiqueta: "Este año",
-    rango: () => { const h = diaISO(new Date()); return { from: `${h.slice(0, 4)}-01-01`, to: h }; },
-  },
+const VISTAS: { value: Vista; label: string }[] = [
+  { value: "mes", label: "Mes" },
+  { value: "semana", label: "Semana" },
+  { value: "dia", label: "Día" },
+  { value: "lista", label: "Lista" },
 ];
 
-export default function AgendaPage() {
-  const { loading: authLoading, authFetch } = useAuth();
+/** Filtros que comparten las tres vistas de rejilla (la tabla lleva los suyos). */
+type Filtros = { search: string; priority: string; assignedBy: string };
+const SIN_FILTROS: Filtros = { search: "", priority: "", assignedBy: "" };
 
+/**
+ * AGENDA — el calendario de la empresa: tareas, reuniones, visitas.
+ *
+ * Cuatro vistas sobre los mismos eventos (`CalendarEvent`), y son cuatro porque son
+ * cuatro preguntas distintas:
+ *
+ *   · **Mes** — cómo viene el mes. Es la que abre, porque es con la que se decide
+ *     cuándo meter algo nuevo.
+ *   · **Semana** — la jornada con sus horas, que es donde se ve si una reunión de las
+ *     11 choca con otra.
+ *   · **Día** — lo mismo para un solo día, en móvil y en los días cargados.
+ *   · **Lista** — la tabla de siempre sobre los 131.913 eventos del histórico: buscar,
+ *     ordenar y paginar. Ver `VistaTabla`, que explica por qué no sobra.
+ *
+ * ── POR QUÉ ESTA PANTALLA ESTÁ EN «PRINCIPAL» Y NO ES «MI AGENDA» ────────────
+ * Son dos cosas distintas que se llaman parecido. `/mi-agenda` es el TURNO de un
+ * técnico —lo que se le asignó a él, en el orden en que lo tiene que hacer—, y por eso
+ * no la ve nadie más. Ésta es la agenda de la oficina: lo que cualquiera del equipo
+ * apunta para sí o para todos. Una no sustituye a la otra y, sobre todo, no comparten
+ * ni la tabla ni el permiso.
+ *
+ * ── UNA SOLA CARGA POR VENTANA ───────────────────────────────────────────────
+ * Las tres rejillas piden lo mismo a `/omni/events/calendar`: los eventos que CRUZAN
+ * los días visibles (no los que empiezan en ellos — ver el backend). Cambiar de mes a
+ * semana sobre el mismo día no vuelve a pedir nada que no haga falta, porque la
+ * ventana la calculan los días que se están pintando.
+ */
+export default function AgendaPage() {
+  const { loading: authLoading } = useAuth();
+
+  const [vista, setVista] = useState<Vista>("mes");
+  /** El día de referencia. Mueve la vista y es lo que el mini-calendario cambia. */
+  const [ancla, setAncla] = useState<Date>(() => inicioDeDia(new Date()));
+  /** El mes del mini, que puede ir por libre para ojear sin saltar de vista. */
+  const [mesDelMini, setMesDelMini] = useState<Date>(() => new Date());
   const [filtros, setFiltros] = useState<Filtros>(SIN_FILTROS);
   const set = <K extends keyof Filtros>(k: K, v: Filtros[K]) => setFiltros((f) => ({ ...f, [k]: v }));
-  const [panelAbierto, setPanelAbierto] = useState(false);
 
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(50);
+  const [modalAbierto, setModalAbierto] = useState(false);
+  const [enEdicion, setEnEdicion] = useState<Evento | null>(null);
+  const [fechaSugerida, setFechaSugerida] = useState<Date | null>(null);
+  /** Se incrementa al guardar o borrar: es lo que hace recargar a la vista que toque. */
+  const [recarga, setRecarga] = useState(0);
 
-  // Pagina en el servidor: el orden viaja en la query.
-  const orden = useOrden({ by: "start", dir: "desc" });
+  const dias = useMemo(() => {
+    if (vista === "mes") return rejillaDeMes(ancla);
+    if (vista === "semana") return semanaDe(ancla);
+    return [ancla];
+  }, [vista, ancla]);
 
-  // Los filtros se aplican solos al cambiarlos (con debounce en el buscador, que se
-  // teclea letra a letra). No hay botón "Filtrar": una tabla que ya cambió y un botón
-  // que sigue ahí hacen dudar de si el filtro llegó a aplicarse.
+  const ventana = useMemo(() => ventanaDe(dias), [dias]);
+
   const qsFiltros = useMemo(() => {
     const qs = new URLSearchParams();
     for (const [k, v] of Object.entries(filtros)) if (v.trim()) qs.set(k, v.trim());
     return qs.toString();
   }, [filtros]);
 
-  const { data, cargando, error, refrescar } = useRequest<any>(
+  const { data, cargando, error, refrescar } = useRequest<{
+    items: Evento[];
+    truncado: boolean;
+    /** Desde cuándo lo devuelto deja de ser completo (sólo si `truncado`). */
+    cortadoDesde: string | null;
+    tope: number;
+  }>(
     () => {
       const qs = new URLSearchParams(qsFiltros);
-      qs.set("page", String(page));
-      qs.set("pageSize", String(pageSize));
-      for (const [k, v] of Object.entries(orden.params)) qs.set(k, v);
-      return `/omni/events?${qs}`;
+      qs.set("from", ventana.from);
+      qs.set("to", ventana.to);
+      return `/omni/events/calendar?${qs}`;
     },
-    [qsFiltros, page, pageSize, orden.clave],
-    { debounceMs: filtros.search ? 350 : 0, saltar: authLoading },
+    [ventana.from, ventana.to, qsFiltros, recarga],
+    { debounceMs: filtros.search ? 350 : 0, saltar: authLoading || vista === "lista" },
   );
 
-  // Las cifras de arriba miran EXACTAMENTE los mismos filtros que la tabla.
-  const { data: stats } = useRequest<any>(
-    () => `/omni/events/stats${qsFiltros ? `?${qsFiltros}` : ""}`,
-    [qsFiltros],
-    { debounceMs: filtros.search ? 350 : 0, saltar: authLoading },
-  );
+  const eventos = data?.items ?? [];
 
-  // Opciones de los desplegables: quién aparece de verdad en los eventos.
-  const [opciones, setOpciones] = useState<{ asignadores: { id: string; nombre: string; total: number }[]; sinAsignar: number }>({ asignadores: [], sinAsignar: 0 });
-  useEffect(() => {
-    if (authLoading) return;
-    void authFetch("/omni/events/filters")
-      .then((r) => r.json())
-      .then((o) => setOpciones({ asignadores: o?.asignadores ?? [], sinAsignar: o?.sinAsignar ?? 0 }))
-      .catch(() => {});
-  }, [authLoading, authFetch]);
+  // ── Navegación ────────────────────────────────────────────────────────────
+  const paso = (signo: 1 | -1) => {
+    const siguiente =
+      vista === "mes" ? sumarMeses(ancla, signo) : sumarDias(ancla, signo * (vista === "semana" ? 7 : 1));
+    setAncla(inicioDeDia(siguiente));
+    setMesDelMini(new Date(siguiente.getFullYear(), siguiente.getMonth(), 1));
+  };
 
-  // Cambiar cualquier filtro vuelve a la página 1: mantener la página vieja sobre un
-  // resultado nuevo mostraba una página que ya no existía.
-  useEffect(() => { setPage(1); }, [qsFiltros, pageSize, orden.clave]);
+  const irA = (dia: Date) => {
+    setAncla(inicioDeDia(dia));
+    setMesDelMini(new Date(dia.getFullYear(), dia.getMonth(), 1));
+  };
 
-  const rows: any[] = data?.items ?? [];
-  const total: number = data?.total ?? 0;
-  const activos = cuantosFiltros(filtros);
+  const hoy = () => irA(new Date());
 
-  // Lo que se ve como chip con el panel cerrado. El buscador no entra: ya se lee
-  // escrito en su propia caja, y repetirlo aquí sería contarlo dos veces.
-  const chips = [
-    filtros.from && { key: "from", etiqueta: `Desde ${filtros.from}`, quitar: () => set("from", "") },
-    filtros.to && { key: "to", etiqueta: `Hasta ${filtros.to}`, quitar: () => set("to", "") },
-    filtros.priority && { key: "priority", etiqueta: `Prioridad: ${filtros.priority}`, quitar: () => set("priority", "") },
-    filtros.assignedBy && {
-      key: "assignedBy",
-      etiqueta: `Asignó: ${filtros.assignedBy === "sin" ? "sin asignar" : opciones.asignadores.find((a) => a.id === filtros.assignedBy)?.nombre ?? filtros.assignedBy}`,
-      quitar: () => set("assignedBy", ""),
-    },
-  ].filter(Boolean) as { key: string; etiqueta: string; quitar: () => void }[];
+  /** El rótulo del periodo. Cambia con la vista porque cambia lo que hay que situar. */
+  const periodo = useMemo(() => {
+    if (vista === "mes") return nombreDeMes(ancla);
+    if (vista === "dia") return ancla.toLocaleDateString("es-CO", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+    const [lunes, ...resto] = semanaDe(ancla);
+    const domingo = resto[resto.length - 1];
+    // "28 sep – 4 oct 2026" cuando la semana cambia de mes; si no, el mes no se repite.
+    const izq = lunes.toLocaleDateString("es-CO", { day: "numeric", ...(lunes.getMonth() === domingo.getMonth() ? {} : { month: "short" }) });
+    const der = domingo.toLocaleDateString("es-CO", { day: "numeric", month: "short", year: "numeric" });
+    return `${izq} – ${der}`;
+  }, [vista, ancla]);
 
-  const [eventModal, setEventModal] = useState<any | "new" | null>(null);
-  const [ev, setEv] = useState<any>({ title: "", start: "", end: "", description: "", color: "#6366f1" });
-  const [savingEv, setSavingEv] = useState(false);
-  const [toDelete, setToDelete] = useState<any>(null);
+  // ── Alta y edición ────────────────────────────────────────────────────────
+  const abrirNuevo = (fecha: Date | null) => { setEnEdicion(null); setFechaSugerida(fecha); setModalAbierto(true); };
+  const abrirEvento = (e: Evento) => { setEnEdicion(e); setFechaSugerida(null); setModalAbierto(true); };
 
-  function openNew() { setEv({ title: "", start: "", end: "", description: "", color: "#6366f1", priority: "Media" }); setEventModal("new"); }
-  function openEdit(r: any) { setEv({ title: r.title ?? "", start: toLocalInput(r.start), end: toLocalInput(r.end), description: r.description ?? "", color: r.color ?? "#6366f1", priority: r.priority ?? "Media" }); setEventModal(r); }
-
-  async function submitEvent() {
-    if (!ev.start) { toast("Indica la fecha/hora de inicio", "alert-triangle"); return; }
-    setSavingEv(true);
-    try {
-      const body: any = { title: ev.title || undefined, description: ev.description || undefined, color: ev.color, priority: ev.priority || "Media", start: new Date(ev.start).toISOString(), end: ev.end ? new Date(ev.end).toISOString() : undefined };
-      const editing = eventModal && eventModal !== "new";
-      const res = await authFetch(editing ? `/omni/events/${eventModal.id}` : "/omni/events", { method: editing ? "PATCH" : "POST", body: JSON.stringify(body) });
-      if (!res.ok) throw new Error((await res.json().catch(() => null))?.message || "No se pudo guardar");
-      toast(editing ? "Evento actualizado" : "Evento creado", "check");
-      setEventModal(null); refrescar();
-    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setSavingEv(false); }
-  }
-
-  async function doDeleteEvent() {
-    if (!toDelete) return;
-    try {
-      const res = await authFetch(`/omni/events/${toDelete.id}`, { method: "DELETE" });
-      if (!res.ok) throw new Error("No se pudo eliminar");
-      toast("Evento eliminado", "check"); setToDelete(null); refrescar();
-    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); setToDelete(null); }
-  }
-
-  const columns = [
-    {
-      key: "start",
-      sortable: true,
-      header: "Inicio",
-      render: (r: any) =>
-        r.start
-          ? new Date(r.start).toLocaleString("es-CO", {
-              day: "2-digit",
-              month: "short",
-              hour: r.allDay ? undefined : "2-digit",
-              minute: r.allDay ? undefined : "2-digit",
-            })
-          : "—",
-    },
-    {
-      key: "title",
-      sortable: true,
-      header: "Título",
-      render: (r: any) => (
-        <span className="flex items-center gap-2">
-          <span
-            className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
-            style={{ backgroundColor: r.color || "var(--color-brand, #6366f1)" }}
-          />
-          <span className="font-medium text-text-primary">{r.title || "—"}</span>
-        </span>
-      ),
-    },
-    {
-      key: "description",
-      sortable: true,
-      header: "Descripción",
-      render: (r: any) => <span className="text-text-secondary">{r.description || "—"}</span>,
-    },
-    {
-      key: "priority",
-      header: "Prioridad",
-      render: (r: any) => {
-        const tono = TICKET_PRIORITY_TONE[r.priority ?? ""] ?? "default";
-        return <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${TONO_BADGE[tono]}`}>{r.priority ?? "Media"}</span>;
-      },
-    },
-    {
-      key: "orderNo",
-      sortable: true,
-      header: "Orden",
-      render: (r: any) =>
-        r.orderNo ? <span className="font-mono text-[12px] text-text-secondary">#{r.orderNo}</span> : "—",
-    },
-    // Sin `sortable`: la columna guarda el id legacy y el nombre se resuelve al
-    // salir, así que la flecha ordenaría por unos números que no se ven. Para eso
-    // está el filtro "Asignó", que ofrece a la gente por nombre.
-    { key: "assignedBy", header: "Asignó", render: (r: any) => r.assignedBy || "—" },
-    { key: "actions", header: "", align: "right" as const, render: (r: any) => (
-      <div className="flex justify-end gap-2">
-        <button type="button" title="Editar" onClick={() => openEdit(r)} className="tap text-text-tertiary hover:text-brand"><Icon name="pencil" size={14} /></button>
-        <button type="button" title="Eliminar" onClick={() => setToDelete(r)} className="tap text-text-tertiary hover:text-error-text"><Icon name="trash" size={14} /></button>
-      </div>
-    ) },
-  ];
+  const verDia = (dia: Date) => { irA(dia); setVista("dia"); };
 
   if (authLoading) return <PageSkeleton />;
 
-  const cifras: { icono: string; etiqueta: string; valor: string }[] = [
-    { icono: "calendar-clock", etiqueta: activos ? "Eventos filtrados" : "Total eventos", valor: (stats?.total ?? 0).toLocaleString("es-CO") },
-    { icono: "receipt", etiqueta: "Con orden", valor: (stats?.conOrden ?? 0).toLocaleString("es-CO") },
-    { icono: "calendar", etiqueta: "Primer evento", valor: fechaCorta(stats?.primero ?? null) },
-    { icono: "activity", etiqueta: "Último evento", valor: fechaCorta(stats?.ultimo ?? null) },
-  ];
+  const enRejilla = vista !== "lista";
 
   return (
     <>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <PageHeading icon="calendar-clock" title="Agenda" subtitle="Eventos y programación de órdenes" />
+        <PageHeading icon="calendar-days" title="Agenda" subtitle="Tus tareas, reuniones y compromisos del equipo" />
         <div className="flex items-center gap-2">
+          {/* Casi todo lo que se agenda acaba siendo una orden: el atajo estaba en la
+              pantalla anterior y se queda. */}
           <Link href="/ordenes" className="hidden sm:block">
             <Button variant="ghost" size="sm"><Icon name="arrow-left" size={14} /> Órdenes</Button>
           </Link>
-          <Button size="sm" onClick={openNew}><Icon name="plus" size={14} /> Nuevo evento</Button>
+          <Button size="sm" onClick={() => abrirNuevo(null)}>
+            <Icon name="plus" size={14} /> Nuevo evento
+          </Button>
         </div>
       </div>
 
-      {/* cifras: siempre sobre lo que está filtrado */}
-      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
-        {cifras.map((c) => (
-          <div key={c.etiqueta} className="flex items-center gap-3 rounded-xl border border-border-subtle bg-surface p-4">
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-soft">
-              <Icon name={c.icono} size={18} className="text-brand" />
-            </span>
-            <div className="min-w-0">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-text-tertiary">{c.etiqueta}</p>
-              <p className="truncate text-[16px] font-bold text-text-primary">{c.valor}</p>
-            </div>
-          </div>
-        ))}
+      {/* Barra de mando: mover el periodo (izquierda) y elegir la vista (derecha). */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          {enRejilla && (
+            <>
+              <button
+                type="button"
+                onClick={hoy}
+                className="foco tap rounded-lg border border-border-default bg-surface px-3 py-1.5 text-[12.5px] font-semibold text-text-secondary hover:bg-surface-2"
+              >
+                Hoy
+              </button>
+              <div className="flex items-center">
+                <button type="button" aria-label="Anterior" onClick={() => paso(-1)} className="foco tap rounded-lg p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-text-primary">
+                  <Icon name="chevron-left" size={17} />
+                </button>
+                <button type="button" aria-label="Siguiente" onClick={() => paso(1)} className="foco tap rounded-lg p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-text-primary">
+                  <Icon name="chevron-right" size={17} />
+                </button>
+              </div>
+              <h2 className="truncate text-[15px] font-bold capitalize text-text-primary">{periodo}</h2>
+              {cargando && <Icon name="loader" size={14} className="animate-spin text-text-tertiary" />}
+            </>
+          )}
+        </div>
+        <Segmented value={vista} onChange={setVista} options={VISTAS} ariaLabel="Vista del calendario" />
       </div>
 
-      {/* Eventos */}
-      <div className="flex flex-col gap-4">
-        <ListToolbar
-          search={filtros.search}
-          onSearch={(v) => set("search", v)}
-          searchPlaceholder="Buscar por título, descripción o N° de orden…"
-          actions={
-            data && (
-              <span className="whitespace-nowrap text-[12px] text-text-tertiary">
-                <span className="font-semibold text-text-secondary">{total.toLocaleString("es-CO")}</span> eventos
-              </span>
-            )
-          }
-        >
-          <button
-            type="button"
-            onClick={() => setPanelAbierto((v) => !v)}
-            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-[12px] font-semibold transition-colors ${panelAbierto || chips.length ? "border-brand bg-brand-soft text-brand" : "border-border-default bg-surface text-text-secondary hover:bg-surface-2"}`}
-          >
-            <Icon name="sliders-horizontal" size={14} /> Filtros
-            {chips.length > 0 && <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-brand px-1 text-[10px] font-bold text-on-brand">{chips.length}</span>}
-            <Icon name={panelAbierto ? "chevron-up" : "chevron-down"} size={14} />
-          </button>
-        </ListToolbar>
+      <div className="flex gap-4">
+        {/* El riel del calendario. Se esconde por debajo de `lg` (no cabe) y en la
+            vista de tabla (que trae sus propios filtros, más completos). */}
+        {enRejilla && (
+          <aside className="hidden w-[212px] shrink-0 flex-col gap-3 lg:flex">
+            <MiniCalendario
+              mes={mesDelMini}
+              seleccionado={ancla}
+              eventos={eventos}
+              onMes={setMesDelMini}
+              onDia={irA}
+            />
 
-        {/* Panel de filtros (colapsable), igual que en Facturación. */}
-        {panelAbierto && (
-          <div className="rounded-xl border border-border-subtle bg-surface-subtle p-3">
-            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-              <Field label="Desde">
-                <Input type="date" value={filtros.from} max={filtros.to || undefined} onChange={(e) => set("from", e.target.value)} />
-              </Field>
-              <Field label="Hasta">
-                <Input type="date" value={filtros.to} min={filtros.from || undefined} onChange={(e) => set("to", e.target.value)} />
+            <div className="flex flex-col gap-2.5 rounded-xl border border-border-subtle bg-surface p-2.5">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-text-tertiary">Filtrar</p>
+              <Field label="Buscar">
+                <Input
+                  value={filtros.search}
+                  onChange={(e) => set("search", e.target.value)}
+                  placeholder="Título, N° de orden…"
+                />
               </Field>
               <Field label="Prioridad">
                 <Select value={filtros.priority} onChange={(e) => set("priority", e.target.value)}>
@@ -315,112 +221,106 @@ export default function AgendaPage() {
                   {TICKET_PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
                 </Select>
               </Field>
-              <Field label="Asignó">
-                <Select value={filtros.assignedBy} onChange={(e) => set("assignedBy", e.target.value)}>
-                  <option value="">Todos</option>
-                  {opciones.asignadores.map((a) => (
-                    <option key={a.id} value={a.id}>{a.nombre} ({a.total.toLocaleString("es-CO")})</option>
-                  ))}
-                  {opciones.sinAsignar > 0 && <option value="sin">Sin asignar ({opciones.sinAsignar.toLocaleString("es-CO")})</option>}
-                </Select>
-              </Field>
-            </div>
-            <div className="mt-3 flex flex-wrap items-center gap-1.5">
-              {ATAJOS.map((a) => (
-                <button
-                  key={a.etiqueta}
-                  type="button"
-                  onClick={() => setFiltros((f) => ({ ...f, ...a.rango() }))}
-                  className="rounded-lg border border-border-default bg-surface px-2.5 py-1.5 text-[12px] font-medium text-text-secondary transition-colors hover:bg-surface-2"
-                >
-                  {a.etiqueta}
-                </button>
-              ))}
-              {activos > 0 && (
+              {(filtros.search || filtros.priority || filtros.assignedBy) && (
                 <button
                   type="button"
                   onClick={() => setFiltros(SIN_FILTROS)}
-                  className="ml-auto rounded-lg border border-border-default bg-surface px-3 py-1.5 text-[12px] font-semibold text-text-secondary hover:bg-surface-2"
+                  className="foco rounded-lg px-2 py-1 text-[11.5px] font-semibold text-text-tertiary hover:bg-surface-2 hover:text-brand"
                 >
                   Limpiar filtros
                 </button>
               )}
             </div>
-          </div>
+          </aside>
         )}
 
-        {/* Con el panel cerrado, los filtros puestos siguen a la vista como chips:
-            una tabla recortada sin nada que lo explique es lo que se lee como "no hay datos". */}
-        {!panelAbierto && chips.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1.5">
-            {chips.map((c) => (
-              <button
-                key={c.key}
-                type="button"
-                onClick={c.quitar}
-                className="inline-flex items-center gap-1 rounded-full border border-border-subtle bg-surface px-2.5 py-1 text-[11px] font-medium text-text-secondary transition-colors hover:bg-surface-2"
-              >
-                {c.etiqueta} <Icon name="x" size={12} className="text-text-tertiary" />
-              </button>
-            ))}
-            <button type="button" onClick={() => setFiltros(SIN_FILTROS)} className="px-1 text-[11px] font-semibold text-brand hover:underline">
-              Limpiar todo
-            </button>
-          </div>
-        )}
+        <div className="flex min-w-0 flex-1 flex-col gap-3">
+          {/* El tope no se calla: un calendario al que le faltan eventos y no lo dice
+              es peor que uno que no carga (ver `eventsCalendar` en el backend). */}
+          {enRejilla && data?.truncado && (
+            <p className="flex items-start gap-2 rounded-xl border border-warning bg-warning-soft px-3 py-2 text-[12px] text-warning-text">
+              <Icon name="alert-triangle" size={14} className="mt-[2px] shrink-0" />
+              <span>
+                Este periodo pasa de {data.tope.toLocaleString("es-CO")} eventos.
+                {data.cortadoDesde ? (
+                  <>
+                    {" "}Lo que ves está completo <b>hasta el{" "}
+                    {new Date(data.cortadoDesde).toLocaleDateString("es-CO", { day: "numeric", month: "long" })}</b>;
+                    de ahí en adelante faltan eventos.
+                  </>
+                ) : (
+                  " Faltan eventos por pintar."
+                )}{" "}
+                Afina con los filtros o mira una semana en vez del mes.
+              </span>
+            </p>
+          )}
 
-        {/* Un rango invertido o una fecha imposible los rechaza el backend: mostrarlo
-            como error es lo que distingue "no hay eventos" de "el filtro está mal". */}
-        {error ? (
-          <LoadError message={error} onRetry={refrescar} />
-        ) : (
-          <>
-            <DataTable
-              columns={columns}
-              rows={rows}
-              loading={cargando}
-              empty={activos ? "Ningún evento coincide con los filtros" : "No hay eventos"}
-              sort={orden.sort}
-              onSort={orden.onSort}
+          {enRejilla && error ? (
+            <LoadError message={error} onRetry={refrescar} />
+          ) : vista === "mes" ? (
+            <VistaMes
+              dias={dias}
+              mes={ancla}
+              eventos={eventos}
+              onNuevo={abrirNuevo}
+              onAbrir={abrirEvento}
+              onVerDia={verDia}
             />
+          ) : vista === "semana" || vista === "dia" ? (
+            <VistaTiempo dias={dias} eventos={eventos} onNuevo={abrirNuevo} onAbrir={abrirEvento} />
+          ) : (
+            <VistaTabla recarga={recarga} onAbrir={abrirEvento} />
+          )}
 
-            {total > 0 && (
-              <Pagination
-                meta={{ page, pageSize, total, pageCount: data?.pages ?? 1 }}
-                onPage={setPage}
-                onPageSize={(s) => { setPageSize(s); setPage(1); }}
-              />
-            )}
-          </>
-        )}
+          {/*
+            UNA REJILLA VACÍA NO DICE POR QUÉ ESTÁ VACÍA, y las tres razones piden cosas
+            distintas: no hay nada agendado (agenda algo), lo tapan los filtros (quítalos)
+            o estás mirando un mes al que todavía no ha llegado la agenda. Sin esta línea
+            las tres se ven igual —un calendario en blanco—, que es exactamente como se
+            lee «esto está roto».
+          */}
+          {enRejilla && !cargando && !error && eventos.length === 0 && (
+            <p className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border border-dashed border-border-subtle bg-surface px-3 py-2.5 text-[12.5px] text-text-tertiary">
+              <Icon name="calendar-days" size={14} className="shrink-0" />
+              {qsFiltros ? (
+                <>
+                  Ningún evento de este periodo pasa los filtros.
+                  <button type="button" onClick={() => setFiltros(SIN_FILTROS)} className="foco font-semibold text-brand hover:underline">
+                    Quitar los filtros
+                  </button>
+                </>
+              ) : (
+                <>
+                  No hay nada agendado en este periodo.
+                  <button type="button" onClick={() => abrirNuevo(null)} className="foco font-semibold text-brand hover:underline">
+                    Agendar algo
+                  </button>
+                </>
+              )}
+            </p>
+          )}
+
+          {/* Los filtros del riel no existen en móvil; que al menos se sepa que hay
+              algo puesto (si no, la rejilla recortada se lee como «no hay nada»). */}
+          {enRejilla && qsFiltros && (
+            <button
+              type="button"
+              onClick={() => setFiltros(SIN_FILTROS)}
+              className="foco self-start rounded-full border border-border-subtle bg-surface px-2.5 py-1 text-[11px] font-medium text-text-secondary lg:hidden"
+            >
+              Filtros activos · quitar <Icon name="x" size={11} className="inline text-text-tertiary" />
+            </button>
+          )}
+        </div>
       </div>
 
-      <Modal open={!!eventModal} onClose={() => setEventModal(null)} title={eventModal === "new" ? "Nuevo evento" : "Editar evento"} maxWidth="max-w-lg">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div className="sm:col-span-2"><Field label="Título"><Input value={ev.title} onChange={(e) => setEv({ ...ev, title: e.target.value })} placeholder="Ej: Instalación cliente X" autoFocus /></Field></div>
-          <Field label="Inicio" required><Input type="datetime-local" value={ev.start} onChange={(e) => setEv({ ...ev, start: e.target.value })} /></Field>
-          <Field label="Fin"><Input type="datetime-local" value={ev.end} onChange={(e) => setEv({ ...ev, end: e.target.value })} /></Field>
-          <Field label="Color"><Input type="color" value={ev.color} onChange={(e) => setEv({ ...ev, color: e.target.value })} /></Field>
-          <Field label="Prioridad">
-            <Select value={ev.priority ?? "Media"} onChange={(e) => setEv({ ...ev, priority: e.target.value })}>
-              {TICKET_PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
-            </Select>
-          </Field>
-          <div className="sm:col-span-2"><Field label="Descripción"><Textarea rows={2} value={ev.description} onChange={(e) => setEv({ ...ev, description: e.target.value })} /></Field></div>
-        </div>
-        <div className="mt-3 flex justify-end gap-2">
-          <Button variant="secondary" onClick={() => setEventModal(null)} disabled={savingEv}>Cancelar</Button>
-          <Button onClick={submitEvent} disabled={savingEv}>{savingEv ? "Guardando…" : "Guardar"}</Button>
-        </div>
-      </Modal>
-
-      <ConfirmDialog
-        open={!!toDelete}
-        title="Eliminar evento"
-        message={<>¿Eliminar el evento <b>{toDelete?.title || "(sin título)"}</b>?</>}
-        confirmLabel="Eliminar"
-        onConfirm={doDeleteEvent}
-        onClose={() => setToDelete(null)}
+      <EventoModal
+        abierto={modalAbierto}
+        evento={enEdicion}
+        fechaSugerida={fechaSugerida}
+        onCerrar={() => setModalAbierto(false)}
+        onGuardado={() => setRecarga((n) => n + 1)}
       />
     </>
   );

@@ -12,6 +12,7 @@ import { Pagination } from "@/components/ui/Pagination";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { Modal } from "@/components/Modal";
 import { toast } from "@/components/ui/Toast";
+import { useValidacion, requerido, email, telefono, documento } from "@/lib/useValidacion";
 import { useAuth } from "@/context/AuthProvider";
 import { StatCard } from "@/components/ui/StatCard";
 import { useRequest } from "@/lib/useRequest";
@@ -86,8 +87,21 @@ export default function EmpleadosPage() {
 
   const setF = (k: string, v: string) => setForm((f: any) => ({ ...f, [k]: v }));
 
+  // El correo se valida EN VIVO por una razón concreta: un correo con mayúsculas
+  // se guardó como una segunda cuenta y el empleado apareció "sin rol". Verlo mal
+  // escrito antes de guardar es más barato que descubrir el duplicado después.
+  const v = useValidacion(
+    { name: form.name, docNumber: form.docNumber, email: form.email, phone: form.phone },
+    {
+      name: requerido("El nombre es obligatorio."),
+      docNumber: documento(),
+      email: email(),
+      phone: telefono(),
+    },
+  );
+
   const submit = useCallback(async () => {
-    if (!form.name.trim()) { toast("El nombre es obligatorio.", "alert-triangle"); return; }
+    if (!v.revisar()) return;
     setSaving(true);
     try {
       const body: any = { name: form.name.trim() };
@@ -109,7 +123,7 @@ export default function EmpleadosPage() {
     } finally {
       setSaving(false);
     }
-  }, [authFetch, form, load]);
+  }, [v, authFetch, form, load]);
 
   if (authLoading) return <PageSkeleton />;
 
@@ -121,7 +135,7 @@ export default function EmpleadosPage() {
           title="Empleados"
           subtitle={stats ? `${(stats.total ?? 0).toLocaleString("es-CO")} empleados activos` : "Talento humano"}
         />
-        <Button variant="primary" onClick={() => setOpenNew(true)}>
+        <Button variant="primary" onClick={() => { v.limpiar(); setOpenNew(true); }}>
           <Icon name="plus" size={15} />
           Nuevo empleado
         </Button>
@@ -186,18 +200,18 @@ export default function EmpleadosPage() {
       <Modal open={openNew} onClose={() => setOpenNew(false)} title="Nuevo empleado">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="sm:col-span-2">
-            <Field label="Nombre" required>
-              <Input value={form.name} onChange={(e) => setF("name", e.target.value)} placeholder="Nombre completo" />
+            <Field label="Nombre" required error={v.error("name")}>
+              <Input value={form.name} onChange={(e) => setF("name", e.target.value)} placeholder="Nombre completo" {...v.campo("name")} />
             </Field>
           </div>
-          <Field label="Documento">
-            <Input value={form.docNumber} onChange={(e) => setF("docNumber", e.target.value)} />
+          <Field label="Documento" error={v.error("docNumber")}>
+            <Input value={form.docNumber} onChange={(e) => setF("docNumber", e.target.value)} {...v.campo("docNumber")} />
           </Field>
-          <Field label="Email">
-            <Input type="email" value={form.email} onChange={(e) => setF("email", e.target.value)} />
+          <Field label="Email" error={v.error("email")}>
+            <Input type="email" value={form.email} onChange={(e) => setF("email", e.target.value)} {...v.campo("email")} />
           </Field>
-          <Field label="Teléfono">
-            <Input value={form.phone} onChange={(e) => setF("phone", e.target.value)} />
+          <Field label="Teléfono" error={v.error("phone")}>
+            <Input value={form.phone} onChange={(e) => setF("phone", e.target.value)} {...v.campo("phone")} />
           </Field>
           <Field label="Rol">
             <Select value={form.role} onChange={(e) => setF("role", e.target.value)}>

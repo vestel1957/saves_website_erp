@@ -214,3 +214,50 @@ export async function cajerasDeSede(
   }
   return suyas;
 }
+
+/**
+ * De una lista de usuarios, los que ALCANZAN esa sede. Es el filtro que hace que un
+ * aviso de sede no salga a toda la empresa.
+ *
+ * Nace de la queja del usuario (2026-09-04): "cada funcionario debe ver sólo lo que
+ * le compete". El aviso de orden sin técnico salía a las 24 personas con permiso de
+ * agenda, así que la cajera de Mocoa tenía 118 avisos sin leer de órdenes de
+ * Villavicencio que ella nunca iba a repartir. Con esto el mismo aviso sale sólo a
+ * quien reparte EN esa sede.
+ *
+ * Respeta la semántica del fichero, que aquí importa mucho: **lista vacía = sin
+ * restricción**, así que el superusuario y quien manda sobre todas las sedes
+ * (gerencia, administración, contabilidad) siguen recibiéndolo todo — que es
+ * exactamente lo que se pidió.
+ *
+ * Una sola consulta para todos: esto corre por cada orden que nace y hacerlo usuario
+ * a usuario abría 24 conexiones de golpe contra un Postgres que ya va justo de cupo
+ * (ver `NotificationsService.notify`, mismo motivo).
+ */
+export async function alcanzanSede(
+  prisma: PrismaService,
+  userIds: string[],
+  branchLegacy: number | null | undefined,
+): Promise<string[]> {
+  if (branchLegacy == null || branchLegacy <= 0 || !userIds.length) return userIds;
+  const filas = await prisma.user
+    .findMany({
+      where: { id: { in: [...new Set(userIds)] } },
+      select: {
+        id: true,
+        sedesAccede: true,
+        cajaLegacyId: true,
+        roles: { select: { role: { select: { permissions: { select: { permission: { select: { key: true } } } } } } } },
+      },
+    })
+    .catch(() => []);
+  if (!filas.length) return userIds; // no se pudo comprobar: mejor avisar de más que callar
+  const alcanzan: string[] = [];
+  for (const f of filas) {
+    const permisos = f.roles.flatMap((r) => r.role.permissions.map((p) => p.permission.key));
+    if (permisos.includes(P_SUPERADMIN)) { alcanzan.push(f.id); continue; }
+    const sedes = await resolverSedes(prisma, f, permisos);
+    if (!sedes.length || sedes.includes(branchLegacy)) alcanzan.push(f.id);
+  }
+  return alcanzan;
+}

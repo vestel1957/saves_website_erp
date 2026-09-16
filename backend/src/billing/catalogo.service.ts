@@ -1,6 +1,7 @@
 import { Logger } from '../core/logger';
 import { PrismaService } from '../prisma/prisma.service';
 import { num } from '../common/money';
+import { MOTIVOS_FACTURA } from './motivos-factura';
 
 /** Origen del ítem: catálogo de planes (precio vigente) o producto del legacy. */
 export type CatalogoKind = 'PLAN' | 'PRODUCTO';
@@ -63,6 +64,41 @@ export class CatalogoService {
   private cargando: Promise<CatalogoItem[]> | null = null;
 
   constructor(private readonly prisma: PrismaService) {}
+
+  /**
+   * POR QUÉ se puede facturar: el catálogo de motivos, cada uno con el concepto del
+   * catálogo que le corresponde (nombre, precio e IVA de HOY).
+   *
+   * El precio viaja desde aquí y no escrito en la web por lo mismo que el cargo de
+   * una orden: el día que el traslado suba de 30.000, la pantalla no puede seguir
+   * proponiendo el viejo mientras la factura dice otra cosa. Un motivo cuyo producto
+   * no esté en el catálogo sale con `producto: null` — se factura igual, eligiendo el
+   * concepto a mano.
+   */
+  async motivos() {
+    const items = await this.items();
+    return MOTIVOS_FACTURA.map((m) => {
+      // El nombre exacto primero y el que empieza igual después: las afiliaciones son
+      // 12 productos distintos ('Afiliación Combo', 'Afiliación Villavo'…) y ninguno
+      // se llama 'Afiliación' a secas.
+      const busca = m.producto ? plano(m.producto) : null;
+      const producto = busca
+        ? items.find((i) => plano(i.name) === busca) ?? items.find((i) => plano(i.name).startsWith(busca))
+        : undefined;
+      return {
+        clave: m.clave,
+        etiqueta: m.etiqueta,
+        ayuda: m.ayuda,
+        kind: m.kind,
+        /** El tipo de orden que abre al pagarse, si abre alguna. */
+        abreOrden: m.abreOrden ?? null,
+        pideDestino: !!m.pideDestino,
+        producto: producto
+          ? { name: producto.name, productId: producto.productId, price: producto.price, taxRate: producto.taxRate }
+          : null,
+      };
+    });
+  }
 
   /** Catálogo filtrado por texto (nombre o código). Sin texto: los más usados. */
   async buscar(search?: string, limit?: number): Promise<{ items: CatalogoItem[]; total: number }> {

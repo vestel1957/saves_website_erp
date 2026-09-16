@@ -16,7 +16,8 @@
  * SOLO si el pago salda la factura entera. Un abono parcial no gana descuento; si el
  * cliente vuelve y la termina de pagar dentro de la vigencia, ahí sí se lo lleva.
  *
- * A QUÉ facturas llega lo dice cada promoción en `invoiceScope` (`alcanzaLaFactura`):
+ * A QUÉ facturas llega lo dice cada promoción (`alcanzaLaFactura`): el TIPO que rebaja
+ * (`invoiceKinds`) y si se limita al mes en curso (`onlyCurrentMonth`):
  * el pronto pago sólo rebaja la MENSUALIDAD del mes en curso —quien arrastra mora la
  * paga completa y los cargos sueltos se cobran enteros—, y una campaña de cartera
  * rebaja las mensualidades atrasadas, que es justo lo contrario y lo que hace falta
@@ -26,7 +27,7 @@
  * aplica sola en ventanilla. Si algún día hace falta una promo que NO se conceda sola,
  * hay que distinguirla con una bandera en `Promotion` — hoy no existe.
  */
-import { Prisma, PromotionInvoiceScope } from '@prisma/client';
+import { InvoiceKind, Prisma } from '@prisma/client';
 import { aplicarNotaEnTx } from '../billing/facturas.service';
 import { num, round2 } from '../common/money';
 import {
@@ -38,43 +39,38 @@ type Tx = Prisma.TransactionClient;
 /**
  * ¿Esta promoción alcanza a ESTA factura?
  *
- * Dos campañas distintas quieren cosas opuestas, y hasta el 2026-09-02 sólo existía
- * la primera —escrita a mano dentro de este módulo, sin forma de pedir la otra—:
+ * El alcance son DOS preguntas independientes, y hasta el 2026-09-10 iban pegadas en
+ * un solo enum de tres valores (`PromotionInvoiceScope`) que no las dejaba combinar:
  *
- * · **`MENSUALIDAD_DEL_MES`** (el pronto pago). Lo que la empresa le promete al
- *   cliente (`chatbot/tramites.catalogo.ts` → `pronto_pago`) es "5% si paga dentro de
- *   los primeros 5 días del mes, **sólo el mes en curso, no facturas atrasadas**". El
- *   plazo lo pone la vigencia de la promoción; lo que se decide aquí es QUÉ factura se
- *   rebaja, y son dos condiciones:
+ * · **Qué TIPO de factura rebaja** (`invoiceKinds`). `RECURRENTE` es la mensualidad
+ *   del servicio; `FIJA`, los cargos sueltos —traslado (30.000, ver
+ *   [[traslado-direccion-y-cargo]]), reconexión, instalación, afiliación—. El PRONTO
+ *   PAGO premia pagar el servicio del mes a tiempo, así que sólo mira la mensualidad:
+ *   sin esa condición el traslado facturado esa misma mañana se cobraba a 28.500. Y al
+ *   revés, una campaña comercial de "instalación a mitad de precio" quiere justo lo
+ *   contrario y antes no se podía pedir: cualquier opción que alcanzara un cargo
+ *   alcanzaba también la mensualidad. Vacío se lee como `[RECURRENTE]`, que es como
+ *   quedaron las campañas que existían.
  *
- *   1. **Del mes en curso.** Sin este filtro, al cliente con 4 facturas pendientes se
- *      le rebajaban las 4 —tres de ellas ya vencidas—, que es justo la fuga que este
- *      módulo existe para no repetir (ver [[fuga-descuento-pronto-pago]]). El mes sale
- *      de `invoiceDate` porque no hay columna de periodo, ni aquí ni en el legacy, y
- *      desde [[mes-que-factura-la-corrida]] el día 1 se factura el mes corriente: la de
- *      septiembre lleva fecha de septiembre. Las dos fechas son `date-only` en UTC
- *      (`hoy`/`payDate` vienen de `dateOnly(hoyColombia())`), así que se comparan en
- *      UTC: en hora local, una factura del día 1 se leería como del mes anterior.
+ *   Efecto colateral que sigue en pie: la mensualidad re-facturada a mano viaja como
+ *   FIJA en esta base ([[mes-a-pagar-en-recaudo]]), así que una promo de mensualidades
+ *   no la rebaja sola; para ésas está el botón manual.
  *
- *   2. **Es la mensualidad (`RECURRENTE`), no un cargo.** El pronto pago premia pagar
- *      el servicio del mes a tiempo; un cargo no tiene nada que ver con eso. Las FIJAS
- *      son los cobros sueltos —traslado (30.000, ver [[traslado-direccion-y-cargo]]),
- *      reconexión, instalación, afiliación— y se emiten con fecha de hoy, así que sin
- *      esta condición TODAS caían dentro del mes en curso y se llevaban el 5%: el
- *      traslado se cobraba a 28.500. Efecto colateral: la mensualidad re-facturada a
- *      mano, que en esta base también viaja como FIJA ([[mes-a-pagar-en-recaudo]]),
- *      tampoco se rebaja sola; para ésas sigue estando el botón manual.
- *
- * · **`MENSUALIDADES_PENDIENTES`** (recuperación de cartera). La campaña opuesta: lo
- *   que hay que rebajar es justamente la MORA, porque el objetivo no es premiar la
- *   puntualidad sino que el cliente vuelva a pagar. Con la regla del pronto pago una
+ * · **Si se limita al MES EN CURSO** (`onlyCurrentMonth`). Con `true` es el pronto
+ *   pago: sin ese filtro, al cliente con 4 facturas pendientes se le rebajaban las 4
+ *   —tres ya vencidas—, que es la fuga que este módulo existe para no repetir (ver
+ *   [[fuga-descuento-pronto-pago]]). Con `false` es la RECUPERACIÓN DE CARTERA: lo que
+ *   hay que rebajar es justamente la mora, porque el objetivo no es premiar la
+ *   puntualidad sino que el cliente vuelva a pagar; con la regla del pronto pago, una
  *   promo dirigida a los clientes en CARTERA no descontaba nunca —lo que ellos deben
- *   es, por definición, de meses anteriores— y en ventanilla no aparecía nada. Cae la
- *   condición del mes, pero NO la de que sea mensualidad: se perdona el servicio no
- *   pagado, no un traslado facturado esta misma mañana.
+ *   es, por definición, de meses anteriores—.
  *
- * · **`CUALQUIER_PENDIENTE`**. Todo lo pendiente, cargos sueltos incluidos. Hay que
- *   pedirlo a propósito: al 50%, un traslado de 30.000 se cobra a 15.000.
+ *   El mes sale de `invoiceDate` porque no hay columna de periodo, ni aquí ni en el
+ *   legacy, y desde [[mes-que-factura-la-corrida]] el día 1 se factura el mes
+ *   corriente: la de septiembre lleva fecha de septiembre. Las dos fechas son
+ *   `date-only` en UTC (`hoy`/`payDate` vienen de `dateOnly(hoyColombia())`), así que
+ *   se comparan en UTC: en hora local, una factura del día 1 se leería como del mes
+ *   anterior.
  *
  * Vale para los DOS caminos. Hasta el 2026-09-03 el botón "Promociones" de
  * `/facturacion/[id]` podía rebajar cualquier factura ("ahí hay alguien decidiendo"),
@@ -82,15 +78,22 @@ type Tx = Prisma.TransactionClient;
  * suelto. El alcance es de la promoción, no de quién la aplica: si la campaña dice
  * "la mensualidad del mes", eso vale también a mano. Para rebajar otra cosa está la
  * nota crédito de siempre, con su motivo escrito.
+ *
+ * · **Facturas elegidas a mano** (`invoiceIds`, 2026-09-10). Las dos preguntas de
+ *   arriba son de todo o nada: "también las atrasadas" rebaja TODAS las atrasadas. Al
+ *   cliente que debe cinco y se le quieren perdonar tres no había forma de decírselo.
+ *   Con la lista puesta —sólo se admite con UN cliente de público— se rebaja
+ *   exactamente eso, y el tipo y la antigüedad dejan de contar.
  */
 export function alcanzaLaFactura(
-  promo: { invoiceScope: PromotionInvoiceScope },
-  inv: { kind: string; invoiceDate: Date },
+  promo: { invoiceKinds: InvoiceKind[]; onlyCurrentMonth: boolean; invoiceIds?: string[] | null },
+  inv: { id: string; kind: string; invoiceDate: Date },
   hoy: Date,
 ): boolean {
-  if (promo.invoiceScope === 'CUALQUIER_PENDIENTE') return true;
-  if (inv.kind !== 'RECURRENTE') return false;
-  if (promo.invoiceScope === 'MENSUALIDADES_PENDIENTES') return true;
+  if (promo.invoiceIds?.length) return promo.invoiceIds.includes(inv.id);
+  const tipos = promo.invoiceKinds?.length ? promo.invoiceKinds : [InvoiceKind.RECURRENTE];
+  if (!tipos.includes(inv.kind as InvoiceKind)) return false;
+  if (!promo.onlyCurrentMonth) return true;
   const f = new Date(inv.invoiceDate);
   return f.getUTCFullYear() === hoy.getUTCFullYear() && f.getUTCMonth() === hoy.getUTCMonth();
 }
@@ -229,12 +232,21 @@ export async function descuentosDePromocionPendientes(
     let mejor: DescuentoPendiente | null = null;
     for (const p of alcanzan) {
       // Qué facturas rebaja cada campaña es cosa SUYA: el pronto pago sólo llega a la
-      // mensualidad del mes, la de cartera a todo lo que se deba.
+      // mensualidad del mes, la de cartera a toda mensualidad que se deba y una de
+      // "instalación a mitad de precio", sólo a los cargos.
       if (!alcanzaLaFactura(p, f, hoy)) continue;
       if (yaConcedidas.has(`${f.id}:${p.id}`)) continue;
-      const amount = montoDeDescuento(p, f);
+      let amount = montoDeDescuento(p, f);
+      if (!(amount > 0)) continue;
       // El descuento no puede comerse más de lo que queda debiendo (factura casi saldada).
-      if (!(amount > 0) || amount >= saldo) continue;
+      // Salvo que alguien la haya ELEGIDO a mano: ahí se decidió perdonarla, y se topa
+      // en el saldo —la factura queda saldada— en vez de saltarla. Caso real: 52420,
+      // nov-2025 con 34.751 abonados y 3.574 de saldo; el 50 % (19.162) la dejaba fuera.
+      // Nunca más que el saldo: el resto ya lo pagó y sería un saldo a favor inventado.
+      if (amount >= saldo) {
+        if (!p.invoiceIds?.includes(f.id)) continue;
+        amount = saldo;
+      }
       if (!mejor || amount > mejor.amount) {
         mejor = {
           promotionId: p.id,

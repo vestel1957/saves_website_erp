@@ -14,13 +14,16 @@ import { ListToolbar } from "@/components/ui/ListToolbar";
 import { Pagination } from "@/components/ui/Pagination";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { EquipmentLabelModal, type LabelEquip } from "@/components/red/EquipmentLabelModal";
+import { EditarEquipoModal, puedeEditarEquipos, type EquipoEditable } from "@/components/red/EditarEquipoModal";
 import { useAuth } from "@/context/AuthProvider";
 import type { Equip, Paged } from "@/lib/network";
 import { useRequest } from "@/lib/useRequest";
 import { useOrden } from "@/lib/useOrden";
 
 export default function EquiposPage() {
-  const { loading: authLoading, authFetch } = useAuth();
+  const { loading: authLoading, authFetch, user } = useAuth();
+  const [editando, setEditando] = useState<EquipoEditable | null>(null);
+  const editable = puedeEditarEquipos(user);
   const [warehouses, setWarehouses] = useState<{ id: string; name: string }[]>([]);
   const [search, setSearch] = useState("");
   const [assigned, setAssigned] = useState("");
@@ -66,6 +69,7 @@ export default function EquiposPage() {
       </div>
 
       <EquipmentLabelModal open={!!label} onClose={() => setLabel(null)} equip={label} />
+      <EditarEquipoModal equipo={editando} onClose={() => setEditando(null)} onSaved={load} />
 
       <ListToolbar search={search} onSearch={setSearch} searchPlaceholder="Buscar por código, MAC, serial o marca…">
         <Select value={assigned} onChange={(e) => setAssigned(e.target.value)} className="w-auto">
@@ -91,10 +95,18 @@ export default function EquiposPage() {
             // Día en que se recogió del cliente, no el día en que se tecleó la devolución.
             { key: "returned", header: "Devuelto", sortable: true, render: (r) => r.returnedAt ? <span className="text-text-secondary">{fmtDate(r.returnedAt)}</span> : <span className="text-text-tertiary">—</span> },
             { key: "label", header: "", align: "right", render: (r) => (
-              <button onClick={() => setLabel({ code: r.code, brand: r.brand, mac: r.mac, serial: r.serial })} title="Imprimir etiqueta QR"
-                className="inline-flex items-center gap-1 rounded-lg border border-border-default px-2.5 py-1.5 text-[12px] font-semibold text-text-secondary transition-colors hover:bg-surface-2">
-                <Icon name="download" size={13} /> Etiqueta
-              </button>
+              <span className="inline-flex items-center gap-1.5">
+                {editable && (
+                  <button onClick={() => setEditando(r)} title="Editar equipo"
+                    className="inline-flex items-center gap-1 rounded-lg border border-border-default px-2.5 py-1.5 text-[12px] font-semibold text-text-secondary transition-colors hover:bg-surface-2">
+                    <Icon name="pencil" size={13} /> Editar
+                  </button>
+                )}
+                <button onClick={() => setLabel({ code: r.code, brand: r.brand, mac: r.mac, serial: r.serial })} title="Imprimir etiqueta QR"
+                  className="inline-flex items-center gap-1 rounded-lg border border-border-default px-2.5 py-1.5 text-[12px] font-semibold text-text-secondary transition-colors hover:bg-surface-2">
+                  <Icon name="download" size={13} /> Etiqueta
+                </button>
+              </span>
             ) },
           ]} />
           {data && <div className="mt-3"><Pagination meta={{ page: data.page, pageSize: data.pageSize, total: data.total, pageCount: data.pages }} onPage={setPage} onPageSize={setPageSize} /></div>}

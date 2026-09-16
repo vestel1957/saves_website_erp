@@ -51,6 +51,14 @@ export class PromotionsController {
     return this.promos.audience(dto);
   }
 
+  /**
+   * Facturas pendientes de UN cliente, para elegir a mano a cuáles llega la promoción
+   * cuando el público es ese cliente.
+   */
+  pendingInvoices(subscriberId?: string) {
+    return this.promos.facturasPendientes(subscriberId);
+  }
+
   /** Facturas a las que ya se les aplicó esta promoción. */
   applications(id: string) {
     return this.promos.applications(id);

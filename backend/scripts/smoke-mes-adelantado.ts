@@ -104,7 +104,10 @@ async function main() {
       const debt: any = await cobranzas.subscriberDebt(candidato.id);
       const adelanto = debt.adelanto;
       check(!!adelanto && adelanto.meses.length === 1, 'la deuda trae la propuesta de UN mes adelantado');
-      check(adelanto.pct > 0, `con descuento del ${adelanto.pct}%`);
+      // El PORCENTAJE no se comprueba: es una decisión comercial que vive en el ajuste
+      // `billing.advanceDiscountPct` (hoy en 0) y puede cambiar cualquier día. Lo que
+      // este smoke tiene que garantizar es que la cuenta cuadre con el que haya puesto.
+      check(adelanto.pct >= 0, `descuento por adelantar: ${adelanto.pct}%`);
       check(
         Math.abs(adelanto.neto - (adelanto.bruto - adelanto.descuento)) < 0.5,
         `${cop(adelanto.bruto)} − ${cop(adelanto.descuento)} = ${cop(adelanto.neto)} (${adelanto.meses[0].label})`,
@@ -124,6 +127,19 @@ async function main() {
         );
       } catch (e: any) { corto = e?.message ?? ''; }
       check(/Faltan/i.test(corto), 'sin el dinero del adelanto, el recaudo se rechaza');
+
+      // --- 2b. y de más también: lo que sobre no lleva descuento (caso 22093) ---
+      let largo = '';
+      try {
+        await cobranzas.collect(
+          {
+            subscriberId: candidato.id, amount: aCobrar + 5000, method: 'Cash',
+            cashAccountId: caja.legacyId!, adelantarMeses: 1, reconectar: false,
+          } as any,
+          USUARIO,
+        );
+      } catch (e: any) { largo = e?.message ?? ''; }
+      check(/de más/i.test(largo), 'con plata de más sobre el adelanto, el recaudo se rechaza');
 
       // --- 3. deuda + adelanto en un solo recaudo ---
       const r: any = await cobranzas.collect(

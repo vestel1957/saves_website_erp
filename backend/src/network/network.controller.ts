@@ -1,7 +1,7 @@
 import type { Response } from 'express';
 import { IsArray, IsIn, IsOptional, IsString, ArrayNotEmpty } from 'class-validator';
 import { NetworkService } from './network.service';
-import { NetworkWriteService, EquipTransferDto, AssignPortDto, AssignEquipmentSubDto, CreateEquipmentDto, CreateIpPoolDto, CreateNapDto, CreateVlanDto, ReceiveTransferDto, RejectTransferDto, SignTransferDto, UpdateIpPoolDto, UpdateNapDto } from './network-write.service';
+import { NetworkWriteService, EquipTransferDto, AssignPortDto, AssignEquipmentSubDto, CreateEquipmentDto, CreateIpPoolDto, CreateNapDto, CreateVlanDto, ReceiveTransferDto, RejectTransferDto, SignTransferDto, UpdateEquipmentDto, UpdateIpPoolDto, UpdateNapDto } from './network-write.service';
 import { MikrotikService } from './mikrotik.service';
 import { INV_PERMISSIONS, APP_PERMISSIONS } from '../auth/permissions.catalog';
 import { AuthUser } from '../auth/current-user.decorator';
@@ -18,6 +18,14 @@ export class MessageBatchDto {
 export class RestoreBranchDto {
   @IsOptional() @IsArray() @IsString({ each: true }) statuses?: string[];
 }
+/**
+ * El interruptor manual de la ficha (port del legacy): a qué lado se mueve la IP.
+ * `desactivar` = a MOROSOS, `activar` = de vuelta a ACTIVOS.
+ */
+export class EstadoMikrotikDto {
+  @IsIn(['activar', 'desactivar']) accion!: 'activar' | 'desactivar';
+}
+
 /** Qué firma se está pidiendo: la salida (sede origen) o la entrada (sede destino). */
 export class TransferOtpDto {
   @IsIn(['salida', 'entrada']) paso!: 'salida' | 'entrada';
@@ -47,6 +55,14 @@ export class NetworkController {
   }
   connection(id: string) {
     return this.mikrotik.liveStatus(id);
+  }
+  /**
+   * Activar / Desactivar la IP en la lista MOROSOS y nada más (ver `toggleMoroso`).
+   * El permiso de la ruta frena al área; quién puede de verdad lo remata el servicio,
+   * porque es un permiso nominal y el superusuario no lo hereda.
+   */
+  estadoMikrotik(id: string, dto: EstadoMikrotikDto, user: AuthUser) {
+    return this.mikrotik.toggleMoroso(id, dto.accion, user);
   }
   mikrotikHistory(id: string) {
     return this.mikrotik.history(id);
@@ -120,6 +136,10 @@ export class NetworkController {
   // Las DOS únicas rutas del módulo de red que le quedan al técnico de campo: su
   // "bodega" (= él mismo) y los equipos que están a su nombre. Ver `ModuloRedGuard`.
   equipmentWarehouses(user?: AuthUser) { return this.write.equipmentWarehouses(user); }
+  // Equipos disponibles por sede (sin cliente y en buen estado). No es del técnico.
+  equipmentAvailable(user: AuthUser, branch?: string, search?: string, page?: string, pageSize?: string) {
+    return this.network.equipmentAvailable({ branch, search, page: Number(page), pageSize: Number(pageSize) }, user);
+  }
   createEquipment(dto: CreateEquipmentDto, user: AuthUser) { return this.write.createEquipment(dto, user); }
 
   stats() { return this.network.stats(); }
@@ -162,6 +182,7 @@ export class NetworkController {
   // --- Asignar / desasignar equipo a cliente ---
   assignEquipment(id: string, dto: AssignEquipmentSubDto) { return this.write.assignEquipmentToSubscriber(id, dto); }
   unassignEquipment(id: string) { return this.write.unassignEquipment(id); }
+  updateEquipment(id: string, dto: UpdateEquipmentDto, user: AuthUser) { return this.write.updateEquipment(id, dto, user); }
 
   // --- Restaurar / sincronizar PPP masivo de una sede (recuperación ante formateo) ---
   restoreBranch(branchId: string, dto: RestoreBranchDto, user: AuthUser) {

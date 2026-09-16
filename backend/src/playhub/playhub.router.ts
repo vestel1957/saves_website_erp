@@ -9,7 +9,7 @@
  */
 import { crearRouter, manejar } from '../core/http/ruta';
 import { validar } from '../core/http/validar';
-import { autenticar, exigirArea } from '../core/auth/instancias';
+import { autenticar, exigirArea, usuarioDe } from '../core/auth/instancias';
 import { PlayhubController, ProductDto } from './playhub.controller';
 import { playhubService } from '../core/contenedor';
 import { IsString, MinLength } from 'class-validator';
@@ -37,49 +37,49 @@ playhubRouter.get(
   '/subscribers/:id/eligibility',
   autenticar,
   exigirArea('administracion', 'tecnicos', 'gerencia', 'sistemas'),
-  manejar((req) => playhub.eligibility(req.params.id)),
+  manejar((req) => playhub.eligibility(usuarioDe(req), req.params.id)),
 );
 
 playhubRouter.get(
   '/subscribers/:id/live',
   autenticar,
   exigirArea('administracion', 'tecnicos', 'gerencia', 'sistemas'),
-  manejar((req) => playhub.live(req.params.id)),
+  manejar((req) => playhub.live(usuarioDe(req), req.params.id)),
 );
 
 playhubRouter.get(
   '/subscribers/:id/local',
   autenticar,
   exigirArea('administracion', 'tecnicos', 'gerencia', 'sistemas'),
-  manejar((req) => playhub.local(req.params.id)),
+  manejar((req) => playhub.local(usuarioDe(req), req.params.id)),
 );
 
 playhubRouter.post(
   '/subscribers/:id/subscribe',
   autenticar,
   exigirArea('administracion', 'tecnicos', 'gerencia', 'sistemas'),
-  manejar((req) => playhub.subscribe(req.params.id, validar(ProductDto, req.body))),
+  manejar((req) => playhub.subscribe(usuarioDe(req), req.params.id, validar(ProductDto, req.body))),
 );
 
 playhubRouter.post(
   '/subscribers/:id/sync-customer',
   autenticar,
   exigirArea('administracion', 'tecnicos', 'gerencia', 'sistemas'),
-  manejar((req) => playhub.syncCustomer(req.params.id)),
+  manejar((req) => playhub.syncCustomer(usuarioDe(req), req.params.id)),
 );
 
 playhubRouter.post(
   '/subscribers/:id/sync-local',
   autenticar,
   exigirArea('administracion', 'tecnicos', 'gerencia', 'sistemas'),
-  manejar((req) => playhub.syncLocal(req.params.id)),
+  manejar((req) => playhub.syncLocal(usuarioDe(req), req.params.id)),
 );
 
 playhubRouter.post(
   '/subscribers/:id/unsubscribe',
   autenticar,
   exigirArea('administracion', 'tecnicos', 'gerencia', 'sistemas'),
-  manejar((req) => playhub.unsubscribe(req.params.id, validar(ProductDto, req.body))),
+  manejar((req) => playhub.unsubscribe(usuarioDe(req), req.params.id, validar(ProductDto, req.body))),
 );
 
 playhubRouter.post(

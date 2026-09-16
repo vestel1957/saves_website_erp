@@ -5,7 +5,7 @@
  * controlador. Cablea HTTP -> método: extrae los argumentos de `req` y llama.
  * La lógica sigue viviendo en SupportController, que ya no lleva decoradores.
  *
- * Endpoints: 46
+ * Endpoints: 56
  */
 import { crearRouter, manejar } from '../core/http/ruta';
 import { validar } from '../core/http/validar';
@@ -25,10 +25,11 @@ import * as ExcelJS from 'exceljs';
 import { SupportService } from './support.service';
 import { AgendaService, type FiltrosAgenda } from './agenda.service';
 import { catalogoDeOrdenes, MOTIVOS_RETIRO } from './order-types';
+import { ETIQUETA_MIX } from '../common/servicios-del-abonado';
 import { GeofenceService } from './geofence.service';
 import {
   SupportWriteService, CreateTicketDto, UpdateTicketDto, UpdateStatusDto, AssignDto, PriorityDto, SignatureDto, ThreadDto, AttachDto,
-  AssignEquipmentDto, ConsumeMaterialsDto,
+  AssignEquipmentDto, ConsumeMaterialsDto, UbicarEquipoDto,
 } from './support-write.service';
 import { OnuProvisionService } from './onu-provision.service';
 import { OrderScoreService } from './order-score.service';
@@ -38,6 +39,7 @@ import { PUNTAJE_MAX, PUNTAJE_MIN } from './order-score.policy';
 import { PerformanceService } from '../reports/performance.service';
 import { serviceOrderPdf } from '../common/pdf/pdf-docs';
 import { APP_PERMISSIONS } from '../auth/permissions.catalog';
+import { respuestaMaterial } from '../common/material-stock';
 import { enviarAdjuntoSeguro, mimeAceptado, nombreEnDisco, MIMES_IMAGEN } from '../common/uploads';
 
 /** Instancia única del controlador. Las dependencias salen del contenedor. */
@@ -111,14 +113,14 @@ supportRouter.get(
   '/cargo-orden',
   autenticar,
   exigirArea('tecnicos', 'administracion', 'caja'),
-  manejar((req) => support.cargoDeOrden(req.query.tipo as string)),
+  manejar((req) => support.cargoDeOrden(req.query.tipo as string, req.query.subscriberId as string, usuarioDe(req))),
 );
 
 supportRouter.get(
   '/equipment/available',
   autenticar,
   exigirArea('tecnicos', 'administracion', 'caja'),
-  manejar((req) => support.availableEquipment(req.query.search as string)),
+  manejar((req) => support.availableEquipment(req.query.search as string, req.query.subscriberId as string)),
 );
 
 supportRouter.get(
@@ -146,14 +148,28 @@ supportRouter.get(
   '/materials/search',
   autenticar,
   exigirArea('tecnicos', 'administracion', 'caja'),
-  manejar((req) => support.searchMaterials(usuarioDe(req), req.query.search as string)),
+  manejar((req) => support.searchMaterials(usuarioDe(req), req.query.search as string, req.query.warehouseId as string, req.query.categoryId as string, req.query.page as string, req.query.pageSize as string)),
+);
+
+supportRouter.get(
+  '/materials/warehouses',
+  autenticar,
+  exigirArea('tecnicos', 'administracion', 'caja'),
+  manejar((req) => support.materialWarehouses(usuarioDe(req), req.query.search as string)),
 );
 
 supportRouter.get(
   '/mi-agenda',
   autenticar,
-  exigirArea('tecnicos', 'administracion', 'caja'),
+  exigirArea('tecnicos', 'administracion', 'caja', 'gerencia', 'contabilidad', 'sistemas'),
   manejar((req) => support.miAgenda(usuarioDe(req), req.query.fecha as string)),
+);
+
+supportRouter.get(
+  '/mi-agenda/calendario',
+  autenticar,
+  exigirArea('tecnicos', 'administracion', 'caja', 'gerencia', 'contabilidad', 'sistemas'),
+  manejar((req) => support.miCalendario(usuarioDe(req), req.query.desde as string, req.query.hasta as string)),
 );
 
 supportRouter.post(
@@ -161,6 +177,13 @@ supportRouter.post(
   autenticar,
   exigirArea('tecnicos', 'administracion', 'caja'),
   manejar((req) => support.noAtendida(validar(NoAtendidaDto, req.body), usuarioDe(req))),
+);
+
+supportRouter.get(
+  '/mi-historial',
+  autenticar,
+  exigirArea('tecnicos', 'administracion', 'caja', 'gerencia', 'contabilidad', 'sistemas'),
+  manejar((req) => support.miHistorial(usuarioDe(req), req.query.desde as string, req.query.hasta as string)),
 );
 
 supportRouter.get(
@@ -189,6 +212,20 @@ supportRouter.get(
   autenticar,
   exigirArea('tecnicos', 'administracion', 'caja'),
   manejar((req) => support.motivosRetiro()),
+);
+
+supportRouter.get(
+  '/naps',
+  autenticar,
+  exigirArea('tecnicos', 'administracion', 'caja'),
+  manejar((req) => support.napsParaEquipo(req.query.search as string, req.query.subscriberId as string)),
+);
+
+supportRouter.get(
+  '/naps/:id/ports',
+  autenticar,
+  exigirArea('tecnicos', 'administracion', 'caja'),
+  manejar((req) => support.puertosDeNap(req.params.id, req.query.subscriberId as string)),
 );
 
 supportRouter.post(
@@ -226,11 +263,39 @@ supportRouter.get(
   manejar((req) => support.stats(usuarioDe(req))),
 );
 
+supportRouter.post(
+  '/subscribers/:id/equipment',
+  autenticar,
+  exigirArea('tecnicos', 'administracion', 'caja'),
+  manejar((req) => support.assignEquipmentToSubscriber(req.params.id, validar(AssignEquipmentDto, req.body), usuarioDe(req))),
+);
+
+supportRouter.patch(
+  '/subscribers/:id/equipment/:equipmentId',
+  autenticar,
+  exigirArea('tecnicos', 'administracion', 'caja'),
+  manejar((req) => support.ubicarEquipo(req.params.id, req.params.equipmentId, validar(UbicarEquipoDto, req.body), usuarioDe(req))),
+);
+
+supportRouter.get(
+  '/subscribers/:id/vlan-olt',
+  autenticar,
+  exigirArea('tecnicos', 'administracion', 'caja'),
+  manejar((req) => support.vlanOltDeAbonado(req.params.id, usuarioDe(req), req.query.refresh as string)),
+);
+
 supportRouter.get(
   '/technicians',
   autenticar,
   exigirArea('tecnicos', 'administracion', 'caja'),
   manejar((req) => support.technicians()),
+);
+
+supportRouter.delete(
+  '/threads/:threadId',
+  autenticar,
+  exigirPermisos(APP_PERMISSIONS.SYSTEM_ADMIN),
+  manejar((req) => support.deleteThread(req.params.threadId, usuarioDe(req))),
 );
 
 supportRouter.get(
@@ -244,7 +309,7 @@ supportRouter.get(
   '/tickets',
   autenticar,
   exigirArea('tecnicos', 'administracion', 'caja'),
-  manejar((req) => support.tickets(req.query.search as string, req.query.status as string, req.query.type as string, req.query.tec as string, req.query.priority as string, req.query.sede as string, req.query.subscriberId as string, req.query.from as string, req.query.to as string, req.query.all as string, req.query.page as string, req.query.pageSize as string, req.query.sortBy as string, req.query.sortDir as string, usuarioDe(req))),
+  manejar((req) => support.tickets(req.query.search as string, req.query.status as string, req.query.type as string, req.query.servicio as string, req.query.tec as string, req.query.priority as string, req.query.sede as string, req.query.subscriberId as string, req.query.from as string, req.query.to as string, req.query.all as string, req.query.page as string, req.query.pageSize as string, req.query.sortBy as string, req.query.sortDir as string, usuarioDe(req))),
 );
 
 supportRouter.post(
@@ -258,7 +323,7 @@ supportRouter.get(
   '/tickets/export.xlsx',
   autenticar,
   exigirArea('tecnicos', 'administracion', 'caja'),
-  manejar((req, res) => support.ticketsXlsx(res, req.query.search as string, req.query.status as string, req.query.type as string, req.query.tec as string, req.query.priority as string, req.query.sede as string, req.query.from as string, req.query.to as string, req.query.all as string, usuarioDe(req))),
+  manejar((req, res) => support.ticketsXlsx(res, req.query.search as string, req.query.status as string, req.query.type as string, req.query.servicio as string, req.query.tec as string, req.query.priority as string, req.query.sede as string, req.query.from as string, req.query.to as string, req.query.all as string, usuarioDe(req))),
 );
 
 supportRouter.get(
@@ -304,6 +369,13 @@ supportRouter.post(
   autenticar,
   exigirArea('tecnicos', 'administracion', 'caja'),
   manejar((req) => support.assignEquipment(req.params.id, validar(AssignEquipmentDto, req.body), usuarioDe(req))),
+);
+
+supportRouter.post(
+  '/tickets/:id/ip-remota',
+  autenticar,
+  exigirArea('tecnicos', 'administracion', 'caja'),
+  manejar((req) => support.activarIpRemota(req.params.id, usuarioDe(req))),
 );
 
 supportRouter.post(

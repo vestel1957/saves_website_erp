@@ -5,25 +5,23 @@
  * controlador. Cablea HTTP -> método: extrae los argumentos de `req` y llama.
  * La lógica sigue viviendo en BillingController, que ya no lleva decoradores.
  *
- * Endpoints: 27
+ * Endpoints: 21
  */
 import { crearRouter, manejar } from '../core/http/ruta';
 import { validar } from '../core/http/validar';
 import { autenticar, exigirArea, usuarioDe } from '../core/auth/instancias';
 import { BillingController } from './billing.controller';
-import { billingService, catalogoService, facturasService, recurringService } from '../core/contenedor';
+import { billingService, catalogoService, facturasService } from '../core/contenedor';
 import type { Response } from 'express';
 import { BillingService } from './billing.service';
 import { invoicePdf } from './billing-pdf';
 import { reciboRolloPdf } from '../common/pdf/recibo-rollo';
 import { FacturasService } from './facturas.service';
-import { RecurringService } from './recurring.service';
 import { CatalogoService } from './catalogo.service';
 import { AsignarServicioDto, CreateInvoiceDto, CreateNoteDto, CreateNotesBulkDto, GenerateInvoicesDto, UpdateInvoiceDto, VoidInvoiceDto } from './dto/facturas.dto';
-import { CreateRecurringDto } from './dto/recurring.dto';
 
 /** Instancia única del controlador. Las dependencias salen del contenedor. */
-const billing = new BillingController(billingService, facturasService, recurringService, catalogoService);
+const billing = new BillingController(billingService, facturasService, catalogoService);
 
 export const billingRouter = crearRouter();
 billingRouter.get(
@@ -132,6 +130,13 @@ billingRouter.post(
 );
 
 billingRouter.get(
+  '/motivos',
+  autenticar,
+  exigirArea('contabilidad', 'caja'),
+  manejar((req) => billing.motivos()),
+);
+
+billingRouter.get(
   '/notes',
   autenticar,
   exigirArea('contabilidad', 'caja'),
@@ -143,55 +148,6 @@ billingRouter.post(
   autenticar,
   exigirArea('contabilidad'),
   manejar((req) => billing.createNotes(validar(CreateNotesBulkDto, req.body), usuarioDe(req))),
-);
-
-billingRouter.get(
-  '/recurring',
-  autenticar,
-  exigirArea('contabilidad', 'caja'),
-  manejar((req) => billing.recList(req.query.search as string, req.query.page as string, req.query.pageSize as string, req.query.sortBy as string, req.query.sortDir as string)),
-);
-
-billingRouter.post(
-  '/recurring',
-  autenticar,
-  exigirArea('contabilidad'),
-  manejar((req) => billing.recCreate(validar(CreateRecurringDto, req.body), usuarioDe(req))),
-);
-
-billingRouter.get(
-  '/recurring/stats',
-  autenticar,
-  exigirArea('contabilidad', 'caja'),
-  manejar((req) => billing.recStats()),
-);
-
-billingRouter.delete(
-  '/recurring/:id',
-  autenticar,
-  exigirArea('contabilidad'),
-  manejar((req) => billing.recRemove(req.params.id)),
-);
-
-billingRouter.get(
-  '/recurring/:id',
-  autenticar,
-  exigirArea('contabilidad', 'caja'),
-  manejar((req) => billing.recDetail(req.params.id)),
-);
-
-billingRouter.post(
-  '/recurring/:id/run',
-  autenticar,
-  exigirArea('contabilidad'),
-  manejar((req) => billing.recRun(req.params.id, usuarioDe(req))),
-);
-
-billingRouter.post(
-  '/recurring/:id/toggle',
-  autenticar,
-  exigirArea('contabilidad'),
-  manejar((req) => billing.recToggle(req.params.id, req.body)),
 );
 
 billingRouter.get(

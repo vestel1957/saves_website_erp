@@ -29,6 +29,18 @@ export type NavSection = {
  */
 export const screenKey = (href: string) => "screen" + href.replace(/\//g, ".");
 
+/** Sedes del módulo "Equipos disponibles" (una pantalla por sede, `/red/disponibles/<slug>`). */
+/** `legacyId` = `Branch.legacyId`, con el que se acota por sede en el backend. */
+export const SEDES_DISPONIBLES = [
+  { slug: "yopal", label: "Yopal", legacyId: 2 },
+  { slug: "villanueva", label: "Villanueva", legacyId: 3 },
+  { slug: "monterrey", label: "Monterrey", legacyId: 4 },
+  { slug: "aguazul", label: "Aguazul", legacyId: 6 },
+  { slug: "tauramena", label: "Tauramena", legacyId: 7 },
+  { slug: "villavicencio", label: "Villavicencio", legacyId: 8 },
+  { slug: "mocoa", label: "Mocoa", legacyId: 5 },
+] as const;
+
 // ── ESPEJO FIEL DEL SIDEBAR LEGACY (saves-vestel) ───────────────────────────
 // Réplica de la estructura del menú de la app legacy (CodeIgniter,
 // application/views/fixed/header.php): encabezados de sección → módulos
@@ -73,6 +85,9 @@ const principal: NavItem[] = [
   { icon: "calendar-clock", label: "Mi agenda", href: "/mi-agenda" },
   { icon: "layout-dashboard", label: "Tablero", href: "/dashboard" },
   { icon: "message-circle", label: "WhatsApp", href: "/whatsapp" },
+  // Campañas por plantilla (2026-09-14). Salió de CONFIGURACIÓN: se usa cada mes, no
+  // se configura una vez. Solo la ve quien tiene `system.whatsapp` (lo exige la API).
+  { icon: "send", label: "Mensajes masivos", href: "/whatsapp/masivo" },
   { icon: "map-pin", label: "Mapa", href: "/mapa" },
   { icon: "play", label: "Clientes PlayHub", href: "/playhub", iconClass: "text-error-text" },
 ];
@@ -84,7 +99,6 @@ const facturacion: NavItem[] = [
   { icon: "scroll-text", label: "Notas crédito/débito", href: "/facturacion/notas" },
   { icon: "file-signature", label: "Facturas electrónicas", href: "/facturacion/electronica" },
   { icon: "file-text", label: "Cotizaciones", href: "/cotizaciones" },
-  { icon: "repeat", label: "Ventas recurrentes", href: "/facturacion/recurrente" },
   { icon: "gift", label: "Promociones", href: "/configuracion/promociones" },
 ];
 
@@ -150,6 +164,14 @@ const inventario: NavItem[] = [
       { icon: "warehouse", label: "Bodega de equipos", href: "/red/bodegas" },
       { icon: "arrow-left-right", label: "Transferencias de equipos", href: "/red/transferencias" },
     ],
+  },
+  {
+    // Equipos disponibles, una entrada por sede (2026-09-14). Las pantallas están
+    // vacías por ahora, a pedido del usuario. ESPEJO de `SEDES_DISPONIBLES` en
+    // `backend/src/auth/permissions.catalog.ts`.
+    icon: "package-check",
+    label: "Equipos disponibles",
+    children: SEDES_DISPONIBLES.map((s) => ({ icon: "map-pin", label: s.label, href: `/red/disponibles/${s.slug}` })),
   },
   {
     icon: "package",
@@ -274,7 +296,6 @@ const configuracion: NavItem[] = [
     children: [
       { icon: "sparkles", label: "Agente (bot)", href: "/configuracion/chatbot" },
       { icon: "file-text", label: "Plantillas", href: "/configuracion/whatsapp/plantillas" },
-      { icon: "send", label: "Envío masivo", href: "/configuracion/whatsapp/masivo" },
       { icon: "settings", label: "Configurar API", href: "/configuracion/whatsapp" },
     ],
   },

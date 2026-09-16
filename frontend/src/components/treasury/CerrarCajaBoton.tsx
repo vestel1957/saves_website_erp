@@ -21,13 +21,19 @@ import { mensajeDeError } from "@/lib/errores";
  * que no se pueden deshacer —cuánto se barre, a dónde se arrastra, y que no se cierra dos
  * veces— y nada más.
  */
-export function CerrarCajaBoton({ cashAccountId, caja, fecha, excedente, proximoDiaHabil, onCerrado }: {
+export function CerrarCajaBoton({ cashAccountId, caja, fecha, excedente, proximoDiaHabil, sinActividad, onCerrado }: {
   cashAccountId: number;
   caja: string;
   fecha: string;
   /** El efectivo que hay ahora mismo en el cajón: es lo que se va a barrer. */
   excedente: number;
   proximoDiaHabil: string;
+  /**
+   * true = ese día no tiene NINGÚN movimiento propio y lo único que hay en el cajón es
+   * el arrastre del cierre anterior. Entonces no se ofrece cerrar, y el botón explica
+   * por qué en vez de desaparecer sin más.
+   */
+  sinActividad?: boolean;
   onCerrado: () => void;
 }) {
   const { authFetch } = useAuth();
@@ -55,6 +61,7 @@ export function CerrarCajaBoton({ cashAccountId, caja, fecha, excedente, proximo
 
       if (data.escrito) toast(`Caja cerrada · se barrieron ${cop(data.excedente)}`);
       else if (data.motivo === "ya-cerrado") toast("Esta caja ya estaba cerrada ese día");
+      else if (data.motivo === "sin-actividad") toast("Ese día no tiene movimientos: no hay nada que cerrar");
       else toast("Sin excedente: no había efectivo que arrastrar");
 
       setAbierto(false);
@@ -64,6 +71,20 @@ export function CerrarCajaBoton({ cashAccountId, caja, fecha, excedente, proximo
     } finally {
       setGuardando(false);
     }
+  }
+
+  // Un día en blanco no se cierra. La pantalla de cierre viene puesta en HOY, y a
+  // primera hora el cajón enseña el arrastre de ayer: cerrar ahí barre ese arrastre al
+  // día siguiente y deja HOY marcado como cerrado, con lo que la cajera pierde el botón
+  // de abrir la caja y se queda sin poder trabajar (le pasó a Yopal el 2026-09-04).
+  // El backend lo rechaza igualmente con `motivo: 'sin-actividad'`; esto es para que no
+  // llegue a pulsarlo.
+  if (sinActividad) {
+    return (
+      <Button size="sm" disabled title="Este día todavía no tiene movimientos: sólo está el arrastre del cierre anterior.">
+        <Icon name="lock" size={14} /> Sin movimientos que cerrar
+      </Button>
+    );
   }
 
   return (

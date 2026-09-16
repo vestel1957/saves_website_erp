@@ -8,7 +8,9 @@ import { Prisma } from '@prisma/client';
 import { paginacion } from '../common/pagination-params';
 import { subName } from '../common/subscriber-name';
 import { BadRequestException, NotFoundException, ServiceUnavailableException } from '../core/http/errores';
+import { num, round2 } from '../common/money';
 import { exigirSedeSuscriptor } from '../common/sede-scope';
+import { diaDelPago, pagosAnterioresAlCorte } from './pago-anterior-al-corte';
 
 /**
  * Puente con el PORTAL DE PAGOS EN LÍNEA (`vestel.com.co/crm`).
@@ -68,6 +70,36 @@ const ESTADO: Record<string, string> = {
  * (`scripts/reconectar-pagos-portal.ts`), no algo que ocurra solo.
  */
 const RECONEXION_DIAS = Number(process.env.PORTAL_PAGOS_RECONEXION_DIAS || 3);
+
+/**
+ * Cuánto tiempo después de que este sistema tocara el pago se sigue teniendo por "de
+ * este pago" una orden de reconexión. Un cuarto de hora: la reconexión se dispara
+ * dentro de la misma llamada, y el margen es para el lote (una pasada del puente puede
+ * reconectar a cientos y las órdenes se van creando por el camino).
+ */
+const VENTANA_RECONEXION_MS = 15 * 60 * 1000;
+
+/**
+ * Margen para dar por bueno un recaudo que no trae la referencia de la pasarela. Cinco
+ * días: el legacy llegó a imputar un pago del portal DOS días después (abonado 55200,
+ * agosto de 2026) y el cargue de pagos por Excel se sube cuando el corresponsal manda
+ * el archivo, no el día del pago.
+ */
+const VENTANA_PARECIDO_MS = 5 * 24 * 60 * 60 * 1000;
+
+/**
+ * Hasta cuándo vale el emparejamiento por parecido.
+ *
+ * Es el día en que el portal pasó a preguntarle a este sistema. A partir de ahí, TODO
+ * pago aplicado desde aquí lleva su referencia en el movimiento, así que un aprobado sin
+ * movimiento con esa referencia es un agujero de verdad y tiene que salir en rojo.
+ *
+ * El corte importa: el parecido es un emparejamiento flojo (mismo abonado, mismo valor,
+ * ±5 días) y podría explicar un pago del portal con un recaudo de ventanilla del mismo
+ * valor, apagando justo la alarma que hay que oír. Antes del corte compensa —tapaba dos
+ * falsos positivos reales—; después, no.
+ */
+const PARECIDO_HASTA = new Date('2026-09-10T00:00:00Z');
 
 /** Tope de filas por pasada, para que una pasada nunca se vuelva un maratón. */
 const LOTE_INGESTA = 500;
@@ -368,11 +400,26 @@ export class OnlinePaymentsService {
    */
   async reconectar(opts: { dias?: number; dryRun?: boolean; limite?: number } = {}) {
     const dias = opts.dias ?? RECONEXION_DIAS;
-    const ordenes = await this.pendientesDeReconexion(dias, opts.limite ?? LOTE_RECONEXION);
+    const todas = await this.pendientesDeReconexion(dias, opts.limite ?? LOTE_RECONEXION);
+
+    // Un pago no levanta un corte que vino DESPUÉS de él (ver `pagosAnterioresAlCorte`).
+    // Se sellan como mirados para que no vuelvan en cada pasada, y no se reconecta a nadie
+    // por ellos; si ese abonado trae además un pago posterior al corte, ése sí cuenta.
+    const anteriores = await this.anterioresAlCorte(todas);
+    if (anteriores.size) {
+      this.logger.log(`${anteriores.size} pago(s) del portal anteriores al último corte del abonado: no reconectan.`);
+      if (!opts.dryRun) {
+        await this.prisma.paymentOrder.updateMany({
+          where: { id: { in: [...anteriores] } }, data: { appliedAt: new Date() },
+        });
+      }
+    }
+    const ordenes = todas.filter((o) => !anteriores.has(o.id));
     if (!ordenes.length) {
       return {
         candidatos: 0, reconectados: 0, internet: 0, tv: 0, ordenes: 0, dryRun: false,
         abonados: [] as string[], internetIds: [] as string[], tvIds: [] as string[],
+        anterioresAlCorte: anteriores.size,
       };
     }
 
@@ -389,6 +436,7 @@ export class OnlinePaymentsService {
         internet: toca.internet.length, tv: toca.tv.length + toca.tvSinEquipo.length,
         ordenes: 0, dryRun: true, abonados: toca.todos,
         internetIds: toca.internet, tvIds: [...toca.tv, ...toca.tvSinEquipo],
+        anterioresAlCorte: anteriores.size,
       };
     }
     if (!toca.todos.length) {
@@ -396,7 +444,7 @@ export class OnlinePaymentsService {
       await this.prisma.paymentOrder.updateMany({
         where: { id: { in: ordenes.map((o) => o.id) } }, data: { appliedAt: new Date() },
       });
-      return { candidatos: ordenes.length, reconectados: 0, internet: 0, tv: 0, ordenes: 0, dryRun: false, abonados: [], internetIds: [], tvIds: [] };
+      return { candidatos: ordenes.length, reconectados: 0, internet: 0, tv: 0, ordenes: 0, dryRun: false, abonados: [], internetIds: [], tvIds: [], anterioresAlCorte: anteriores.size };
     }
 
     // En lote a propósito: reconectar de a uno abre una conexión al router y una
@@ -421,7 +469,24 @@ export class OnlinePaymentsService {
       abonados: toca.todos,
       internetIds: toca.internet,
       tvIds: [...toca.tv, ...toca.tvSinEquipo],
+      anterioresAlCorte: anteriores.size,
     };
+  }
+
+  /** Órdenes cuyo abonado fue cortado en un día posterior al del pago. */
+  private async anterioresAlCorte(ordenes: { id: string; subscriberId: string; diaPago: string }[]) {
+    if (!ordenes.length) return new Set<string>();
+    const primerDia = ordenes.reduce((m, o) => (o.diaPago < m ? o.diaPago : m), ordenes[0].diaPago);
+    const cortes = await this.prisma.ticket.findMany({
+      where: {
+        subscriberId: { in: [...new Set(ordenes.map((o) => o.subscriberId))] },
+        status: { not: 'ANULADA' },
+        type: { startsWith: 'Corte' },
+        created: { gt: new Date(`${primerDia}T00:00:00Z`) },
+      },
+      select: { subscriberId: true, created: true },
+    });
+    return pagosAnterioresAlCorte(ordenes, cortes);
   }
 
   /** Órdenes aprobadas, con la plata ya contabilizada aquí, que el puente no ha tocado. */
@@ -433,7 +498,7 @@ export class OnlinePaymentsService {
         appliedAt: null,
         createdAt: { gte: this.desdeDias(dias) },
       },
-      select: { id: true, reference: true, subscriberId: true },
+      select: { id: true, reference: true, subscriberId: true, createdAt: true, rawInit: true },
       orderBy: { createdAt: 'asc' },
       take: limite,
     });
@@ -451,7 +516,9 @@ export class OnlinePaymentsService {
       const txId = conPlata.get(o.reference);
       if (txId) await this.prisma.paymentOrder.update({ where: { id: o.id }, data: { transactionId: txId } });
     }
-    return ordenes.filter((o) => conPlata.has(o.reference));
+    return ordenes
+      .filter((o) => conPlata.has(o.reference))
+      .map((o) => ({ id: o.id, reference: o.reference, subscriberId: o.subscriberId, diaPago: diaDelPago(o.rawInit, o.createdAt) }));
   }
 
   // ------------------------------------------------------------------
@@ -527,30 +594,61 @@ export class OnlinePaymentsService {
         where, orderBy: { createdAt: 'desc' }, skip, take,
         select: {
           id: true, reference: true, amount: true, status: true, method: true,
-          gatewayTxId: true, appliedAt: true, transactionId: true, createdAt: true,
+          gatewayTxId: true, appliedAt: true, appliedBy: true, transactionId: true, createdAt: true,
           subscriberId: true,
           subscriber: { select: SELECT_NOMBRE },
         },
       }),
     ]);
 
-    const aplicadas = await this.aplicadasEnCartera(filas.map((f) => f.reference));
-    const items = filas.map((f) => ({
-      id: f.id,
-      reference: f.reference,
-      amount: Number(f.amount),
-      status: f.status,
-      method: f.method,
-      gatewayTxId: f.gatewayTxId,
-      fecha: f.createdAt,
-      subscriberId: f.subscriberId,
-      abonado: f.subscriber?.abonado ?? null,
-      subscriberName: subName(f.subscriber),
-      // La plata: si el movimiento no está, el cliente pagó y sigue debiendo.
-      aplicado: aplicadas.has(f.reference),
-      // El servicio: si el puente ya se ocupó de devolvérselo.
-      reconectado: !!f.appliedAt,
-    }));
+    const recaudo = await this.recaudoDeCadaReferencia(filas.map((f) => f.reference));
+    const reconectados = await this.reconexionesDe(
+      filas.map((f) => ({ reference: f.reference, subscriberId: f.subscriberId, appliedAt: f.appliedAt })),
+    );
+    // Los aprobados que no casan por referencia: se intenta el emparejamiento por
+    // parecido antes de pintarlos en rojo. Ver `emparejadasPorParecido`.
+    const porParecido = await this.emparejadasPorParecido(
+      filas
+        .filter((f) => f.status === 'APPROVED' && !recaudo.has(f.reference))
+        .map((f) => ({ reference: f.reference, subscriberId: f.subscriberId, amount: Number(f.amount), createdAt: f.createdAt })),
+    );
+    const items = filas.map((f) => {
+      const r = recaudo.get(f.reference);
+      return {
+        id: f.id,
+        reference: f.reference,
+        amount: Number(f.amount),
+        status: f.status,
+        method: f.method,
+        gatewayTxId: f.gatewayTxId,
+        fecha: f.createdAt,
+        subscriberId: f.subscriberId,
+        abonado: f.subscriber?.abonado ?? null,
+        subscriberName: subName(f.subscriber),
+        // La plata: si el movimiento no está por ningún lado, el cliente pagó y sigue
+        // debiendo. Es LA alarma de esta pantalla.
+        aplicado: !!r || porParecido.has(f.reference),
+        // Si casó por referencia (lo normal) o si hubo que emparejarlo por valor y
+        // fecha, que es más flojo y la pantalla lo dice.
+        porReferencia: !!r,
+        // A QUÉ fue a parar: las facturas que saldó y el recibo de caja. Es lo que
+        // convierte la pantalla en algo que se puede cotejar con el cliente por teléfono.
+        facturas: r?.facturas ?? [],
+        recibo: r?.recibo ?? null,
+        // Quién imputó la plata. Sale de la columna, no de mirar el movimiento: el
+        // writeback adopta el gemelo del legacy y le pone su `legacyId`, así que un
+        // recaudo nacido aquí acabaría pareciendo de allá. Lo aplicado antes de que
+        // existiera la columna es LEGACY por definición (lo puso la migración).
+        origen: f.appliedBy ? (f.appliedBy === 'NEXUS' ? 'nexus' : 'legacy') : (r ? 'legacy' : null),
+        // El servicio. Antes esto era `appliedAt` a secas, que sólo decía que el puente
+        // había pasado por la orden; desde que el pago se aplica aquí, `appliedAt` lo
+        // lleva TODO pago, reconecte o no, y esa columna daba por reconectado a todo el
+        // mundo. Ahora se mira si de verdad nació una orden de reconexión.
+        reconectado: reconectados.has(f.reference),
+        // Que este sistema ya se ocupó de la orden (aplicarla y/o reconectar).
+        procesado: !!f.appliedAt,
+      };
+    });
     const visibles = params.estado === 'SIN_APLICAR' ? items.filter((i) => !i.aplicado) : items;
     return { items: visibles, total, page, pageSize, pages: Math.ceil(total / pageSize) };
   }
@@ -563,6 +661,148 @@ export class OnlinePaymentsService {
       select: { payuOrderId: true },
     });
     return new Set(movs.map((m) => m.payuOrderId!).filter(Boolean));
+  }
+
+  /**
+   * Segunda pasada para los que NO casan por referencia: se emparejan por abonado,
+   * valor y fecha.
+   *
+   * Existe porque el legacy no siempre escribía `transactions.id_orden_payu`, y sin ese
+   * campo un pago perfectamente imputado sale en la pantalla como "sin aplicar". Dos
+   * casos reales el 2026-09-10, y los dos falsa alarma: el abonado 55200 (73.150 el
+   * 3-ago, imputado en WOMPI dos días después sin referencia) y el 55793 (75.500 el
+   * 10-jul, que el legacy imputó contra la cuenta BANCOLOMBIA TELECOMUNICACIONES —entró
+   * por el cargue de pagos por Excel—). Con esos dos dentro, "sin aplicar" volvía a ser
+   * un número al que se le puede hacer caso, que es para lo que está la pantalla.
+   *
+   * Los pagos que aplica ESTE sistema siempre llevan la referencia, así que esta red
+   * sólo pesca histórico.
+   *
+   * Es un emparejamiento por parecido y se dice como tal (`porReferencia: false`): mismo
+   * abonado, mismo valor al peso y dentro de la ventana. No vale para conciliar contra
+   * la pasarela, vale para no dar una alarma falsa.
+   */
+  private async emparejadasPorParecido(
+    sinReferencia: { reference: string; subscriberId: string; amount: number; createdAt: Date }[],
+  ) {
+    const fuera = new Set<string>();
+    // Sólo el histórico: ver `PARECIDO_HASTA`.
+    const candidatas = sinReferencia.filter((o) => o.createdAt < PARECIDO_HASTA);
+    if (!candidatas.length) return fuera;
+
+    const desde = new Date(Math.min(...candidatas.map((o) => o.createdAt.getTime())) - VENTANA_PARECIDO_MS);
+    const hasta = new Date(Math.max(...candidatas.map((o) => o.createdAt.getTime())) + VENTANA_PARECIDO_MS);
+    const movs = await this.prisma.transaction.findMany({
+      where: {
+        subscriberId: { in: [...new Set(candidatas.map((o) => o.subscriberId))] },
+        type: 'INCOME', status: 'VIGENTE',
+        date: { gte: desde, lte: hasta },
+      },
+      select: { subscriberId: true, credit: true, date: true },
+    });
+    // Un movimiento sólo puede explicar UN pago: si no, dos intentos del mismo valor se
+    // taparían con el mismo recaudo y la alarma que importa se apagaría sola.
+    const usados = new Set<number>();
+    for (const o of candidatas) {
+      const i = movs.findIndex((m, idx) =>
+        !usados.has(idx)
+        && m.subscriberId === o.subscriberId
+        && Math.abs(num(m.credit) - o.amount) < 1
+        && Math.abs(m.date.getTime() - o.createdAt.getTime()) <= VENTANA_PARECIDO_MS);
+      if (i >= 0) { usados.add(i); fuera.add(o.reference); }
+    }
+    return fuera;
+  }
+
+  /**
+   * Qué pasó con la plata de cada referencia: a qué facturas fue, con qué recibo y
+   * quién la aplicó.
+   *
+   * Todo EN BLOQUE (tres consultas para la página entera, no tres por fila): la
+   * pantalla pagina de 50 en 50 y el listado se abre muchas veces al día.
+   *
+   * Quién aplicó el pago NO se resuelve aquí: lo dice `PaymentOrder.appliedBy`. Mirar el
+   * movimiento no serviría —el writeback adopta el gemelo del legacy y le estampa su
+   * `legacyId`, así que un recaudo nacido aquí acaba pareciendo traído de allá—.
+   */
+  private async recaudoDeCadaReferencia(referencias: string[]) {
+    // La factura viaja con su `id` Y su `tid`: la pantalla enseña el consecutivo (#505096,
+    // que es lo que el cliente lee) pero `/facturacion/:id` navega por el id.
+    const vacio = new Map<string, {
+      aplicado: boolean; movimientoId: string | null;
+      facturas: { id: string; tid: number }[]; recibo: string | null; total: number;
+    }>();
+    if (!referencias.length) return vacio;
+
+    const movs = await this.prisma.transaction.findMany({
+      where: { payuOrderId: { in: referencias }, status: 'VIGENTE' },
+      select: {
+        id: true, payuOrderId: true, credit: true,
+        invoice: { select: { id: true, tid: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (!movs.length) return vacio;
+
+    // El recibo de caja se comparte entre los movimientos de un mismo recaudo (un pago
+    // que salda dos facturas son dos movimientos y UN recibo).
+    const enlaces = await this.prisma.receiptTransaction.findMany({
+      where: { transactionId: { in: movs.map((m) => m.id) } },
+      select: { transactionId: true, receipt: { select: { fileName: true } } },
+    });
+    const reciboDe = new Map(enlaces.map((e) => [e.transactionId, e.receipt?.fileName ?? null]));
+
+    for (const m of movs) {
+      const ref = m.payuOrderId!;
+      const y = vacio.get(ref) ?? {
+        aplicado: true, movimientoId: m.id,
+        facturas: [] as { id: string; tid: number }[], recibo: null as string | null, total: 0,
+      };
+      if (m.invoice?.tid) y.facturas.push({ id: m.invoice.id, tid: m.invoice.tid });
+      y.total = round2(y.total + num(m.credit));
+      y.recibo = y.recibo ?? reciboDe.get(m.id) ?? null;
+      vacio.set(ref, y);
+    }
+    return vacio;
+  }
+
+  /**
+   * ¿A este pago le siguió una reconexión?
+   *
+   * No hay vínculo guardado entre el pago y la orden —`ReconexionService` atiende a la
+   * caja, al cargue por Excel y al portal, y desde la orden las tres se ven igual—, así
+   * que se empareja por abonado y por tiempo: una orden de reconexión creada en el
+   * cuarto de hora siguiente a que este sistema tocara el pago es de este pago.
+   *
+   * Es una heurística y se cuenta como tal en la pantalla ("Reconectado"), no como un
+   * dato contable. Se mira sólo lo que ya está sellado (`appliedAt`): sin eso no hay
+   * instante contra el que emparejar.
+   */
+  private async reconexionesDe(
+    ordenes: { reference: string; subscriberId: string; appliedAt: Date | null }[],
+  ) {
+    const conSello = ordenes.filter((o) => o.appliedAt);
+    const fuera = new Set<string>();
+    if (!conSello.length) return fuera;
+
+    const desde = new Date(Math.min(...conSello.map((o) => o.appliedAt!.getTime())));
+    const hasta = new Date(Math.max(...conSello.map((o) => o.appliedAt!.getTime())) + VENTANA_RECONEXION_MS);
+    const tickets = await this.prisma.ticket.findMany({
+      where: {
+        subscriberId: { in: [...new Set(conSello.map((o) => o.subscriberId))] },
+        type: { startsWith: 'Reconexion' },
+        createdAt: { gte: desde, lte: hasta },
+      },
+      select: { subscriberId: true, createdAt: true },
+    });
+    for (const o of conSello) {
+      const t0 = o.appliedAt!.getTime();
+      if (tickets.some((t) => t.subscriberId === o.subscriberId
+        && t.createdAt.getTime() >= t0 && t.createdAt.getTime() <= t0 + VENTANA_RECONEXION_MS)) {
+        fuera.add(o.reference);
+      }
+    }
+    return fuera;
   }
 
   /** Cifras de cabecera de la pantalla, sobre la ventana pedida. */
@@ -586,10 +826,18 @@ export class OnlinePaymentsService {
     // Los aprobados que no llegaron a cartera. Es el número que justifica la pantalla:
     // si algún día deja de ser ~0, hay plata cobrada que nadie está viendo.
     const aprobadas = await this.prisma.paymentOrder.findMany({
-      where: { ...where, status: 'APPROVED' }, select: { reference: true, amount: true },
+      where: { ...where, status: 'APPROVED' },
+      select: { reference: true, amount: true, subscriberId: true, createdAt: true },
     });
     const conPlata = await this.aplicadasEnCartera(aprobadas.map((a) => a.reference));
-    const sinAplicar = aprobadas.filter((a) => !conPlata.has(a.reference));
+    // Mismo criterio que el listado: sin esto el contador acusaba de "sin aplicar" a
+    // pagos que el legacy sí imputó, sólo que sin escribir la referencia.
+    const porParecido = await this.emparejadasPorParecido(
+      aprobadas
+        .filter((a) => !conPlata.has(a.reference))
+        .map((a) => ({ reference: a.reference, subscriberId: a.subscriberId, amount: Number(a.amount), createdAt: a.createdAt })),
+    );
+    const sinAplicar = aprobadas.filter((a) => !conPlata.has(a.reference) && !porParecido.has(a.reference));
 
     return {
       aprobados: bucket('APPROVED'),
@@ -599,13 +847,37 @@ export class OnlinePaymentsService {
     };
   }
 
+  /**
+   * Lo que una promoción le rebajó a las facturas que saldó este pago.
+   *
+   * Con el portal preguntándole a este sistema, el cliente paga MENOS que su deuda
+   * cuando hay una campaña vigente ([[portal-pagos]]). Quien atienda una reclamación
+   * tiene que poder decir cuánto y por qué campaña sin salir de aquí.
+   *
+   * Se cuentan sólo las vigentes: una aplicación con `revertedAt` es un descuento que
+   * se retiró después (pagó fuera de la vigencia) y sumarla mentiría.
+   */
+  private async descuentoDePromocion(invoiceIds: string[]) {
+    if (!invoiceIds.length) return null;
+    const aplicaciones = await this.prisma.promotionApplication.findMany({
+      where: { invoiceId: { in: invoiceIds }, revertedAt: null },
+      select: { amount: true, percentage: true, promotion: { select: { name: true } } },
+    });
+    if (!aplicaciones.length) return null;
+    return {
+      monto: round2(aplicaciones.reduce((a, b) => a + num(b.amount), 0)),
+      promocion: aplicaciones[0].promotion?.name ?? null,
+      porcentaje: aplicaciones[0].percentage,
+    };
+  }
+
   /** Detalle de una orden: el recaudo al que fue a parar y qué se reconectó. */
   async detail(id: string) {
     const o = await this.prisma.paymentOrder.findUnique({
       where: { id },
       select: {
         id: true, reference: true, amount: true, status: true, method: true,
-        gatewayTxId: true, appliedAt: true, transactionId: true, createdAt: true,
+        gatewayTxId: true, appliedAt: true, appliedBy: true, transactionId: true, createdAt: true,
         rawInit: true, subscriberId: true,
         subscriber: { select: { ...SELECT_NOMBRE, status: true } },
       },
@@ -624,12 +896,19 @@ export class OnlinePaymentsService {
           where: {
             subscriberId: o.subscriberId,
             type: { startsWith: 'Reconexion' },
-            createdAt: { gte: o.appliedAt, lte: new Date(o.appliedAt.getTime() + 10 * 60 * 1000) },
+            createdAt: { gte: o.appliedAt, lte: new Date(o.appliedAt.getTime() + VENTANA_RECONEXION_MS) },
           },
           select: { id: true, code: true, type: true, status: true },
           orderBy: { createdAt: 'asc' },
         })
       : [];
+
+    const recaudo = (await this.recaudoDeCadaReferencia([o.reference])).get(o.reference) ?? null;
+    // El descuento de promoción que se concedió AL COBRAR este pago: son notas crédito
+    // sobre las facturas que saldó, selladas en `PromotionApplication`.
+    const descuento = recaudo?.facturas.length
+      ? await this.descuentoDePromocion(recaudo.facturas.map((f) => f.id))
+      : null;
 
     return {
       ...o,
@@ -638,8 +917,18 @@ export class OnlinePaymentsService {
       abonado: o.subscriber?.abonado ?? null,
       subscriberStatus: o.subscriber?.status ?? null,
       movimiento: movimiento ? { ...movimiento, credit: Number(movimiento.credit) } : null,
-      aplicado: !!movimiento,
-      reconectado: !!o.appliedAt,
+      aplicado: !!recaudo,
+      facturas: recaudo?.facturas ?? [],
+      recibo: recaudo?.recibo ?? null,
+      origen: o.appliedBy ? (o.appliedBy === 'NEXUS' ? 'nexus' : 'legacy') : (recaudo ? 'legacy' : null),
+      // Lo que se le rebajó por una promoción vigente al pagar: el cliente ve un valor
+      // más bajo que su deuda y alguien tiene que poder explicar por qué.
+      descuento,
+      // Reconectado = nació una orden de reconexión detrás de este pago (heurística por
+      // abonado y tiempo, ver `reconexionesDe`). `procesado` es otra cosa: que este
+      // sistema ya tocó la orden.
+      reconectado: ordenes.length > 0,
+      procesado: !!o.appliedAt,
       ordenes,
     };
   }
@@ -826,6 +1115,23 @@ export class OnlinePaymentsService {
       });
       if (!res.ok) {
         throw new ServiceUnavailableException(`El portal de pagos respondió ${res.status}. No se cambió la contraseña.`);
+      }
+      /**
+       * El cuerpo distingue las dos maneras de responder 200 que tiene el portal:
+       * `1` es el UPDATE hecho, y el cuerpo VACÍO es el `exit()` de
+       * `Communication_model::sfgsagety785625x`, o sea que la llave no cuadró y cortó
+       * antes de tocar nada. Se separa aquí a propósito: la comprobación de más abajo
+       * también lo caza, pero diciendo "no quedó guardada", que manda a buscar el
+       * problema al lado del cliente. Pasó el 2026-09-10: al rotar el secreto del
+       * portal se cambiaron PORTAL_WS_* y estos dos se quedaron con el valor viejo.
+       */
+      const cuerpo = (await res.text()).trim();
+      if (cuerpo !== '1') {
+        throw new ServiceUnavailableException(
+          'El portal de pagos rechazó la llave del servidor (PORTAL_CRM_TOKEN_USUARIO / ' +
+            'PORTAL_CRM_TOKEN_CLAVE). No se cambió la contraseña: avisa a soporte, es ' +
+            'configuración, no el cliente.',
+        );
       }
     } catch (e: any) {
       if (e instanceof ServiceUnavailableException) throw e;

@@ -1,8 +1,9 @@
-import { BadRequestException, NotFoundException } from '../core/http/errores';
+import { BadRequestException, ForbiddenException, NotFoundException } from '../core/http/errores';
 import { Prisma, SubscriberStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { exigirSedeSuscriptor, sedesDe, whereSedeSuscriptor } from '../common/sede-scope';
+import { esClienteDeSuOrden, esTecnicoDeCampo, whereSuscriptoresDeSusOrdenes } from '../common/tecnico-scope';
 import { assertPoint, distMeters, parsePoint } from './geo.util';
 import { MapQueryDto, PingDto, RouteDto, SetSubscriberLocationDto } from './dto/geo.dto';
 import { RoutingService } from './routing.service';
@@ -63,6 +64,11 @@ export class GeoService {
 
     if (dto.subscriberId) {
       await exigirSedeSuscriptor(this.prisma, user, dto.subscriberId);
+      // Al técnico, sólo hasta los clientes de sus órdenes: "cómo llegar" sale de su
+      // visita, y trazar ruta a un abonado cualquiera diría su nombre y su casa.
+      if (esTecnicoDeCampo(user) && !(await esClienteDeSuOrden(this.prisma, user, dto.subscriberId))) {
+        throw new ForbiddenException('Este cliente no corresponde a ninguna de tus órdenes.');
+      }
       const sub = await this.prisma.subscriber.findUnique({
         where: { id: dto.subscriberId },
         select: { gpsLat: true, gpsLng: true, abonado: true, ...NOMBRE },
@@ -116,7 +122,12 @@ export class GeoService {
     }
 
     const texto = q.q?.trim();
+    // Al técnico de campo, sólo los abonados de SUS órdenes (2026-09-10). El mapa
+    // trae buscador por nombre y dirección: sin esto seguía siendo un buscador de
+    // clientes abierto, justo lo que se cerró en el ⌘K y en el listado.
+    const suyos = await whereSuscriptoresDeSusOrdenes(this.prisma, user);
     const whereSub: Prisma.SubscriberWhereInput = {
+      ...(suyos ?? {}),
       // El filtro de verdad (coordenada válida) es en memoria: en BD son texto y
       // hay basura ('0', 'NULL', ''). Esto solo descarta los nulos, que son la
       // inmensa mayoría, usando el índice.
@@ -304,6 +315,11 @@ export class GeoService {
    */
   async setSubscriberLocation(user: AuthUser, id: string, dto: SetSubscriberLocationDto) {
     await exigirSedeSuscriptor(this.prisma, user, id);
+    // Y al técnico de campo, sólo los clientes de SUS órdenes (2026-09-10): capturar
+    // GPS es escribir en la ficha, y la ficha ajena ya no se le abre ni para mirarla.
+    if (esTecnicoDeCampo(user) && !(await esClienteDeSuOrden(this.prisma, user, id))) {
+      throw new ForbiddenException('Este cliente no corresponde a ninguna de tus órdenes.');
+    }
     const sub = await this.prisma.subscriber.findUnique({
       where: { id },
       select: { id: true, abonado: true, gpsLat: true, gpsLng: true },

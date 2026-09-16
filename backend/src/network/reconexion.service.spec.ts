@@ -21,6 +21,12 @@ const abonado = (p: Partial<any> = {}) => ({
     { id: 'sv-1', kind: 'INTERNET', status: 'ACTIVO' },
     { id: 'sv-2', kind: 'TV', status: 'ACTIVO' },
   ]) as Servicio[],
+  /**
+   * Su última factura recurrente: la otra fuente de "¿tiene TV y la tiene cortada?"
+   * (`serviceTv` la nombra, `estadoTv` con valor = caída). Es la que vale para los
+   * 2.350 clientes que se quedaron sin filas de servicio en la migración.
+   */
+  invoices: (p.factura ? [p.factura] : []) as { serviceTv: string | null; estadoTv: string | null }[],
   _count: { oltOnus: p.onus ?? 0 },
 });
 
@@ -170,6 +176,41 @@ describe('a quién le corresponde reconectar', () => {
     expect(r.aplica).toBe(true);
     expect(mikrotik.reconnect).not.toHaveBeenCalled();
     expect(genieacs.tvBatchBySubscribers).toHaveBeenCalled();
+  });
+
+  it('devuelve la TV del cortado que no tiene filas de servicio: se la nombra su factura', async () => {
+    // El caso del abonado 56720 (08-09-2026): combo internet+TV cortado desde junio.
+    // `SubscriberService` está vacío para él —la migración solo pobló a los ACTIVO—
+    // y la reconexión solo le devolvía el internet, sin ni intentar la televisión.
+    const { srv, mikrotik, genieacs } = armar(
+      abonado({ services: [], factura: { serviceTv: 'Television26', estadoTv: 'CORTADO' } }),
+    );
+    const r = await srv.porPago('sub-1');
+
+    expect(mikrotik.reconnect).toHaveBeenCalled();
+    expect(genieacs.tvBatchBySubscribers).toHaveBeenCalled();
+    expect(r.servicios.map((s) => s.servicio).sort()).toEqual(['INTERNET', 'TV']);
+  });
+
+  it('y si el equipo no le devuelve esa TV, la deja en una orden de visita', async () => {
+    const { srv, ordenes } = armar(
+      abonado({ services: [], factura: { serviceTv: 'Television26', estadoTv: 'CORTADO' } }),
+      { tvOk: false },
+    );
+    const r = await srv.porPago('sub-1');
+
+    const tv = r.ordenes.find((o) => o.servicio === 'TV');
+    expect(tv).toBeTruthy();
+    expect(ordenes.abrirSiNoHay).toHaveBeenCalledWith(expect.objectContaining({ type: 'Reconexion Television' }));
+  });
+
+  it('no le inventa televisión al que su factura dice que no la tiene', async () => {
+    const { srv, genieacs } = armar(
+      abonado({ services: [], factura: { serviceTv: 'no', estadoTv: null } }),
+    );
+    const r = await srv.porPago('sub-1');
+    expect(genieacs.tvBatchBySubscribers).not.toHaveBeenCalled();
+    expect(r.servicios.map((s) => s.servicio)).toEqual(['INTERNET']);
   });
 
   it('no hace nada con el que ya estaba al día', async () => {
@@ -551,6 +592,48 @@ describe('cargue de pagos (lote)', () => {
     expect(r).toMatchObject({ total: 0 });
     expect(mikrotik.reconnectBatch).not.toHaveBeenCalled();
     expect(genieacs.tvBatchBySubscribers).not.toHaveBeenCalled();
+  });
+});
+
+describe('si el router ya lo tenía al aire, no es una reconexión', () => {
+  const alAire = (m: any) =>
+    m.reconnect.mockResolvedValue({ ok: true, dryRun: false, action: 'RECONNECT', subscriberId: 'sub-1', steps: [], message: 'ok', wasCut: false });
+
+  it('el COMPROMISO que paga sin estar cortado no deja orden ni cobro', async () => {
+    // Caso real 12-09-2026: abonados 349, 2543 y 54205 (COMPROMISO) pagaron y quedó
+    // una "Reconexion Internet" sin que el router los tuviera en MOROSOS.
+    const { srv, mikrotik, ordenes, escrituras } = armar(
+      abonado({ status: 'COMPROMISO', services: [{ id: 'sv-1', kind: 'INTERNET', status: 'ACTIVO' }] }),
+    );
+    alAire(mikrotik);
+    const r = await srv.porPago('sub-1');
+    expect(r.aplica).toBe(false);
+    expect(r.registros).toHaveLength(0);
+    expect(ordenes.registrarResuelta).not.toHaveBeenCalled();
+    expect(ordenes.abrirSiNoHay).not.toHaveBeenCalled();
+    expect(escrituras.historial).toHaveLength(0);
+  });
+
+  it('pero si lo sacó de MOROSOS sí deja su orden', async () => {
+    const { srv, mikrotik, ordenes } = armar(
+      abonado({ services: [{ id: 'sv-1', kind: 'INTERNET', status: 'ACTIVO' }] }),
+    );
+    mikrotik.reconnect.mockResolvedValue({ ok: true, dryRun: false, action: 'RECONNECT', subscriberId: 'sub-1', steps: [], message: 'ok', wasCut: true });
+    const r = await srv.porPago('sub-1');
+    expect(r.aplica).toBe(true);
+    expect(ordenes.registrarResuelta).toHaveBeenCalledTimes(1);
+  });
+
+  it('en lote tampoco registra al que ya estaba al aire', async () => {
+    const { srv, mikrotik, ordenes } = armar(
+      abonado({ services: [{ id: 'sv-1', kind: 'INTERNET', status: 'ACTIVO' }] }),
+    );
+    mikrotik.reconnectBatch.mockResolvedValue({
+      total: 1, ok: 1, results: [{ ok: true, dryRun: false, subscriberId: 'sub-1', steps: [], message: '', wasCut: false }],
+    });
+    const r = await srv.porPagoLote(['sub-1']);
+    expect(r).toMatchObject({ internet: 0, registros: 0 });
+    expect(ordenes.registrarResuelta).not.toHaveBeenCalled();
   });
 });
 

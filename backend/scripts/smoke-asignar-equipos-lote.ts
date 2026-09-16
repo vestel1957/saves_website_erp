@@ -92,7 +92,7 @@ const check = (ok: boolean, msg: string) => { console.log(`  ${ok ? '✓' : '✗
   } finally {
     // Limpieza: todo lo de pega fuera, y el cliente como estaba.
     await prisma.equipment.deleteMany({ where: { mac: { startsWith: 'DE:AD:BE:EF:' } } });
-    await prisma.ticketThread.deleteMany({ where: { ticketCode: t.code } });
+    await prisma.ticketThread.deleteMany({ where: { ticketCode: t.code! } });
     await prisma.ticket.delete({ where: { id: t.id } }).catch(() => undefined);
     await prisma.subscriber.update({ where: { id: sub.id }, data: { macEquipo: macPrevia } }).catch(() => undefined);
     await prisma.$disconnect();

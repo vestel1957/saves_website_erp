@@ -1,5 +1,6 @@
 import type { PrismaService } from '../prisma/prisma.service';
 import { num } from '../common/money';
+import { esAfiliacion } from '../common/concepto-factura';
 
 /**
  * La AFILIACIÓN: lo que de verdad se le cobra a un cliente el día que se da de alta.
@@ -25,9 +26,6 @@ import { num } from '../common/money';
  * venda (Combo 70.000, Villavo 50.000, Dedicado 300.000, Streaming 85.000…). Este módulo
  * las lee de ahí y propone la que toca; la cajera puede cambiarla en el asistente.
  */
-
-/** Cómo se llaman las afiliaciones en el catálogo del legacy. */
-const PREFIJO = 'afiliaci';
 
 /** Una afiliación del catálogo, lista para volcarse como renglón de factura. */
 export type AfiliacionCatalogo = {
@@ -109,7 +107,7 @@ export async function resolverAfiliacion(
     // El catálogo lo mantiene contabilidad y los nombres cambian de año en año
     // («Afiliacion 2021»): si el nombre exacto ya no existe, se cae a cualquier
     // afiliación que empiece igual antes que a no cobrar nada.
-    elegida ??= catalogo.find((a) => plano(a.name).startsWith(PREFIJO));
+    elegida ??= catalogo.find((a) => esAfiliacion(a.name));
   }
   if (!elegida) return null;
 

@@ -7,7 +7,7 @@ export class BulkFilterDto {
   @IsOptional() @IsString() search?: string;
   @IsOptional() @IsString() servicio?: string; // internet | tv | combo
   @IsOptional() @IsString() tecnologia?: string; // FTTH | EOC
-  @IsOptional() @IsString() cuenta?: string; // aldia | debe | compromiso
+  @IsOptional() @IsString() cuenta?: string; // aldia | debe | compromiso | compromiso-vencido | compromiso-vigente
   @IsOptional() @IsString() deuda?: string; // 1 | gt2 | fija (debe su mensualidad o más)
 }
 

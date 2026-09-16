@@ -10,10 +10,12 @@ import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { PasoPublico } from "@/components/promotions/PublicoPromocion";
 import { useAlcance } from "@/components/promotions/useAlcance";
+import { FacturasElegidas } from "@/components/promotions/FacturasElegidas";
 import {
-  type DiscountFormat, type InvoiceScope, type Promotion, type PromotionAudience,
+  type DiscountFormat, type InvoiceKindChoice, type Promotion, type PromotionAudience,
   type PromotionCatalogs, type PromotionDraft, type PromotionSubscriber, type PromotionTemplate,
-  EMPTY_AUDIENCE, FACTURA_EJEMPLO, INVOICE_SCOPE_OPTIONS, discountLabel, isFlatDiscount,
+  EMPTY_AUDIENCE, FACTURA_EJEMPLO, INVOICE_AGE_OPTIONS, INVOICE_KIND_OPTIONS,
+  eleccionDeKinds, kindsDeEleccion, discountLabel, isFlatDiscount,
   motivoNoPreaplicableEnPortal, motivoNoPublicableEnPortal, requisitosPromocion, simularDescuento,
 } from "@/lib/promotions";
 
@@ -27,7 +29,8 @@ const PASOS = ["Descuento", "Clientes", "Fechas"];
 const EMPTY: PromotionDraft = {
   name: "", description: "", discountFormat: "%", percentage: "", flatAmount: "",
   startDate: iso(new Date()), endDate: iso(new Date()), active: true,
-  invoiceScope: "MENSUALIDAD_DEL_MES", portalPublish: false, portalPreapply: false,
+  invoiceKinds: ["RECURRENTE"], onlyCurrentMonth: true, invoiceIds: null,
+  portalPublish: false, portalPreapply: false,
 };
 
 /** Atajos de vigencia: el 90% de las campañas cae en uno de estos rangos. */
@@ -125,7 +128,9 @@ export function PromocionModal({
           startDate: dstr(editing.startDate),
           endDate: dstr(editing.endDate),
           active: editing.active,
-          invoiceScope: editing.invoiceScope ?? "MENSUALIDAD_DEL_MES",
+          invoiceKinds: editing.invoiceKinds?.length ? editing.invoiceKinds : ["RECURRENTE"],
+          onlyCurrentMonth: editing.onlyCurrentMonth ?? true,
+          invoiceIds: editing.invoiceIds?.length ? [...editing.invoiceIds] : null,
           portalPublish: editing.portalPublish,
           portalPreapply: editing.portalPreapply ?? false,
         }
@@ -176,15 +181,30 @@ export function PromocionModal({
   // con publicarla (ver `motivoNoPreaplicableEnPortal`).
   const noPreaplicar = motivoNoPreaplicableEnPortal(draft);
 
-  // A qué facturas del cliente llega el descuento en ventanilla. No es un detalle:
-  // una campaña de cartera que se deje en "la mensualidad del mes" no descuenta nada,
+  // A qué facturas del cliente llega el descuento, en dos preguntas: QUÉ rebaja
+  // (mensualidad, cargos o las dos) y si se limita al mes en curso. No es un detalle:
+  // una campaña de cartera que se deje en "sólo las de este mes" no descuenta nada,
   // porque lo que debe un cliente en cartera es siempre de meses anteriores.
-  const alcanceFacturas = INVOICE_SCOPE_OPTIONS.find((o) => o.value === draft.invoiceScope)
-    ?? INVOICE_SCOPE_OPTIONS[0];
+  const tipoElegido = eleccionDeKinds(draft.invoiceKinds);
+  const tipoFactura = INVOICE_KIND_OPTIONS.find((o) => o.value === tipoElegido)
+    ?? INVOICE_KIND_OPTIONS[0];
+  const antiguedad = INVOICE_AGE_OPTIONS[draft.onlyCurrentMonth ? 0 : 1];
+  // Con UN cliente de público se pueden elegir sus facturas una por una.
+  const clienteUnico = !audience.allSubscribers && audience.subscriberIds.length === 1
+    ? audience.subscriberIds[0] : null;
+  const elegidasAMano = clienteUnico ? draft.invoiceIds : null;
 
-  // Las mismas cuatro reglas de siempre, repartidas entre los pasos que las piden.
+  // Cómo se lee el alcance en el resumen del último paso, en una frase.
+  const alcanceFrase = elegidasAMano
+    ? `${elegidasAMano.length === 1 ? "la factura elegida" : `las ${elegidasAMano.length} facturas elegidas`}`
+    : `${
+      { MENSUALIDAD: "la mensualidad", CARGOS: "los cargos sueltos", AMBAS: "toda factura" }[tipoElegido]
+    }${draft.onlyCurrentMonth ? " de este mes" : " que deba, atrasadas incluidas"}`;
+
+  // Las mismas cuatro reglas de siempre, repartidas entre los pasos que las piden. Con
+  // facturas elegidas a mano, desmarcarlas todas deja una promo que no rebaja nada.
   const req = requisitosPromocion(draft, audience);
-  const pasoOk = [req[0].ok && req[1].ok, req[2].ok, req[3].ok];
+  const pasoOk = [req[0].ok && req[1].ok, req[2].ok && !(elegidasAMano && !elegidasAMano.length), req[3].ok];
   const todoOk = pasoOk.every(Boolean);
 
   const set = (patch: Partial<PromotionDraft>) => setDraft((d) => ({ ...d, ...patch }));
@@ -207,7 +227,8 @@ export function PromocionModal({
       flatAmount: t.flatAmount != null ? String(t.flatAmount) : "",
       startDate: dstr(t.startDate),
       endDate: dstr(t.endDate),
-      invoiceScope: t.invoiceScope ?? "MENSUALIDAD_DEL_MES",
+      invoiceKinds: t.invoiceKinds?.length ? t.invoiceKinds : ["RECURRENTE"],
+      onlyCurrentMonth: t.onlyCurrentMonth ?? true,
     });
   }
 
@@ -232,7 +253,10 @@ export function PromocionModal({
         startDate: draft.startDate,
         endDate: draft.endDate,
         active: draft.active,
-        invoiceScope: draft.invoiceScope,
+        invoiceKinds: draft.invoiceKinds,
+        onlyCurrentMonth: draft.onlyCurrentMonth,
+        // `[]` = sin lista: rebaja según el tipo y la antigüedad.
+        invoiceIds: elegidasAMano ?? [],
         portalPublish: draft.portalPublish && !noPortal,
         portalPreapply: draft.portalPreapply && !noPreaplicar,
         ...audience,
@@ -249,7 +273,7 @@ export function PromocionModal({
     } finally {
       setBusy(false);
     }
-  }, [authFetch, audience, busy, draft, editing, flat, guardarPlantilla, noPortal, onSaved, todoOk]);
+  }, [authFetch, audience, busy, draft, editing, elegidasAMano, flat, guardarPlantilla, noPortal, onSaved, todoOk]);
 
   /**
    * Enter avanza al paso siguiente. NO crea la promoción desde el último paso: crear
@@ -380,13 +404,27 @@ export function PromocionModal({
                 Se le descuenta a
               </span>
               <Segmented
-                ariaLabel="A qué facturas alcanza el descuento"
+                ariaLabel="Tipo de factura que rebaja el descuento"
                 className="w-full"
-                value={draft.invoiceScope}
-                onChange={(v) => set({ invoiceScope: v as InvoiceScope })}
-                options={INVOICE_SCOPE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+                value={tipoElegido}
+                onChange={(v) => set({ invoiceKinds: kindsDeEleccion(v as InvoiceKindChoice) })}
+                options={INVOICE_KIND_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
               />
-              <p className="mt-1 text-[11.5px] text-text-tertiary">{alcanceFacturas.detail}</p>
+              <p className="mt-1 text-[11.5px] text-text-tertiary">{tipoFactura.detail}</p>
+            </div>
+
+            <div>
+              <span className="mb-1 block text-[11px] font-semibold text-text-tertiary">
+                ¿Cuáles?
+              </span>
+              <Segmented
+                ariaLabel="Antigüedad de las facturas que alcanza el descuento"
+                className="w-full"
+                value={draft.onlyCurrentMonth ? "MES" : "TODAS"}
+                onChange={(v) => set({ onlyCurrentMonth: v === "MES" })}
+                options={INVOICE_AGE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+              />
+              <p className="mt-1 text-[11.5px] text-text-tertiary">{antiguedad.detail}</p>
             </div>
 
             <Eco>
@@ -406,11 +444,23 @@ export function PromocionModal({
 
             <PasoPublico
               value={audience}
-              onChange={setAudience}
+              onChange={(a) => {
+                // Las facturas elegidas son del cliente de antes: con otro, se vuelve a empezar.
+                if (a.subscriberIds[0] !== audience.subscriberIds[0]) set({ invoiceIds: null });
+                setAudience(a);
+              }}
               catalogs={catalogs}
               nombres={nombres}
               onNombre={(s) => setNombres((prev) => new Map(prev).set(s.id, s))}
             />
+
+            {clienteUnico && (
+              <FacturasElegidas
+                subscriberId={clienteUnico}
+                draft={draft}
+                onChange={(ids) => set({ invoiceIds: ids })}
+              />
+            )}
 
             <Eco tono={req[2].ok && !contando && alcanzados === 0 ? "alerta" : "normal"}>
               {contando ? "Contando clientes…"
@@ -524,7 +574,7 @@ export function PromocionModal({
               <V>{contando ? "…" : alcanzados.toLocaleString("es-CO")}</V>
               {" clientes, del "}{fecha(draft.startDate)}{" al "}{fecha(draft.endDate)}
               {", sobre "}
-              <V>{alcanceFacturas.label.toLowerCase()}</V>
+              <V>{alcanceFrase}</V>
               {sim ? <>. Pagarían <V>{cop(sim.paga)}</V> en vez de {cop(FACTURA_EJEMPLO.total)}.</> : "."}
               {draft.portalPublish && !noPortal ? " También se aplica sola en el portal de pagos en línea." : ""}
               {draft.portalPreapply && !noPreaplicar ? " En el portal de pagos verán ya el valor rebajado." : ""}

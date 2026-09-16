@@ -5,7 +5,7 @@
  * controlador. Cablea HTTP -> método: extrae los argumentos de `req` y llama.
  * La lógica sigue viviendo en WhatsappController, que ya no lleva decoradores.
  *
- * Endpoints: 12
+ * Endpoints: 15
  */
 import { crearRouter, manejar } from '../../core/http/ruta';
 import { validar } from '../../core/http/validar';
@@ -15,7 +15,7 @@ import { whatsappCampaignService, whatsappLogService, whatsappService } from '..
 import { WhatsappService } from './whatsapp.service';
 import { WhatsappLogService } from './whatsapp-log.service';
 import { WhatsappCampaignService } from './whatsapp-campaign.service';
-import { CreateCampaignDto, TemplateDto } from './dto/campaign.dto';
+import { CampaignPreviewDto, CampaignTestDto, CreateCampaignDto, TemplateDto } from './dto/campaign.dto';
 import { APP_PERMISSIONS } from '../../auth/permissions.catalog';
 
 /** Instancia única del controlador. Las dependencias salen del contenedor. */
@@ -34,6 +34,27 @@ whatsappRouter.post(
   autenticar,
   exigirPermisos(APP_PERMISSIONS.WHATSAPP_MANAGE),
   manejar((req) => whatsapp.createCampaign(validar(CreateCampaignDto, req.body), usuarioDe(req))),
+);
+
+whatsappRouter.get(
+  '/whatsapp/campaigns/options',
+  autenticar,
+  exigirPermisos(APP_PERMISSIONS.WHATSAPP_MANAGE),
+  manejar((req) => whatsapp.campaignOptions()),
+);
+
+whatsappRouter.post(
+  '/whatsapp/campaigns/preview',
+  autenticar,
+  exigirPermisos(APP_PERMISSIONS.WHATSAPP_MANAGE),
+  manejar((req) => whatsapp.previewCampaign(validar(CampaignPreviewDto, req.body))),
+);
+
+whatsappRouter.post(
+  '/whatsapp/campaigns/test',
+  autenticar,
+  exigirPermisos(APP_PERMISSIONS.WHATSAPP_MANAGE),
+  manejar((req) => whatsapp.testCampaign(validar(CampaignTestDto, req.body), usuarioDe(req))),
 );
 
 whatsappRouter.get(

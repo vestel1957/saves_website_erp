@@ -9,6 +9,7 @@ import { OltHuawei } from './olt/olt-huawei.driver';
 import { createOltDriver, OLT_BRANDS } from './olt/olt-factory';
 import type { OltTransporte } from './olt/olt-ssh.client';
 import { decryptSecret, encryptSecret } from '../common/secret-box';
+import { formaHex } from '../common/serial-onu';
 
 /**
  * OltService — clon de SmartOLT: control total de ONUs por SSH.
@@ -90,7 +91,15 @@ export class OltService {
   private autoProvision = process.env.AUTO_PROVISION_ENABLED === 'true';
   private autoProvisionCheckedAt = 0;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    /**
+     * Opcional y por forma, no por clase: sólo hace falta para que la señal óptica
+     * encuentre el equipo por la MAC con que navega cuando el inventario no cuadra.
+     * Sin él (scripts, smokes) todo lo demás funciona igual.
+     */
+    private readonly mikrotik?: { callerIdDeAbonado(subscriberId: string): Promise<string | null> },
+  ) {}
 
   get isLive(): boolean {
     return this.live;
@@ -544,10 +553,363 @@ export class OltService {
     return { ok: r.ok, error: r.error, optical: r.data ?? {}, raw: r.raw };
   }
 
+  // ------------------------------------------------------------------ //
+  //  Señal óptica del abonado (bloque de la ficha del cliente)          //
+  // ------------------------------------------------------------------ //
+
+  /**
+   * Dónde está la ONU de un abonado, para poder preguntarle a la OLT por ella.
+   *
+   * Manda el EQUIPO ASIGNADO en inventario, no el vínculo de `OltOnu`: cuando al
+   * cliente le cambian la ONU, el inventario se actualiza en la orden, pero la fila
+   * vieja de `OltOnu` sigue apuntándolo hasta que alguien la desvincule (abonado
+   * 54519: la ficha leía la ONU que ya tenía otro cliente). En orden:
+   *  1. El serial rotulado del equipo asignado, traducido a HEX
+   *     (`ZTEGDE519D2C` → `5A544547DE519D2C`) y buscado en `OltOnu`.
+   *  2. Ese mismo SN preguntado a la OLT de su sede (`display ont info by-sn`):
+   *     cubre los puertos que el sync aún no ha leído.
+   *  3. Sólo si el cliente NO tiene ningún equipo con serial de ONU (EoC, legacy sin
+   *     inventario): la ONU vinculada (`OltOnu.subscriberId`), la `presente` primero.
+   */
+  private async ubicarOnuDeAbonado(sub: { id: string; branchId: string | null }) {
+    const equipos = await this.prisma.equipment.findMany({
+      where: { subscriberId: sub.id },
+      select: { serial: true, code: true },
+      orderBy: { code: 'desc' },
+    });
+    // El más reciente primero (`code` desc): si arrastra dos, el nuevo es el instalado.
+    const onus = equipos
+      .map((e) => ({ serial: String(e.serial ?? ''), hex: formaHex(e.serial) }))
+      .filter((e): e is { serial: string; hex: string } => !!e.hex);
+
+    if (onus.length) {
+      const hex = [...new Set(onus.map((e) => e.hex))];
+      const filas = await this.prisma.oltOnu.findMany({
+        where: { sn: { in: hex } },
+        include: { olt: true },
+        orderBy: { lastSync: 'desc' },
+      });
+      const porSerial = filas.find((o) => o.syncState === 'presente' && o.ontId !== null) ?? filas[0];
+      if (porSerial) {
+        const serial = onus.find((e) => e.hex === porSerial.sn)?.serial ?? porSerial.sn;
+        return { fila: porSerial, olt: porSerial.olt, via: 'SERIAL' as const, serial };
+      }
+      const olt = sub.branchId
+        ? await this.prisma.olt.findFirst({
+            where: { branchId: sub.branchId },
+            orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
+          })
+        : null;
+      if (olt) return { fila: null, olt, sn: onus[0].hex, serial: onus[0].serial, via: 'BUSQUEDA' as const };
+    }
+
+    const vinculadas = await this.prisma.oltOnu.findMany({
+      where: { subscriberId: sub.id },
+      include: { olt: true },
+      orderBy: { lastSync: 'desc' },
+    });
+    const vinculada = vinculadas.find((o) => o.syncState === 'presente' && o.ontId !== null)
+      ?? vinculadas.find((o) => o.ontId !== null)
+      ?? vinculadas[0];
+    if (vinculada) return { fila: vinculada, olt: vinculada.olt, via: 'VINCULADA' as const, serial: vinculada.sn };
+    return null;
+  }
+
+  /** Número de un valor que la OLT devuelve como texto ("-21.50" → -21.5). */
+  private numeroOptico(v: unknown): number | null {
+    const s = String(v ?? '').trim().replace(',', '.');
+    if (!/^-?\d+(\.\d+)?$/.test(s)) return null;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  /**
+   * Potencias ópticas de la ONU del abonado — el bloque "Señal óptica" de la
+   * ficha del cliente.
+   *
+   * Es UNA sesión contra la OLT que trae dos cosas: el estado de la ONT
+   * (`display ont info`, con la distancia y por qué se cayó la última vez) y las
+   * potencias (`display ont optical-info`: lo que RECIBE la ONT, lo que TRANSMITE
+   * y lo que la OLT recibe de ella). Nada de esto está guardado en la base —
+   * `OltOnu.rxPower` es la foto del último sync — así que se pregunta en vivo.
+   *
+   * Se cachea 60 s: la ficha del cliente la abre medio mundo y las OLT Huawei
+   * aguantan pocas sesiones VTY. `refresh` (el botón "Refrescar") la salta.
+   */
+  async opticaDeAbonado(subscriberId: string, refresh = false) {
+    const sub = await this.prisma.subscriber.findUnique({
+      where: { id: subscriberId },
+      select: { id: true, abonado: true, branchId: true, installTech: true },
+    });
+    if (!sub) throw new NotFoundException('Cliente no encontrado.');
+
+    const ubic = await this.ubicarOnuDeAbonado(sub);
+    if (!ubic) {
+      return {
+        ok: false,
+        motivo: 'SIN_ONU',
+        error: 'Este cliente no tiene ninguna ONU vinculada en la OLT ni un equipo con serial de ONU en el inventario.',
+      };
+    }
+    const { olt, via } = ubic;
+    const snAsignado: string | null = ubic.fila?.sn ?? (ubic as any).sn ?? null;
+
+    return this.conCache(`${olt.id}:optica-abonado:${sub.id}`, refresh, async () => {
+      const primera = await this.leerOpticaDeOnu(sub, olt, via, ubic.fila, snAsignado, ubic.serial ?? null);
+      if (primera.motivo !== 'NO_AUTENTICADA') return primera;
+
+      // El inventario dice un equipo y la OLT no lo tiene. Antes de decirlo, se mira
+      // con QUÉ equipo está conectado de verdad: la MAC de su sesión PPPoE (caller-id)
+      // es la del aparato que está en la casa (abonado 54519: el inventario tenía el
+      // ZTE ...CDF y en la casa estaba el ...CBD, un carácter de diferencia).
+      const mac = await this.mikrotik?.callerIdDeAbonado(sub.id).catch(() => null);
+      if (!mac) return primera;
+      const eq = await this.prisma.equipment.findFirst({
+        where: { mac: { equals: mac, mode: 'insensitive' } },
+        select: { serial: true, code: true },
+      });
+      const hex = formaHex(eq?.serial);
+      if (!eq || !hex || hex === snAsignado) return primera;
+      const segunda = await this.leerOpticaDeOnu(sub, olt, 'MAC', null, hex, eq.serial);
+      if (!segunda.ok) return primera;
+      return {
+        ...segunda,
+        avisoVinculo:
+          `El inventario le asigna ${ubic.serial ?? snAsignado}, pero está conectado con ${eq.serial} ` +
+          `(código ${eq.code}, MAC ${mac}): la lectura es de ese equipo. Corrija el equipo asignado.`,
+      };
+    });
+  }
+
+  /** Una lectura de estado + óptica de UNA ONU (por posición guardada o por SN). */
+  private async leerOpticaDeOnu(
+    sub: { id: string; abonado: number | null },
+    olt: any,
+    via: string,
+    fila: any,
+    snBuscado: string | null,
+    serial: string | null,
+  ): Promise<any> {
+      const r = await this.withDriver(olt, async (d) => {
+        let frame = fila?.frame ?? 0;
+        let slot = fila?.slot ?? null;
+        let port = fila?.port ?? null;
+        let ontId = fila?.ontId ?? null;
+        let sn = snBuscado;
+
+        // Sin F/S/P no hay a quién preguntarle: se localiza por SN en la OLT.
+        if (slot === null || port === null || ontId === null) {
+          if (!sn) return false;
+          const onu = await d.findBySn(sn);
+          // El equipo asignado no está dado de alta en la OLT: no es un fallo de
+          // lectura, y se dice con el serial rotulado, que es el que se ve en la caja.
+          if (!onu) {
+            return {
+              motivo: 'NO_AUTENTICADA',
+              error: `El equipo asignado (${serial ?? sn}) no aparece autenticado en la OLT ${olt.name}: sin eso la OLT no tiene potencias que dar.`,
+            } as any;
+          }
+          const pos = this.fspDeOnu(onu);
+          if (!pos) return { error: 'La OLT encontró la ONU pero no reporta F/S/P u ont-id.' } as any;
+          ({ frame, slot, port, ontId } = pos);
+          sn = String(onu.sn ?? sn);
+        }
+
+        let detail = await d.getOntDetail(frame, slot as number, port as number, ontId as number);
+        // La posición guardada es la del último sync, y la ONU se pudo mover desde
+        // entonces (re-autenticada desde SmartOLT en otro puerto): la OLT contesta
+        // "The ONT does not exist". Se busca por SN antes de rendirse.
+        let movida: { antes: string; descripcion: string } | null = null;
+        if (detail === false && fila && sn && /does not exist/i.test(d.getError())) {
+          const antes = `${frame}/${slot}/${port}:${ontId}`;
+          const onu = await d.findBySn(sn);
+          const pos = onu ? this.fspDeOnu(onu) : null;
+          if (!pos) return { error: `La ONU ${sn} ya no está autenticada en la OLT (estaba en ${antes}).` } as any;
+          movida = { antes, descripcion: String(onu.description ?? '') };
+          ({ frame, slot, port, ontId } = pos);
+          detail = await d.getOntDetail(frame, slot, port, ontId);
+        }
+        if (detail === false) return false;
+        const optical = await d.getOntOptical(frame, slot as number, port as number, ontId as number);
+        return {
+          fsp: `${frame}/${slot}/${port}`,
+          frame, slot, port, ontId,
+          sn: String(detail.sn ?? sn ?? ''),
+          detail,
+          movida,
+          optical: optical === false ? null : optical,
+          errorOptica: optical === false ? d.getError() : '',
+        } as any;
+      });
+
+      if (!r.ok || !r.data) {
+        return {
+          ok: false,
+          motivo: 'OLT',
+          error: r.error || 'No se pudo consultar la OLT.',
+          olt: { id: olt.id, name: olt.name },
+        };
+      }
+      const dat = r.data;
+      if (dat.error) {
+        return { ok: false, motivo: dat.motivo ?? 'OLT', error: dat.error, olt: { id: olt.id, name: olt.name } };
+      }
+      const o = dat.optical ?? {};
+      const sinLecturas = [o.rx, o.tx, o.olt_rx].every((v) => this.numeroOptico(v) === null);
+      // Si apareció en otra posición, su descripción dice de quién es: empieza por
+      // el número de abonado. Si es OTRO, las potencias no son de este cliente y el
+      // vínculo de la ficha quedó viejo.
+      let avisoVinculo = '';
+      if (dat.movida) {
+        const num = String(dat.movida.descripcion).match(/^\s*(\d{3,})/)?.[1];
+        const nueva = `${dat.fsp}:${dat.ontId}`;
+        avisoVinculo = num && sub.abonado != null && num !== String(sub.abonado)
+          ? `Esta ONU ya no está en ${dat.movida.antes}: la OLT la tiene en ${nueva} a nombre de otro abonado (${dat.movida.descripcion}). El vínculo de esta ficha está desactualizado.`
+          : `La ONU se movió de ${dat.movida.antes} a ${nueva}; la lectura es de la posición actual.`;
+      }
+      return {
+        ok: true,
+        via,
+        avisoVinculo,
+        olt: { id: olt.id, name: olt.name },
+        onu: {
+          sn: dat.sn || null,
+          fsp: dat.fsp,
+          ontId: dat.ontId,
+          descripcion: dat.detail.description ?? null,
+        },
+        estado: {
+          run: dat.detail.run_state ?? null,
+          config: dat.detail.config_state ?? null,
+          match: dat.detail.match_state ?? null,
+          distancia: this.numeroOptico(dat.detail.distance),
+          ultimaCaida: dat.detail.last_down ?? null,
+          causaCaida: dat.detail.last_down_cause ?? null,
+          desdeCuando: dat.detail.online_duration ?? dat.detail.last_up ?? null,
+        },
+        // Las tres potencias que se miran para decidir si la fibra está bien:
+        // rx = lo que RECIBE la ONT del cliente (la que manda), tx = lo que ella
+        // emite, oltRx = lo que la OLT recibe de ella (delata un empalme flojo
+        // en el camino de vuelta aunque el rx del cliente se vea bien).
+        optica: {
+          rx: this.numeroOptico(o.rx),
+          tx: this.numeroOptico(o.tx),
+          oltRx: this.numeroOptico(o.olt_rx),
+          temperatura: this.numeroOptico(o.temp),
+          voltaje: this.numeroOptico(o.voltage),
+          corriente: this.numeroOptico(o.current),
+        },
+        // La ONT apagada no tiene óptica que dar: la OLT responde el bloque con los
+        // campos vacíos. Se dice con palabras en vez de pintar tres guiones, que es
+        // la diferencia entre "está apagada" y "esto no funciona".
+        avisoOptica: dat.errorOptica || (sinLecturas
+          ? (/offline|down/i.test(String(dat.detail.run_state ?? ''))
+            ? 'La ONT está offline, así que la OLT no reporta potencias: equipo apagado, sin luz en la casa, fibra cortada o sin sincronizar.'
+            : 'La OLT no devolvió lecturas ópticas para esta ONU.')
+          : ''),
+        consultadoEn: new Date().toISOString(),
+      };
+  }
+
+  /**
+   * La VLAN con la que la OLT tiene dada de alta la ONU del abonado: la de su
+   * service-port (`display service-port port F/S/P`, filtrado por su ONT-ID).
+   *
+   * Es la que manda de verdad —la caja NAP o la ficha pueden decir otra, pero el
+   * tráfico del cliente sale por ésta—, así que la pestaña Equipos la rellena sola
+   * en vez de pedírsela a quien edita. Con varios service-ports (internet + TV/voz)
+   * se devuelven todos y `vlan` es el de índice más bajo, que es el que se crea
+   * primero al autenticar: el de datos.
+   *
+   * Se localiza la ONU igual que la óptica (`ubicarOnuDeAbonado`) y se cachea 60 s.
+   */
+  async vlanDeAbonado(subscriberId: string, refresh = false) {
+    const sub = await this.prisma.subscriber.findUnique({
+      where: { id: subscriberId },
+      select: { id: true, branchId: true },
+    });
+    if (!sub) throw new NotFoundException('Cliente no encontrado.');
+
+    const ubic = await this.ubicarOnuDeAbonado(sub);
+    if (!ubic) {
+      return {
+        ok: false, motivo: 'SIN_ONU', vlan: null as number | null, vlans: [] as number[],
+        error: 'Este cliente no tiene ninguna ONU vinculada en la OLT ni un equipo con serial de ONU en el inventario.',
+      };
+    }
+    const { fila, olt } = ubic;
+    const snBuscado = fila?.sn ?? (ubic as any).sn ?? null;
+
+    return this.conCache(`${olt.id}:vlan-abonado:${sub.id}`, refresh, async () => {
+      const r = await this.withDriver(olt, async (d) => {
+        let frame = fila?.frame ?? 0;
+        let slot = fila?.slot ?? null;
+        let port = fila?.port ?? null;
+        let ontId = fila?.ontId ?? null;
+        if (slot === null || port === null || ontId === null) {
+          if (!snBuscado) return false;
+          const onu = await d.findBySn(snBuscado);
+          if (!onu) return false;
+          const pos = this.fspDeOnu(onu);
+          if (!pos) return false;
+          ({ frame, slot, port, ontId } = pos);
+        }
+        const leer = async (f: number, s: number, p: number, id: number) => ({
+          fsp: `${f}/${s}/${p}`, ontId: id,
+          sps: ((await d.servicePortsDePuerto(f, s, p)) ?? []).filter((x: any) => Number(x.ontId) === Number(id)),
+        });
+        const enSuSitio = await leer(frame, slot as number, port as number, ontId as number);
+        if (enSuSitio.sps.length || !fila) return enSuSitio;
+
+        // La fila vinculada puede estar vieja: la ONU se movió de puerto o se volvió a
+        // autenticar con otro ONT-ID, y en esa posición ya no hay nada (visto con un
+        // cliente de VILLANUEVA: 0/0/10 ONT 2 "does not exist"). Se busca por serial
+        // —el de la ONU vinculada y el del equipo del inventario— antes de rendirse.
+        const equipos = await this.prisma.equipment.findMany({ where: { subscriberId: sub.id }, select: { serial: true } });
+        const seriales = [...new Set([fila.sn, ...equipos.map((e) => formaHex(e.serial))].filter(Boolean) as string[])];
+        for (const sn of seriales) {
+          const onu = await d.findBySn(sn);
+          const pos = onu ? this.fspDeOnu(onu) : null;
+          if (!pos) continue;
+          const alli = await leer(pos.frame, pos.slot, pos.port, pos.ontId);
+          if (alli.sps.length) return alli;
+        }
+        return enSuSitio;
+      });
+
+      const base = { olt: { id: olt.id, name: olt.name } };
+      if (!r.ok || !r.data) {
+        return { ok: false, motivo: 'OLT', vlan: null as number | null, vlans: [] as number[], error: r.error || 'No se pudo consultar la OLT.', ...base };
+      }
+      const sps = [...r.data.sps].sort((a: any, b: any) => Number(a.index) - Number(b.index));
+      const vlans = [...new Set(sps.map((s: any) => Number(s.vlan)).filter((v) => Number.isInteger(v) && v > 0))];
+      if (!vlans.length) {
+        return {
+          ok: false, motivo: 'SIN_SERVICE_PORT', vlan: null as number | null, vlans,
+          error: `La ONU ${r.data.fsp}:${r.data.ontId} no tiene service-port en la OLT: no hay VLAN que leer.`,
+          ...base,
+        };
+      }
+      return { ok: true, vlan: vlans[0], vlans, fsp: r.data.fsp, ontId: r.data.ontId, ...base, consultadoEn: new Date().toISOString() };
+    });
+  }
+
   async findBySn(id: string, sn: string) {
     const olt = await this.resolveOlt(id);
     const r = await this.withDriver(olt, (d) => d.findBySn(sn));
     return { ok: r.ok, error: r.error, onu: r.data ?? {}, raw: r.raw };
+  }
+
+  /**
+   * Dónde está y CÓMO está dada de alta una ONU, buscada por SN: puerto, ONT-ID,
+   * line/srv-profile, comentario y sus service-ports (VLAN, GEM y traffic-tables).
+   * Solo lectura. Es lo que hace falta para volver a darla de alta igual que
+   * estaba cambiando únicamente la velocidad (ver `OnuProvisionService.reautenticarConPlan`).
+   */
+  async estadoPorSn(id: string, sn: string) {
+    const olt = await this.resolveOlt(id);
+    const r = await this.withDriver(olt, (d) => d.estadoPorSn(sn));
+    return { ok: r.ok && !!r.data, error: r.error || (r.data ? '' : 'La ONU no está autenticada en esta OLT.'), estado: r.data ?? null };
   }
 
   /** F/S/P + ont-id a partir del bloque que devuelve findBySn. */

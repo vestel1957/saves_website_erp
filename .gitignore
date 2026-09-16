@@ -43,3 +43,4 @@ coverage/
 # runtime
 backend/uploads/
 __pycache__/
+/mobile/

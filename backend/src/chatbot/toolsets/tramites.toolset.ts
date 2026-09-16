@@ -21,6 +21,8 @@ import {
   TRAMITE_SLUGS,
   type TramiteDef,
 } from '../tramites.catalogo';
+import { prontoPagoVigente, textoProntoPago } from '../../promotions/pronto-pago-vigente';
+import type { PrismaService } from '../../prisma/prisma.service';
 import { cop, esSonda, safe } from './toolset.util';
 
 /** Estados en los que una orden ya no cuenta como "abierta". */
@@ -65,6 +67,8 @@ export class TramitesToolset implements Toolset {
     private readonly write: SupportWriteService,
     /** Para el atajo del cambio de WiFi: aplicarlo en el equipo antes de abrir orden. */
     private readonly genieacs: GenieacsService,
+    /** Sólo para leer la promoción de pronto pago vigente (`info_comercial`). */
+    private readonly prisma: PrismaService,
   ) {}
 
   /**
@@ -200,6 +204,18 @@ export class TramitesToolset implements Toolset {
     const tema = String(input.tema ?? '').trim().toLowerCase();
     const t = INFO_COMERCIAL[tema];
     if (!t) return `No tengo ese tema. Los que tengo: ${Object.keys(INFO_COMERCIAL).join(', ')}.`;
+
+    // El pronto pago no es un dato fijo: es la promoción que haya vigente hoy, y hay
+    // meses sin ninguna. Se consulta en vez de leerse del catálogo — ver el encabezado
+    // de `promotions/pronto-pago-vigente.ts` para por qué. Si la consulta falla se cae
+    // al texto del catálogo, que es el que NO promete nada.
+    if (tema === 'pronto_pago') {
+      try {
+        return `${t.titulo}: ${textoProntoPago(await prontoPagoVigente(this.prisma))}`;
+      } catch (e) {
+        this.logger.error(`pronto_pago: no se pudo leer la promoción vigente: ${(e as Error)?.message ?? e}`);
+      }
+    }
     return `${t.titulo}: ${t.texto}`;
   }
 

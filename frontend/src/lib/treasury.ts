@@ -38,6 +38,8 @@ export function tieneCaja(user: Pick<AuthUser, "caja"> | null | undefined): bool
 
 export type TxRow = {
   id: string; date: string; type: string; category: string;
+  /** Instante en que se registró: `date` es sólo el día contable, la hora está aquí. */
+  createdAt?: string;
   /** Consecutivo del movimiento en el legacy (`tid`), o null si nació aquí. */
   codigo: number | null;
   /** Funcionario que EMITIÓ el movimiento (no a quien se le pagó). */
@@ -156,6 +158,8 @@ export type InformeCierreData = {
     horaCierre: string | null;
     migrado: boolean;
     yaCerrado: boolean;
+    /** true = el día no tiene movimientos propios; sólo el arrastre del cierre anterior. */
+    sinActividad: boolean;
     excedente: number;
     proximoDiaHabil: string;
     /**

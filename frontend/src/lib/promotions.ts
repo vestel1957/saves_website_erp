@@ -15,42 +15,79 @@ export const DISCOUNT_FORMAT_OPTIONS: { value: DiscountFormat; label: string }[]
 ];
 
 /**
- * A qué FACTURAS del cliente alcanza el descuento automático de ventanilla.
+ * A qué FACTURAS del cliente alcanza el descuento, que son DOS preguntas distintas:
+ * el TIPO de factura que rebaja y si se limita al mes en curso.
  *
- * Es lo que separa dos campañas opuestas: el PRONTO PAGO premia pagar el servicio del
- * mes a tiempo (y por eso no toca ni la mora ni los cargos sueltos), mientras que una
- * de RECUPERACIÓN DE CARTERA existe justamente para rebajar lo atrasado. Hasta el
- * 2026-09-02 sólo existía la primera regla, quemada en el backend: una promo dirigida
- * a los clientes en CARTERA no descontaba nunca, porque lo que ellos deben es siempre
- * de meses anteriores.
+ * Hasta el 2026-09-10 iban pegadas en un solo selector de tres opciones, y con eso no
+ * había forma de armar una campaña que rebajara SÓLO los cargos —"instalación a mitad
+ * de precio"—: cualquier opción que alcanzara un cargo alcanzaba también la
+ * mensualidad. Separadas, cada campaña dice lo suyo:
+ *
+ * · El PRONTO PAGO premia pagar el servicio del mes a tiempo → mensualidad + este mes.
+ * · La RECUPERACIÓN DE CARTERA existe para rebajar lo atrasado → mensualidad + todas.
+ * · Una campaña comercial de instalación o traslado → cargos.
  */
-export type InvoiceScope =
-  | "MENSUALIDAD_DEL_MES"
-  | "MENSUALIDADES_PENDIENTES"
-  | "CUALQUIER_PENDIENTE";
+export type InvoiceKind = "RECURRENTE" | "FIJA";
 
-export const INVOICE_SCOPE_OPTIONS: {
-  value: InvoiceScope; label: string; detail: string;
+/** Las tres combinaciones de tipo que ofrece la pantalla (el backend admite la lista). */
+export type InvoiceKindChoice = "MENSUALIDAD" | "CARGOS" | "AMBAS";
+
+export const INVOICE_KIND_OPTIONS: {
+  value: InvoiceKindChoice; label: string; detail: string;
 }[] = [
   {
-    value: "MENSUALIDAD_DEL_MES",
-    label: "La mensualidad del mes",
-    detail:
-      "Sólo la factura del servicio de este mes. Lo atrasado y los cargos sueltos (traslado, reconexión, instalación) se cobran completos. Es el pronto pago.",
+    value: "MENSUALIDAD",
+    label: "Mensualidad",
+    detail: "Sólo la factura del servicio. Los cargos sueltos —traslado, reconexión, instalación— se cobran completos.",
   },
   {
-    value: "MENSUALIDADES_PENDIENTES",
-    label: "Toda mensualidad que deba",
-    detail:
-      "Las mensualidades atrasadas y la de este mes. Los cargos sueltos se cobran completos. Es la campaña de cartera: se rebaja el servicio no pagado para que el cliente vuelva.",
+    value: "CARGOS",
+    label: "Cargos",
+    detail: "Sólo los cobros sueltos: instalación, afiliación, traslado, reconexión. La mensualidad se cobra completa.",
   },
   {
-    value: "CUALQUIER_PENDIENTE",
-    label: "Todo lo que deba",
-    detail:
-      "Cualquier factura pendiente, cargos incluidos. Al 50%, un traslado de $30.000 se cobra a $15.000: pídelo sólo si es lo que quieres.",
+    value: "AMBAS",
+    label: "Las dos",
+    detail: "Mensualidad y cargos. Al 50%, un traslado de $30.000 se cobra a $15.000: pídelo sólo si es lo que quieres.",
   },
 ];
+
+/** Si el descuento se limita a lo facturado ESTE MES o alcanza también lo atrasado. */
+export const INVOICE_AGE_OPTIONS: {
+  value: "MES" | "TODAS"; label: string; detail: string;
+}[] = [
+  {
+    value: "MES",
+    label: "Sólo las de este mes",
+    detail: "Lo atrasado se cobra completo. Es el pronto pago: premia pagar a tiempo, no la mora.",
+  },
+  {
+    value: "TODAS",
+    label: "También las atrasadas",
+    detail: "Alcanza lo vencido. Es la campaña de cartera: se rebaja lo no pagado para que el cliente vuelva.",
+  },
+];
+
+export const kindsDeEleccion = (c: InvoiceKindChoice): InvoiceKind[] =>
+  c === "CARGOS" ? ["FIJA"] : c === "AMBAS" ? ["RECURRENTE", "FIJA"] : ["RECURRENTE"];
+
+export function eleccionDeKinds(kinds: InvoiceKind[] | null | undefined): InvoiceKindChoice {
+  const k = kinds?.length ? kinds : ["RECURRENTE"];
+  if (k.includes("RECURRENTE") && k.includes("FIJA")) return "AMBAS";
+  return k.includes("FIJA") ? "CARGOS" : "MENSUALIDAD";
+}
+
+/** Etiqueta corta del alcance, para la tarjeta de la promoción. */
+export function alcanceFacturasLabel(p: {
+  invoiceKinds: InvoiceKind[]; onlyCurrentMonth: boolean; invoiceIds?: string[] | null;
+}): string {
+  const n = p.invoiceIds?.length ?? 0;
+  if (n) return n === 1 ? "1 factura elegida" : `${n} facturas elegidas`;
+  const que = { MENSUALIDAD: "Mensualidad", CARGOS: "Cargos", AMBAS: "Todo" }[
+    eleccionDeKinds(p.invoiceKinds)
+  ];
+  return p.onlyCurrentMonth ? `${que} · este mes` : `${que} · con lo atrasado`;
+}
 
 export const isFlatDiscount = (f?: string | null) => f === "flat" || f === "bflat";
 export const isBeforeTaxDiscount = (f?: string | null) => f === "b_p" || f === "bflat";
@@ -142,7 +179,8 @@ export type PromotionTemplate = {
   flatAmount: number | null;
   startDate: string;
   endDate: string;
-  invoiceScope: InvoiceScope;
+  invoiceKinds: InvoiceKind[];
+  onlyCurrentMonth: boolean;
 };
 
 /** Borrador del formulario, tal como lo teclea quien arma la promoción. */
@@ -155,8 +193,16 @@ export type PromotionDraft = {
   startDate: string;
   endDate: string;
   active: boolean;
-  /** A qué facturas del cliente alcanza el descuento automático de ventanilla. */
-  invoiceScope: InvoiceScope;
+  /** TIPO de factura que rebaja: la mensualidad, los cargos sueltos o las dos. */
+  invoiceKinds: InvoiceKind[];
+  /** Limitarlo a lo facturado este mes (pronto pago) o alcanzar también lo atrasado. */
+  onlyCurrentMonth: boolean;
+  /**
+   * Facturas elegidas a mano (sólo con UN cliente de público). `null` = nadie las ha
+   * tocado y se marcan solas según el tipo y la antigüedad; en cuanto se toca una
+   * casilla pasa a ser la lista exacta que se guarda.
+   */
+  invoiceIds: string[] | null;
   /** Publicarla en el portal de pagos en línea (vestel.com.co). */
   portalPublish: boolean;
   /** Que el portal cobre ya con el descuento puesto (rebaja la cartera por adelantado). */
@@ -218,6 +264,57 @@ export function requisitosPromocion(d: PromotionDraft, a: PromotionAudience): Re
   ];
 }
 
+/** Una factura que el cliente debe, para elegir a cuáles llega la promoción. */
+export type PendingInvoice = {
+  id: string;
+  tid: number;
+  kind: InvoiceKind;
+  invoiceDate: string;
+  subtotal: number;
+  total: number;
+  paidAmount: number;
+  saldo: number;
+  concepto: string | null;
+  /** Timbrada ante la DIAN: no se puede abaratar sin nota crédito electrónica. */
+  timbrada: boolean;
+  /** Ya trae el descuento que le puso el portal de pagos del legacy. */
+  rebajadaEnOrigen: boolean;
+};
+
+/** ¿La regla de tipo + antigüedad alcanzaría esta factura? (Espejo de `alcanzaLaFactura`.) */
+export function alcanzaPorRegla(
+  d: Pick<PromotionDraft, "invoiceKinds" | "onlyCurrentMonth">,
+  inv: Pick<PendingInvoice, "kind" | "invoiceDate">,
+  hoy = new Date(),
+): boolean {
+  const tipos = d.invoiceKinds?.length ? d.invoiceKinds : ["RECURRENTE"];
+  if (!tipos.includes(inv.kind)) return false;
+  if (!d.onlyCurrentMonth) return true;
+  const [y, m] = inv.invoiceDate.slice(0, 7).split("-").map(Number);
+  return y === hoy.getFullYear() && m === hoy.getMonth() + 1;
+}
+
+/**
+ * Cuánto le rebajaría la promoción a esta factura y, si no se puede, por qué. Mismas
+ * reglas que el cobro en ventanilla (`descuentosDePromocionPendientes`): allí una
+ * factura que no pasa se salta callada, y aquí hay que decirlo ANTES de elegirla.
+ */
+export function descuentoSobreFactura(
+  discountFormat: DiscountFormat, percentage: number, flatAmount: number, inv: PendingInvoice,
+): { monto: number; motivo: string | null; tope: boolean } {
+  if (inv.timbrada) return { monto: 0, motivo: "Timbrada ante la DIAN", tope: false };
+  if (inv.rebajadaEnOrigen) return { monto: 0, motivo: "Ya trae el descuento del portal", tope: false };
+  const base = isBeforeTaxDiscount(discountFormat) ? inv.subtotal : inv.total;
+  const monto = isFlatDiscount(discountFormat)
+    ? Math.min(flatAmount || 0, base)
+    : Math.round((base * (percentage || 0)) / 100 * 100) / 100;
+  // Si el descuento pasa de lo que debe, elegida a mano se le perdona el saldo entero
+  // (nunca más: lo ya abonado no vuelve como saldo a favor). Por la regla automática
+  // no se aplicaría, así que no se marca sola.
+  if (monto >= inv.saldo) return { monto: inv.saldo, motivo: null, tope: true };
+  return { monto, motivo: null, tope: false };
+}
+
 /** Cliente puntual dentro del público de una promoción. */
 export type PromotionSubscriber = {
   id: string;
@@ -267,7 +364,10 @@ export type Promotion = {
   startDate: string;
   endDate: string;
   active: boolean;
-  invoiceScope: InvoiceScope;
+  invoiceKinds: InvoiceKind[];
+  onlyCurrentMonth: boolean;
+  /** Facturas elegidas a mano; si trae alguna, rebaja exactamente esas. */
+  invoiceIds: string[];
   /** Público de la promo. */
   allSubscribers: boolean;
   subscriberStatuses: string[];

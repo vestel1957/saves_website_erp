@@ -4,7 +4,17 @@ import { useMemo, useState } from "react";
 import { Icon } from "../Icon";
 import { Dropdown } from "./Dropdown";
 
-export type OpcionMulti = { value: string; label: string };
+export type OpcionMulti = {
+  value: string;
+  label: string;
+  /**
+   * Cuántos registros deja esa opción CON LOS DEMÁS FILTROS PUESTOS. Opcional: sin
+   * él la lista se ve como siempre. Con él, el desplegable deja de ser una lista a
+   * ciegas —se ve dónde hay algo y dónde no antes de marcar— y un 0 avisa de que
+   * esa combinación no existe en vez de dejar la tabla vacía sin explicación.
+   */
+  count?: number;
+};
 
 /**
  * Filtro de listado que admite VARIAS opciones a la vez.
@@ -123,6 +133,15 @@ export function MultiSelect({
                   {marcada && <Icon name="check" size={11} />}
                 </span>
                 <span className="truncate">{o.label}</span>
+                {o.count != null && (
+                  <span
+                    className={`ml-auto shrink-0 tabular-nums text-[12px] ${
+                      o.count === 0 ? "text-text-tertiary opacity-60" : "text-text-tertiary"
+                    }`}
+                  >
+                    {o.count.toLocaleString("es-CO")}
+                  </span>
+                )}
               </button>
             );
           })}

@@ -5,7 +5,12 @@ import { AuthUser } from '../auth/current-user.decorator';
 import { exigirSedeSuscriptor } from '../common/sede-scope';
 import { OltService } from '../network/olt.service';
 import { OltPlanProfileService } from '../network/olt-plan-profile.service';
+import { MikrotikService } from '../network/mikrotik.service';
 import { EquipoReservaService } from './equipo-reserva.service';
+import { esAgregarInternet, esAltaDeInternet, esReinstalacion, esTraslado, FRAGMENTOS_TRABAJO_DE_CONEXION, sentidoDeMegas } from './order-types';
+import { esUsuarioPppUtil } from '../subscribers/conexion-alta';
+import type { SubscribersService } from '../subscribers/subscribers.service';
+import { normalizarSerial, formasDeSerial, formaHex } from '../common/serial-onu';
 
 /**
  * OnuProvisionService — autenticar la ONU DESDE LA ORDEN DE INSTALACIÓN.
@@ -39,11 +44,13 @@ import { EquipoReservaService } from './equipo-reserva.service';
 /**
  * Tipos de orden donde se AUTENTICA una ONU contra la OLT.
  *
- * Los cinco que pidió el usuario (2026-09-03) son «Instalacion», «Cambio de
- * equipo», «Subir megas», «Traslado» y «Migracion»; se mantiene «Reinstalacion»,
- * que ya autenticaba y es el mismo trabajo. Se comparan por fragmento porque el
- * `detalle` del legacy es `varchar(50)` y viene escrito de varias formas:
- * `migraci` casa con «Migracion» (2.134 órdenes) y con «Migración».
+ * Son los CINCO trabajos que dejan al cliente conectado —«Instalacion»,
+ * «Traslado», «Migracion», «Cambio de equipo» y 'AgregarInternet', que va por el
+ * predicado de abajo— más «Subir megas». La «Reinstalación» calza con 'instalac'
+ * pero se descuenta arriba del todo: ahí no hay nada que autenticar. La
+ * lista de los cinco es la MISMA que usa el cierre para no dejar a nadie en
+ * 'INSTALAR' (`FRAGMENTOS_TRABAJO_DE_CONEXION` en `order-types.ts`): si un día se
+ * añade un trabajo, se añade una vez y las dos cosas se enteran.
  *
  * «Subir megas» está aquí Y en la lista de velocidad: en un aumento de megas la
  * ONU suele seguir siendo la misma —y entonces solo se le aplica la velocidad—,
@@ -51,9 +58,30 @@ import { EquipoReservaService } from './equipo-reserva.service';
  * hay que autenticar. La orden ofrece las dos cosas (modo `AMBOS`) en vez de
  * obligarle a salirse a /red/olt para la mitad del trabajo.
  */
-const TIPOS_AUTENTICAR = ['instalac', 'traslado', 'cambio de equipo', 'reinstalac', 'migraci', 'subir megas'];
+const TIPOS_AUTENTICAR = [...FRAGMENTOS_TRABAJO_DE_CONEXION, 'subir megas'];
 /** Tipos de orden donde la ONU ya existe y solo cambia la velocidad del plan. */
 const TIPOS_VELOCIDAD = ['subir megas', 'bajar megas', 'cambio de plan'];
+
+/**
+ * AGREGAR INTERNET va por el predicado y no por las listas de arriba.
+ *
+ * Dos motivos, y los dos ya costaron caros antes en esta misma orden:
+ *
+ * 1. El nombre real del detalle es 'AgregarInternet' —sin espacio, tal cual está
+ *    en la base— y no cae en ninguno de los fragmentos ('instalac' no casa con
+ *    'agregarinternet'). Por eso el bloque de la ONU no salía en estas órdenes:
+ *    `modoDeOrden` devolvía null y la orden decía "no aplica la autenticación".
+ *
+ * 2. Es `AMBOS`, no `AUTENTICAR`. Al cliente que solo tiene televisión hay que
+ *    montarle el internet, y eso puede significar las dos cosas: la ONU de la TV
+ *    ya está autenticada y solo falta ponerle la velocidad del plan que contrató,
+ *    o el técnico monta un equipo nuevo y hay que darlo de alta. Además el plan
+ *    TIENE que salir de la orden (`planToId`) y no de la ficha: el abonado aún no
+ *    tiene servicio de internet registrado —se lo crea el cierre de esta misma
+ *    orden—, así que leyendo la ficha el bloque se bloquearía siempre con
+ *    "el abonado no tiene servicio de internet". `planDeLaOrden` prefiere el plan
+ *    de la orden justo cuando el modo permite velocidad, de ahí `AMBOS`.
+ */
 
 /** `AMBOS` = la orden puede autenticar una ONU nueva y/o aplicar la velocidad. */
 export type ModoOnu = 'AUTENTICAR' | 'VELOCIDAD' | 'AMBOS' | null;
@@ -62,6 +90,12 @@ export type ModoOnu = 'AUTENTICAR' | 'VELOCIDAD' | 'AMBOS' | null;
 export function modoDeOrden(type: string | null | undefined): ModoOnu {
   const t = (type ?? '').toLowerCase();
   if (!t.trim()) return null;
+  // LA REINSTALACIÓN NO AUTENTICA (2026-09-08, dicho por el usuario). Va antes que
+  // nada porque calza con el fragmento 'instalac' y hasta hoy entraba por ahí: el
+  // equipo ya está puesto en la casa y ya está de alta en la OLT, así que el bloque
+  // sobraba en la orden. Ver `esReinstalacion` en `order-types.ts`.
+  if (esReinstalacion(t)) return null;
+  if (esAgregarInternet(t)) return 'AMBOS';
   // OJO al orden de las comprobaciones: «Cambio de equipo» y «Cambio de plan»
   // empiezan igual, así que cada lista se evalúa entera y por separado.
   const autentica = TIPOS_AUTENTICAR.some((k) => t.includes(k));
@@ -77,35 +111,61 @@ export const puedeAutenticar = (m: ModoOnu): boolean => m === 'AUTENTICAR' || m 
 /** ¿En esta orden se puede aplicar la velocidad del plan a la ONU que ya tiene? */
 export const puedeVelocidad = (m: ModoOnu): boolean => m === 'VELOCIDAD' || m === 'AMBOS';
 
-/** Serial comparable: mayúsculas y sin signos (el inventario trae espacios y guiones). */
-export function normalizarSerial(s: string | null | undefined): string {
-  return String(s ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-}
+/**
+ * Tecnologías que NO pasan por la OLT (2026-09-05).
+ *
+ * En EPON no hay nada que autenticar en la planta: la OLT EPON no está —ni aquí
+ * ni en el legacy, que solo tiene driver Huawei GPON— y el técnico da de alta el
+ * equipo en la caja EPON, a mano. Lo que le da servicio y velocidad al abonado es
+ * el perfil PPP de su `/ppp/secret` en la Mikrotik, exactamente igual que en el
+ * legacy (`Customers_model::get_ip_coneccion_microtik_por_sede`, que elige el
+ * router por SEDE + TECNOLOGÍA y escribe `profile => $perfil`).
+ *
+ * Así que para un EPON «autenticar» significa una sola cosa: ponerle el perfil
+ * del plan que tiene contratado. Es la misma frase del usuario, hecha función.
+ *
+ * Hasta ahora la orden de un EPON abría una sesión SSH contra la OLT **GPON** de
+ * su sede y le listaba ONUs que no eran suyas: ruido, y el riesgo de que alguien
+ * autenticara el equipo de otro cliente.
+ *
+ * EOC está en la misma situación (256 activos) pero se deja fuera a propósito:
+ * se pidió EPON. Añadirlo es meter 'EOC' en esta lista y nada más.
+ */
+const TECNOLOGIAS_SIN_OLT = ['EPON'];
+
+/** Por dónde se le da servicio a este abonado: la OLT o el perfil de la Mikrotik. */
+export type ViaOnu = 'OLT' | 'MIKROTIK';
 
 /**
- * Las formas con las que un mismo equipo puede estar escrito en el inventario.
- *
- * La OLT reporta el SN en 16 hex (`47504F4E120278E5`), pero en el inventario los
- * seriales suelen venir como los imprime el fabricante en la etiqueta: los 4
- * primeros bytes son el OUI en ASCII (`GPON`, `HWTC`, `XPON`, `XGTC`) seguidos
- * de los 8 hex restantes → `GPON120278E5`. Sin esta traducción el cruce
- * inventario↔OLT pasa de 424 equipos a 90: la mayoría de los que SÍ casan lo
- * hacen por esta vía.
+ * Lo que se hizo con el alta del abonado en la Mikrotik al autenticarle el equipo.
+ * Ver `OnuProvisionService.asegurarAltaEnMikrotik`.
  */
-export function formasDeSerial(sn: string | null | undefined): string[] {
-  const hex = normalizarSerial(sn);
-  if (!hex) return [];
-  const formas = new Set<string>([hex]);
-  if (/^[0-9A-F]{16}$/.test(hex)) {
-    const ascii = (hex.slice(0, 8).match(/../g) ?? [])
-      .map((par) => String.fromCharCode(parseInt(par, 16)))
-      .join('');
-    // Solo si los 4 bytes son texto imprimible: hay ONUs cuyo prefijo es binario
-    // y convertirlo produciría un serial fantasma que casaría con cualquier cosa.
-    if (/^[A-Z0-9]{4}$/.test(ascii)) formas.add(ascii + hex.slice(8));
-  }
-  return [...formas];
+export type AltaMikrotik = {
+  /** false = no se pudo dejar el alta hecha; `mensaje` dice qué falta. */
+  ok: boolean;
+  /** El `/ppp/secret` no existía y se creó ahora. */
+  creado: boolean;
+  /** El abonado no tenía usuario PPPoE utilizable y se le derivó del nombre. */
+  usuarioCreado: boolean;
+  /** Simulación: MIKROTIK_LIVE no está activo, no se escribió en el router. */
+  dryRun: boolean;
+  pppUsername: string | null;
+  perfil: string | null;
+  router: string | null;
+  /** Lo que se le mandó al router (o se le mandaría, en dry-run). */
+  pasos: string[];
+  mensaje: string;
+};
+
+/** @see TECNOLOGIAS_SIN_OLT */
+export function viaDeTecnologia(installTech: string | null | undefined): ViaOnu {
+  return TECNOLOGIAS_SIN_OLT.includes((installTech ?? '').trim().toUpperCase()) ? 'MIKROTIK' : 'OLT';
 }
+
+// Los traductores del serial (rotulado ↔ hex) viven en `common/serial-onu`:
+// los comparte la ficha del cliente para localizar la ONU del abonado. Se
+// re-exportan aquí porque este módulo era su casa y medio soporte los importa.
+export { normalizarSerial, formasDeSerial, formaHex } from '../common/serial-onu';
 
 /**
  * Cuánto puede llevar anunciándose una ONU para seguir siendo "la que se acaba
@@ -151,8 +211,17 @@ export class OnuProvisionService {
     private readonly prisma: PrismaService,
     private readonly olt: OltService,
     private readonly planProfiles: OltPlanProfileService,
+    /** La vía de los abonados SIN OLT: el perfil PPP del secret. Ver `TECNOLOGIAS_SIN_OLT`. */
+    private readonly mikrotik: MikrotikService,
     /** Cuadra la reserva hecha al abrir la orden con lo que la OLT demostró. */
     private readonly reserva: EquipoReservaService = new EquipoReservaService(prisma),
+    /**
+     * Quien sabe derivar el usuario PPPoE de un abonado que no lo tiene
+     * (`asegurarCredencialesPpp`). Opcional para no atar este servicio al de
+     * clientes en las pruebas; sin él, el alta en la Mikrotik solo puede avisar
+     * de que falta el usuario en vez de crearlo.
+     */
+    private readonly subs?: SubscribersService,
   ) {}
 
   /** Orden + abonado + comprobación de sede. Punto único de entrada de permisos. */
@@ -175,6 +244,11 @@ export class OnuProvisionService {
       select: {
         id: true, abonado: true, branchId: true, fullName: true,
         firstName: true, secondName: true, lastName1: true, lastName2: true, companyName: true,
+        // La tecnología decide POR DÓNDE se le da servicio: los EPON no pasan por
+        // la OLT y se resuelven con el perfil del secret (ver `viaDeTecnologia`).
+        // El resto son los campos que pide `MikrotikService.resolveRouter` para
+        // elegir el router por sede+tecnología, igual que hace el legacy.
+        installTech: true, pppUsername: true, legacyId: true, ipRemote: true, status: true,
         // `legacyId` es la llave con la que las bodegas de equipos dicen de qué
         // sede son (`EquipmentWarehouse.branchLegacy`): sin ella no se puede
         // sacar del stock de SU sede el equipo que se le va a instalar.
@@ -396,7 +470,108 @@ export class OnuProvisionService {
    * Todo lo que no encaje ahí devuelve el motivo escrito y la elección vuelve al
    * desplegable: automatizar una corazonada es autenticarle la ONU al vecino.
    */
-  private async decidirAutomatico(sub: any, candidatos: any[], inv: Map<string, any>, ticketId?: string) {
+  /**
+   * El equipo que el inventario ya da por de este cliente, y qué dice la OLT de él.
+   *
+   * Nace de una pregunta del usuario (2026-09-04) que la pantalla no sabía
+   * contestar: *"este cliente ya tiene un equipo asignado pero en la orden me
+   * pide elegir uno, ¿y cómo sabemos si ya está listo para autenticar?"*. Las dos
+   * mitades se responden con el mismo dato. El automático manda a elegir a mano
+   * cuando el equipo del cliente NO se está anunciando —`DEL_ABONADO` exige que
+   * la OLT lo vea— pero decía solo cuántas ONUs había sonando, nunca que la caja
+   * apartada para esa casa no era ninguna de ellas.
+   *
+   * Y "listo para autenticar" no es un estado del inventario: es que la ONU
+   * aparezca en el autofind. Hasta que la fibra no está conectada y el equipo
+   * encendido, no hay nada que autenticar por mucho que el papel diga que es suyo.
+   *
+   * `anunciandose` = está en el autofind ahora · `autenticada` = ya tiene alta en
+   * alguna OLT (y por eso NO sale en el autofind: no es un problema, es lo que
+   * pasa con el equipo viejo de un cambio de equipo).
+   */
+  private async equipoDelAbonado(subscriberId: string, ticketId: string, candidatos: any[], oltId?: string | null) {
+    const filas = await this.prisma.equipment.findMany({
+      where: { OR: [{ subscriberId }, { reservedTicketId: ticketId }] },
+      select: {
+        id: true, code: true, serial: true, status: true, reservedTicketId: true,
+        warehouse: { select: { name: true } },
+      },
+      orderBy: { code: 'desc' },
+    });
+    if (!filas.length) return null;
+
+    // Índice del autofind por CUALQUIERA de las formas del serial: la OLT dice
+    // `5A544547DE519D2C` y el almacén rotula `ZTEGDE519D2C`.
+    const porForma = new Map<string, any>();
+    for (const c of candidatos) for (const f of formasDeSerial(String(c.sn ?? ''))) porForma.set(f, c);
+
+    // Altas ya hechas, para no llamar "perdido" a un equipo que lleva meses dando
+    // servicio (un equipo autenticado desaparece del autofind).
+    const hex = filas.map((e) => formaHex(e.serial)).filter(Boolean) as string[];
+    const altas = hex.length
+      ? new Set((await this.prisma.oltOnu.findMany({ where: { sn: { in: hex } }, select: { sn: true } })).map((o) => String(o.sn).toUpperCase()))
+      : new Set<string>();
+
+    const vistos = filas.map((e) => {
+      const c = porForma.get(normalizarSerial(e.serial)) ?? null;
+      return {
+        id: e.id,
+        code: e.code,
+        serial: e.serial,
+        status: e.status,
+        bodega: e.warehouse?.name ?? null,
+        /** Se apartó de la bodega AL ABRIR esta orden (`EquipoReservaService`). */
+        reservado: e.reservedTicketId === ticketId,
+        anunciandose: !!c,
+        /** El SN tal y como lo reporta la OLT: es el que hay que autenticar. */
+        sn: c ? String(c.sn) : formaHex(e.serial),
+        haceMin: c?.haceMin ?? null,
+        /** Ya está montado en otro cliente / bodega depurada… (mismo texto de la lista). */
+        impedimento: c?.impedimento ?? null,
+        autenticada: altas.has(String(formaHex(e.serial) ?? '')),
+        /** Dónde la tiene dada de alta la OLT, cuando se le preguntó (ver abajo). */
+        autenticadaEn: null as null | { fsp: string; ontId: number; descripcion: string; runState: string },
+      };
+    });
+
+    // Manda el que la OLT está viendo; si ninguno, el apartado para ESTA orden.
+    vistos.sort((a, b) =>
+      Number(b.anunciandose) - Number(a.anunciandose)
+      || Number(b.reservado) - Number(a.reservado)
+      || Number(!!b.sn) - Number(!!a.sn));
+    const elegido = vistos[0];
+
+    // `OltOnu` no conoce las altas hechas desde SmartOLT ni las que nunca se
+    // sincronizaron (2026-09-15, equipo 311071: seguía dado de alta en 0/1/11 a
+    // nombre del cliente anterior y la orden decía "la OLT todavía no lo ve",
+    // mandando a revisar la fibra de un equipo que estaba encendido). Antes de
+    // decir eso se le pregunta a la OLT por el serial: es un comando más en la
+    // misma sesión, y solo cuando no hay otra forma de saberlo.
+    if (elegido && !elegido.anunciandose && !elegido.autenticada && elegido.sn && oltId) {
+      // Una OLT que no contesta no puede tumbar la orden: se queda el aviso de siempre.
+      let r: Awaited<ReturnType<OltService['estadoPorSn']>> | null = null;
+      try { r = await this.olt.estadoPorSn(oltId, elegido.sn); } catch { r = null; }
+      if (r?.ok && r.estado) {
+        elegido.autenticada = true;
+        elegido.autenticadaEn = {
+          fsp: r.estado.fsp, ontId: r.estado.ont_id,
+          descripcion: r.estado.description ?? '', runState: r.estado.run_state ?? '',
+        };
+      }
+    }
+    return elegido;
+  }
+
+  private async decidirAutomatico(
+    sub: any, candidatos: any[], inv: Map<string, any>, ticketId?: string,
+    /**
+     * ¿Puede sacarse una unidad de la bodega para la ONU que la OLT anuncia y el
+     * inventario no conoce? En un TRASLADO no: el aparato que se anuncia en la casa
+     * nueva es el mismo que el cliente tenía en la vieja, y descontar una caja del
+     * estante por él resta stock que nadie ha entregado (2026-09-04).
+     */
+    permiteStock = true,
+  ) {
     const noAuto = (motivo: string) => ({ sn: null as string | null, origen: null, equipo: null, deStock: false, motivo, haceMin: null as number | null });
     const libres = candidatos.filter((c) => !c.impedimento);
     if (!libres.length) {
@@ -468,6 +643,13 @@ export class OnuProvisionService {
     // 2c. Cliente nuevo con una ONU que el inventario no conoce (el 32% de las
     //     de la planta): se le carga una unidad de la bodega de su sede y se le
     //     graba el SN de verdad, que es como se va limpiando el inventario.
+    if (!permiteStock) {
+      return {
+        sn: String(c.sn), origen: 'DEL_ABONADO', deStock: false, equipo: null, haceMin: c.haceMin ?? null,
+        motivo: 'En un traslado no se entrega equipo: se autentica la ONU que se está anunciando '
+          + '(la que el cliente se llevó) sin descontar ninguna unidad de la bodega.',
+      };
+    }
     const stock = await this.tomarDeStock(sede, c.vendor ?? null);
     return {
       sn: String(c.sn), origen: 'STOCK_SEDE', deStock: !!stock, haceMin: c.haceMin ?? null,
@@ -505,6 +687,15 @@ export class OnuProvisionService {
     t: { type: string | null; planToId: string | null; planToName: string | null; planToMegas: number | null },
     subscriberId: string,
   ) {
+    /**
+     * AGREGAR INTERNET: solo vale el plan que porta la orden. Aquí el abonado no
+     * tiene internet —esa es la orden—, así que el respaldo de "leerlo de sus
+     * últimas facturas" solo puede devolver ruido (un internet que tuvo hace
+     * años, el de otro servicio) y con él se le aplicaría a la ONU una velocidad
+     * que nadie contrató. Sin plan en la orden se prefiere el bloqueo, que dice
+     * exactamente qué falta.
+     */
+    if (esAgregarInternet(t.type) && !t.planToId) return null;
     if (puedeVelocidad(modoDeOrden(t.type)) && t.planToId) {
       const p = await this.prisma.plan
         .findUnique({ where: { id: t.planToId }, select: { id: true, name: true, megas: true } })
@@ -588,12 +779,16 @@ export class OnuProvisionService {
   async estado(ticketId: string, user?: AuthUser) {
     const { t, sub } = await this.cargarOrden(ticketId, user);
     const modo = modoDeOrden(t.type);
+    // Un EPON no tiene OLT que consultar: su "autenticación" es el perfil del
+    // plan en la Mikrotik. Se sale antes de gastar la sesión SSH del autofind.
+    if (viaDeTecnologia(sub.installTech) === 'MIKROTIK') return this.estadoMikrotik(t, sub, modo);
     const olt = await this.oltDeSede(sub.branchId);
     const plan = await this.planDeLaOrden(t, sub.id);
     const mapeo = await this.planProfiles.resolveConEtiqueta(plan?.planId, olt?.id);
     const { live } = await this.olt.mode();
 
     const base = {
+      via: 'OLT' as ViaOnu,
       modo,
       live,
       olt: olt ? { id: olt.id, name: olt.name } : null,
@@ -610,7 +805,7 @@ export class OnuProvisionService {
           }
         : null,
       // Motivo por el que el botón no se puede usar (uno solo, el primero que aplica).
-      bloqueo: this.motivoDeBloqueo({ modo, olt, plan, mapeo }),
+      bloqueo: this.motivoDeBloqueo({ modo, olt, plan, mapeo, tipo: t.type }),
       candidatos: [] as any[],
       /**
        * Qué haría el botón de "autenticar solo": la ONU elegida, de dónde sale y
@@ -619,6 +814,22 @@ export class OnuProvisionService {
        */
       auto: null as any,
       onuActual: null as any,
+      /**
+       * El equipo que el inventario YA da por de este cliente (asignado o
+       * apartado al abrir la orden) y si la OLT lo está viendo ahora mismo.
+       * Es la respuesta a "el cliente ya tiene equipo, ¿por qué me pide elegir?"
+       * y a "¿ya está listo para autenticar?".
+       */
+      equipoAsignado: null as any,
+      /** Todas las ONUs vinculadas al abonado: con más de una, la orden lo avisa. */
+      onusDelCliente: [] as any[],
+      /**
+       * El abonado va a estrenar internet y todavía no tiene usuario PPPoE: al
+       * autenticar se le crean solos sus datos de integración con la Mikrotik
+       * (ver `asegurarAltaEnMikrotik`). Se dice ANTES para que el técnico no lo
+       * descubra en el resultado — y para que nadie lo vaya a crear a mano.
+       */
+      altaMikrotikPendiente: esAltaDeInternet(t.type) && !esUsuarioPppUtil(sub.pppUsername),
     };
 
     // Sin OLT, sin plan o sin mapeo no tiene sentido gastar una sesión SSH: se
@@ -646,7 +857,16 @@ export class OnuProvisionService {
             + 'Conecte la fibra y encienda el equipo; luego refresque.',
         };
       }
-      base.auto = await this.decidirAutomatico(sub, base.candidatos, inv, t.id);
+      base.auto = await this.decidirAutomatico(sub, base.candidatos, inv, t.id, !esTraslado(t.type));
+      base.equipoAsignado = await this.equipoDelAbonado(sub.id, t.id, base.candidatos, r.ok ? olt.id : null);
+      // Dos ONUs dadas de alta a nombre del mismo cliente es lo que deja un cambio
+      // de equipo a medias: autenticar la nueva no borra la vieja de la OLT (y no
+      // debe hacerlo solo: puede ser la ONU de la TV). Se enseña para que alguien decida.
+      base.onusDelCliente = await this.prisma.oltOnu.findMany({
+        where: { subscriberId: sub.id },
+        orderBy: { lastSync: 'desc' },
+        select: { sn: true, frame: true, slot: true, port: true, ontId: true, runState: true, lastSync: true, olt: { select: { name: true } } },
+      });
     }
 
     // En una orden que SOLO cambia la velocidad, no tener ONU vinculada es un
@@ -664,14 +884,32 @@ export class OnuProvisionService {
   }
 
   /** El primer impedimento real, en el orden en que hay que resolverlos. */
-  private motivoDeBloqueo(x: { modo: ModoOnu; olt: any; plan: any; mapeo: any }): { code: string; message: string } | null {
+  private motivoDeBloqueo(x: { modo: ModoOnu; olt: any; plan: any; mapeo: any; tipo?: string | null }): { code: string; message: string } | null {
     if (!x.modo) {
+      if (esReinstalacion(x.tipo)) {
+        return {
+          code: 'TIPO',
+          message: 'Las órdenes de reinstalación no autentican ONU: el equipo del abonado ya está dado de alta en la OLT.',
+        };
+      }
       return { code: 'TIPO', message: 'Esta orden no es de instalación ni de cambio de velocidad: no aplica la autenticación de ONU.' };
     }
     if (!x.olt) {
       return { code: 'SIN_OLT', message: 'La sede del abonado no tiene ninguna OLT configurada. Configúrela en Red › OLT.' };
     }
     if (!x.plan?.planId) {
+      // AGREGAR INTERNET: que el abonado no tenga servicio de internet es LA
+      // PREMISA de la orden, no un error de datos — se lo crea el cierre. Lo que
+      // falta es el plan DESTINO de la orden, y eso se arregla en otro sitio
+      // (Editar orden), no en la ficha del cliente.
+      if (esAgregarInternet(x.tipo)) {
+        return {
+          code: 'SIN_PLAN_DE_ORDEN',
+          message: 'Esta orden de agregar internet no dice a qué plan se pasa el abonado, '
+            + 'así que no se sabe qué velocidad aplicarle a la ONU. '
+            + 'Indíquelo en «Editar orden» y vuelva a consultar.',
+        };
+      }
       return {
         code: 'SIN_PLAN',
         message: x.plan
@@ -691,6 +929,311 @@ export class OnuProvisionService {
     return null;
   }
 
+  // ------------------------------------------------------------------
+  //  VÍA MIKROTIK — los abonados sin OLT (EPON). Ver `TECNOLOGIAS_SIN_OLT`.
+  // ------------------------------------------------------------------
+
+  /**
+   * El perfil PPP que le toca al abonado por su plan: `Plan.pppProfile`, el mismo
+   * campo que usa el alta y el cambio de plan para escribir el `/ppp/secret`.
+   *
+   * No se inventa a partir de las megas: en los routers conviven `100Megas`,
+   * `100MegasD` y `100MegasSt` con topes distintos, y RouterOS resuelve por
+   * PREFIJO —«100» casa con las tres y tumba la escritura entera—. El nombre
+   * exacto lo decide el catálogo de planes, no una deducción.
+   */
+  private async perfilDelPlan(planId: string | null | undefined): Promise<string | null> {
+    if (!planId) return null;
+    const p = await this.prisma.plan
+      .findUnique({ where: { id: planId }, select: { pppProfile: true } })
+      .catch(() => null);
+    return p?.pppProfile?.trim() || null;
+  }
+
+  /**
+   * EL ALTA DEL ABONADO EN LA MIKROTIK, ANTES DE AUTENTICARLE EL EQUIPO.
+   *
+   * Autenticar la ONU es la mitad del trabajo: la OLT le da enlace, pero quien le
+   * da INTERNET es el `/ppp/secret` de la Mikrotik de su sede. Un cliente que
+   * llega a la instalación sin usuario PPPoE —o con el relleno del legacy ('0',
+   * '-', 'null')— y sin secret en el router queda con la ONU online y sin
+   * navegar, y eso no se nota hasta que llama: la orden se cierra en verde.
+   *
+   * Por eso, en las órdenes en las que el abonado EMPIEZA a navegar
+   * (`esAltaDeInternet`: instalación, reinstalación y 'AgregarInternet'), sus
+   * datos de integración se crean solos justo antes de autenticar:
+   *
+   *   1. USUARIO Y CLAVE, derivados del propio cliente con la convención de
+   *      siempre —nombre pegado en mayúsculas / número de documento— y sin pisar
+   *      nunca uno que ya sirve (`asegurarCredencialesPpp`).
+   *   2. EL PERFIL DEL PLAN en la ficha, para que el secret nazca con la
+   *      velocidad contratada y no con `default`. Va con `editedAt` por lo mismo
+   *      que en `changePlan`: `perfil` baja del legacy y sin la marca el sync lo
+   *      devuelve al valor viejo a los 15 minutos.
+   *   3. EL SECRET en el router (`provision`, que crea el que falta y adopta el
+   *      que ya esté).
+   *
+   * Un secret que YA existe no se toca: si el abonado tiene usuario y el router
+   * dice que su secret está puesto, esto no escribe nada — reescribirlo solo
+   * podría estropear un alta que funciona.
+   *
+   * NUNCA lanza. Que la Mikrotik no responda no puede impedir autenticar la ONU:
+   * lo que no se pudo hacer viaja en el resultado y queda anotado en la orden.
+   */
+  private async asegurarAltaEnMikrotik(
+    t: { type: string | null; code: number | null },
+    sub: any,
+    plan: { planId: string | null; planName: string | null } | null,
+    user?: AuthUser,
+  ): Promise<AltaMikrotik | null> {
+    if (!esAltaDeInternet(t.type)) return null;
+    const fallo = (mensaje: string): AltaMikrotik => ({
+      ok: false, creado: false, usuarioCreado: false, dryRun: false,
+      pppUsername: esUsuarioPppUtil(sub.pppUsername) ? String(sub.pppUsername).trim() : null,
+      perfil: null, router: null, pasos: [], mensaje,
+    });
+
+    const alta = await this.altaEnMikrotik(sub, plan, user, fallo);
+    // Queda en el hilo de la orden salvo cuando no hubo nada que hacer: que el
+    // abonado ya tuviera su secret no es noticia; que se le creara —o que no se
+    // pudiera— sí, y es lo que alguien va a buscar si mañana no navega.
+    if (!alta.ok || alta.creado || alta.usuarioCreado) {
+      await this.anotarEnLaOrden(t, sub, `Mikrotik · ${alta.mensaje}`, alta.dryRun && alta.ok);
+    }
+    return alta;
+  }
+
+  /** El trabajo de `asegurarAltaEnMikrotik`, sin la decisión de si toca hacerlo. */
+  private async altaEnMikrotik(
+    sub: any,
+    plan: { planId: string | null; planName: string | null } | null,
+    user: AuthUser | undefined,
+    fallo: (mensaje: string) => AltaMikrotik,
+  ): Promise<AltaMikrotik> {
+    try {
+      // 1) Usuario y clave. Los que ya sirven se dejan como están.
+      let pppUsername = esUsuarioPppUtil(sub.pppUsername) ? String(sub.pppUsername).trim() : null;
+      let usuarioCreado = false;
+      if (!pppUsername) {
+        if (!this.subs) {
+          return fallo('El abonado no tiene usuario PPPoE y no se le pudo crear: hágalo desde su ficha antes de cerrar la orden.');
+        }
+        const cred = await this.subs.asegurarCredencialesPpp(sub.id, user);
+        if (!cred.ok || !cred.pppUsername) {
+          return fallo(`No se le pudo crear el usuario PPPoE: ${(cred as any).motivo ?? 'sin motivo'}`);
+        }
+        pppUsername = cred.pppUsername;
+        usuarioCreado = !!cred.creado;
+      }
+
+      // 2) ¿Ya tiene su secret en el router? Si el usuario se acaba de crear, no
+      // puede tenerlo. Si no, se pregunta al router antes de escribir nada.
+      if (!usuarioCreado) {
+        const st = await this.mikrotik.liveStatus(sub.id).catch(() => null);
+        if (st?.ok && st.live?.secretExists) {
+          return {
+            ok: true, creado: false, usuarioCreado: false, dryRun: !!st.dryRun,
+            pppUsername, perfil: null, router: st.mikrotik?.name ?? null, pasos: [],
+            mensaje: `El abonado ya tenía su alta en la Mikrotik (secret ${pppUsername}${st.mikrotik?.name ? ` en ${st.mikrotik.name}` : ''}).`,
+          };
+        }
+      }
+
+      // 3) El perfil del plan en la ficha: `provision` escribe el secret con él.
+      const perfil = await this.perfilDelPlan(plan?.planId);
+      if (perfil) {
+        await this.prisma.subscriber
+          .update({ where: { id: sub.id }, data: { pppProfile: perfil, editedAt: new Date() } })
+          .catch((e) => this.logger.warn(`No se pudo fijar el perfil ${perfil} en la ficha de ${sub.id}: ${(e as Error).message}`));
+      }
+
+      // 4) El secret.
+      const r = await this.mikrotik.provision(sub.id, user);
+      const creado = !!r.ok && (r.steps ?? []).some((s) => s.includes('secret creado'));
+      const cabecera = usuarioCreado ? `Usuario PPPoE ${pppUsername} creado. ` : '';
+      return {
+        ok: !!r.ok,
+        creado,
+        usuarioCreado,
+        dryRun: !!r.dryRun,
+        pppUsername,
+        perfil: perfil ?? null,
+        router: r.mikrotik?.name ?? null,
+        pasos: r.steps ?? [],
+        mensaje: r.ok
+          ? `${cabecera}${r.message}${perfil ? ` · perfil ${perfil}` : ''}`
+          : `${cabecera}No se pudo crear su alta en la Mikrotik: ${r.error ?? r.message}. Reinténtelo desde la ficha del cliente.`,
+      };
+    } catch (e) {
+      return fallo(`No se pudo crear su alta en la Mikrotik: ${(e as Error).message}. Reinténtelo desde la ficha del cliente.`);
+    }
+  }
+
+  /**
+   * Lo mismo que `estado()` pero para un abonado sin OLT: qué perfil se le va a
+   * poner, en qué router, y qué falta si no se puede.
+   *
+   * Se devuelve con la MISMA forma que la vía OLT —`candidatos`, `auto`,
+   * `onuActual` y `equipoAsignado` vacíos— para que la pantalla no tenga que
+   * adivinar qué campos existen: lo único que mira para cambiar de cara es `via`.
+   */
+  private async estadoMikrotik(
+    t: { type: string | null; planToId: string | null; planToName: string | null; planToMegas: number | null },
+    sub: any,
+    modo: ModoOnu,
+  ) {
+    const plan = await this.planDeLaOrden(t, sub.id);
+    const perfil = await this.perfilDelPlan(plan?.planId);
+    // `resolveRouter` es la MISMA elección que hace el corte, la reconexión y el
+    // alta (sede + tecnología, con respaldo en el marcado por defecto). Tira si el
+    // abonado no tiene sede: aquí eso es un bloqueo que se cuenta, no un error 400
+    // que deja la pantalla en blanco.
+    const router = await this.mikrotik.resolveRouter(sub).catch(() => null);
+
+    return {
+      via: 'MIKROTIK' as ViaOnu,
+      modo,
+      live: this.mikrotik.isLive,
+      olt: null,
+      /** El router y el perfil son, juntos, "lo que se va a aplicar". */
+      mikrotik: router
+        ? { id: router.id, name: router.name, host: `${router.ip}:${router.port}`, tech: router.tech }
+        : null,
+      pppUsername: sub.pppUsername ?? null,
+      /** @see estado — aquí significa lo mismo: el secret se crea al aplicar. */
+      altaMikrotikPendiente: esAltaDeInternet(t.type) && !esUsuarioPppUtil(sub.pppUsername),
+      perfil,
+      plan: plan
+        ? { id: plan.planId, name: plan.planName, megas: plan.megas, estado: plan.status, derivado: plan.derivado }
+        : null,
+      velocidad: null,
+      bloqueo: this.motivoDeBloqueoMikrotik({
+        modo, router, plan, perfil, sub,
+        puedeCrearPppoe: esAltaDeInternet(t.type) && !!this.subs,
+      }),
+      candidatos: [] as any[],
+      auto: null as any,
+      onuActual: null as any,
+      equipoAsignado: null as any,
+    };
+  }
+
+  /** El primer impedimento de la vía Mikrotik, en el orden en que hay que resolverlos. */
+  private motivoDeBloqueoMikrotik(
+    x: { modo: ModoOnu; router: any; plan: any; perfil: string | null; sub: any; puedeCrearPppoe?: boolean },
+  ): { code: string; message: string } | null {
+    if (!x.modo) {
+      return { code: 'TIPO', message: 'Esta orden no es de instalación ni de cambio de velocidad: no aplica.' };
+    }
+    // En una instalación o un 'AgregarInternet' el usuario PPPoE ya no es un
+    // impedimento: si no lo tiene se le crea antes de escribir el secret
+    // (`asegurarAltaEnMikrotik`). Antes esto dejaba el alta EPON parada con un
+    // mensaje que mandaba a la ficha a hacer a mano lo que el sistema sabe hacer.
+    if (!x.sub.pppUsername && !x.puedeCrearPppoe) {
+      return {
+        code: 'SIN_PPPOE',
+        message: 'El abonado no tiene usuario PPPoE en su ficha, así que no hay secret al que ponerle el perfil.',
+      };
+    }
+    if (!x.router) {
+      return {
+        code: 'SIN_ROUTER',
+        message: 'La sede del abonado no tiene ninguna Mikrotik configurada. Configúrela en Red › Mikrotik.',
+      };
+    }
+    if (!x.plan?.planId) {
+      return {
+        code: 'SIN_PLAN',
+        message: x.plan
+          ? `El servicio de internet del abonado ("${x.plan.planName ?? 'sin nombre'}") no está ligado a un plan `
+            + 'del catálogo, así que no se sabe qué perfil ponerle. Asígnele un plan desde su ficha.'
+          : 'El abonado no tiene servicio de internet registrado: no hay plan del que sacar el perfil.',
+      };
+    }
+    if (!x.perfil) {
+      return {
+        code: 'SIN_PERFIL',
+        message: `El plan "${x.plan.planName ?? x.plan.planId}" no tiene perfil PPP configurado. `
+          + 'Administración debe ponérselo en Configuración › Planes. '
+          + 'Sin eso el abonado quedaría con el perfil que traiga de antes.',
+      };
+    }
+    return null;
+  }
+
+  /**
+   * «Autenticar» un EPON: ponerle a su `/ppp/secret` el perfil de su plan.
+   *
+   * Es el mismo `applyProfile` del botón de la ficha —una sola escritura de red,
+   * con su auditoría y su dry-run—, así que no hay dos formas de cambiarle la
+   * velocidad a un abonado. Si el perfil del plan no existe en ese router,
+   * `applyProfile` falla diciendo cuáles hay: mejor eso que dejarlo a medias.
+   */
+  private async aplicarPlanEnMikrotik(t: any, sub: any, user?: AuthUser) {
+    const plan = await this.planDeLaOrden(t, sub.id);
+    const perfil = await this.perfilDelPlan(plan?.planId);
+    const router = await this.mikrotik.resolveRouter(sub).catch(() => null);
+    const esAlta = esAltaDeInternet(t.type);
+    const bloqueo = this.motivoDeBloqueoMikrotik({
+      modo: modoDeOrden(t.type), router, plan, perfil, sub, puedeCrearPppoe: esAlta && !!this.subs,
+    });
+    if (bloqueo) throw new BadRequestException(bloqueo.message);
+
+    /**
+     * Instalación / agregar internet: aquí el secret puede no existir todavía, y
+     * `applyProfile` no sirve para eso —edita un `/ppp/secret` que tiene que
+     * estar—. Se le crean primero sus datos de integración, ya con el perfil del
+     * plan dentro; si el abonado ya los tenía, esto no escribe nada y el camino
+     * sigue siendo el de siempre.
+     */
+    const alta = esAlta ? await this.asegurarAltaEnMikrotik(t, sub, plan, user) : null;
+    if (alta && !alta.ok) {
+      return {
+        ok: false, dryRun: alta.dryRun, action: 'PROVISION', subscriberId: sub.id,
+        steps: alta.pasos, message: alta.mensaje, error: alta.mensaje,
+        via: 'MIKROTIK' as ViaOnu, perfil, altaMikrotik: alta,
+        plan: { id: plan!.planId, name: plan!.planName },
+      };
+    }
+    // El secret acaba de nacer con el perfil del plan: empujárselo otra vez sería
+    // una segunda sesión contra el mismo router para escribir lo mismo.
+    if (alta && (alta.creado || alta.usuarioCreado)) {
+      return {
+        ok: true, dryRun: alta.dryRun, action: 'PROVISION', subscriberId: sub.id,
+        steps: alta.pasos, message: alta.mensaje,
+        via: 'MIKROTIK' as ViaOnu, perfil: alta.perfil ?? perfil, altaMikrotik: alta,
+        mikrotik: router ? { id: router.id, name: router.name, host: `${router.ip}:${router.port}`, tech: router.tech } : null,
+        plan: { id: plan!.planId, name: plan!.planName },
+      };
+    }
+
+    const res = await this.mikrotik.applyProfile(sub.id, perfil!, user);
+
+    // El rastro va en el hilo de la orden, igual que la vía OLT: es donde el
+    // técnico y quien audite después miran qué se hizo en esa visita.
+    if (res.ok && !res.dryRun && t.code != null) {
+      await this.prisma.ticketThread
+        .create({
+          data: {
+            ticketCode: t.code,
+            message: `Plan aplicado en la Mikrotik desde la orden · perfil ${perfil}`
+              + ` · plan ${plan!.planName ?? '—'} · router ${res.mikrotik?.name ?? '—'}`,
+            subscriberId: sub.id, employeeId: 0, date: new Date(),
+          },
+        })
+        .catch(() => undefined);
+    }
+    return { ...res, via: 'MIKROTIK' as ViaOnu, perfil, plan: { id: plan!.planId, name: plan!.planName }, altaMikrotik: alta };
+  }
+
+  /** Una línea en el hilo de la orden. Nunca tumba lo que se acaba de hacer. */
+  private async anotarEnLaOrden(t: { code: number | null }, sub: { id: string }, message: string, dryRun = false) {
+    if (t.code == null || dryRun) return;
+    await this.prisma.ticketThread
+      .create({ data: { ticketCode: t.code, message, subscriberId: sub.id, employeeId: 0, date: new Date() } })
+      .catch((e) => this.logger.warn(`No se pudo anotar en la orden ${t.code}: ${(e as Error).message}`));
+  }
+
   /**
    * AUTENTICA la ONU elegida y la deja lista: perfiles y VLAN clonados de lo que
    * ya funciona en ese puerto, velocidad tomada del plan, comentario con el
@@ -698,15 +1241,39 @@ export class OnuProvisionService {
    */
   async autenticar(ticketId: string, dto: { sn?: string; equipmentId?: string }, user?: AuthUser) {
     const { t, sub } = await this.cargarOrden(ticketId, user);
+    // En un EPON no hay ONU que dar de alta: autenticar es ponerle el perfil de
+    // su plan en la Mikrotik. Mismo botón, misma orden, otra vía.
+    if (viaDeTecnologia(sub.installTech) === 'MIKROTIK') return this.aplicarPlanEnMikrotik(t, sub, user);
     if (!puedeAutenticar(modoDeOrden(t.type))) {
       throw new BadRequestException(`Las órdenes de tipo "${t.type}" no autentican ONUs.`);
     }
+    /**
+     * TRASLADO: el trabajo no es montar un equipo, es MOVER el que el cliente ya
+     * tiene. Por eso aquí no se aparta ni se entrega nada de la bodega (ver
+     * `EquipoReservaService`) y, antes de dar de alta la ONU en el puerto de la casa
+     * nueva, hay que desautenticarla de donde estaba (`liberarAltaAnterior`).
+     * `esTraslado` deja fuera el 'Traslado interno De Equipos Red en cliente final',
+     * que es mover el aparato de sitio dentro de la misma vivienda: ese no cambia de
+     * puerto y su alta no se toca.
+     */
+    const traslado = esTraslado(t.type);
 
     const olt = await this.oltDeSede(sub.branchId);
     const plan = await this.planDeLaOrden(t, sub.id);
     const mapeo = await this.planProfiles.resolve(plan?.planId, olt?.id);
-    const bloqueo = this.motivoDeBloqueo({ modo: 'AUTENTICAR', olt, plan, mapeo });
+    const bloqueo = this.motivoDeBloqueo({ modo: 'AUTENTICAR', olt, plan, mapeo, tipo: t.type });
     if (bloqueo) throw new BadRequestException(bloqueo.message);
+
+    /**
+     * ANTES de tocar la OLT: el alta del abonado en la Mikrotik. La ONU le da
+     * enlace, pero quien le da internet es su `/ppp/secret`, y en una instalación
+     * (o en un 'AgregarInternet') puede no existir todavía. Va aquí y no al final
+     * porque desde este punto la orden puede salir por varias puertas —adoptar un
+     * alta que ya estaba, un SN repetido— y por todas el cliente tiene que quedar
+     * con sus datos de red. No tumba la autenticación si el router no responde:
+     * lo que falte viaja en el resultado. Ver `asegurarAltaEnMikrotik`.
+     */
+    const altaMikrotik = await this.asegurarAltaEnMikrotik(t, sub, plan, user);
 
     /**
      * Sin SN: lo elige el sistema. Se autentica el equipo que el cliente tenga
@@ -723,7 +1290,7 @@ export class OnuProvisionService {
       if (!r.ok) throw new BadRequestException(`No se pudo leer el autofind de la OLT: ${r.error}`);
       afReciente = r;
       const { candidatos, inv } = await this.candidatosDeAutofind(sub, Array.isArray(r.onus) ? r.onus : []);
-      auto = await this.decidirAutomatico(sub, candidatos, inv, t.id);
+      auto = await this.decidirAutomatico(sub, candidatos, inv, t.id, !traslado);
       if (!auto.sn) throw new BadRequestException(auto.motivo);
       sn = auto.sn;
       // La unidad que se saca del stock viaja como si la hubiera elegido una
@@ -790,7 +1357,7 @@ export class OnuProvisionService {
       // desde SmartOLT (la planta vieja está llena de ellas). Se comprueba.
       const yaEsta = await this.olt.findBySn(olt!.id, sn);
       if (yaEsta.ok && yaEsta.onu && (yaEsta.onu as any).fsp) {
-        return this.adoptarExistente({ t, sub, olt: olt!, sn, plan, mapeo, equipo, equipoAVincular, user });
+        return { ...(await this.adoptarExistente({ t, sub, olt: olt!, sn, plan, mapeo, equipo, equipoAVincular, user })), altaMikrotik };
       }
       throw new BadRequestException(
         `La ONU ${sn} ya no se está anunciando en la OLT ${olt!.name} y tampoco está autenticada en ella. `
@@ -824,9 +1391,11 @@ export class OnuProvisionService {
     };
     if (!params.lineprofile || !params.srvprofile) {
       throw new BadRequestException(
-        `No se pudo deducir el perfil de alta para el puerto ${frame}/${slot}/${port} `
-        + '(no hay ONUs funcionando ahí de las que copiar, ni valores por defecto en la OLT). '
-        + 'Autentíquela desde Red › OLT indicando line-profile y srv-profile, o configúrelos en el plan.',
+        `No se pudo deducir el perfil de alta para el puerto ${frame}/${slot}/${port}: `
+        + `de las ONUs que ya cuelgan de ahí no se pudo leer ${!params.lineprofile ? 'el line-profile' : 'el srv-profile'} `
+        + '(puerto vacío o ninguna con la configuración legible), y la OLT no tiene valores por defecto. '
+        + 'Autentíquela desde Red › OLT indicando line-profile y srv-profile, o póngalos en el plan '
+        + '(Planes › perfiles de OLT) o como valores por defecto de la OLT.',
       );
     }
     if (!params.vlan) {
@@ -835,13 +1404,31 @@ export class OnuProvisionService {
       );
     }
 
-    const res: any = await this.olt.provision(olt!.id, params, user);
+    // En un traslado, el alta vieja se quita ANTES de hacer la nueva: si no, el
+    // `ont add` choca con "SN already exists" y lo que hay en la OLT sigue apuntando
+    // al PON de la dirección anterior.
+    let liberacion = traslado ? await this.liberarAltaAnterior({ t, sub, olt: olt!, sn, fspNuevo: `${frame}/${slot}/${port}`, user }) : null;
+
+    let res: any = await this.olt.provision(olt!.id, params, user);
     // Carrera: estaba en el autofind al listar y para cuando se pulsó el botón ya
     // la había autenticado otro (o la OLT la tenía de antes en otro puerto).
     if (!res.ok && res.codigo === 'SN_YA_EXISTE') {
-      return { ...(await this.adoptarExistente({ t, sub, olt: olt!, sn, plan, mapeo, equipo, equipoAVincular, user })), auto: resumenAuto };
+      // En un traslado, "ya existe" es el alta anterior que hay que quitar, no una
+      // ONU ajena que adoptar: la OLT dice dónde está, se borra ahí y se reintenta
+      // una sola vez. Adoptarla dejaría al cliente con el service-port de la casa
+      // vieja —que es justo lo que la orden viene a corregir—.
+      if (traslado && !liberacion?.borrado && res.existente) {
+        liberacion = await this.liberarAltaAnterior({ t, sub, olt: olt!, sn, fspNuevo: `${frame}/${slot}/${port}`, user, existente: res.existente });
+        if (liberacion.borrado) res = await this.olt.provision(olt!.id, params, user);
+      }
+      if (!res.ok && res.codigo === 'SN_YA_EXISTE') {
+        return {
+          ...(await this.adoptarExistente({ t, sub, olt: olt!, sn, plan, mapeo, equipo, equipoAVincular, user })),
+          auto: resumenAuto, liberacion, altaMikrotik,
+        };
+      }
     }
-    if (!res.ok) return res;
+    if (!res.ok) return { ...res, liberacion, altaMikrotik };
 
     let equipoRegistrado: EquipoRegistrado = null;
     let conciliacion: { liberados: number[]; devuelto: number | null } | null = null;
@@ -864,10 +1451,126 @@ export class OnuProvisionService {
       fsp: `${frame}/${slot}/${port}`,
       equipo: equipoRegistrado,
       conciliacion,
+      /** Traslado: de dónde se desautenticó la ONU antes de darla de alta aquí. */
+      liberacion,
       // Cuando la eligió el sistema: por qué esa y no otra. La orden lo enseña
       // para que el técnico pueda desdecirlo si ve que no es la que instaló.
       auto: resumenAuto,
+      /** El alta en la Mikrotik que se le dejó hecha (null = esta orden no la toca). */
+      altaMikrotik,
     };
+  }
+
+  /** F/S/P + ont-id de un bloque de la OLT (el de `findBySn` o el `existente` de un alta). */
+  private posicionDeOnu(onu: any): { frame: number; slot: number; port: number; ontId: number } | null {
+    const m = String(onu?.fsp ?? '').match(/(\d+)\s*\/\s*(\d+)\s*\/\s*(\d+)/);
+    const ontId = Number(onu?.ont_id ?? onu?.ontId);
+    if (!m || !Number.isFinite(ontId)) return null;
+    return { frame: Number(m[1]), slot: Number(m[2]), port: Number(m[3]), ontId };
+  }
+
+  /**
+   * DESAUTENTICA la ONU de donde estaba, para poder darla de alta donde toca ahora.
+   *
+   * Es la mitad que le faltaba al traslado (2026-09-04, pedido por el usuario): "no
+   * hay que asignarle un equipo nuevo de la bodega, simplemente se desautentica y se
+   * vuelve a autenticar donde tiene que ser". El cliente se lleva SU ONU a la casa
+   * nueva, y esa casa cuelga de otro puerto —o de otra OLT si cambia de sede—; el
+   * alta anterior sobrevive al trasteo y estorba de dos maneras:
+   *
+   * - En la MISMA OLT, `ont add` responde "SN already exists" y no se puede dar de
+   *   alta. Adoptar el alta vieja tampoco sirve: su service-port sigue colgando del
+   *   PON de la dirección anterior, así que el abonado se quedaría sin navegar
+   *   justo después de que el técnico diera la orden por buena.
+   * - En OTRA OLT (traslado entre sedes) el alta ni siquiera estorba al comando: se
+   *   queda ahí para siempre como una ONT fantasma ocupando un ont-id y, peor, con
+   *   el nombre del abonado puesto en un nodo donde ya no vive.
+   *
+   * Por eso se borra en las dos: en la de destino (donde la OLT diga que está) y en
+   * cualquier otra que el inventario local recuerde con ese SN. `ont delete` arrastra
+   * sus service-ports (ver `OltHuawei.accionOnu`), que es lo que hay que quitar.
+   *
+   * NUNCA lanza: un traslado no se puede quedar a medias por no haber podido limpiar
+   * lo de antes. Lo que no se pudo borrar viaja en `avisos` y queda anotado en la
+   * orden, para que alguien lo mire desde Red › OLT.
+   */
+  private async liberarAltaAnterior(x: {
+    t: any; sub: any; olt: { id: string; name: string }; sn: string; fspNuevo: string;
+    user?: AuthUser;
+    /** El bloque `existente` que devuelve un alta rechazada con SN_YA_EXISTE, si lo hubo. */
+    existente?: any;
+  }) {
+    const out = {
+      borrado: false,
+      dryRun: false,
+      /** Dónde estaba autenticada en la OLT de destino (F/S/P:ont-id). */
+      anterior: null as string | null,
+      /** Altas fantasma borradas en otras OLTs: "NODO 0/1/5:12". */
+      tambienEn: [] as string[],
+      avisos: [] as string[],
+    };
+    try {
+      // 1. La OLT de destino. Se pregunta a la OLT (o se usa lo que ella acaba de
+      //    contestar al alta): el inventario local puede llevar días sin sincronizar
+      //    y borrar por un ont-id viejo es borrarle la ONT a otro abonado.
+      let pos = this.posicionDeOnu(x.existente);
+      if (!pos) {
+        const y = await this.olt.findBySn(x.olt.id, x.sn);
+        if (y.ok && (y.onu as any)?.fsp) pos = this.posicionDeOnu(y.onu);
+      }
+      if (pos) {
+        const fsp = `${pos.frame}/${pos.slot}/${pos.port}:${pos.ontId}`;
+        const r: any = await this.olt.remove(
+          x.olt.id, { frame: pos.frame, slot: pos.slot, port: pos.port, ont_id: pos.ontId, sn: x.sn }, x.user);
+        out.anterior = fsp;
+        out.borrado = !!r.ok;
+        out.dryRun = !!r.dryRun;
+        if (!r.ok) out.avisos.push(`No se pudo desautenticar la ONU de ${fsp} en ${x.olt.name}: ${r.error}`);
+      }
+
+      // 2. Otras OLTs: el traslado que cambia de sede deja el alta en el nodo viejo.
+      //    El inventario local solo dice DÓNDE mirar; la posición se vuelve a leer
+      //    de esa OLT antes de tocar nada.
+      const fuera = await this.prisma.oltOnu.findMany({
+        where: { sn: x.sn, oltId: { not: x.olt.id } },
+        select: { id: true, oltId: true, olt: { select: { name: true } } },
+      });
+      for (const o of fuera) {
+        const y = await this.olt.findBySn(o.oltId, x.sn).catch(() => ({ ok: false } as any));
+        const p2 = y.ok ? this.posicionDeOnu(y.onu) : null;
+        if (!p2) {
+          // Ya no está allá (o no se pudo entrar): el registro local es el fantasma.
+          await this.prisma.oltOnu.delete({ where: { id: o.id } }).catch(() => undefined);
+          continue;
+        }
+        const fsp = `${p2.frame}/${p2.slot}/${p2.port}:${p2.ontId}`;
+        const r: any = await this.olt.remove(
+          o.oltId, { frame: p2.frame, slot: p2.slot, port: p2.port, ont_id: p2.ontId, sn: x.sn }, x.user);
+        if (r.ok && !r.dryRun) {
+          out.tambienEn.push(`${o.olt?.name ?? o.oltId} ${fsp}`);
+          await this.prisma.oltOnu.delete({ where: { id: o.id } }).catch(() => undefined);
+        } else if (!r.ok) {
+          out.avisos.push(`No se pudo desautenticar la ONU de ${fsp} en la OLT ${o.olt?.name ?? o.oltId}: ${r.error}`);
+        }
+      }
+
+      if (x.t?.code != null && (out.anterior || out.tambienEn.length || out.avisos.length)) {
+        const msg =
+          `TRASLADO · ONU ${x.sn} desautenticada de su sitio anterior para volver a autenticarla en ${x.fspNuevo}`
+          + (out.dryRun ? ' (DRY-RUN: la OLT no se tocó)' : '')
+          + (out.anterior ? `\nEstaba en ${x.olt.name} ${out.anterior}${out.borrado ? ' — borrada con sus service-ports.' : ' — NO se pudo borrar.'}` : '')
+          + (out.tambienEn.length ? `\nTambién se quitó el alta que había quedado en: ${out.tambienEn.join(' · ')}` : '')
+          + '\nNo se descuenta ningún equipo de la bodega: es el mismo aparato que el cliente ya tenía.'
+          + (out.avisos.length ? `\nAvisos: ${out.avisos.join(' | ')}` : '');
+        await this.prisma.ticketThread
+          .create({ data: { ticketCode: x.t.code, message: msg, subscriberId: x.sub.id, employeeId: 0, date: new Date() } })
+          .catch((e) => this.logger.warn(`No se pudo anotar la liberación en la orden ${x.t.code}: ${e.message}`));
+      }
+    } catch (e) {
+      out.avisos.push(`No se pudo revisar el alta anterior de la ONU ${x.sn}: ${(e as Error).message}`);
+      this.logger.warn(`Traslado: liberar alta anterior de ${x.sn} — ${(e as Error).message}`);
+    }
+    return out;
   }
 
   /**
@@ -1029,18 +1732,26 @@ export class OnuProvisionService {
   }
 
   /**
-   * Aplica al service-port la velocidad del plan vigente, sobre la ONU que el
-   * abonado YA tiene autenticada. Es el "subir/bajar megas" sin tocar el alta.
+   * Aplica la velocidad del plan de la orden a la ONU que el abonado YA tiene
+   * autenticada.
+   *
+   * - «Subir megas»: se DESAUTENTICA la ONU y se vuelve a autenticar con las megas
+   *   de la orden (pedido por el usuario, 2026-09-14). Ver `reautenticarConPlan`.
+   * - «Bajar megas» / «Cambio de plan»: se reapuntan las traffic-tables del
+   *   service-port sin tocar el alta.
    */
   async aplicarVelocidad(ticketId: string, user?: AuthUser) {
     const { t, sub } = await this.cargarOrden(ticketId, user);
+    // Sin OLT, «aplicar la velocidad» y «autenticar» son literalmente la misma
+    // escritura: el perfil del plan en el secret. Las dos puertas van al mismo sitio.
+    if (viaDeTecnologia(sub.installTech) === 'MIKROTIK') return this.aplicarPlanEnMikrotik(t, sub, user);
     if (!puedeVelocidad(modoDeOrden(t.type))) {
       throw new BadRequestException(`Las órdenes de tipo "${t.type}" no cambian la velocidad de la ONU.`);
     }
     const olt = await this.oltDeSede(sub.branchId);
     const plan = await this.planDeLaOrden(t, sub.id);
     const mapeo = await this.planProfiles.resolve(plan?.planId, olt?.id);
-    const bloqueo = this.motivoDeBloqueo({ modo: 'VELOCIDAD', olt, plan, mapeo });
+    const bloqueo = this.motivoDeBloqueo({ modo: 'VELOCIDAD', olt, plan, mapeo, tipo: t.type });
     if (bloqueo) throw new BadRequestException(bloqueo.message);
 
     const onu = await this.prisma.oltOnu.findFirst({
@@ -1050,6 +1761,10 @@ export class OnuProvisionService {
     });
     if (!onu?.sn) {
       throw new BadRequestException('Este abonado no tiene ninguna ONU vinculada: no hay velocidad que cambiar.');
+    }
+
+    if (sentidoDeMegas(t.type) === 'SUBIR') {
+      return this.reautenticarConPlan({ t, sub, oltId: onu.oltId ?? olt!.id, olt: olt!, sn: onu.sn, plan, mapeo, user });
     }
 
     const res: any = await this.olt.setSpeed(
@@ -1070,5 +1785,126 @@ export class OnuProvisionService {
         .catch(() => undefined);
     }
     return { ...res, plan: { id: plan!.planId, name: plan!.planName } };
+  }
+
+  /**
+   * SUBIR MEGAS = DESAUTENTICAR Y VOLVER A AUTENTICAR con las megas de la orden
+   * (pedido por el usuario, 2026-09-14).
+   *
+   * Se vuelve a dar de alta EXACTAMENTE como estaba —mismo puerto, mismo ONT-ID,
+   * mismos line/srv-profile, VLAN y GEM, mismo comentario— y lo único que cambia
+   * son las traffic-tables, que salen del plan de la orden. Todo se lee de la OLT
+   * justo antes de borrar: el inventario local puede llevar días sin sincronizar.
+   *
+   * Guardas, porque entre el borrado y el alta el abonado está sin servicio:
+   * - Con varios service-ports (internet + TV/voz) no se toca: el alta nueva solo
+   *   recrea el de internet y la TV se perdería.
+   * - Si el alta nueva falla, se intenta dejar la ONU como estaba (velocidad
+   *   vieja) UNA sola vez. No en bucle: re-autenticar seguido es lo que deja
+   *   pegadas a las ZTE en `config: failed`.
+   */
+  private async reautenticarConPlan(x: {
+    t: any; sub: any; oltId: string; olt: any; sn: string; plan: any; mapeo: any; user?: AuthUser;
+  }) {
+    const { t, sub, oltId, olt, sn, plan, mapeo, user } = x;
+    const leido = await this.olt.estadoPorSn(oltId, sn);
+    const est: any = leido.estado;
+    if (!leido.ok || !est) {
+      throw new BadRequestException(
+        `No se encontró la ONU ${sn} autenticada en la OLT: no hay nada que desautenticar. ${leido.error ?? ''}`.trim());
+    }
+    const sps: any[] = Array.isArray(est.servicePorts) ? est.servicePorts : [];
+    if (sps.length > 1) {
+      throw new BadRequestException(
+        `La ONU ${sn} tiene ${sps.length} service-ports (internet y TV/voz): desautenticarla le quitaría `
+        + 'también la TV. Cambie la velocidad desde Red › OLT.');
+    }
+    const sp = sps[0] ?? null;
+    const num = (v: unknown) => (v !== undefined && v !== null && v !== '' && Number.isFinite(Number(v)) ? Number(v) : undefined);
+    const elegir = (...vs: any[]) => {
+      for (const v of vs) if (v !== undefined && v !== null && v !== '') return v;
+      return undefined;
+    };
+    // La sugerencia del puerto solo rellena lo que la propia ONT no dice (el
+    // user-vlan no sale en el listado de service-ports).
+    const sug = (await this.olt.sugerencia(oltId, est.frame, est.slot, est.port)).sugerencia ?? {};
+    const vlan = elegir(num(sp?.vlan), mapeo?.vlan, sug.vlan, olt.defaultVlan);
+    const params = {
+      frame: est.frame, slot: est.slot, port: est.port, ont_id: est.ont_id, sn,
+      lineprofile: elegir(num(est.lineprofile), mapeo?.lineprofile, sug.lineprofile, olt.defaultLineProfile),
+      srvprofile: elegir(num(est.srvprofile), mapeo?.srvprofile, sug.srvprofile, olt.defaultSrvProfile),
+      vlan,
+      gemport: elegir(num(sp?.gemport), mapeo?.gemport, sug.gemport, olt.defaultGemport, 1),
+      user_vlan: elegir(mapeo?.userVlan, sug.user_vlan, olt.defaultUserVlan, vlan),
+      traffic_in: mapeo?.trafficIn ?? undefined,
+      traffic_out: mapeo?.trafficOut ?? undefined,
+      desc: est.description?.trim() || this.comentario(sub),
+    };
+    if (!params.lineprofile || !params.srvprofile || !params.vlan) {
+      throw new BadRequestException(
+        `No se pudo leer cómo está dada de alta la ONU ${sn} (line-profile, srv-profile o VLAN): `
+        + 'no se desautentica sin saber cómo volver a autenticarla.');
+    }
+    const fsp = `${est.frame}/${est.slot}/${est.port}`;
+    const antes = { traffic_in: sp?.rx ?? '—', traffic_out: sp?.tx ?? '—' };
+
+    // 1) Desautenticar (arrastra sus service-ports).
+    const baja: any = await this.olt.remove(oltId, { frame: est.frame, slot: est.slot, port: est.port, ont_id: est.ont_id, sn }, user);
+    if (!baja.ok) {
+      return { ok: false, dryRun: false, error: `No se pudo desautenticar la ONU ${sn} de ${fsp}:${est.ont_id}: ${baja.error}. El cliente sigue como estaba.` };
+    }
+
+    // 2) Volver a autenticar con la velocidad del plan de la orden.
+    let res: any = await this.olt.provision(oltId, params, user);
+    let restaurada: boolean | null = null;
+    if (!res.ok && !baja.dryRun) {
+      // El abonado está sin alta: se intenta dejarlo como estaba.
+      const viejo = { ...params, traffic_in: num(sp?.rx), traffic_out: num(sp?.tx) };
+      const r2: any = await this.olt.provision(oltId, viejo, user).catch((e) => ({ ok: false, error: (e as Error).message }));
+      restaurada = !!r2.ok;
+      this.logger.warn(`Subir megas ${sn}: el alta nueva falló (${res.error}); restaurar con la velocidad anterior → ${r2.ok ? 'ok' : r2.error}`);
+    }
+
+    if (!res.dryRun && t.code != null) {
+      const avisos: string[] = res.verificacion?.avisos ?? [];
+      const msg =
+        `SUBIR MEGAS · ONU ${sn} desautenticada y vuelta a autenticar en ${fsp} (ONT-ID ${est.ont_id})`
+        + `\nPlan: ${plan?.planName ?? '—'} · traffic-table bajada ${antes.traffic_in} → ${params.traffic_in ?? '—'} / subida ${antes.traffic_out} → ${params.traffic_out ?? '—'}`
+        + (res.ok
+          ? `\nEstado: ${res.verificacion?.run_state ?? '—'} · config ${res.verificacion?.config_state ?? '—'} · ${res.verificacion?.servicePorts?.length ?? 0} service-port(s)`
+          : `\nNO se pudo volver a autenticar: ${res.error}`
+            + (restaurada === true ? ' — se restauró el alta con la velocidad anterior.' : ' — TAMPOCO se pudo restaurar: el abonado quedó SIN alta en la OLT, autentíquela desde Red › OLT.'))
+        + (avisos.length ? `\nAvisos: ${avisos.join(' | ')}` : '');
+      await this.prisma.ticketThread
+        .create({ data: { ticketCode: t.code, message: msg, subscriberId: sub.id, employeeId: 0, date: new Date() } })
+        .catch((e) => this.logger.warn(`No se pudo anotar la re-autenticación en la orden ${t.code}: ${(e as Error).message}`));
+    }
+    // `provision` guarda la ONU en el inventario local; el vínculo con el abonado se repone.
+    if (!res.dryRun && (res.ok || restaurada)) {
+      await this.prisma.oltOnu
+        .updateMany({ where: { oltId, sn }, data: { subscriberId: sub.id, clientName: nombreDe(sub) || String(sub.abonado ?? '') } })
+        .catch(() => undefined);
+    }
+
+    if (!res.ok) {
+      return {
+        ...res,
+        error: `${res.error ?? 'La OLT rechazó el alta nueva.'} `
+          + (restaurada ? 'Se restauró la ONU con la velocidad anterior.' : 'No se pudo restaurar: el abonado quedó sin alta en la OLT.'),
+        restaurada,
+      };
+    }
+    return {
+      ...res,
+      commands: [...(baja.commands ?? []), ...(res.commands ?? [])],
+      message: res.dryRun
+        ? res.message
+        : `ONU desautenticada y vuelta a autenticar con ${plan?.planName ?? 'el plan de la orden'}.`,
+      reautenticada: true,
+      fsp,
+      antes,
+      despues: { traffic_in: String(params.traffic_in ?? '—'), traffic_out: String(params.traffic_out ?? '—') },
+      plan: { id: plan?.planId ?? null, name: plan?.planName ?? null },
+    };
   }
 }

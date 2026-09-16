@@ -51,6 +51,14 @@ cronRouter.post(
 );
 
 cronRouter.post(
+  '/run/cortes-deshechos',
+  autenticar,
+  exigirArea('contabilidad', 'sistemas'),
+  exigirPermisos(APP_PERMISSIONS.CRON_RUN),
+  manejar((req) => cronService.runCortesDeshechos({ manual: true, user: usuarioDe(req), avisar: req.body?.avisar !== false })),
+);
+
+cronRouter.post(
   '/run/legacy-sync',
   autenticar,
   exigirArea('contabilidad', 'sistemas'),

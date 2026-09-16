@@ -1,5 +1,5 @@
 import { join } from 'path';
-import { NotFoundException } from '../core/http/errores';
+import { BadRequestException, NotFoundException } from '../core/http/errores';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { scopeDate } from '../common/date-scope';
@@ -8,7 +8,7 @@ import {
 } from './cierre-legacy';
 import { informeCierre, WOMPI_ID } from './cierre-informe';
 import { alcanceDe, cajasPermitidas, esCajera, exigirAcceso, exigirAccesoAlMovimiento } from './caja-scope';
-import { hoyEnColombia } from '../common/fecha-colombia';
+import { hoyEnColombia, inicioDelDiaColombia } from '../common/fecha-colombia';
 import { AuthUser } from '../auth/current-user.decorator';
 import { num, round2 } from '../common/money';
 import { conceptoFactura, conceptoMesAdelantado } from '../common/concepto-factura';
@@ -117,7 +117,8 @@ export class TreasuryService {
    * del otro tipo. Para el monto están los filtros de tipo + los totales.
    */
   private static readonly ORDEN_MOVIMIENTOS = {
-    date: 'date',
+    // Dentro del mismo día, por la hora en que se registró (`date` no tiene hora).
+    date: (dir: 'asc' | 'desc') => [{ date: dir }, { createdAt: dir }],
     type: 'type',
     cat: 'category',
     fact: 'invoice.tid',
@@ -153,6 +154,90 @@ export class TreasuryService {
 
   async list(params: ListTxQueryDto, user: AuthUser) {
     const { page, pageSize } = paginacion(params);
+    const where = await this.filtroMovimientos(params, user);
+
+    // El arrastre de caja NO es plata que entre ni salga: son las dos patas con las que
+    // el cierre pasa el saldo al día siguiente. En el mes en curso son el 46% de los
+    // "ingresos" (238 de 512 millones), así que un total que las sumara diría casi el
+    // doble de lo que de verdad se movió. Se quedan en la LISTA (existen y hay que poder
+    // verlas) pero fuera del total, y la pantalla lo dice.
+    const notasArrastre = await this.notasDeArrastre();
+    const sinArrastre: Prisma.TransactionWhereInput = {
+      ...where,
+      // Las anuladas no suman... salvo que sea justo lo que se pidió ver: en la pantalla
+      // de Anulaciones (`status=ANULADA`) forzar VIGENTE dejaba el total en cero, que es
+      // la única cifra que allí no le sirve a nadie.
+      ...(params.status ? {} : { status: 'VIGENTE' as const }),
+      AND: [
+        ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
+        // `notIn` a secas se comería los movimientos SIN nota: en SQL, `note NOT IN (…)`
+        // con note NULL no es cierto, es desconocido, y la fila se cae del total. Hoy no
+        // hay ninguna nota nula, pero el schema las permite y un egreso puede nacer sin
+        // nota — el día que pase, la plata desaparecería de la suma sin avisar.
+        { OR: [{ note: null }, { note: { notIn: notasArrastre } }] },
+      ],
+    };
+    const [rows, total, sumas, arrastres] = await Promise.all([
+      this.prisma.transaction.findMany({
+        where, orderBy: orden(params, TreasuryService.ORDEN_MOVIMIENTOS, [{ date: 'desc' }, { createdAt: 'desc' }]), skip: (page - 1) * pageSize, take: pageSize,
+        include: {
+          subscriber: { select: SUB_SELECT }, invoice: { select: { tid: true } },
+          // El recibo de caja del movimiento, para poder REIMPRIMIR el voucher desde
+          // la lista: si la impresora se atasca o el navegador se come la ventana, la
+          // cajera no tenía ningún camino de vuelta al papel.
+          receiptLinks: { select: { receiptId: true }, take: 1 },
+        },
+      }),
+      this.prisma.transaction.count({ where }),
+      // Totales de LO FILTRADO, no del periodo: la pregunta que se hace quien filtra
+      // ("¿cuánto suma esto?") se contestaba sacando las filas a mano. Las anuladas
+      // se dejan fuera de la suma aunque estén en la lista — sumarlas mentiría.
+      this.prisma.transaction.aggregate({ _sum: { credit: true, debit: true }, where: sinArrastre }),
+      // Cuántas patas de arrastre se quedaron fuera del total, para poder decirlo.
+      this.prisma.transaction.count({ where: { ...where, note: { in: notasArrastre } } }),
+    ]);
+
+    const emisores = await this.nombresDeEmisor(rows.map((t) => t.issuerUserId));
+
+    return {
+      items: rows.map((t) => ({
+        id: t.id, date: t.date, type: t.type, category: t.category,
+        // La hora real del movimiento: `date` es sólo el día contable.
+        createdAt: t.createdAt,
+        // Quién EMITIÓ el movimiento (la cajera o el funcionario que lo registró),
+        // no a quién se le pagó: son dos personas distintas y en la lista sólo se
+        // veía la segunda.
+        emisor: t.issuerUserId != null ? (emisores.get(t.issuerUserId) ?? null) : null,
+        // El consecutivo con el que el movimiento se conoce en el legacy: es el
+        // número por el que pregunta contabilidad cuando cuadra las dos listas.
+        codigo: t.legacyId,
+        debit: num(t.debit), credit: num(t.credit),
+        amount: t.type === 'EXPENSE' ? num(t.debit) : num(t.credit),
+        payer: subName(t.subscriber) ?? t.payerName ?? '—',
+        subscriberId: t.subscriber?.id ?? null,
+        method: t.method, account: t.accountName, bank: t.bankName,
+        invoiceTid: t.invoice?.tid ?? null, status: t.status, note: t.note,
+        ...comprobanteDe(t),
+        receiptId: t.receiptLinks[0]?.receiptId ?? null,
+      })),
+      total, page, pageSize, pages: Math.ceil(total / pageSize),
+      totales: {
+        ingresos: num(sumas._sum.credit),
+        egresos: num(sumas._sum.debit),
+        balance: round2(num(sumas._sum.credit) - num(sumas._sum.debit)),
+        /** Movimientos de la lista que NO entran en el total (arrastre de caja). */
+        arrastres,
+      },
+    };
+  }
+
+  /**
+   * El `where` del listado de movimientos: los filtros de la pantalla cruzados con las
+   * cajas que puede ver quien pregunta. Lo comparten la tabla y el Excel, para que el
+   * archivo traiga exactamente lo que se ve en pantalla — y nunca más de lo que a cada
+   * uno le toca ver.
+   */
+  private async filtroMovimientos(params: ListTxQueryDto, user: AuthUser): Promise<Prisma.TransactionWhereInput> {
     const search = (params.search || '').trim();
 
     const where: Prisma.TransactionWhereInput = {};
@@ -209,6 +294,22 @@ export class TreasuryService {
       ? rangoDia(hoyEnColombia())
       : scopeDate(params.from, params.to, params.all);
     if (period) where.date = period;
+    // Hora del REGISTRO. `date` es el día contable, sin hora; la hora real de cada
+    // movimiento está en `createdAt` (la misma del recibo). La ventana va del día
+    // `from` a `horaDesde` al día `to` a `horaHasta`, en hora de Colombia, y se suma
+    // al filtro por día — no lo reemplaza.
+    if (params.horaDesde || params.horaHasta) {
+      const hoy = hoyEnColombia().toISOString().slice(0, 10);
+      const instante = (dia: string, hora: string, finDelMinuto: boolean) => {
+        const inicio = inicioDelDiaColombia(dia);
+        if (!inicio) return undefined;
+        const [h, m] = hora.split(':').map(Number);
+        return new Date(inicio.getTime() + (h * 60 + m) * 60_000 + (finDelMinuto ? 59_999 : 0));
+      };
+      const gte = instante(params.from ?? params.to ?? hoy, params.horaDesde || '00:00', false);
+      const lte = instante(params.to ?? params.from ?? hoy, params.horaHasta || '23:59', true);
+      if (gte || lte) ands.push({ createdAt: { ...(gte ? { gte } : {}), ...(lte ? { lte } : {}) } });
+    }
     if (search) {
       // El nombre que se VE en la columna "Pagador" sale del abonado (`subName`), no de
       // `payerName`: de los 469.094 movimientos con cliente, el legacy dejó en `payerName`
@@ -256,78 +357,51 @@ export class TreasuryService {
       );
     }
     if (ands.length) where.AND = ands;
+    return where;
+  }
 
-    // El arrastre de caja NO es plata que entre ni salga: son las dos patas con las que
-    // el cierre pasa el saldo al día siguiente. En el mes en curso son el 46% de los
-    // "ingresos" (238 de 512 millones), así que un total que las sumara diría casi el
-    // doble de lo que de verdad se movió. Se quedan en la LISTA (existen y hay que poder
-    // verlas) pero fuera del total, y la pantalla lo dice.
-    const notasArrastre = await this.notasDeArrastre();
-    const sinArrastre: Prisma.TransactionWhereInput = {
-      ...where,
-      // Las anuladas no suman... salvo que sea justo lo que se pidió ver: en la pantalla
-      // de Anulaciones (`status=ANULADA`) forzar VIGENTE dejaba el total en cero, que es
-      // la única cifra que allí no le sirve a nadie.
-      ...(params.status ? {} : { status: 'VIGENTE' as const }),
-      AND: [
-        ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
-        // `notIn` a secas se comería los movimientos SIN nota: en SQL, `note NOT IN (…)`
-        // con note NULL no es cierto, es desconocido, y la fila se cae del total. Hoy no
-        // hay ninguna nota nula, pero el schema las permite y un egreso puede nacer sin
-        // nota — el día que pase, la plata desaparecería de la suma sin avisar.
-        { OR: [{ note: null }, { note: { notIn: notasArrastre } }] },
-      ],
-    };
-    const [rows, total, sumas, arrastres] = await Promise.all([
-      this.prisma.transaction.findMany({
-        where, orderBy: orden(params, TreasuryService.ORDEN_MOVIMIENTOS, { date: 'desc' }), skip: (page - 1) * pageSize, take: pageSize,
-        include: {
-          subscriber: { select: SUB_SELECT }, invoice: { select: { tid: true } },
-          // El recibo de caja del movimiento, para poder REIMPRIMIR el voucher desde
-          // la lista: si la impresora se atasca o el navegador se come la ventana, la
-          // cajera no tenía ningún camino de vuelta al papel.
-          receiptLinks: { select: { receiptId: true }, take: 1 },
-        },
-      }),
-      this.prisma.transaction.count({ where }),
-      // Totales de LO FILTRADO, no del periodo: la pregunta que se hace quien filtra
-      // ("¿cuánto suma esto?") se contestaba sacando las filas a mano. Las anuladas
-      // se dejan fuera de la suma aunque estén en la lista — sumarlas mentiría.
-      this.prisma.transaction.aggregate({ _sum: { credit: true, debit: true }, where: sinArrastre }),
-      // Cuántas patas de arrastre se quedaron fuera del total, para poder decirlo.
-      this.prisma.transaction.count({ where: { ...where, note: { in: notasArrastre } } }),
-    ]);
+  /**
+   * Tope del Excel. Un año de ingresos de todas las sedes pasa de 60.000 filas: se arma
+   * entero en memoria, así que por encima de esto se pide acotar en vez de tumbar la API.
+   */
+  static readonly MAX_EXPORT = 50_000;
 
+  /**
+   * Filas del Excel de movimientos: los MISMOS filtros y el mismo orden que la tabla
+   * (`filtroMovimientos`), pero todas las páginas. La cajera sigue saliendo acotada a
+   * su caja y a hoy — eso lo decide el filtro, no la pantalla.
+   */
+  async exportRows(params: ListTxQueryDto, user: AuthUser) {
+    const where = await this.filtroMovimientos(params, user);
+    const total = await this.prisma.transaction.count({ where });
+    if (total > TreasuryService.MAX_EXPORT) {
+      throw new BadRequestException(
+        `El filtro trae ${total.toLocaleString('es-CO')} movimientos y el Excel admite hasta ${TreasuryService.MAX_EXPORT.toLocaleString('es-CO')}. Acota el periodo o la sede.`,
+      );
+    }
+    const rows = await this.prisma.transaction.findMany({
+      where, orderBy: orden(params, TreasuryService.ORDEN_MOVIMIENTOS, [{ date: 'desc' }, { createdAt: 'desc' }]),
+      include: { subscriber: { select: SUB_SELECT }, invoice: { select: { tid: true } } },
+    });
     const emisores = await this.nombresDeEmisor(rows.map((t) => t.issuerUserId));
-
-    return {
-      items: rows.map((t) => ({
-        id: t.id, date: t.date, type: t.type, category: t.category,
-        // Quién EMITIÓ el movimiento (la cajera o el funcionario que lo registró),
-        // no a quién se le pagó: son dos personas distintas y en la lista sólo se
-        // veía la segunda.
-        emisor: t.issuerUserId != null ? (emisores.get(t.issuerUserId) ?? null) : null,
-        // El consecutivo con el que el movimiento se conoce en el legacy: es el
-        // número por el que pregunta contabilidad cuando cuadra las dos listas.
-        codigo: t.legacyId,
-        debit: num(t.debit), credit: num(t.credit),
-        amount: t.type === 'EXPENSE' ? num(t.debit) : num(t.credit),
-        payer: subName(t.subscriber) ?? t.payerName ?? '—',
-        subscriberId: t.subscriber?.id ?? null,
-        method: t.method, account: t.accountName, bank: t.bankName,
-        invoiceTid: t.invoice?.tid ?? null, status: t.status, note: t.note,
-        ...comprobanteDe(t),
-        receiptId: t.receiptLinks[0]?.receiptId ?? null,
-      })),
-      total, page, pageSize, pages: Math.ceil(total / pageSize),
-      totales: {
-        ingresos: num(sumas._sum.credit),
-        egresos: num(sumas._sum.debit),
-        balance: round2(num(sumas._sum.credit) - num(sumas._sum.debit)),
-        /** Movimientos de la lista que NO entran en el total (arrastre de caja). */
-        arrastres,
-      },
-    };
+    return rows.map((t) => ({
+      codigo: t.legacyId,
+      date: t.date,
+      // Hora del registro como texto de Colombia: una celda de fecha de Excel no tiene zona.
+      hora: t.createdAt.toLocaleTimeString('es-CO', { timeZone: 'America/Bogota', hour: '2-digit', minute: '2-digit', hour12: false }),
+      type: t.type,
+      account: t.accountName ?? t.bankName ?? null,
+      payer: subName(t.subscriber) ?? t.payerName ?? '',
+      abonado: t.subscriber?.abonado ?? null,
+      note: t.note,
+      emisor: t.issuerUserId != null ? (emisores.get(t.issuerUserId) ?? null) : null,
+      category: t.category,
+      invoiceTid: t.invoice?.tid ?? null,
+      method: t.method,
+      amount: t.type === 'EXPENSE' ? num(t.debit) : num(t.credit),
+      status: t.status,
+      comprobante: comprobanteDe(t).attach != null,
+    }));
   }
 
   /** Adjunta (o reemplaza) el comprobante/evidencia de un movimiento. */
@@ -495,6 +569,11 @@ export class TreasuryService {
 
     const movimientos = txs.map((t) => ({
       id: t.id, date: t.date, type: t.type, category: t.category,
+      // El consecutivo del legacy: es el número por el que se busca el movimiento para
+      // anularlo (la lista de /tesoreria abre por él). Sin este dato, del cierre había
+      // que salir a buscar el pago por nombre y monto uno a uno. Null = nacido aquí y
+      // todavía sin viajar al legacy.
+      codigo: t.legacyId,
       transfer: t.type === 'TRANSFER',
       arrastre: esArrastre(t),
       efectivo: esEfectivo(t),
@@ -551,6 +630,14 @@ export class TreasuryService {
       cashAccountId,
       account: account ? { holder: account.holder, accountNumber: account.accountNumber } : null,
       yaCerrado: !!cerrado,
+      /**
+       * true = este día no tiene NINGÚN movimiento propio: lo que hay en el cajón es
+       * sólo el arrastre que dejó el cierre anterior. La pantalla no debe ofrecer
+       * cerrar (el backend además lo rechaza con `motivo: 'sin-actividad'`): cerrar un
+       * día en blanco lo deja marcado como cerrado y le quita a la cajera el botón de
+       * abrir la caja, sin manera de volver atrás.
+       */
+      sinActividad: movimientos.filter((m) => !m.arrastre).length === 0,
       cajero: cerrado?.payerName ?? null,
       cerradoEl: cerrado?.createdAt ?? null,
       /** null = no se sabe (cierre migrado: el legacy no guardaba la hora por caja). */
@@ -578,12 +665,11 @@ export class TreasuryService {
    *
    * Réplica de lo que armaba `Invoices::printinvoice()` en el legacy: el renglón NO
    * dice "Abono a factura #123", dice el MES facturado y el número de cuenta
-   * (`julio CTA:123456`) — o el producto cuando la factura es fija —, y debajo van
-   * las facturas que el cliente sigue debiendo. Eso es lo que la cajera le lee al
+   * (`julio CTA:123456`) —nunca el plan ni el servicio—, y debajo van las facturas
+   * que el cliente sigue debiendo. Eso es lo que la cajera le lee al
    * cliente cuando pregunta "¿y entonces qué me falta?".
    */
   async receiptPdfData(id: string) {
-    const ITEM = { select: { productName: true }, take: 1, orderBy: { createdAt: 'asc' as const } };
     const r = await this.prisma.paymentReceipt.findUnique({
       where: { id },
       include: {
@@ -609,7 +695,12 @@ export class TreasuryService {
                 // el papel partiría el adelanto al precio de lista y saldría un renglón
                 // de más con el resto suelto.
                 advance: { select: { id: true, monthlyNet: true } },
-                invoice: { select: { tid: true, kind: true, invoiceDate: true, items: ITEM } },
+                // De los `items` sólo se mira si el cargo es una AFILIACIÓN, que es el
+                // único renglón que NO se rotula por mes (ver `conceptoFactura`); el
+                // plan de una mensualidad sigue sin salir en el papel.
+                invoice: {
+                  select: { tid: true, invoiceDate: true, items: { select: { productName: true } } },
+                },
                 // Cuando el recaudo es SÓLO anticipo el recibo no cuelga de ninguna
                 // factura, así que el cliente y la sede del papel salen de aquí.
                 subscriberId: true,
@@ -685,9 +776,11 @@ export class TreasuryService {
     const pendientes = subscriberId
       ? await this.prisma.subInvoice.findMany({
           where: { subscriberId, status: { in: ['DUE', 'PARTIAL'] } },
+          // El bloque de pendientes se rotula por MES, salvo la afiliación: los
+          // `items` viajan sólo para reconocerla (ver `conceptoFactura`).
           select: {
-            id: true, tid: true, kind: true, invoiceDate: true, total: true, paidAmount: true,
-            items: ITEM,
+            id: true, tid: true, invoiceDate: true, total: true, paidAmount: true,
+            items: { select: { productName: true } },
           },
           orderBy: { invoiceDate: 'asc' },
         })
@@ -788,6 +881,7 @@ export class TreasuryService {
       movimientos: a.movimientos.map((m) => ({
         date: m.date, note: m.note, payer: m.payer, category: m.category,
         method: m.method, type: m.type, amount: m.amount, firma: m.firma,
+        codigo: m.codigo,
       })),
     };
   }

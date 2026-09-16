@@ -1,4 +1,4 @@
-import { whereDelDia } from './agenda-dia';
+import { whereDelDia, whereTrabajoDelDia } from './agenda-dia';
 
 /** Un día de Colombia tal como Prisma lo escribe en una columna `date`. */
 const dia = (ymd: string) => {
@@ -42,5 +42,48 @@ describe('whereDelDia', () => {
     // Dos `Date` distintos con la misma medianoche UTC son el mismo día. Con un
     // `===` esto devolvería la rama de "otro día" y el arrastre no ocurriría nunca.
     expect(whereDelDia(dia('2026-08-11'), HOY).OR).toBeDefined();
+  });
+});
+
+/**
+ * El trabajo del día del técnico — lo que ve en `/soporte` desde el 2026-09-10.
+ *
+ * Lo que se fija aquí no es la forma del `where` sino los cuatro renglones que NO
+ * pueden faltar. Cada uno tapa un agujero por el que el técnico perdería trabajo de
+ * vista: si se cae el de "empezado" queda anclado sin ver a qué; si se cae el de
+ * "asignado hoy sin agendar" desaparece 1 de cada 4 órdenes que cierra; y si se cae
+ * el de "cerrado hoy", el día terminado se ve igual que uno en blanco.
+ */
+describe('whereTrabajoDelDia', () => {
+  const renglones = () => whereTrabajoDelDia(HOY).OR ?? [];
+
+  it('trae la agenda de hoy, con lo atrasado que sigue abierto', () => {
+    expect(renglones()[0]).toEqual(whereDelDia(HOY, HOY));
+  });
+
+  it('trae lo EMPEZADO, esté agendado o no', () => {
+    expect(renglones()).toContainEqual({ status: 'REALIZANDO' });
+  });
+
+  it('trae lo asignado HOY sin agendar (la cajera abre y el técnico cierra el mismo día)', () => {
+    expect(renglones()).toContainEqual({
+      scheduledFor: null,
+      status: { in: ['PENDIENTE', 'REALIZANDO'] },
+      created: HOY,
+    });
+  });
+
+  it('trae lo que cerró o apartó hoy, para que vea lo que lleva hecho', () => {
+    const r = renglones();
+    expect(r).toContainEqual({ finalDate: HOY });
+    expect(r.some((c: any) => c.resolvedAt)).toBe(true);
+    expect(r.some((c: any) => c.skippedAt)).toBe(true);
+  });
+
+  it('NO trae su historial: nada abierto sin fecha de días anteriores', () => {
+    // El renglón de lo no agendado exige `created: HOY`. Sin eso volverían las 966
+    // órdenes de toda su vida, que es justo lo que el usuario pidió quitar.
+    const sinAgendar = renglones().find((c: any) => c.scheduledFor === null) as any;
+    expect(sinAgendar.created).toEqual(HOY);
   });
 });

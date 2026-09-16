@@ -21,6 +21,8 @@ export interface SiigoInvoiceResult {
   number?: string;
   /** CUFE / sello electrónico */
   cufe?: string;
+  /** Estado del sello ante la DIAN: 'Accepted' | 'Rejected' | 'Draft' | 'Processing'. */
+  stampStatus?: string;
   /** URL pública del PDF */
   pdfUrl?: string;
   raw: any;
@@ -105,13 +107,20 @@ export class SiigoClient {
     }
     if (res.status >= 200 && res.status < 300) {
       // Siigo devuelve stamp con cufe + public_url del PDF cuando la factura es electrónica.
+      // 2xx no significa "timbrada": Siigo crea el documento y aparte informa qué hizo la
+      // DIAN con él en `stamp`. Un `Rejected` (o un `Draft`, si no se pidió el envío) es un
+      // documento que NO es factura electrónica todavía, y hay que decirlo.
+      const stamp = raw?.stamp ?? {};
+      const obs = Array.isArray(stamp.observations) ? stamp.observations.join(' | ') : stamp.observations;
       return {
         ok: true,
         httpCode: res.status,
         id: raw?.id,
         number: raw?.number != null ? String(raw.number) : raw?.name,
-        cufe: raw?.stamp?.cufe ?? raw?.metadata?.cufe,
+        cufe: stamp.cufe ?? raw?.metadata?.cufe,
+        stampStatus: stamp.status,
         pdfUrl: raw?.public_url ?? raw?.pdf_url,
+        error: stamp.status === 'Rejected' ? `La DIAN rechazó el documento: ${obs ?? 'sin detalle'}` : undefined,
         raw,
       };
     }

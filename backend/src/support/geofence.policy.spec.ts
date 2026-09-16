@@ -106,8 +106,16 @@ describe('evaluarCierre — cliente sin coordenada', () => {
     expect(v).toEqual({ accion: 'permitir-y-georreferenciar' });
   });
 
-  it('si tampoco hay punto del técnico, simplemente pasa', () => {
+  // 2026-09-10: «exigir el registro de las coordenadas de ubicación». Que el cliente
+  // no tenga punto guardado dejó de ser una puerta — era por donde pasaba entero un
+  // cierre sin GPS, y justo en los abonados peor georreferenciados.
+  it('en modo exigir, sin punto del técnico NO se cierra aunque el cliente no tenga', () => {
     const v = evaluarCierre(con({ cliente: null, tecnico: null }));
+    expect(v).toMatchObject({ accion: 'exigir-ubicacion' });
+  });
+
+  it('observando sí pasa: sin punto de nadie no hay nada que comparar ni que anotar', () => {
+    const v = evaluarCierre(con({ modo: 'observar', cliente: null, tecnico: null }));
     expect(v).toEqual({ accion: 'permitir', motivo: 'sin-datos' });
   });
 });
@@ -118,25 +126,28 @@ describe('evaluarCierre — con coordenada del cliente', () => {
     expect(v.accion).toBe('permitir');
   });
 
-  it('desde la oficina, a 4,5 km, exige justificación', () => {
+  it('desde la oficina, a 4,5 km, NO se cierra', () => {
     const v = evaluarCierre(con({ tecnico: { ...OFICINA, accuracyM: 10 } }));
-    expect(v.accion).toBe('exigir-justificacion');
-    if (v.accion === 'exigir-justificacion') expect(v.distanciaM).toBeGreaterThan(2500);
+    expect(v.accion).toBe('exigir-presencia');
+    if (v.accion === 'exigir-presencia') expect(v.distanciaM).toBeGreaterThan(2500);
   });
 
-  it('con una justificación suficiente, deja cerrar y lo marca', () => {
+  it('escribir un motivo ya NO abre la cerca (2026-09-10)', () => {
+    // Antes bastaban 10 caracteres y la orden se cerraba igual; el usuario lo quitó:
+    // «no dejar que cierren las órdenes si no están en la ubicación del cliente».
+    const v = evaluarCierre({
+      ...con({ tecnico: { ...OFICINA, accuracyM: 10 } }),
+      // Aunque el cliente viejo siga mandando el campo, la política ni lo mira.
+      ...({ justificacion: 'El cliente confirmó por teléfono que ya tiene servicio.' } as object),
+    });
+    expect(v.accion).toBe('exigir-presencia');
+  });
+
+  it('la salida es el exento, no el técnico: administración sí puede cerrarla', () => {
     const v = evaluarCierre(
-      con({
-        tecnico: { ...OFICINA, accuracyM: 10 },
-        justificacion: 'El cliente confirmó por teléfono que ya tiene servicio.',
-      }),
+      con({ tecnico: { ...OFICINA, accuracyM: 10 }, permisosUsuario: ['area.administracion'] }),
     );
-    expect(v.accion).toBe('permitir-justificado');
-  });
-
-  it('una justificación de dos palabras no vale: sería un trámite vacío', () => {
-    const v = evaluarCierre(con({ tecnico: { ...OFICINA, accuracyM: 10 }, justificacion: 'ya' }));
-    expect(v.accion).toBe('exigir-justificacion');
+    expect(v.accion).toBe('permitir');
   });
 
   it('un GPS impreciso no bloquea a quien sí está en la casa', () => {
@@ -148,7 +159,7 @@ describe('evaluarCierre — con coordenada del cliente', () => {
 
   it('pero una precisión inventada NO abre la cerca desde la oficina', () => {
     const v = evaluarCierre(con({ tecnico: { ...OFICINA, accuracyM: 999999 } }));
-    expect(v.accion).toBe('exigir-justificacion');
+    expect(v.accion).toBe('exigir-presencia');
   });
 
   it('sin ubicación y en modo exigir, la pide', () => {

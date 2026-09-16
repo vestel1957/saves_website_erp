@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, NotFoundException } from '../core/http/errores';
+import { BadRequestException, ForbiddenException, HttpException, HttpStatus, NotFoundException } from '../core/http/errores';
 import type { EmisorDeEventos } from '../core/eventos';
 import { Type } from 'class-transformer';
 import { IsArray, IsDateString, IsIn, IsInt, IsNumber, IsObject, IsOptional, IsString, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
@@ -6,7 +6,9 @@ import { Prisma, ServiceStatus, TicketStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { MikrotikService } from '../network/mikrotik.service';
+import { conservaEstadoAlReconectar } from '../network/estado-al-reconectar';
 import type { GenieacsService } from '../network/genieacs.service';
+import type { OltService } from '../network/olt.service';
 
 /**
  * Cuánto espera QUIEN CIERRA la orden a que contesten los equipos de televisión.
@@ -18,27 +20,37 @@ import type { GenieacsService } from '../network/genieacs.service';
 const ESPERA_EQUIPOS_MS = 20_000;
 import { parsePoint } from '../geo/geo.util';
 import { GeofenceService, type ResultadoCerca } from './geofence.service';
+import { faltaLaFoto, SIN_FOTO } from './foto-cierre.policy';
+import { faltaLaIpRemota, SIN_IP_REMOTA } from './ip-remota.policy';
+import { esUsuarioPppUtil } from '../subscribers/conexion-alta';
 import { ResponsibilityNotifierService } from '../responsibilities/responsibility-notifier.service';
 import {
-  BAJA_APLICADA_EVENT, TICKET_ANULADA_EVENT, TICKET_ASIGNADO_EVENT, TICKET_CREADO_EVENT, TICKET_RESUELTO_EVENT,
-  type BajaAplicadaEvent, type TicketAsignadoEvent, type TicketResueltoEvent,
+  ACTIVACION_APLICADA_EVENT, BAJA_APLICADA_EVENT, RECONEXION_APLICADA_ORDEN_EVENT, TICKET_ANULADA_EVENT, TICKET_ASIGNADO_EVENT, TICKET_DESASIGNADO_EVENT,
+  TICKET_CREADO_EVENT, TICKET_RESUELTO_EVENT,
+  type ActivacionAplicadaEvent, type BajaAplicadaEvent, type ReconexionAplicadaOrdenEvent, type TicketAsignadoEvent, type TicketDesasignadoEvent, type TicketResueltoEvent,
 } from './support.events';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CARGO_TECNICO } from '../staff/cargos-legacy';
 import { bodegaMaterialDelTecnico, esTecnicoDeCampo, fichaDelUsuario } from '../common/tecnico-scope';
+import { bodegasConMaterial, buscarMaterialConStock, FiltroMaterial } from '../common/material-stock';
 import { hoyEnColombia } from '../common/fecha-colombia';
+import { ORDEN_CRONOLOGICO } from './orden-cronologico';
+import { EquipoReservaService, tipoConReserva } from './equipo-reserva.service';
+import { exigirSedeSuscriptor } from '../common/sede-scope';
 import { num, round2 } from '../common/money';
-import { puedeAbrirOrden } from './turno';
+import { puedeEmpezarOrden } from './turno';
 import { nextTid, TID_SEQ } from '../common/tid';
 import { AgendaService } from './agenda.service';
 import { autorDeOrden, autorDeSeguimiento, SEGUIMIENTO_DEL_SISTEMA, type FirmaDeSeguimiento } from './autor-orden';
-import { ETIQUETA_CLASE, esCambioDeMegas, esClaseOrden, esReconexion, esReconexionPorDias, esRetiroVoluntario, esTraslado, MAX_DIAS_GRACIA, motivoDeRetiroCanonico, MOTIVOS_RETIRO, resolverClase, sentidoDeMegas, serviciosDeOrden, serviciosDeReconexion } from './order-types';
+import { ETIQUETA_CLASE, esAgregarInternet, esCambioDeMegas, esClaseOrden, esReconexion, esReconexionPorDias, esRetiroVoluntario, esTrabajoDeConexion, esTraslado, MAX_DIAS_GRACIA, motivoDeRetiroCanonico, MOTIVOS_RETIRO, ordenLlevaPlanInternet, resolverClase, sentidoDeMegas, serviciosDeOrden, serviciosDeReconexion } from './order-types';
 import type { SubscribersService } from '../subscribers/subscribers.service';
 import type { ProrrateoReconexionService } from '../billing/prorrateo-reconexion.service';
 import type { CargoOrdenService, ResultadoCargo } from '../billing/cargo-orden.service';
 import { cargoDeTipoDeOrden } from '../billing/cargos-orden';
-import { direccionDe, nomenclaturaLimpia } from '../common/subscriber-address';
+import { direccionDe } from '../common/subscriber-address';
+import { subName } from '../common/subscriber-name';
+import { armarTraslado, TrasladoDto, type FichaParaTraslado } from '../common/traslado';
 import { OrderScoreService } from './order-score.service';
 
 /** Carpeta de firmas PNG dibujadas de las órdenes. */
@@ -47,28 +59,12 @@ const SIGNATURE_ROOT = join(process.cwd(), 'uploads', 'signatures');
 export const TICKET_PRIORITIES = ['Baja', 'Media', 'Alta', 'Urgente'] as const;
 
 /**
- * A dónde se muda el cliente. Solo lo lleva la orden de 'Traslado'.
- *
- * Son las mismas casillas de la ficha (`Subscriber.nomenclature` + barrio y zona),
- * y no un renglón de texto libre, por la misma razón por la que la ficha las tiene
- * partidas: de ahí sale la dirección que ve el técnico, la que imprime el contrato
- * y la que el writeback escribe columna a columna en el MySQL del legacy.
+ * A dónde se muda el cliente (`TrasladoDto`) y cómo se arma ese destino, ahora en
+ * `common/traslado.ts`: lo comparten la ORDEN de traslado y la FACTURA de traslado
+ * (ver el encabezado de ese fichero). Se re-exporta para no romper a quien lo
+ * importe desde aquí, que es donde vivía.
  */
-export class TrasladoDto {
-  /** Las 12 casillas (`nomenclatura`, `numero1`…). Se filtran en el servidor. */
-  @IsObject() nomenclature!: Record<string, unknown>;
-  /**
-   * Zona nueva. Van los ids del legacy en texto, como en la ficha. Son opcionales
-   * porque la mudanza suele ser dentro del mismo barrio: lo que no venga se queda
-   * como está.
-   */
-  @IsOptional() @IsString() @MaxLength(50) departmentRef?: string;
-  @IsOptional() @IsString() @MaxLength(50) cityRef?: string;
-  @IsOptional() @IsString() @MaxLength(50) localityRef?: string;
-  @IsOptional() @IsString() @MaxLength(50) neighborhood?: string;
-  /** La dirección "comercial" suelta, si en esa ficha se usa (ver `direccionDe`). */
-  @IsOptional() @IsString() @MaxLength(255) addressLine?: string;
-}
+export { TrasladoDto };
 
 export class CreateTicketDto {
   @IsString() subscriberId!: string;
@@ -125,6 +121,18 @@ export class CreateTicketDto {
    * que se le cobra ni lo que la red le entrega.
    */
   @IsOptional() @IsString() planToId?: string;
+  /**
+   * «Este trabajo YA está facturado»: el número (`SubInvoice.tid`) de la factura con
+   * la que se le cobró en ventanilla.
+   *
+   * Apaga el cargo automático del tipo de orden y ata la orden a esa factura. Es el
+   * mismo `yaFacturada` con el que nace la orden que dispara un pago
+   * (`OrdenAlPagarService`), pero dicho a mano: la cajera que factura primero y abre
+   * la orden después recorría los dos caminos y el cliente acababa con dos facturas
+   * de 30.000 del mismo trabajo. Las candidatas las sirve
+   * `GET /support/cargo-orden?tipo=…&subscriberId=…`.
+   */
+  @IsOptional() @IsInt() @Min(1) yaFacturadaTid?: number;
 }
 /**
  * Corrección de una orden ya registrada: lo que se escribió mal al abrirla.
@@ -196,8 +204,12 @@ export class UpdateStatusDto {
   @IsOptional() @IsNumber() @Min(-90) @Max(90) lat?: number;
   @IsOptional() @IsNumber() @Min(-180) @Max(180) lng?: number;
   @IsOptional() @IsNumber() @Min(0) accuracyM?: number;
-  /** Motivo para cerrar estando fuera del radio. */
-  @IsOptional() @IsString() @MaxLength(500) justificacion?: string;
+  /**
+   * Ya NO existe el "cerrar fuera de rango escribiendo un motivo" (2026-09-10): el
+   * campo se quitó del DTO a propósito, para que no quede una puerta que el servidor
+   * siga aceptando. Un cliente web sin recargar puede seguir mandándolo; `validar`
+   * descarta lo que el DTO no declara, así que llega y no hace nada.
+   */
 }
 export class AssignDto {
   @IsOptional() @IsString() assigned?: string; // técnico
@@ -226,6 +238,10 @@ export class AssignEquipmentItemDto {
   @IsOptional() @Type(() => Number) @IsInt() port?: number;
   @IsOptional() @Type(() => Number) @IsInt() vlan?: number;
   @IsOptional() @Type(() => Number) @IsInt() nat?: number;
+  /** Caja NAP elegida en la pantalla (id de aquí). Se traduce a `nat` — ver `resolverPuertos`. */
+  @IsOptional() @IsString() napId?: string;
+  /** Puerto de esa caja (id de aquí). Se traduce a `puerto` y deja el puerto ocupado. */
+  @IsOptional() @IsString() portId?: string;
   @IsOptional() @IsString() master?: string;
   @IsOptional() @Type(() => Number) @IsInt() meters?: number;
   @IsOptional() @IsString() accessories?: string;
@@ -251,10 +267,32 @@ export class AssignEquipmentDto {
   @IsOptional() @Type(() => Number) @IsInt() port?: number;
   @IsOptional() @Type(() => Number) @IsInt() vlan?: number;
   @IsOptional() @Type(() => Number) @IsInt() nat?: number;
+  @IsOptional() @IsString() napId?: string;
+  @IsOptional() @IsString() portId?: string;
   @IsOptional() @IsString() master?: string;
   @IsOptional() @Type(() => Number) @IsInt() meters?: number;
   @IsOptional() @IsString() accessories?: string;
   @IsOptional() @IsString() serial?: string;
+}
+
+/**
+ * Mover un equipo YA INSTALADO de caja NAP / puerto desde la pestaña Equipos.
+ *
+ * - `portId` (+ `napId`) → queda colgado de ese puerto.
+ * - `quitarCaja` → ya no cuelga de ninguna caja (se sueltan `nat` y `puerto`).
+ * - Ninguno de los dos → sólo se vuelve a leer la VLAN de la OLT.
+ *
+ * La VLAN no viaja: la escribe el servidor con la del service-port de la ONU.
+ */
+export class UbicarEquipoDto {
+  @IsOptional() @IsString() napId?: string;
+  @IsOptional() @IsString() portId?: string;
+  @IsOptional() @Type(() => Boolean) quitarCaja?: boolean;
+  /**
+   * Serial rotulado de la ONU. Es con lo que se la encuentra en la OLT: hay equipos
+   * importados con "solicitar" o vacío en el serial, y sin él no hay ONU que leer.
+   */
+  @IsOptional() @IsString() @MaxLength(100) serial?: string;
 }
 
 /** Un ítem de consumo de material. */
@@ -365,6 +403,12 @@ export class SupportWriteService {
      * que usa el botón "Cambiar plan", no una copia.
      */
     private readonly planes?: SubscribersService,
+    /**
+     * Opcional: la VLAN de un equipo se lee del service-port de su ONU en la OLT
+     * (ver `ubicarEquipo`). Sin él, mover la caja NAP funciona igual y la VLAN se
+     * queda como estaba.
+     */
+    private readonly olt?: OltService,
   ) {}
 
   /**
@@ -429,11 +473,21 @@ export class SupportWriteService {
    * @param opts.planOpcional  deja abrir una orden de MEGAS sin el plan destino, por
    *   lo mismo: el cliente pide "más megas" por WhatsApp y a qué plan se pasa lo
    *   confirma quien atienda la orden, con el precio delante.
+   * @param opts.yaFacturada  el trabajo YA SE COBRÓ y esta es la factura con la que
+   *   se pagó. Es el camino de la factura de traslado (2026-09-08): allí se factura
+   *   primero y la orden nace sola al pagarse, así que volver a llamar al cargo
+   *   automático le cobraría al cliente los 30.000 dos veces. La orden se abre
+   *   apuntando a ESA factura (`chargeInvoiceTid`, y `moveInvoiceTid` si es un
+   *   traslado), que es como quedan las que sí se cobran al abrirse.
    */
   async createTicket(
     dto: CreateTicketDto,
     user: AuthUser,
-    opts: { destinoOpcional?: boolean; planOpcional?: boolean } = {},
+    opts: {
+      destinoOpcional?: boolean;
+      planOpcional?: boolean;
+      yaFacturada?: { tid: number; concepto?: string | null };
+    } = {},
   ) {
     // El técnico de campo ATIENDE órdenes, no las abre (2026-07-31, decisión del
     // usuario): quien las genera es quien recibe al cliente —caja, administración o
@@ -443,7 +497,13 @@ export class SupportWriteService {
     }
     const sub = await this.prisma.subscriber.findUnique({
       where: { id: dto.subscriberId },
-      select: { id: true, nomenclature: true, addressLine: true, neighborhood: true },
+      // `branch` sólo para dirigir el aviso de "orden sin técnico" a quien reparte
+      // EN esa sede (ver `alcanzanSede`): sin él, la orden de Mocoa le sonaba
+      // también a las cajeras de Villavicencio, que no la iban a repartir nunca.
+      select: {
+        id: true, nomenclature: true, addressLine: true, neighborhood: true,
+        branch: { select: { legacyId: true } },
+      },
     });
     if (!sub) throw new NotFoundException('Cliente no encontrado');
     // A dónde se muda, si es un traslado. Se resuelve ANTES de tocar nada: una
@@ -542,6 +602,7 @@ export class SupportWriteService {
         body: `${ETIQUETA_CLASE[clase]} · ${dto.type}${dto.priority && dto.priority !== 'Media' ? ` · prioridad ${dto.priority}` : ''}`,
         link: `/soporte/${creada.id}`,
         groupKey: `ticket:${creada.id}`,
+        sede: sub.branch?.legacyId ?? null,
       });
     }
 
@@ -572,9 +633,30 @@ export class SupportWriteService {
     // El traslado es el único con condición: el que entra por chat nace SIN destino
     // (`destinoOpcional`) y ése no se cobra — la dirección está por confirmar y la
     // cobertura también, así que cobrarlo sería devolver la plata después.
-    const deEsteTipo = cargoDeTipoDeOrden(dto.type);
+    //
+    // Y no se cobra NADA cuando el trabajo llega ya facturado (`yaFacturada`): la
+    // orden que nace del pago de una factura de traslado se ata a esa factura y se
+    // acabó — cobrar aquí sería el segundo cargo de 30.000 del mismo trabajo.
+    //
+    // Y tampoco cuando quien abre la orden DICE que ya está facturada
+    // (`yaFacturadaTid`): es el mismo caso, pero a mano — la cajera cobra en
+    // ventanilla y abre la orden después.
+    const yaFacturada = opts.yaFacturada ?? (await this.facturaYaCobrada(dto, sub.id));
+    const deEsteTipo = yaFacturada ? null : cargoDeTipoDeOrden(dto.type);
     const cargo = deEsteTipo && (!esTraslado(dto.type) || traslado) ? deEsteTipo : null;
     let cobro: ResultadoCargo | null = null;
+    if (yaFacturada) {
+      await this.prisma.ticket
+        .update({
+          where: { id: creada.id },
+          data: {
+            chargeInvoiceTid: yaFacturada.tid,
+            chargeConcept: yaFacturada.concepto ?? null,
+            ...(traslado ? { moveInvoiceTid: yaFacturada.tid } : {}),
+          },
+        })
+        .catch(() => undefined);
+    }
     if (cargo && this.cargoOrden) {
       cobro = await this.cargoOrden.cobrar(cargo, sub.id, {
         ctx: `orden #${creada.code}`,
@@ -611,9 +693,13 @@ export class SupportWriteService {
         ? {
             desde: traslado.direccionVieja,
             hasta: traslado.direccionNueva,
-            factura: cobro?.invoiceTid ?? null,
-            cobrado: cobro?.cobrado ?? false,
-            mensaje: cobro?.mensaje ?? 'No se facturó el traslado.',
+            // La factura es la que se acaba de emitir... o la que ya se había
+            // pagado, si la orden nació justamente del pago de esa factura.
+            factura: yaFacturada?.tid ?? cobro?.invoiceTid ?? null,
+            cobrado: !!yaFacturada || (cobro?.cobrado ?? false),
+            mensaje: yaFacturada
+              ? `Ya estaba cobrado en la factura #${yaFacturada.tid}.`
+              : cobro?.mensaje ?? 'No se facturó el traslado.',
           }
         : undefined,
       /**
@@ -679,6 +765,50 @@ export class SupportWriteService {
   }
 
   /**
+   * «Esto ya lo pagó»: la factura con la que se cobró el trabajo en ventanilla.
+   *
+   * Existe porque un mismo trabajo se puede cobrar por dos caminos —la factura
+   * primero (motivo de `motivos-factura.ts`; la orden nace al pagarse) o la orden
+   * primero (el cargo automático de `cargos-orden.ts`)— y quien factura a mano y
+   * abre la orden después recorre los dos: el cliente acaba con dos facturas de
+   * 30.000 del mismo trabajo (pasó con la #505077 el 2026-09-08).
+   *
+   * Se COMPRUEBA en vez de creérselo: el número viaja en el cuerpo de la petición y
+   * atar la orden a la factura de otro cliente —o a una anulada, o a una que ya es
+   * de otra orden— sería regalar el cargo. Y se lanza en vez de ignorarlo en
+   * silencio: quien marcó la casilla cree que no se va a cobrar, y quedarse callado
+   * es emitir la segunda factura sin decirlo.
+   */
+  private async facturaYaCobrada(
+    dto: CreateTicketDto,
+    subscriberId: string,
+  ): Promise<{ tid: number; concepto?: string | null } | undefined> {
+    const tid = dto.yaFacturadaTid;
+    if (!tid) return undefined;
+    const inv = await this.prisma.subInvoice.findUnique({
+      where: { tid },
+      select: {
+        tid: true, subscriberId: true, status: true,
+        items: { take: 1, select: { productName: true, description: true } },
+      },
+    });
+    if (!inv || inv.subscriberId !== subscriberId) {
+      throw new BadRequestException(`La factura #${tid} no es de este cliente.`);
+    }
+    if (inv.status === 'CANCELED') {
+      throw new BadRequestException(`La factura #${tid} está anulada: no cobra nada.`);
+    }
+    const otra = await this.prisma.ticket.findFirst({
+      where: { OR: [{ chargeInvoiceTid: tid }, { moveInvoiceTid: tid }] },
+      select: { code: true },
+    });
+    if (otra) {
+      throw new BadRequestException(`La factura #${tid} ya es de la orden #${otra.code}.`);
+    }
+    return { tid, concepto: inv.items[0]?.productName ?? inv.items[0]?.description ?? null };
+  }
+
+  /**
    * Valida y arma el traslado de una orden nueva: a dónde va el cliente, de dónde
    * sale y qué hay que escribirle en la ficha.
    *
@@ -700,10 +830,17 @@ export class SupportWriteService {
   }
 
   /**
-   * Valida el CAMBIO DE MEGAS de una orden nueva: a qué plan se pasa el cliente, de
+   * Valida el PLAN DE INTERNET de una orden nueva: a qué plan se pasa el cliente, de
    * cuál viene y qué hay que escribir en la orden.
    *
-   * Devuelve `null` si la orden no es de megas — y ahí el `planToId` que venga se
+   * Cubre las dos órdenes que llevan plan destino (`ordenLlevaPlanInternet`):
+   *   · 'Subir megas' / 'Bajar megas' — el cliente se MUEVE de un plan a otro; hay
+   *     un plan de origen y el sentido tiene que cuadrar con el nombre de la orden.
+   *   · 'AgregarInternet' — el cliente NO tiene internet y se le pone el primero:
+   *     no hay origen que comparar ni sentido que comprobar, y si ya lo tuviera la
+   *     orden está mal abierta (para eso están las de megas).
+   *
+   * Devuelve `null` si la orden no lleva plan — y ahí el `planToId` que venga se
    * ignora a propósito, igual que los días de gracia fuera de la reconexión por
    * días: un dato que nadie va a aplicar no se guarda.
    *
@@ -718,11 +855,14 @@ export class SupportWriteService {
     planOpcional = false,
     origenFijo?: { planId: string | null; nombre: string | null; megas: number | null } | null,
   ) {
-    if (!esCambioDeMegas(dto.type)) return null;
+    if (!ordenLlevaPlanInternet(dto.type)) return null;
+    const alta = esAgregarInternet(dto.type);
     if (!dto.planToId) {
       if (planOpcional) return null;
       throw new BadRequestException(
-        'Di a qué plan se pasa el cliente: una orden de megas sin plan no dice cuántas son.',
+        alta
+          ? 'Di con qué plan de internet queda el cliente: sin plan, cerrar la orden no le monta nada.'
+          : 'Di a qué plan se pasa el cliente: una orden de megas sin plan no dice cuántas son.',
       );
     }
     const plan = await this.prisma.plan.findUnique({
@@ -759,6 +899,16 @@ export class SupportWriteService {
         : null;
     }
 
+    // En un alta de internet, tener ya el servicio contratado es la señal de que la
+    // orden está mal elegida: lo que se quiere ahí es 'Subir megas' / 'Bajar megas'.
+    // Se mira que la fila exista con plan, no que esté ACTIVA: un internet cortado
+    // sigue siendo internet contratado y no se "agrega" otra vez.
+    if (alta && actual?.planId) {
+      throw new BadRequestException(
+        `El cliente ya tiene internet contratado («${actual.nombre ?? 'plan sin nombre'}»). `
+        + 'Para moverlo de plan usa \'Subir megas\' o \'Bajar megas\'.',
+      );
+    }
     if (actual?.planId && actual.planId === plan.id) {
       throw new BadRequestException(`El cliente ya está en «${plan.name}»: esa orden no le cambia nada.`);
     }
@@ -779,8 +929,14 @@ export class SupportWriteService {
       }
     }
 
-    const deA = `de ${actual?.megas != null ? `${actual.megas} Megas` : actual?.nombre ?? 'plan sin registrar'}`
-      + ` a ${plan.megas != null ? `${plan.megas} Megas` : plan.name}`;
+    // En el alta no hay "de dónde": la frase dice con qué queda, no de cuánto a
+    // cuánto. Escribir "de plan sin registrar a 300 Megas" en una orden de agregar
+    // internet sólo confunde a quien la lee (aquí y en el legacy, que recibe esta
+    // misma línea dentro de la observación).
+    const deA = alta
+      ? `con ${plan.megas != null ? `${plan.megas} Megas` : plan.name}`
+      : `de ${actual?.megas != null ? `${actual.megas} Megas` : actual?.nombre ?? 'plan sin registrar'}`
+        + ` a ${plan.megas != null ? `${plan.megas} Megas` : plan.name}`;
     return {
       plan,
       actual,
@@ -863,6 +1019,111 @@ export class SupportWriteService {
     // decirlo, o el cliente paga el plan nuevo navegando con el viejo.
     if (router && !router.ok) partes.push(`El router no tomó el perfil: ${router.message}`);
     return { aplicado: true, mensaje: partes.join(' '), factura };
+  }
+
+  /**
+   * EL ALTA DE INTERNET de una orden 'AgregarInternet', AL CERRARLA.
+   *
+   * El cliente que sólo tenía televisión sale de aquí con internet contratado. Son
+   * cuatro cosas y ninguna se puede saltar, porque cada una la lee un sitio distinto:
+   *
+   *   1) El SERVICIO en la ficha (`SubscriberService` de kind INTERNET, vía el mismo
+   *      `changePlan` del botón "Cambiar plan"): es lo que factura la corrida mensual
+   *      y lo que la ficha enseña como "sus servicios". Sin esto el cliente sigue
+   *      "saliendo solo la TV" por más que el técnico haya cerrado la orden.
+   *   2) El USUARIO PPPoE, si no lo tenía: los que llegan del legacy con televisión
+   *      sola traen `name_s` de relleno y sin usuario no hay secret que crear.
+   *   3) El SECRET en el Mikrotik (`provision`, no `applyProfile`): el secret todavía
+   *      no existe, así que hay que crearlo —con el perfil que el paso 1 acaba de
+   *      dejar en la ficha—, no editarlo. `provision` adopta el que ya esté.
+   *   4) LOS DÍAS QUE QUEDAN DEL MES, por el mismo prorrateo que cobra una
+   *      reconexión: el internet entra a mitad de mes y se cobra desde hoy, no el mes
+   *      entero. Aquí NO se reprecia ningún renglón —a diferencia de un cambio de
+   *      megas— porque no hay renglón de internet que repreciar: es un servicio que
+   *      no estaba en la factura.
+   *
+   * El orden importa: 1 antes que 3 (igual que en el alta de cliente, `alta.service.ts`)
+   * y 1 antes que 4 (el prorrateo saca el precio del `SubscriberService`).
+   *
+   * No puede tumbar el cierre. Si algo falla, la orden queda cerrada, sin
+   * `planAppliedAt`, y el mensaje dice exactamente qué quedó por hacer y dónde.
+   */
+  private async aplicarAltaDeInternet(
+    ticketId: string | null,
+    subscriberId: string,
+    planId: string | null,
+    code: number | null,
+    user?: AuthUser,
+  ): Promise<{ aplicado: boolean; mensaje: string; prorrateo?: unknown; router?: { ok: boolean; message: string } }> {
+    if (!planId) {
+      return {
+        aplicado: false,
+        mensaje: 'Esta orden no dice con qué plan de internet queda el cliente: asígnaselo desde su ficha (Cambiar plan).',
+      };
+    }
+    const plan = await this.prisma.plan
+      .findUnique({ where: { id: planId }, select: { id: true, name: true, megas: true } })
+      .catch(() => null);
+    if (!plan) {
+      return { aplicado: false, mensaje: 'El plan que traía la orden ya no está en el catálogo: asígnaselo al cliente desde su ficha.' };
+    }
+    if (!this.planes) {
+      return { aplicado: false, mensaje: `No se le montó el internet «${plan.name}»: hazlo desde su ficha (Cambiar plan).` };
+    }
+
+    // 1) El servicio contratado + el perfil PPP en la ficha. `pushRouter: false`
+    // porque el secret aún no existe: empujarle el perfil sólo devolvería un error
+    // confuso y el paso 3 lo crea ya con ese perfil.
+    try {
+      await this.planes.changePlan(subscriberId, plan.id, user, { allowInactive: true, pushRouter: false });
+    } catch (e) {
+      return {
+        aplicado: false,
+        mensaje: `No se le pudo montar el internet «${plan.name}»: ${(e as Error).message}. Hazlo desde su ficha (Cambiar plan).`,
+      };
+    }
+    if (ticketId) {
+      await this.prisma.ticket
+        .update({ where: { id: ticketId }, data: { planAppliedAt: new Date() } })
+        .catch(() => undefined);
+    }
+    const partes = [`El cliente quedó con internet «${plan.name}»${plan.megas != null ? ` (${plan.megas} Megas)` : ''}.`];
+
+    // 2 y 3) Usuario PPPoE y secret en el router. Que el router no responda no
+    // deshace el contrato: se dice y se reintenta desde la ficha.
+    let router: { ok: boolean; message: string } | undefined;
+    try {
+      const cred = await this.planes.asegurarCredencialesPpp(subscriberId, user);
+      if (!cred.ok) {
+        partes.push(`No se creó el secret: ${cred.motivo}`);
+      } else {
+        if (cred.creado) partes.push(`Usuario PPPoE ${cred.pppUsername} creado.`);
+        const r = await this.mikrotik.provision(subscriberId, user);
+        router = { ok: r.ok, message: r.message };
+        partes.push(r.ok ? r.message : `El router no tomó el alta: ${r.error ?? r.message}`);
+      }
+    } catch (e) {
+      router = { ok: false, message: (e as Error).message };
+      partes.push(`No se pudo dar de alta en el router: ${(e as Error).message}. Reinténtalo desde la ficha.`);
+    }
+
+    // 4) Los días que quedan del mes. Mismo cobro que una reconexión: el renglón cae
+    // en la factura del mes (o en una nueva si esa ya está pagada o timbrada), y si
+    // el internet ya estuviera facturado este mes no cobra nada — cerrar dos veces la
+    // orden no cobra dos veces.
+    let prorrateo: unknown;
+    if (this.prorrateo) {
+      const p = await this.prorrateo.aplicar(subscriberId, ['INTERNET'], {
+        ctx: code ? `orden #${code}` : 'alta de internet al cerrar la orden',
+        autor: user?.name || user?.email || 'Sistema',
+      });
+      prorrateo = p;
+      partes.push(p.mensaje);
+    } else {
+      partes.push('Los días que quedan del mes no se cobraron: revisa su factura.');
+    }
+
+    return { aplicado: true, mensaje: partes.join(' '), prorrateo, router };
   }
 
   /**
@@ -1023,51 +1284,11 @@ export class SupportWriteService {
   }
 
   /**
-   * El destino de un traslado, a partir de las casillas de dirección: a dónde va,
-   * de dónde sale y qué hay que escribirle en la ficha.
-   *
-   * Lo comparten abrir la orden y corregirla después. `mismaEsError` es la única
-   * diferencia entre las dos: al ABRIRLA, una dirección igual a la que ya tiene el
-   * cliente es un error de dedo (nadie se muda a donde ya vive); al REGISTRARLA en
-   * una orden que ya existe, es lo más normal del mundo —la orden nació en el
-   * legacy y allá ya le cambiaron la dirección a la ficha—, y ahí lo que se quiere
-   * es dejar dicho en la orden a dónde se fue, sin volver a tocar la ficha.
+   * El destino de un traslado. La mecánica vive en `common/traslado.ts` porque la
+   * comparten la orden y la factura de traslado; aquí solo se llama.
    */
-  private armarTraslado(
-    moveTo: TrasladoDto,
-    sub: { nomenclature: unknown; addressLine: string | null; neighborhood: string | null },
-    { mismaEsError = true }: { mismaEsError?: boolean } = {},
-  ) {
-    const nomenclature = nomenclaturaLimpia(moveTo.nomenclature);
-    const addressLine = moveTo.addressLine?.trim() || null;
-    const direccionNueva = direccionDe(nomenclature, addressLine);
-    if (!direccionNueva) {
-      throw new BadRequestException('La dirección nueva está vacía: escribe al menos la vía y su número.');
-    }
-    const direccionVieja = direccionDe(sub.nomenclature, sub.addressLine);
-    const mismaDireccion = !!direccionVieja && direccionVieja.toLowerCase() === direccionNueva.toLowerCase();
-    if (mismaDireccion && mismaEsError) {
-      throw new BadRequestException(`La dirección nueva es la misma que ya tiene el cliente (${direccionVieja}).`);
-    }
-
-    // La zona (departamento/ciudad/localidad/barrio) solo se toca si viene: mudarse
-    // dentro del mismo barrio es lo normal, y escribir un barrio vacío borraría el
-    // que tiene puesto.
-    const zona: Record<string, string> = {};
-    for (const k of ['departmentRef', 'cityRef', 'localityRef', 'neighborhood'] as const) {
-      const v = moveTo[k]?.trim();
-      if (v) zona[k] = v;
-    }
-
-    return {
-      destino: { nomenclature, addressLine, ...zona },
-      direccionNueva,
-      direccionVieja,
-      /** `true` si la ficha ya estaba en esa dirección: no hay nada que moverle. */
-      mismaDireccion,
-      fichaData: { nomenclature: nomenclature as Prisma.InputJsonValue, ...zona, ...(addressLine ? { addressLine } : {}) },
-      notaObservacion: `Traslado: de ${direccionVieja ?? 'dirección sin registrar'} a ${direccionNueva}.`,
-    };
+  private armarTraslado(moveTo: TrasladoDto, sub: FichaParaTraslado) {
+    return armarTraslado(moveTo, sub);
   }
 
   /**
@@ -1129,14 +1350,21 @@ export class SupportWriteService {
     const t = await this.prisma.ticket.findUnique({ where: { id } });
     if (!t) throw new NotFoundException('Orden no encontrada');
 
-    // Turno obligatorio: el técnico no cierra una orden que no le toca. La puerta de
-    // `ticketDetail` bloquea abrirla, pero cambiar el estado es un endpoint aparte y
-    // sin esto quedaba el atajo de llamarlo directamente con el id.
-    if (esTecnicoDeCampo(user)) {
-      const ficha = await fichaDelUsuario(this.prisma, user!);
+    // Una orden a la vez, y ésta es la ÚNICA puerta (2026-09-10, réplica del legacy:
+    // `Tickets.php` → `update_status`, `if ($status=="Realizando")`). Sólo se mira al
+    // EMPEZAR: con una orden ya empezada encima no se empieza una segunda. Cerrarla,
+    // anularla, devolverla a pendiente o documentarla no se bloquea nunca — si el
+    // cierre también se bloqueara, la orden que ancla no habría forma de quitarla de
+    // en medio.
+    //
+    // Los procesos internos (cron, sync, facturación) no traen usuario y siguen
+    // pasando, que es lo que hace que la reconexión automática pueda mover su orden
+    // aunque el técnico tenga una empezada.
+    if (user?.id && dto.status === 'REALIZANDO') {
+      const ficha = await fichaDelUsuario(this.prisma, user);
       if (ficha) {
-        const v = await puedeAbrirOrden(this.prisma, ficha.id, { id, status: t.status });
-        if (!v.permitido) throw new ForbiddenException(v.motivo);
+        const v = await puedeEmpezarOrden(this.prisma, ficha.id, { id }, user);
+        if (!v.permitido) throw new ForbiddenException({ message: v.motivo, code: 'ORDEN_EN_CURSO', enCurso: v.enCurso });
       }
     }
 
@@ -1154,6 +1382,17 @@ export class SupportWriteService {
     ) {
       throw new BadRequestException('No se puede cerrar la orden sin la firma de quien recibe. Registra la firma primero.');
     }
+
+    // Registro fotográfico: una visita a domicilio no se cierra sin evidencia
+    // (2026-09-10). Va ANTES de la geo-cerca a propósito — es el requisito más
+    // barato de comprobar y el más fácil de arreglar para quien está en la puerta:
+    // si le faltan las dos cosas, que la primera que se le pida sea la foto, que ya
+    // lleva hecha, y no que discuta con el GPS.
+    if (dto.status === 'RESUELTO') await this.exigirRegistroFotografico(t, user);
+
+    // IP remota: la visita no se cierra dejando al cliente sin acceso remoto
+    // (2026-09-10). Detrás de la foto y delante de la cerca: ver `exigirIpRemota`.
+    if (dto.status === 'RESUELTO') await this.exigirIpRemota(t, user);
 
     // Geo-cerca: un técnico no cierra una visita a domicilio sin haber estado
     // allí. Lanza si hay que frenar el cierre; sólo aplica al pasar a RESUELTO
@@ -1228,7 +1467,177 @@ export class SupportWriteService {
         subscriberId: t.subscriberId, estado: cascade.statusSet ?? 'SUSPENDIDO', code: t.code,
       } satisfies BajaAplicadaEvent);
     }
+
+    // Y la RECONEXIÓN, con la misma prisa y por el mismo motivo que la baja: el corte
+    // vive en el estado del abonado Y en el `estado_combo`/`estado_tv` de su factura,
+    // los dos de los que manda el legacy en la ida. Lo que no llegue allá antes de la
+    // siguiente pasada se deshace solo y el cliente vuelve a salir cortado con el
+    // internet funcionando (orden #505799, 09-09-2026). Se emite tanto si volvió el
+    // estado como si sólo se levantó el corte de la factura —una reconexión de sólo
+    // televisión no le cambia el estado a nadie, igual que la suspensión de sólo TV—.
+    if (t.subscriberId
+        && (cascade.facturaReconexion?.ok === true && !cascade.facturaReconexion?.sinCambio
+          || cascade.statusSet === 'ACTIVO' || cascade.statusSet === 'COMPROMISO')
+        && (esReconexion(t.type) || (t.type || '').toLowerCase().includes('activ'))) {
+      this.events.emit(RECONEXION_APLICADA_ORDEN_EVENT, {
+        subscriberId: t.subscriberId, code: t.code,
+      } satisfies ReconexionAplicadaOrdenEvent);
+    }
+
+    // Y la ACTIVACIÓN por instalación, con la misma prisa y por el mismo motivo: el
+    // legacy tiene al recién instalado en 'Instalar' y su ida devuelve ese estado cada
+    // 15 minutos, así que la activación que no llegue antes se deshace sola y el técnico
+    // ve al cliente "por instalar" al día siguiente de haberlo instalado.
+    // `cascade.activacion` = venía en 'INSTALAR' y quedó ACTIVO, sea cual sea la
+    // orden que lo consiguió (un 'AgregarInternet' o una 'Migracion' también
+    // instalan). El nombre de la orden se sigue mirando porque una instalación que
+    // reactiva a un CORTADO también hay que empujarla con prisa.
+    if (t.subscriberId && cascade.statusSet === 'ACTIVO'
+        && (cascade.activacion || (t.type || '').toLowerCase().includes('instalac'))) {
+      this.events.emit(ACTIVACION_APLICADA_EVENT, {
+        subscriberId: t.subscriberId, code: t.code,
+      } satisfies ActivacionAplicadaEvent);
+    }
     return { id, status: dto.status, cascade };
+  }
+
+  /**
+   * Frena el cierre de una visita a domicilio que no tiene ni una foto
+   * (2026-09-10, del requerimiento: «exigir registro fotográfico como requisito
+   * obligatorio para cerrar la orden»). La regla —a quién y a qué órdenes— vive en
+   * `foto-cierre.policy.ts`; aquí sólo se cuentan las fotos y se lanza.
+   *
+   * **Las fotos cuelgan del NÚMERO de orden** (`TicketThread.ticketCode`), no del
+   * id: así las guarda el legacy y así las escribe `addAttachment`. Una orden sin
+   * número no puede tener fotos —el propio endpoint de subida la rechaza— y por eso
+   * queda fuera del requisito: exigírsela sería dejarla abierta para siempre.
+   *
+   * Es 422 y no 400, igual que la geo-cerca: la petición está bien formada y lo que
+   * falla es una regla de negocio que el técnico puede cumplir y reintentar. El
+   * `code` viaja para que la pantalla sepa ofrecerle la cámara en vez de un error.
+   *
+   * Se apaga con `TICKET_REQUIRE_PHOTO=false`, como la firma con
+   * `TICKET_REQUIRE_SIGNATURE`: el día que una cuadrilla se quede sin cobertura para
+   * subir imágenes, la empresa tiene que poder seguir cerrando órdenes.
+   */
+  private async exigirRegistroFotografico(
+    t: { code: number | null; type: string | null },
+    user?: AuthUser,
+  ) {
+    const activo = process.env.TICKET_REQUIRE_PHOTO !== 'false';
+    if (!activo || t.code == null) return;
+    const tiposCampo = await this.geofence.tiposCampo();
+    // Sólo se cuentan las fotos si la orden es de las que las exigen: es una
+    // consulta que no hay por qué hacer en el 85% de los cierres (los remotos).
+    const entrada = {
+      activo,
+      tipoOrden: t.type,
+      tiposCampo,
+      permisosUsuario: user?.permissions,
+      hayUsuario: Boolean(user?.id),
+      fotos: 0,
+    };
+    if (!faltaLaFoto(entrada)) return;
+    const fotos = await this.prisma.ticketThread.count({
+      where: { ticketCode: t.code, attach: { not: null } },
+    });
+    if (!faltaLaFoto({ ...entrada, fotos })) return;
+    throw new HttpException({ code: 'FOTO_REQUERIDA', message: SIN_FOTO }, HttpStatus.UNPROCESSABLE_ENTITY);
+  }
+
+  /**
+   * IP remota obligatoria para cerrar una visita (2026-09-10, a petición del
+   * usuario: «no dejarle cerrar órdenes si el cliente no tiene IP Remota activa,
+   * para que sistemas pueda acceder remotamente»).
+   *
+   * Las reglas —a quién sí y a quién no— están en `ip-remota.policy.ts`, sin base de
+   * datos. Aquí sólo se traen los dos datos del abonado que hacen falta: si tiene
+   * internet (usuario PPPoE de verdad) y qué dirección trae la ficha.
+   *
+   * Va DESPUÉS de la foto y ANTES de la geo-cerca, por lo mismo que ella: es lo que
+   * se puede arreglar sin moverse —el botón «Asignar IP remota» de la propia orden la
+   * reparte y la escribe en el router—, y discutir con el GPS es siempre lo último.
+   *
+   * `code` viaja para que la pantalla ofrezca ese botón en vez de un error seco.
+   * Se apaga con `TICKET_REQUIRE_REMOTE_IP=false`, como la foto y la firma.
+   */
+  private async exigirIpRemota(
+    t: { type: string | null; subscriberId: string | null },
+    user?: AuthUser,
+  ) {
+    const activo = process.env.TICKET_REQUIRE_REMOTE_IP !== 'false';
+    if (!activo) return;
+    const tiposCampo = await this.geofence.tiposCampo();
+    const entrada = {
+      activo,
+      tipoOrden: t.type,
+      tiposCampo,
+      permisosUsuario: user?.permissions,
+      hayUsuario: Boolean(user?.id),
+      hayCliente: Boolean(t.subscriberId),
+      // Optimistas a propósito: con estos dos valores la política ya descarta el 85%
+      // de los cierres (los que no son de campo) sin ir a buscar al abonado.
+      tieneInternet: true,
+      ipRemota: null as string | null,
+    };
+    if (!faltaLaIpRemota(entrada)) return;
+
+    const sub = await this.prisma.subscriber.findUnique({
+      where: { id: t.subscriberId! },
+      select: { pppUsername: true, ipRemote: true },
+    });
+    const real = {
+      ...entrada,
+      tieneInternet: esUsuarioPppUtil(sub?.pppUsername),
+      ipRemota: sub?.ipRemote ?? null,
+    };
+    if (!faltaLaIpRemota(real)) return;
+    throw new HttpException({ code: 'IP_REMOTA_REQUERIDA', message: SIN_IP_REMOTA }, HttpStatus.UNPROCESSABLE_ENTITY);
+  }
+
+  /**
+   * Le activa la IP remota al cliente de esta orden: la reparte el sistema y la
+   * escribe en el `/ppp/secret` (ver `MikrotikService.garantizarIpRemota`).
+   *
+   * Es la salida del bloqueo de arriba, y por eso vive en soporte y no en Red: el
+   * técnico que está en la puerta del cliente no entra al módulo Red — ni tiene por
+   * qué—, y un candado sin forma de abrirlo desde donde se choca con él es una
+   * cadena. El alcance por sede es el mismo que el de la orden.
+   */
+  async activarIpRemota(ticketId: string, user?: AuthUser) {
+    const t = await this.prisma.ticket.findUnique({
+      where: { id: ticketId },
+      select: { id: true, code: true, subscriberId: true, assignedStaffId: true },
+    });
+    if (!t) throw new NotFoundException('Orden no encontrada');
+    if (!t.subscriberId) throw new BadRequestException('Esta orden no tiene cliente: no hay IP remota que activar.');
+    // Que la orden sea SUYA basta para el alcance, igual que al abrir su detalle: el
+    // técnico llega aquí desde la orden que está atendiendo, y exigirle además que el
+    // cliente sea de su sede lo dejaría con el candado del cierre y sin la llave.
+    const ficha = esTecnicoDeCampo(user) ? await fichaDelUsuario(this.prisma, user!) : null;
+    if (!ficha || t.assignedStaffId !== ficha.id) {
+      await exigirSedeSuscriptor(this.prisma, user, t.subscriberId);
+    }
+
+    const r = await this.mikrotik.garantizarIpRemota(t.subscriberId, user);
+    // Queda en el hilo de la orden: al día siguiente, "por qué a este cliente le
+    // cambió la IP" se responde mirando la orden en la que se hizo.
+    if (r.ok && t.code != null) {
+      await this.prisma.ticketThread
+        .create({
+          data: {
+            ticketCode: t.code,
+            message: r.dryRun
+              ? `IP remota (simulación): ${r.message}`
+              : `IP remota activada: ${r.ip} en ${r.mikrotik?.name ?? 'el router'}.`,
+            subscriberId: t.subscriberId,
+            date: new Date(),
+            ...(await this.firmaDeSeguimiento(user)),
+          },
+        })
+        .catch(() => undefined);
+    }
+    return { ok: r.ok, ip: r.ip, dryRun: r.dryRun, message: r.message, steps: r.steps, error: r.error };
   }
 
   /**
@@ -1285,18 +1694,17 @@ export class SupportWriteService {
     }
 
     // Un cierre fuera de rango tiene que verse en la propia orden, no sólo en un
-    // informe que nadie abre.
-    if (veredicto.accion === 'permitir-justificado' || veredicto.accion === 'permitir-marcado') {
+    // informe que nadie abre. Desde el 2026-09-10 esto sólo puede pasar en modo
+    // observación o con un usuario EXENTO (el técnico ya no puede cerrar fuera de
+    // rango de ninguna manera), y en los dos casos interesa que quede dicho.
+    if (veredicto.accion === 'permitir-marcado') {
       const dist = Math.round(veredicto.distanciaM);
       const quien = user?.name ?? 'Sistema';
-      const motivo =
-        veredicto.accion === 'permitir-justificado'
-          ? ` Motivo: ${datos.closeGeoReason}`
-          : ' (registrado en modo observación, sin bloquear).';
       await this.noteOnThread(
         ticketCode,
         subscriberId,
-        `⚠ Cierre fuera del rango permitido: ${quien} estaba a ${dist} m del domicilio (máximo ${veredicto.radioM} m).${motivo}`,
+        `⚠ Cierre fuera del rango permitido: ${quien} estaba a ${dist} m del domicilio `
+        + `(máximo ${veredicto.radioM} m) (registrado en modo observación, sin bloquear).`,
         user,
       ).catch(() => undefined);
     }
@@ -1436,20 +1844,32 @@ export class SupportWriteService {
      * sync en la siguiente pasada, porque el estado es de los `CAMPOS_DE_ALLA`.
      * Así se cerró un 'Retiro voluntario' el 31-08-2026 y el cliente volvió a
      * ACTIVO diecisiete minutos después.
+     *
+     * `previo` es el estado de ANTES de tocar los equipos, para cuando quien llama ya
+     * lo movió sin dejar rastro: `MikrotikService.reconnect` pone ACTIVO al abonado por
+     * su cuenta, así que preguntarlo aquí devolvería el estado nuevo, la comparación de
+     * abajo diría "no hay cambio que historiar" y la reconexión se quedaría otra vez
+     * sin constancia —justo lo que se quiere arreglar—.
      */
-    const setStatus = async (status: string, nota: string) => {
-      if (soloTv) return;
+    const setStatus = async (status: string, nota: string, opts: { aunqueSoloTv?: boolean; previo?: string | null } = {}) => {
+      if (soloTv && !opts.aunqueSoloTv) return;
       const ahora = new Date();
-      const antes = await this.prisma.subscriber
-        .findUnique({ where: { id: sid }, select: { status: true } })
-        .catch(() => null);
+      const antes = opts.previo !== undefined
+        ? { status: opts.previo }
+        : await this.prisma.subscriber
+          .findUnique({ where: { id: sid }, select: { status: true } })
+          .catch(() => null);
       await this.prisma.subscriber
         .update({
           where: { id: sid },
-          data: { previousStatus: antes?.status ?? undefined, status: status as any, statusChangedAt: ahora },
+          data: { previousStatus: (antes?.status as any) ?? undefined, status: status as any, statusChangedAt: ahora },
         })
         .catch(() => undefined);
       cascade.statusSet = status;
+      // El que estaba POR INSTALAR y queda activo es un caso aparte: hay que
+      // contárselo al legacy en el acto o su ida lo devuelve a 'Instalar' en la
+      // siguiente pasada (ver `ACTIVACION_APLICADA_EVENT`).
+      if (antes?.status === 'INSTALAR' && status === 'ACTIVO') cascade.activacion = true;
       // Ya estaba en ese estado: no hay cambio que historiar (cerrar dos veces la
       // misma orden no puede dejar dos filas).
       if (antes?.status === status) return;
@@ -1478,9 +1898,29 @@ export class SupportWriteService {
         catch (e) { cascade.note = `Reconexión Mikrotik: ${(e as Error).message}`; }
       }
       if (tocaTv) cascade.tv = await this.aplicarTv(sid, true, user);
+      // Y SE LEVANTA EL CORTE EN LA FACTURA, que es de donde la ficha lee qué servicio
+      // está caído. Faltaba —y es la contraparte exacta de `marcarBajaEnFactura`, que
+      // el corte sí tiene—: se cerraba la 'Reconexion Internet', el router devolvía al
+      // cliente a ACTIVOS y su ficha seguía pintando el internet en rojo porque nadie
+      // tocaba `estadoCombo` (orden #505799, 09-09-2026, abonado 2131).
+      // Clave propia (no `cascade.factura`, que es la de la baja): la baja y la
+      // reconexión se empujan al legacy por puertas distintas y con gates distintos.
+      cascade.facturaReconexion = await this.levantarCorteEnFactura(sid, servicios, soloTv);
+      // Y EN LA LÍNEA DE SERVICIO, que es la OTRA mitad de donde se lee el corte. La
+      // televisión ya lo hace dentro de `aplicarTv` (`marcarFicha`, en los dos
+      // sentidos); el internet no tenía contraparte ninguna.
+      cascade.servicioReconexion = await this.levantarCorteEnServicio(sid, servicios);
     };
 
-    if (kind.includes('retiro')) {
+    // AGREGAR INTERNET va lo primero y por el predicado, no por `includes`: el
+    // nombre 'AgregarInternet' no cae en ninguna de las palabras de abajo (ni
+    // 'megas' ni 'plan' ni 'instalac'), y por eso cerrar una de estas órdenes no
+    // hacía absolutamente nada — se cobraba el cargo al abrirla y el cliente se
+    // quedaba con la televisión sola.
+    if (esAgregarInternet(t.type)) {
+      cascade.internet = await this.aplicarAltaDeInternet(t.ticketId ?? null, sid, t.planToId ?? null, t.code ?? null, user);
+      cascade.note = cascade.internet.mensaje;
+    } else if (kind.includes('retiro')) {
       await tryCut();
       await setStatus('RETIRADO', 'Retiro');
       cascade.factura = await this.marcarBajaEnFactura(sid, servicios, 'RETIRADO', soloTv);
@@ -1503,7 +1943,33 @@ export class SupportWriteService {
       if (await this.cascadeBillingEnabled()) cascade.charge = await this.applyReconnectionCharge(sid, kind);
       cascade.note = (cascade.note ? cascade.note + ' · ' : '') + 'Instalación resuelta: cliente activado.';
     } else if (kind.includes('reconex') || kind.includes('activ')) {
+      // El estado de ANTES de tocar el router: `mikrotik.reconnect` lo pone ACTIVO por
+      // dentro, así que después ya no hay forma de saber de dónde venía.
+      const antesDeReconectar = soloTv ? null : await this.prisma.subscriber
+        .findUnique({ where: { id: sid }, select: { status: true } })
+        .catch(() => null);
       await tryReconnect();
+
+      /**
+       * Y SE DEJA CONSTANCIA del ACTIVO, igual que hacen el retiro, la suspensión y la
+       * instalación en sus ramas. Aquí no había ninguna: el estado lo movía por dentro
+       * `MikrotikService.markStatus`, en silencio y sin fila de historial. Sin esa fila
+       * la reconexión no existe para nadie más:
+       *  · `pushEstados` y `pushReconexiones` (el writeback) sacan de ahí a quién
+       *    empujar al legacy, así que la reconexión no llegaba allá y la ida devolvía
+       *    su 'Cortado' quince minutos después, y
+       *  · la ficha se queda sin el renglón que explica por qué el cliente volvió.
+       *
+       * `setStatus` ya respeta que una orden sólo de televisión no cambia el estado del
+       * abonado. Lo que se respeta aparte es el ACUERDO DE PAGO: a un COMPROMISO se le
+       * devuelve el servicio pero no se le borra el acuerdo poniéndolo ACTIVO (ver
+       * `estado-al-reconectar.ts`). Y la reconexión POR DÍAS de aquí abajo escribe su
+       * propio COMPROMISO, así que tampoco se le pone ACTIVO antes.
+       */
+      const porDias = esReconexionPorDias(t.type) && (t.graceDays ?? 0) > 0;
+      if (!porDias && !soloTv && !conservaEstadoAlReconectar(antesDeReconectar?.status)) {
+        await setStatus('ACTIVO', 'Reconexión', { previo: antesDeReconectar?.status ?? null });
+      }
 
       // Reconexión POR DÍAS: no basta con devolver el servicio, hay que dejar
       // dicho hasta cuándo. Se traduce a COMPROMISO + `promiseExpiry`, que es la
@@ -1564,6 +2030,34 @@ export class SupportWriteService {
         ? `Traslado resuelto: el cliente quedó en ${t.moveToText}.`
         : 'Traslado resuelto: actualiza la dirección del cliente en su ficha (esta orden no porta la nueva dirección).';
     }
+
+    /**
+     * RED DE SEGURIDAD: ninguno de los cinco trabajos que dejan al cliente
+     * conectado puede cerrarse dejándolo en 'INSTALAR' (`esTrabajoDeConexion`).
+     *
+     * La instalación ya lo activa en su rama, pero las otras cuatro no tenían
+     * ninguna: cerrar un 'AgregarInternet', una 'Migracion', un 'Traslado' o un
+     * 'Cambio de equipo' no tocaba el estado, y el abonado que venía en 'INSTALAR'
+     * —el legacy los pone ahí al abrir la visita— se quedaba ahí para siempre.
+     * En 'INSTALAR' NO SE FACTURA: es un cliente conectado, con la ONU autenticada,
+     * al que se dejó de cobrar (el abonado 3653 llevaba así desde el 19-08-2025).
+     *
+     * Solo LEVANTA ese estado: cualquier otro (CORTADO, RETIRADO, CARTERA…) se
+     * respeta, porque ahí el estado lo puso otra cosa y no es esta orden quien
+     * tiene que decidirlo. Y se hace aunque la orden sea sólo de televisión: al
+     * que se le acaba de instalar la TV también se le terminó el trabajo.
+     */
+    if (esTrabajoDeConexion(t.type) && cascade.statusSet !== 'ACTIVO') {
+      const actual = await this.prisma.subscriber
+        .findUnique({ where: { id: sid }, select: { status: true } })
+        .catch(() => null);
+      if (actual?.status === 'INSTALAR') {
+        await setStatus('ACTIVO', 'Trabajo terminado en sitio', { aunqueSoloTv: true });
+        cascade.note = (cascade.note ? cascade.note + ' · ' : '')
+          + 'El cliente seguía en «Por instalar» y quedó ACTIVO al cerrar esta orden.';
+      }
+    }
+
     cascade.mensaje = this.mensajeDeCascada(cascade);
     return cascade;
   }
@@ -1624,6 +2118,112 @@ export class SupportWriteService {
       data.serviceStatusAt = new Date();
       await this.prisma.subInvoice.update({ where: { id }, data });
       return { ok: true, facturaId: id };
+    } catch (e) {
+      return { ok: false, detalle: (e as Error).message };
+    }
+  }
+
+  /**
+   * LEVANTA el corte del servicio en la factura vigente. Es el espejo de
+   * `marcarBajaEnFactura` y faltaba: el cierre sabía escribir el corte pero no
+   * borrarlo.
+   *
+   * Sin esto, cerrar una 'Reconexion Internet' devolvía el servicio de verdad —el
+   * router saca la IP de MOROSOS y el abonado navega— y la ficha seguía diciendo
+   * "internet cortado", porque lo que pinta ese chip no es el estado del abonado sino
+   * `SubInvoice.estadoTv`/`estadoCombo` de su última factura recurrente (convención del
+   * legacy: NULL = al aire, con valor = caído). Caso: orden #505799 del 09-09-2026,
+   * abonado 2131 — cerrada, reconectada en el router y roja en las dos pantallas.
+   *
+   * Sólo se levanta lo CORTADO: un 'Suspendido' es una suspensión pedida por el
+   * cliente y no la deshace una reconexión (la deshace su propio trámite). Y sólo del
+   * servicio que la orden NOMBRA: al que se le devuelve el internet no se le regala la
+   * televisión.
+   *
+   * `ron` es del abonado, no de un servicio: se pone en ACTIVO sólo cuando en esa
+   * factura ya no queda ningún corte en pie (mismo criterio que
+   * `ReconexionService.levantarCorteDeFactura`).
+   *
+   * Y se sella `serviceStatusAt` por la misma razón que en la baja: sin esa marca la
+   * ida del sync devuelve el 'Cortado' del legacy a los quince minutos, y además es de
+   * donde `pushEstadoServicio` saca a quién empujar allá (levantar un corte va por el
+   * gate de RECONEXIÓN, no por el de bajas).
+   */
+  private async levantarCorteEnFactura(
+    sid: string,
+    servicios: Array<'INTERNET' | 'TV'>,
+    soloTv: boolean,
+  ) {
+    try {
+      const vigente = await this.prisma.$queryRaw<{ id: string }[]>`
+        SELECT i.id
+          FROM "SubInvoice" i
+         WHERE i."subscriberId" = ${sid}
+           AND i.kind = 'RECURRENTE'
+         ORDER BY i."invoiceDate" DESC NULLS LAST, i.tid DESC
+         LIMIT 1`;
+      const id = vigente[0]?.id;
+      if (!id) return { ok: false, detalle: 'el abonado no tiene factura recurrente' };
+      const actual = await this.prisma.subInvoice.findUnique({
+        where: { id },
+        select: { estadoCombo: true, estadoTv: true, ron: true },
+      });
+      if (!actual) return { ok: false, detalle: 'la factura vigente desapareció' };
+
+      const data: Prisma.SubInvoiceUpdateInput = {};
+      if (servicios.includes('INTERNET') && actual.estadoCombo === 'CORTADO') data.estadoCombo = null;
+      if (servicios.includes('TV') && actual.estadoTv === 'CORTADO') data.estadoTv = null;
+      if (!Object.keys(data).length) return { ok: true, sinCambio: true, facturaId: id };
+
+      // ¿Queda algún corte en pie después de esto? Si no, el eje de la factura sube.
+      const quedaCorte = (actual.estadoCombo === 'CORTADO' && data.estadoCombo === undefined)
+        || (actual.estadoTv === 'CORTADO' && data.estadoTv === undefined);
+      if (!soloTv && !quedaCorte && actual.ron === 'CORTADO') data.ron = 'ACTIVO';
+      data.serviceStatusAt = new Date();
+      await this.prisma.subInvoice.update({ where: { id }, data });
+      return { ok: true, facturaId: id, levantado: Object.keys(data).filter((k) => k !== 'serviceStatusAt') };
+    } catch (e) {
+      return { ok: false, detalle: (e as Error).message };
+    }
+  }
+
+  /**
+   * LEVANTA el corte en la LÍNEA DE SERVICIO del abonado (`SubscriberService`), que es
+   * la otra mitad de donde la ficha lee "este servicio está caído".
+   *
+   * `SubscribersService.conEstadoDeServicio` le da prioridad ABSOLUTA al corte de esta
+   * tabla —esconder un corte es el error caro: es justo lo que el cliente está llamando
+   * a reclamar—, así que mientras la fila diga CORTADO el chip sigue rojo aunque la
+   * factura esté limpia y el router navegando.
+   *
+   * Faltaba sólo para el INTERNET, y por eso se colaba: la televisión se marca en las
+   * dos direcciones dentro de `aplicarTv` (`marcarFicha`), pero el corte de internet lo
+   * escribe aquí `MikrotikService.registrarCorteDeInternet` (el lote de corte) y NADIE
+   * lo borraba. Caso que lo destapó: abonado 17842, cortado en el lote del 09-09-2026;
+   * al día siguiente se cerraron sus dos reconexiones (#505970 internet y #505971 TV),
+   * el router lo sacó de MOROSOS, `estadoCombo` quedó limpio, la TV volvió… y el chip de
+   * internet siguió en rojo hasta que se arregló a mano desde el botón de la ficha.
+   *
+   * Sólo lo CORTADO y sólo del servicio que la orden NOMBRA, mismo criterio que en la
+   * factura: una SUSPENSIÓN la pidió el cliente y no la deshace una reconexión, y al que
+   * se le devuelve el internet no se le regala la televisión. Los PUNTOS son decos de
+   * televisión y corren su suerte.
+   *
+   * No hay nada que empujar al legacy desde aquí: allá el corte por servicio vive en
+   * `invoices.estado_combo`/`estado_tv`, y de eso se encarga `levantarCorteEnFactura`
+   * con su `serviceStatusAt`.
+   */
+  private async levantarCorteEnServicio(sid: string, servicios: Array<'INTERNET' | 'TV'>) {
+    // Sólo el INTERNET: la televisión (y sus PUNTOS, que son decos suyos) ya la marca
+    // `aplicarTv` en los dos sentidos y sin condiciones, porque ahí hay una PERSONA
+    // cerrando. Repetirlo aquí sería una escritura de más y más floja que aquélla.
+    if (!servicios.includes('INTERNET')) return { ok: true, sinCambio: true };
+    try {
+      const r = await this.prisma.subscriberService.updateMany({
+        where: { subscriberId: sid, kind: 'INTERNET', status: 'CORTADO' },
+        data: { status: 'ACTIVO' },
+      });
+      return { ok: true, sinCambio: r.count === 0, lineas: r.count };
     } catch (e) {
       return { ok: false, detalle: (e as Error).message };
     }
@@ -1779,6 +2379,11 @@ export class SupportWriteService {
         ticketId: id, code: t.code, type: t.type, subscriberId: t.subscriberId,
         tecnico: dto.assigned.trim(), abiertaPor: t.col,
       } satisfies TicketAsignadoEvent);
+    } else if (t.assigned?.trim()) {
+      // Se la quitaron a alguien y no se la dieron a nadie: que deje de verla en su
+      // campanita. La reasignación no pasa por aquí —el aviso del nuevo dueño ya
+      // barre el del anterior— pero desasignar no avisaba a nada.
+      this.events.emit(TICKET_DESASIGNADO_EVENT, { ticketId: id, code: t.code } satisfies TicketDesasignadoEvent);
     }
     return { id, assigned: dto.assigned ?? null };
   }
@@ -1908,9 +2513,10 @@ export class SupportWriteService {
         select: { id: true, nomenclature: true, addressLine: true, neighborhood: true },
       });
       if (!sub) throw new NotFoundException('Cliente no encontrado');
-      // `mismaEsError: false`: si la orden vino del legacy, allá ya le cambiaron la
-      // dirección a la ficha, así que lo normal es que la nueva sea la que ya tiene.
-      const traslado = this.armarTraslado(dto.moveTo, sub, { mismaEsError: false });
+      // Que la dirección nueva sea la que la ficha ya tiene es lo normal por aquí: si
+      // la orden vino del legacy, allá ya se la cambiaron. Se registra en la orden a
+      // dónde se fue y la ficha no se vuelve a tocar (ver `mismaDireccion` abajo).
+      const traslado = this.armarTraslado(dto.moveTo, sub);
       if (traslado.direccionNueva !== t.moveToText) {
         data.moveTo = traslado.destino as Prisma.InputJsonValue;
         data.moveToText = traslado.direccionNueva;
@@ -1943,8 +2549,12 @@ export class SupportWriteService {
     // dónde ponérselo: la orden salía a la calle sin decir a qué velocidad hay que
     // dejar al cliente. Y también corrige el error de dedo: el plan de al lado en
     // el desplegable. Igual que el plazo en días, solo cuenta en su tipo de orden.
+    //
+    // Vale también para 'AgregarInternet' (`ordenLlevaPlanInternet`), y ahí es lo
+    // que permite rescatar las que ya se cerraron sin plan: se les pone el suyo y
+    // se aplica desde la ficha, sin tener que anular y repetir la orden.
     let megas: Awaited<ReturnType<typeof this.prepararCambioDeMegas>> = null;
-    if (dto.planToId && esCambioDeMegas(tipoFinal) && dto.planToId !== t.planToId) {
+    if (dto.planToId && ordenLlevaPlanInternet(tipoFinal) && dto.planToId !== t.planToId) {
       if (!t.subscriberId) throw new BadRequestException('Esta orden no tiene cliente: no hay a quién cambiarle el plan.');
       megas = await this.prepararCambioDeMegas(
         { type: tipoFinal, planToId: dto.planToId },
@@ -2067,6 +2677,24 @@ export class SupportWriteService {
         editedAt: new Date(),
       },
     });
+
+    // Firmar de nuevo REESCRIBE el acta —y el PNG, que se guarda en `<id>.png`—, así
+    // que la de la visita anterior se perdía en silencio (2026-09-12: una orden
+    // cerrada por teléfono y reabierta el mismo día, #506045). Aquí no se guarda un
+    // histórico de actas; lo que queda es el renglón en el seguimiento, que es donde
+    // el acta en PDF y la ficha ya cuentan lo que pasó con la orden.
+    if (t.signatureName && t.code != null && t.signatureName.trim() !== dto.name.trim()) {
+      await this.prisma.ticketThread.create({
+        data: {
+          ticketCode: t.code,
+          message: `Acta firmada de nuevo por ${dto.name.trim()}. La anterior era de ${t.signatureName.trim()}${t.signatureCc ? ` (CC ${t.signatureCc})` : ''} y queda reemplazada.`,
+          subscriberId: t.subscriberId,
+          date: new Date(),
+          ...SEGUIMIENTO_DEL_SISTEMA,
+        },
+      });
+    }
+
     return { id, signed: true, hasImage: !!signatureImage };
   }
 
@@ -2080,6 +2708,38 @@ export class SupportWriteService {
         ...(await this.firmaDeSeguimiento(user)),
       },
     });
+    return { ok: true };
+  }
+
+  /**
+   * Borra un renglón del seguimiento de una orden. Sólo superusuario (el gate va en la
+   * ruta). Lo borrado queda copiado en `AuditLog` —texto, autor y fecha—, porque la
+   * fila ya no está para preguntarle qué decía.
+   *
+   * No resucita con el sync: la ida trae `tickets_th` por marca de agua (sólo ids
+   * nuevos). Pero tampoco viaja: si el renglón vino del legacy, allá sigue.
+   */
+  async deleteThread(threadId: string, user: AuthUser) {
+    const th = await this.prisma.ticketThread.findUnique({ where: { id: threadId } });
+    if (!th) throw new NotFoundException('Seguimiento no encontrado');
+    await this.prisma.$transaction(async (tx) => {
+      await tx.ticketThread.delete({ where: { id: threadId } });
+      await tx.auditLog.create({
+        data: {
+          userId: user?.id ?? null, action: 'DELETE', entity: 'TicketThread', entityId: th.id,
+          before: {
+            orden: th.ticketCode, mensaje: th.message, autor: th.authorName, eid: th.employeeId,
+            fecha: th.date.toISOString(), adjunto: th.attachName ?? th.attach, legacyId: th.legacyId,
+          },
+          after: { by: user?.name ?? user?.email ?? null },
+        },
+      });
+    });
+    // La foto se va con su renglón, salvo que otro renglón apunte al mismo archivo.
+    if (th.attach && !(await this.prisma.ticketThread.count({ where: { attach: th.attach } }))) {
+      const file = join(process.cwd(), 'uploads', 'support', th.attach);
+      try { if (existsSync(file)) unlinkSync(file); } catch { /* el archivo huérfano no estorba */ }
+    }
     return { ok: true };
   }
 
@@ -2162,39 +2822,187 @@ export class SupportWriteService {
       .catch(() => undefined);
   }
 
-  /** Equipos disponibles en stock (sin cliente asignado) para el selector del modal. */
-  async availableEquipment(search?: string) {
-    const where: Prisma.EquipmentWhereInput = { subscriberId: null };
+  /**
+   * Equipos que se le pueden entregar a un cliente: los libres de stock y —si se dice
+   * de quién se habla— los que YA están apartados a su nombre.
+   *
+   * Ese segundo caso no es un adorno: desde que la orden aparta una unidad al abrirse
+   * (`EquipoReservaService`), esa unidad deja de estar "libre" —lleva `subscriberId`—
+   * y desaparecía de este selector. La ficha decía "llévese el equipo 311793" y el
+   * modal para entregarlo no lo ofrecía: la única caja que había que dar era la única
+   * que no se podía elegir.
+   *
+   * Las apartadas para él salen PRIMERO y marcadas (`reservado`), para que quien
+   * entrega no elija otra por descuido.
+   */
+  async availableEquipment(search?: string, subscriberId?: string) {
+    const dueño = subscriberId?.trim() || null;
     const s = search?.trim();
-    if (s) where.OR = [{ mac: { contains: s, mode: 'insensitive' } }, { serial: { contains: s, mode: 'insensitive' } }];
-    const rows = await this.prisma.equipment.findMany({
-      where, orderBy: { code: 'asc' }, take: 30,
-      select: { id: true, code: true, mac: true, serial: true, brand: true, installType: true, status: true, warehouse: { select: { name: true } } },
+    // El CÓDIGO es lo que la cajera tiene delante: viene rotulado en la caja y es lo
+    // que se teclea (2026-09-05). Buscar sólo por MAC/serial obligaba a leer una MAC
+    // de 12 dígitos de una etiqueta diminuta para encontrar una unidad del estante.
+    const codigo = s && /^\d{1,9}$/.test(s) ? Number(s) : null;
+    const texto: Prisma.EquipmentWhereInput = s
+      ? {
+          OR: [
+            ...(codigo == null ? [] : [{ code: codigo }]),
+            { mac: { contains: s, mode: 'insensitive' as const } },
+            { serial: { contains: s, mode: 'insensitive' as const } },
+          ],
+        }
+      : {};
+    const SEL = {
+      id: true, code: true, mac: true, serial: true, brand: true, installType: true, status: true,
+      warehouse: { select: { name: true } },
+    } as const;
+
+    // Las suyas van en su PROPIA consulta y no mezcladas en un `OR` con el stock: la
+    // lista se corta a 30 por código ascendente, y las unidades apartadas llevan los
+    // códigos más altos del inventario (son las que entraron ayer). En un solo `OR` el
+    // recorte se las comía SIEMPRE — la caja que la ficha manda entregar era justo la
+    // única que el selector no ofrecía.
+    const suyos = dueño
+      ? await this.prisma.equipment.findMany({
+          where: { subscriberId: dueño, AND: [texto] }, orderBy: { code: 'asc' }, select: SEL,
+        })
+      : [];
+    // La SEDE del cliente, para no ofrecerle a la cajera de Villanueva unidades que
+    // están en el estante de Yopal. Si su sede no tiene nada que dar, se cae a todo el
+    // inventario antes que devolver una lista vacía.
+    const sede = dueño
+      ? (await this.prisma.subscriber.findUnique({ where: { id: dueño }, select: { branch: { select: { legacyId: true } } } }))?.branch?.legacyId ?? null
+      : null;
+    // Ordenadas por código DESCENDENTE, igual que elige la reserva y por lo mismo: el
+    // inventario arrastra unidades de hace años que figuran "disponibles" y ya no están
+    // en ningún estante (el código 1004 de Villanueva, sin ir más lejos). Con el orden
+    // ascendente el selector ofrecía justo ésas en las primeras 30 filas, y la caja que
+    // de verdad se puede entregar no aparecía nunca.
+    const libresDe = (donde: Prisma.EquipmentWhereInput, cuantos: number) =>
+      this.prisma.equipment.findMany({
+        where: { subscriberId: null, AND: [texto, donde] }, orderBy: { code: 'desc' }, take: cuantos, select: SEL,
+      });
+    const deSuSede = sede == null ? [] : await libresDe({ warehouse: { branchLegacy: sede } }, 30);
+    const encontradas = deSuSede.length
+      ? deSuSede
+      : await libresDe({}, 30);
+    // El código EXACTO va primero y sin pasar por el recorte: "1004" también aparece
+    // dentro de mil seriales, y la unidad 1004 —que es la que se está tecleando— caía
+    // fuera de las 30 filas. Tampoco se limita a la sede: si la caja rotulada está en
+    // otro estante, mejor verla y saberlo que no encontrarla.
+    const exacta = codigo == null
+      ? null
+      : await this.prisma.equipment.findFirst({ where: { code: codigo, subscriberId: null }, select: SEL });
+    const libres = exacta
+      ? [exacta, ...encontradas.filter((e) => e.id !== exacta.id)]
+      : encontradas;
+    const fila = (e: (typeof libres)[number], reservado: boolean) => ({
+      id: e.id, code: e.code, mac: e.mac, serial: e.serial, brand: e.brand,
+      installType: e.installType, status: e.status, warehouse: e.warehouse?.name ?? null,
+      /** Ya está a nombre del cliente por el que se pregunta: es el que hay que entregar. */
+      reservado,
     });
-    return rows.map((e) => ({ id: e.id, code: e.code, mac: e.mac, serial: e.serial, brand: e.brand, installType: e.installType, status: e.status, warehouse: e.warehouse?.name ?? null }));
+    return [...suyos.map((e) => fila(e, true)), ...libres.map((e) => fila(e, false))];
   }
 
-  /** Materiales con stock para el selector del modal de consumo. */
-  async searchMaterials(user: AuthUser, search?: string) {
-    const where: Prisma.MaterialWhereInput = { qty: { gt: 0 } };
-    // El técnico de campo gasta de SU bodega y de ninguna otra (misma regla que
-    // /inventario/bodegas, ver `tecnico-scope.ts`). Sin esto el buscador de la orden
-    // le ofrecía el material de las 35 bodegas personales y el de los almacenes
-    // generales, y `consumeMaterials` se lo descontaba a su dueño sin preguntar.
-    // Si no tiene bodega asignada no puede consumir nada: mejor una lista vacía que
-    // gastar del almacén de otro.
-    if (esTecnicoDeCampo(user)) {
-      const suya = await bodegaMaterialDelTecnico(this.prisma, user);
-      if (!suya) return [];
-      where.warehouseId = suya.id;
-    }
-    const s = search?.trim();
-    if (s) where.OR = [{ name: { contains: s, mode: 'insensitive' } }, { code: { contains: s, mode: 'insensitive' } }];
-    const rows = await this.prisma.material.findMany({
-      where, orderBy: { name: 'asc' }, take: 30,
-      select: { id: true, name: true, code: true, price: true, qty: true, warehouseId: true, warehouse: { select: { title: true } } },
+  /**
+   * Cajas NAP para el selector de la entrega de equipos (2026-09-09).
+   *
+   * No reusa `/network/naps` a propósito: aquélla pide área `tecnicos` o
+   * `administracion` y el módulo Red, y quien entrega la caja en la ventanilla es la
+   * CAJERA. Esta responde lo justo para elegir —rótulo, dirección, sede y cuántos
+   * puertos quedan libres— con la misma puerta que el resto del modal.
+   *
+   * Las de la sede del cliente van primero: una NAP es un poste, y ofrecerle a
+   * Villanueva las cajas de Yopal es cómo se acaba con un equipo colgado de una caja
+   * que está a 80 km. No se FILTRA por sede porque 4 de cada 10 clientes no la
+   * tienen puesta (ver `cliente-sin-sede-invisible`) y ahí la lista saldría vacía.
+   *
+   * SIN TOPE (2026-09-14): antes se cortaba en 40 y Yopal tiene 508 cajas, así que
+   * "no salen todas". Son 1.406 filas en total: se traen enteras y se filtran aquí,
+   * comparando sin espacios/guiones/rayas bajas porque los rótulos del legacy vienen
+   * como "VLLC _03" y quien busca teclea "vllc 03".
+   */
+  async napsParaEquipo(search?: string, subscriberId?: string) {
+    const plano = (s: string | null | undefined) =>
+      (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[\s_\-.]+/g, '');
+    const texto = plano(search);
+    const sede = subscriberId
+      ? (await this.prisma.subscriber.findUnique({ where: { id: subscriberId }, select: { branchId: true } }))?.branchId ?? null
+      : null;
+    const todas = await this.prisma.nap.findMany({
+      where: !texto && sede ? { branchId: sede } : {},
+      select: { id: true, name: true, address: true, portCount: true, branchId: true, branch: { select: { name: true } } },
     });
-    return rows.map((m) => ({ id: m.id, name: m.name, code: m.code, price: Number(m.price), qty: m.qty, warehouseId: m.warehouseId, warehouse: m.warehouse?.title ?? null }));
+    const naps = texto ? todas.filter((n) => plano(n.name).includes(texto) || plano(n.address).includes(texto)) : todas;
+    if (!naps.length) return [];
+    const ids = naps.map((n) => n.id);
+    const [total, ocupados] = await Promise.all([
+      this.prisma.port.groupBy({ by: ['napId'], where: { napId: { in: ids } }, _count: { _all: true } }),
+      // Ocupado = TIENE CLIENTE, no `status: 'Ocupado'`: son la misma cosa salvo en 5
+      // filas sucias del legacy, y es la regla con la que se pintan los puertos al
+      // abrir la caja (`libre`). Contar de dos maneras distintas es cómo la lista
+      // dice "3 libres" y dentro se ven 4.
+      this.prisma.port.groupBy({ by: ['napId'], where: { napId: { in: ids }, subscriberId: { not: null } }, _count: { _all: true } }),
+    ]);
+    const mapa = (g: { napId: string | null; _count: { _all: number } }[]) =>
+      new Map(g.map((x) => [x.napId, x._count._all] as const));
+    const [totalPor, ocupadosPor] = [mapa(total), mapa(ocupados)];
+    const cuenta = (m: Map<string | null, number>, id: string) => m.get(id) ?? 0;
+    return naps
+      .map((n) => {
+        const puertos = cuenta(totalPor, n.id) || n.portCount;
+        return {
+          id: n.id, name: n.name, address: n.address || null,
+          branch: n.branch?.name ?? null,
+          /** De la sede del cliente: la lista las sube arriba y la pantalla lo dice. */
+          deSuSede: !!sede && n.branchId === sede,
+          puertos, libres: Math.max(0, puertos - cuenta(ocupadosPor, n.id)),
+        };
+      })
+      // `numeric`: "_2" antes que "_10", como están rotuladas en el poste.
+      .sort((a, b) => Number(b.deSuSede) - Number(a.deSuSede) || a.name.localeCompare(b.name, 'es', { numeric: true }));
+  }
+
+  /**
+   * Los puertos de una caja, como se ven al abrirla: por número, con quién ocupa
+   * cada uno. `subscriberId` marca los que ya son de ese cliente (`mio`), que son los
+   * únicos ocupados que se pueden volver a elegir —es su propio equipo cambiándose—.
+   */
+  async puertosDeNap(napId: string, subscriberId?: string) {
+    const nap = await this.prisma.nap.findUnique({
+      where: { id: napId },
+      select: { id: true, name: true, address: true, portCount: true, vlanLegacy: true, branch: { select: { name: true } } },
+    });
+    if (!nap) throw new NotFoundException('Caja NAP no encontrada');
+    const ports = await this.prisma.port.findMany({
+      where: { napId },
+      orderBy: { port: 'asc' },
+      select: {
+        id: true, port: true, status: true, detail: true, subscriberId: true,
+        subscriber: { select: { firstName: true, secondName: true, lastName1: true, lastName2: true, companyName: true, fullName: true } },
+      },
+    });
+    return {
+      nap: { id: nap.id, name: nap.name, address: nap.address || null, branch: nap.branch?.name ?? null, portCount: nap.portCount, vlan: nap.vlanLegacy || null },
+      ports: ports.map((p) => ({
+        id: p.id, port: p.port, status: p.status,
+        detail: p.detail?.trim() || null,
+        client: subName(p.subscriber),
+        subscriberId: p.subscriberId,
+        mio: !!subscriberId && p.subscriberId === subscriberId,
+        libre: !p.subscriberId,
+      })),
+    };
+  }
+
+  /** Bodegas con material, para entrar por el estante (ver `material-stock.ts`). */
+  materialWarehouses(user: AuthUser, search?: string) {
+    return bodegasConMaterial(this.prisma, user, search);
+  }
+
+  /** Materiales con stock para el selector del modal de consumo (ver `material-stock.ts`). */
+  searchMaterials(user: AuthUser, filtro: FiltroMaterial) {
+    return buscarMaterialConStock(this.prisma, user, filtro);
   }
 
   /**
@@ -2212,7 +3020,100 @@ export class SupportWriteService {
     const t = await this.prisma.ticket.findUnique({ where: { id } });
     if (!t) throw new NotFoundException('Orden no encontrada');
     if (!t.subscriberId) throw new BadRequestException('La orden no tiene cliente asociado');
-    const subscriberId = t.subscriberId;
+    return this.asignarEquipos(t.subscriberId, t.code, dto, user);
+  }
+
+  /**
+   * Los mismos equipos, entregados DESDE LA FICHA del cliente (2026-09-04).
+   *
+   * La pestaña "Equipos" no tenía por dónde entregar nada: se asignaba sólo desde la
+   * orden, y quien entrega la caja en la ventanilla está mirando al cliente, no una
+   * orden. Es la misma escritura —misma transacción, mismas validaciones— y por eso
+   * comparte cuerpo con la de arriba: dos caminos que asignan equipos con reglas
+   * distintas es cómo se llega a un inventario que no cuadra.
+   *
+   * La nota se cuelga de su orden ABIERTA cuando la tiene —primero la que pide equipo
+   * (una instalación, un cambio de equipo…), que es la razón por la que se entrega—,
+   * y si no tiene ninguna abierta se asigna igual, sin nota. No se exige orden: un
+   * cliente al que se le repone un equipo un martes cualquiera no siempre trae una.
+   */
+  async assignEquipmentToSubscriber(subscriberId: string, dto: AssignEquipmentDto, user: AuthUser) {
+    // La cajera solo entrega a los clientes de SU sede: aquí y no en la pantalla,
+    // porque el desplegable es una comodidad y esto es la puerta (ver `sede-scope`).
+    // La vía por orden no lo comprueba porque el técnico llega a ella desde su propia
+    // agenda, ya acotada; a la ficha se llega escribiendo un id.
+    await exigirSedeSuscriptor(this.prisma, user, subscriberId);
+    const sub = await this.prisma.subscriber.findUnique({ where: { id: subscriberId }, select: { id: true } });
+    if (!sub) throw new NotFoundException('Cliente no encontrado');
+    const abiertas = await this.prisma.ticket.findMany({
+      where: { subscriberId, status: { in: ['PENDIENTE', 'REALIZANDO'] }, code: { not: null } },
+      select: { code: true, type: true },
+      orderBy: ORDEN_CRONOLOGICO,
+    });
+    const ancla = abiertas.find((o) => tipoConReserva(o.type)) ?? abiertas[0] ?? null;
+    return this.asignarEquipos(subscriberId, ancla?.code ?? null, dto, user);
+  }
+
+  /**
+   * Traduce la caja NAP y el puerto elegidos en la pantalla a lo que guarda `equipos`.
+   *
+   * OJO CON LA CONVENCIÓN DEL LEGACY, que es la que hay que respetar para que el
+   * dato signifique lo mismo a los dos lados: `equipos.nat` es el id de la caja
+   * (`Nap.legacyId`, la columna `idn`) y `equipos.puerto` NO es el número del puerto
+   * —el 1 al 16 que está rotulado en la caja— sino el id de SU FILA en `puertos`
+   * (`Port.legacyId`, la columna `idp`). Comprobado sobre los 4.477 equipos
+   * importados que traen caja: 4.124 casan por `idp` y sólo 302 por número.
+   *
+   * Por eso la pantalla manda ids de aquí (`portId`) y la traducción vive en el
+   * servidor: un `idp` no se teclea de memoria, y las dos casillas numéricas que
+   * había antes ("Puerto NAT" y "Caja NAT") pedían justo eso.
+   *
+   * Devuelve el mapa `portId → datos`, ya validado: puerto existente, coherente con
+   * la caja que dice la pantalla, no elegido dos veces en el mismo envío y libre (o
+   * ya de este mismo cliente).
+   */
+  private async resolverPuertos(items: AssignEquipmentItemDto[], subscriberId: string) {
+    const pedidos = items.map((it) => it.portId).filter((v): v is string => !!v);
+    const mapa = new Map<string, { id: string; numero: number; napLegacy: number; napNombre: string; portLegacy: number; vlanLegacy: number | null }>();
+    if (!pedidos.length) return mapa;
+    if (new Set(pedidos).size !== pedidos.length) {
+      throw new BadRequestException('Hay dos equipos colgados del mismo puerto de la caja NAP');
+    }
+    const filas = await this.prisma.port.findMany({
+      where: { id: { in: [...new Set(pedidos)] } },
+      select: {
+        id: true, port: true, legacyId: true, napId: true, subscriberId: true,
+        nap: { select: { legacyId: true, name: true, vlanLegacy: true } },
+        subscriber: { select: { firstName: true, secondName: true, lastName1: true, lastName2: true, companyName: true, fullName: true } },
+      },
+    });
+    for (const it of items) {
+      if (!it.portId) continue;
+      const p = filas.find((f) => f.id === it.portId);
+      if (!p) throw new NotFoundException('El puerto de la caja NAP no existe');
+      if (!p.nap) throw new BadRequestException('Ese puerto no cuelga de ninguna caja NAP');
+      if (it.napId && p.napId !== it.napId) {
+        throw new BadRequestException(`El puerto ${p.port} no es de la caja NAP elegida`);
+      }
+      // Ocupado por OTRO: dos clientes en el mismo puerto es una avería, no un dato.
+      if (p.subscriberId && p.subscriberId !== subscriberId) {
+        throw new BadRequestException(
+          `El puerto ${p.port} de la caja ${p.nap.name} ya lo ocupa ${subName(p.subscriber) ?? 'otro cliente'}`,
+        );
+      }
+      mapa.set(p.id, {
+        id: p.id, numero: p.port, napLegacy: p.nap.legacyId, napNombre: p.nap.name,
+        portLegacy: p.legacyId, vlanLegacy: p.nap.vlanLegacy || null,
+      });
+    }
+    return mapa;
+  }
+
+  /** El cuerpo compartido: asigna la lista de equipos al cliente y deja la traza. */
+  private async asignarEquipos(subscriberId: string, ticketCode: number | null, dto: AssignEquipmentDto, user: AuthUser) {
+    // El id del cliente EN EL LEGACY: es lo que va en `equipos.asignado` allá, y sin
+    // él la asignación no sobrevive al viaje de ida y vuelta — ver `assignedRaw` abajo.
+    const dueño = await this.prisma.subscriber.findUnique({ where: { id: subscriberId }, select: { legacyId: true } });
 
     // Lote o cuerpo plano: a partir de aquí todo es una lista.
     const items: AssignEquipmentItemDto[] = dto.items?.length ? dto.items : (dto.mac ? [dto as AssignEquipmentItemDto] : []);
@@ -2250,51 +3151,228 @@ export class SupportWriteService {
     const max = await this.prisma.equipment.aggregate({ _max: { code: true } });
     let siguienteCode = (max._max.code ?? 0) + 1;
 
+    // La caja NAP y el puerto donde queda colgado cada equipo (2026-09-09). Se
+    // resuelve ANTES de la transacción para que un puerto ocupado por otro cliente
+    // se conteste con un mensaje y no reviente a medio escribir el lote.
+    const puertos = await this.resolverPuertos(items, subscriberId);
+
     const asignados = await this.prisma.$transaction(async (tx) => {
       const out: { equipmentId: string; mac: string; installType: string }[] = [];
       for (const it of items) {
         const mac = it.mac.trim();
+        const caja = it.portId ? puertos.get(it.portId) ?? null : null;
         const data = {
           subscriberId, mac, installType: it.installType,
-          port: it.port ?? null, vlan: it.vlan ?? null, nat: it.nat ?? null,
+          // Con caja elegida mandan sus ids legacy; los números sueltos siguen
+          // valiendo para quien llame a la API sin pasar por la pantalla.
+          port: caja ? caja.portLegacy : it.port ?? null,
+          vlan: it.vlan ?? caja?.vlanLegacy ?? null,
+          nat: caja ? caja.napLegacy : it.nat ?? null,
           master: it.master?.trim() || null, meters: it.meters ?? null,
           accessories: it.accessories?.trim() || null, serial: it.serial?.trim() || null,
           status: 'Asignado', endDate: dateOnly(),
           returnedAt: null, // se instala de nuevo: no arrastra la fecha de la devolución anterior
           editedAt: new Date(), // asignación hecha aquí: la sincronización no la pisa
+          // El mismo dueño escrito como lo escribe el legacy (`equipos.asignado` = su
+          // id de cliente allá). `subscriberId` solo existe de este lado: el writeback
+          // manda `assignedRaw` y después suelta el blindaje `editedAt`, así que sin
+          // esto se empujaba un `asignado = 0` y la siguiente pasada de la ida dejaba
+          // el equipo sin dueño otra vez. Los 5.832 equipos asignados que bajaron del
+          // legacy llevan exactamente esta convención.
+          ...(dueño?.legacyId == null ? {} : { assignedRaw: String(dueño.legacyId) }),
+          // La reserva era una apuesta sobre qué caja se llevaría el técnico; esto ya
+          // es la entrega. Se suelta la marca para que al cerrar la orden no se
+          // "libere" a la bodega un equipo que está en casa del cliente.
+          reservedTicketId: null,
         };
+        let equipmentId: string;
+        /** Dónde colgaba este mismo equipo antes, para soltar ese puerto si se mueve. */
+        let anterior: { port: number | null; nat: number | null } | null = null;
         if (it.equipmentId) {
-          const eq = await tx.equipment.findUnique({ where: { id: it.equipmentId }, select: { id: true, subscriberId: true } });
+          const eq = await tx.equipment.findUnique({ where: { id: it.equipmentId }, select: { id: true, subscriberId: true, port: true, nat: true } });
           if (!eq) throw new NotFoundException('Equipo de stock no encontrado');
           if (eq.subscriberId && eq.subscriberId !== subscriberId) throw new BadRequestException(`El equipo ${mac} ya está asignado`);
           await tx.equipment.update({ where: { id: eq.id }, data });
-          out.push({ equipmentId: eq.id, mac, installType: it.installType });
+          equipmentId = eq.id;
+          anterior = { port: eq.port, nat: eq.nat };
         } else {
           const created = await tx.equipment.create({
             data: { ...data, code: siguienteCode++, warehouseLegacy: 0, supplierLegacy: 0, arrival: dateOnly() },
           });
-          out.push({ equipmentId: created.id, mac, installType: it.installType });
+          equipmentId = created.id;
+        }
+        out.push({ equipmentId, mac, installType: it.installType });
+
+        if (caja) {
+          // El censo de la caja: sin esto la NAP seguiría diciendo "puerto libre" con
+          // un cliente colgado, que es justo lo que se mira antes de mandar a alguien
+          // a instalar (ver /red/naps y /red/conexiones).
+          await tx.port.update({
+            where: { id: caja.id },
+            data: { subscriberId, assignedLegacy: dueño?.legacyId ?? 0, status: 'Ocupado' },
+          });
+          // Y el puerto de donde venía este mismo equipo se suelta, salvo que otro
+          // aparato del cliente siga colgado ahí (un cambio de equipo que reusa el
+          // mismo puerto ya está cubierto por la comparación de arriba).
+          if (anterior?.port && anterior.port !== caja.portLegacy) {
+            const quedan = await tx.equipment.count({
+              where: { subscriberId, port: anterior.port, id: { not: equipmentId } },
+            });
+            if (!quedan) {
+              await tx.port.updateMany({
+                where: { legacyId: anterior.port, subscriberId },
+                data: { subscriberId: null, assignedLegacy: 0, status: 'Disponible' },
+              });
+            }
+          }
         }
       }
       return out;
     });
+
+    // La caja ya está entregada: lo que otra orden abierta le tuviera apartado vuelve
+    // al estante. Si no, el cliente queda con dos unidades a su nombre y el aviso de
+    // "esta visita sale con equipo" nombra una distinta de la que se acaba de dar.
+    await new EquipoReservaService(this.prisma).liberarSobrantesDeCliente(subscriberId, asignados.map((a) => a.equipmentId));
 
     // Reflejar la MAC principal en el cliente (como el legacy: customers.macequipo).
     // Con varios equipos manda el primero de la lista: el legacy sólo tiene sitio
     // para uno y es el que la pantalla del cliente enseña como equipo del servicio.
     await this.prisma.subscriber.update({ where: { id: subscriberId }, data: { macEquipo: asignados[0].mac } }).catch(() => undefined);
 
-    const detalle = (it: AssignEquipmentItemDto) => [
-      it.installType,
-      it.port != null ? `PN:${it.port}` : '', it.nat != null ? `N:${it.nat}` : '',
-      it.vlan != null ? `V:${it.vlan}` : '', it.meters != null ? `${it.meters}m` : '',
-    ].filter(Boolean).join(' ');
+    const detalle = (it: AssignEquipmentItemDto) => {
+      // La caja se nombra por su rótulo y el puerto por su número: "N:241 PN:2393"
+      // era el par de ids del legacy, que no le dice nada a quien lee el hilo.
+      const caja = it.portId ? puertos.get(it.portId) : null;
+      return [
+        it.installType,
+        caja ? `NAP ${caja.napNombre} pto ${caja.numero}` : '',
+        !caja && it.port != null ? `PN:${it.port}` : '', !caja && it.nat != null ? `N:${it.nat}` : '',
+        it.vlan != null ? `V:${it.vlan}` : '', it.meters != null ? `${it.meters}m` : '',
+      ].filter(Boolean).join(' ');
+    };
     const linea = items.map((it) => `${it.mac.trim()}${detalle(it) ? ` · ${detalle(it)}` : ''}`).join(' | ');
-    await this.noteOnThread(t.code, subscriberId,
+    await this.noteOnThread(ticketCode, subscriberId,
       `${items.length > 1 ? `${items.length} equipos asignados` : 'Equipo asignado'}: ${linea} (${user.name || user.email})`, user);
     // `equipmentId` y `mac` en singular siguen ahí por los clientes que asignaban
     // de uno en uno y leen la respuesta.
     return { ok: true, equipmentId: asignados[0].equipmentId, mac: asignados[0].mac, equipos: asignados, total: asignados.length };
+  }
+
+  /**
+   * La VLAN que la OLT tiene para la ONU del cliente, para enseñarla en el editor
+   * antes de guardar. Vive en soporte (y no en Red) por lo mismo que las NAP: quien
+   * corrige la caja de un equipo puede ser la cajera, que no entra al módulo Red.
+   */
+  async vlanOltDeAbonado(subscriberId: string, user: AuthUser, refresh = false) {
+    await exigirSedeSuscriptor(this.prisma, user, subscriberId);
+    if (!this.olt) {
+      return { ok: false, motivo: 'SIN_OLT', vlan: null, vlans: [], error: 'La consulta a la OLT no está disponible.' };
+    }
+    return this.olt.vlanDeAbonado(subscriberId, refresh);
+  }
+
+  /**
+   * Corrige DÓNDE está colgado un equipo que el cliente ya tiene (2026-09-14): la
+   * caja NAP y el puerto sólo se podían poner al entregarlo, y los 5.800 equipos
+   * que bajaron del legacy —o uno al que se le cambió la acometida— no tenían por
+   * dónde arreglarse.
+   *
+   * Misma traducción y mismo censo que la entrega (`resolverPuertos`: `nat` = id
+   * legacy de la caja, `puerto` = id legacy de la FILA del puerto; el puerto nuevo
+   * queda ocupado y el viejo se suelta si nadie más del cliente cuelga de él).
+   *
+   * La VLAN no se pide: se lee del service-port de la ONU en la OLT, que es la que
+   * de verdad lleva el tráfico. Si la OLT no contesta, se guarda la caja igual y la
+   * VLAN se queda como estaba —se dice en `vlanOlt`—, porque una OLT caída no es
+   * razón para no poder corregir una caja.
+   */
+  async ubicarEquipo(subscriberId: string, equipmentId: string, dto: UbicarEquipoDto, user: AuthUser) {
+    await exigirSedeSuscriptor(this.prisma, user, subscriberId);
+    const eq = await this.prisma.equipment.findUnique({
+      where: { id: equipmentId },
+      select: { id: true, subscriberId: true, mac: true, code: true, port: true, nat: true, vlan: true, serial: true },
+    });
+    if (!eq || eq.subscriberId !== subscriberId) throw new NotFoundException('Ese equipo no está asignado a este cliente');
+
+    // El serial va ANTES de preguntarle a la OLT: es con lo que se localiza la ONU
+    // (`ubicarOnuDeAbonado` lo lee de la base), y con el viejo la lectura seguiría
+    // diciendo "sin ONU". Por lo mismo, si cambia se salta la caché.
+    const serial = dto.serial?.trim() || null;
+    const cambiaSerial = !!serial && serial !== (eq.serial ?? '').trim();
+    if (cambiaSerial) {
+      await this.prisma.equipment.update({ where: { id: eq.id }, data: { serial, editedAt: new Date() } });
+    }
+    const dueño = await this.prisma.subscriber.findUnique({ where: { id: subscriberId }, select: { legacyId: true } });
+
+    const quitar = !dto.portId && !!dto.quitarCaja;
+    const puertos = dto.portId
+      ? await this.resolverPuertos([{ napId: dto.napId, portId: dto.portId } as AssignEquipmentItemDto], subscriberId)
+      : null;
+    const caja = dto.portId ? puertos!.get(dto.portId) ?? null : null;
+
+    // Fuera de la transacción: son segundos de SSH. Con caché (la misma lectura que
+    // acaba de pintar el editor), así guardar no abre otra sesión contra la OLT.
+    let vlanOlt: { ok: boolean; vlan: number | null; vlans?: number[]; error?: string; olt?: { name: string } } | null = null;
+    if (this.olt) {
+      vlanOlt = await this.olt.vlanDeAbonado(subscriberId, cambiaSerial).catch((e) => ({ ok: false, vlan: null, error: e?.message ?? 'No se pudo consultar la OLT.' }));
+    }
+    const vlan = vlanOlt?.ok && vlanOlt.vlan != null ? vlanOlt.vlan : eq.vlan;
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.equipment.update({
+        where: { id: eq.id },
+        data: {
+          ...(caja ? { port: caja.portLegacy, nat: caja.napLegacy } : quitar ? { port: null, nat: null } : {}),
+          vlan,
+          editedAt: new Date(), // editado aquí: la sincronización no lo pisa
+          // Ver `asignarEquipos`: sin el dueño en crudo, el writeback empuja
+          // `asignado = 0` y la ida deja el equipo sin cliente.
+          ...(dueño?.legacyId == null ? {} : { assignedRaw: String(dueño.legacyId) }),
+        },
+      });
+      if (caja) {
+        await tx.port.update({
+          where: { id: caja.id },
+          data: { subscriberId, assignedLegacy: dueño?.legacyId ?? 0, status: 'Ocupado' },
+        });
+      }
+      if (eq.port && (quitar || (caja && eq.port !== caja.portLegacy))) {
+        const quedan = await tx.equipment.count({ where: { subscriberId, port: eq.port, id: { not: eq.id } } });
+        if (!quedan) {
+          await tx.port.updateMany({
+            where: { legacyId: eq.port, subscriberId },
+            data: { subscriberId: null, assignedLegacy: 0, status: 'Disponible' },
+          });
+        }
+      }
+    });
+
+    // La traza, en la orden abierta del cliente si la tiene (como la entrega).
+    if (caja || quitar || cambiaSerial || vlan !== eq.vlan) {
+      const abierta = await this.prisma.ticket.findFirst({
+        where: { subscriberId, status: { in: ['PENDIENTE', 'REALIZANDO'] }, code: { not: null } },
+        select: { code: true },
+        orderBy: ORDEN_CRONOLOGICO,
+      });
+      const cambios = [
+        caja ? `NAP ${caja.napNombre} pto ${caja.numero}` : quitar ? 'sin caja NAP' : '',
+        cambiaSerial ? `serial ${eq.serial || '—'} → ${serial}` : '',
+        vlan !== eq.vlan ? `VLAN ${vlan ?? '—'} (de la OLT)` : '',
+      ].filter(Boolean).join(' · ');
+      await this.noteOnThread(abierta?.code ?? null, subscriberId,
+        `Equipo ${eq.mac ?? eq.code} reubicado: ${cambios} (${user.name || user.email})`, user);
+    }
+
+    return {
+      ok: true,
+      equipmentId: eq.id,
+      napName: caja?.napNombre ?? null,
+      portNumber: caja?.numero ?? null,
+      serial: cambiaSerial ? serial : eq.serial,
+      vlan,
+      vlanOlt,
+    };
   }
 
   /**

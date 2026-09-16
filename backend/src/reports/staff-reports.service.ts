@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { moduloDe, normalizarRuta } from './audit-normalize';
+import { describir, fraseSinNombres } from '../common/audit/bitacora-descripcion';
 
 /**
  * Reportes de personal: qué hizo cada funcionario con la plata y con el sistema.
@@ -290,6 +291,14 @@ export class StaffReportsService {
       userId: visibles.find((e) => nombreUsuario(e) === nombre)?.user?.id ?? null,
     }));
 
+    // El cuerpo de la petición (`after`) sólo se trae para los 300 que se listan:
+    // en la consulta grande pesaría de más (hay firmas en base64 de 100 KB).
+    const ultimos = visibles.slice(0, 300);
+    const cuerpos = ultimos.length
+      ? await this.prisma.auditLog.findMany({ where: { id: { in: ultimos.map((e) => e.id) } }, select: { id: true, action: true, entity: true, entityId: true, after: true } })
+      : [];
+    const descripciones = new Map(cuerpos.map((c) => [c.id, fraseSinNombres(describir(c).frase)]));
+
     return {
       desde,
       hasta,
@@ -306,10 +315,12 @@ export class StaffReportsService {
         acciones: [...new Set(conDerivados.map((e) => e.operacion))].sort(),
         usuarios: [...new Map(conDerivados.filter((e) => e.user).map((e) => [e.user!.id, { id: e.user!.id, nombre: e.user!.name || e.user!.email }])).values()],
       },
-      eventos: visibles.slice(0, 300).map((e) => ({
+      eventos: ultimos.map((e) => ({
         id: e.id,
         fecha: e.createdAt,
+        // La ruta cruda sirve para agrupar; la frase es la que se lee.
         operacion: e.operacion,
+        descripcion: descripciones.get(e.id) ?? e.operacion,
         modulo: e.modulo,
         entidadId: e.entityId,
         ip: e.ipAddress,

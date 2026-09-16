@@ -1,11 +1,12 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '../core/http/errores';
-import { Prisma, PromotionTargetKind } from '@prisma/client';
+import { InvoiceKind, Prisma, PromotionTargetKind } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { FacturasService } from '../billing/facturas.service';
 import {
   ApplyPromotionDto,
   CreatePromotionDto,
+  InvoiceKindName,
   PromotionAudienceDto,
   SubscriberStatusName,
   UpdatePromotionDto,
@@ -54,7 +55,33 @@ function resolveDiscount(format: string, percentage?: number | null, flatAmount?
   return { discountFormat: format, percentage: percentage as number, flatAmount: null };
 }
 
-/** Etiqueta legible del descuento (para descripciones de nota crédito). */
+/**
+ * TIPO de factura que rebaja la campaña, normalizado: sin repetidos y siempre en el
+ * mismo orden (mensualidad, cargos), para que dos promociones equivalentes se
+ * guarden igual y las consultas por lista exacta sean predecibles. Sin nada elegido,
+ * la mensualidad: es lo que hacían todas las campañas antes de que el tipo se pudiera
+ * pedir aparte (2026-09-10).
+ */
+function tiposDeFactura(kinds?: InvoiceKindName[] | null): InvoiceKind[] {
+  const pedidos = new Set(kinds ?? []);
+  const fuera = [InvoiceKind.RECURRENTE, InvoiceKind.FIJA].filter((k) => pedidos.has(k));
+  return fuera.length ? fuera : [InvoiceKind.RECURRENTE];
+}
+
+/** Cómo se lee en pantalla el alcance de una campaña ("La mensualidad del mes"). */
+function alcanceEnPalabras(p: { invoiceKinds: InvoiceKind[]; onlyCurrentMonth: boolean }): string {
+  const tipos = tiposDeFactura(p.invoiceKinds as InvoiceKindName[]);
+  const que = tipos.length === 2 ? 'las facturas' : tipos[0] === InvoiceKind.RECURRENTE ? 'las mensualidades' : 'los cargos sueltos';
+  return p.onlyCurrentMonth ? `${que} del mes en curso` : `${que} pendientes, atrasadas incluidas`;
+}
+
+/** ¿El público es UN cliente en concreto y nada más? Es lo único que admite elegir facturas. */
+function esUnCliente(a: Audience): boolean {
+  return (
+    !a.allSubscribers && a.subscriberIds.length === 1 && !a.subscriberStatuses.length
+    && !a.planIds.length && !a.branchIds.length && !a.neighborhoodRefs.length
+  );
+}
 
 /**
  * Promociones de facturación (legacy `settings/promociones`).
@@ -231,6 +258,31 @@ export class PromotionsService {
 
   /** Datos del cliente que deciden si una promo lo alcanza. */
 
+  /**
+   * Facturas elegidas a mano, validadas. Sólo tienen sentido con UN cliente de público
+   * —con un grupo, "estas facturas" no significa nada— y todas tienen que ser de ese
+   * cliente y cobrables (mensualidad o cargo): si no, la promoción apuntaría a algo
+   * que nunca rebaja y nadie sabría por qué.
+   */
+  private async facturasElegidas(a: Audience, ids?: string[] | null): Promise<string[]> {
+    const pedidas = uniq(ids ?? []);
+    if (!pedidas.length) return [];
+    if (!esUnCliente(a))
+      throw new BadRequestException(
+        'Elegir facturas sólo se puede cuando la promoción va a UN cliente en concreto',
+      );
+    const suyas = await this.prisma.subInvoice.count({
+      where: {
+        id: { in: pedidas },
+        subscriberId: a.subscriberIds[0],
+        kind: { in: [InvoiceKind.RECURRENTE, InvoiceKind.FIJA] },
+      },
+    });
+    if (suyas !== pedidas.length)
+      throw new BadRequestException('Alguna de las facturas elegidas no es de este cliente');
+    return pedidas;
+  }
+
   // ------------------------------------------------------------ Bitácora ----
 
   /** Destinatarios del público, con su etiqueta legible (para la bitácora). */
@@ -372,6 +424,7 @@ export class PromotionsService {
     if (portalPublish) this.assertPublicableEnPortal(disc, a);
     const portalPreapply = dto.portalPreapply ?? false;
     this.assertPortalCoherente(portalPublish, portalPreapply);
+    const invoiceIds = await this.facturasElegidas(a, dto.invoiceIds);
 
     return this.prisma.$transaction(async (tx) => {
       const promo = await tx.promotion.create({
@@ -384,7 +437,9 @@ export class PromotionsService {
           startDate: start,
           endDate: end,
           active: dto.active ?? true,
-          invoiceScope: dto.invoiceScope ?? 'MENSUALIDAD_DEL_MES',
+          invoiceKinds: tiposDeFactura(dto.invoiceKinds),
+          onlyCurrentMonth: dto.onlyCurrentMonth ?? true,
+          invoiceIds,
           portalPublish,
           portalPreapply,
           allSubscribers: a.allSubscribers,
@@ -409,7 +464,8 @@ export class PromotionsService {
           flatAmount: disc.flatAmount,
           startDate: start,
           endDate: end,
-          invoiceScope: dto.invoiceScope ?? 'MENSUALIDAD_DEL_MES',
+          invoiceKinds: tiposDeFactura(dto.invoiceKinds),
+          onlyCurrentMonth: dto.onlyCurrentMonth ?? true,
           createdBy: createdBy ?? null,
         };
         // Mismo nombre = misma plantilla: se actualiza en vez de acumular copias.
@@ -431,7 +487,7 @@ export class PromotionsService {
       select: {
         id: true, name: true, description: true, discountFormat: true,
         percentage: true, flatAmount: true, startDate: true, endDate: true,
-        invoiceScope: true,
+        invoiceKinds: true, onlyCurrentMonth: true,
       },
     });
   }
@@ -464,6 +520,15 @@ export class PromotionsService {
       );
     const name = dto.name?.trim() ?? existing.name;
 
+    // Las facturas elegidas son de UN cliente: si el público deja de ser ese cliente,
+    // se sueltan solas en vez de quedar apuntando a facturas de otro.
+    const mismoCliente = esUnCliente(after) && esUnCliente(before)
+      && after.subscriberIds[0] === before.subscriberIds[0];
+    const invoiceIds = await this.facturasElegidas(
+      after,
+      dto.invoiceIds ?? (mismoCliente ? existing.invoiceIds : []),
+    );
+
     const data: Prisma.PromotionUpdateInput = {
       name: dto.name?.trim() ?? undefined,
       description:
@@ -471,7 +536,9 @@ export class PromotionsService {
       startDate: start,
       endDate: end,
       active: dto.active ?? undefined,
-      invoiceScope: dto.invoiceScope ?? undefined,
+      invoiceKinds: dto.invoiceKinds ? tiposDeFactura(dto.invoiceKinds) : undefined,
+      onlyCurrentMonth: dto.onlyCurrentMonth ?? undefined,
+      invoiceIds,
       allSubscribers: after.allSubscribers,
       subscriberStatuses: after.subscriberStatuses as any,
       neighborhoodRefs: after.neighborhoodRefs,
@@ -569,6 +636,51 @@ export class PromotionsService {
     });
   }
 
+  /**
+   * Lo que el cliente debe, factura por factura, para elegir a mano a cuáles llega la
+   * promoción. Mensualidades y cargos con saldo (las notas no se cobran). Trae lo que
+   * la pantalla necesita para decir por qué alguna NO se puede rebajar: timbrada ante
+   * la DIAN o ya rebajada por el portal — las mismas dos reglas de
+   * `descuento-al-cobrar.ts`, que al cobrar la saltarían en silencio.
+   *
+   * El saldo se mira factura por factura y no por `status`: el legacy deja facturas
+   * con `paidAmount` que no casa con su estado (ver [[facturas-sobrepagadas-legacy]]).
+   */
+  async facturasPendientes(subscriberId?: string) {
+    if (!subscriberId) return [];
+    const rows = await this.prisma.subInvoice.findMany({
+      where: {
+        subscriberId,
+        status: { not: 'CANCELED' },
+        kind: { in: [InvoiceKind.RECURRENTE, InvoiceKind.FIJA] },
+      },
+      orderBy: [{ invoiceDate: 'asc' }, { tid: 'asc' }],
+      select: {
+        id: true, tid: true, kind: true, invoiceDate: true,
+        subtotal: true, total: true, paidAmount: true, discount: true,
+        items: { where: { price: { gt: 0 } }, select: { productName: true, description: true }, take: 1 },
+        electronicInvoices: {
+          where: { type: 'FACTURADA', dianNumber: { not: null } }, select: { id: true }, take: 1,
+        },
+      },
+    });
+    return rows
+      .map((r) => ({
+        id: r.id,
+        tid: r.tid,
+        kind: r.kind,
+        invoiceDate: r.invoiceDate,
+        subtotal: num(r.subtotal),
+        total: num(r.total),
+        paidAmount: num(r.paidAmount),
+        saldo: round2(num(r.total) - num(r.paidAmount)),
+        concepto: (r.items[0]?.productName || r.items[0]?.description || '').trim() || null,
+        timbrada: r.electronicInvoices.length > 0,
+        rebajadaEnOrigen: yaRebajadaEnOrigen(r),
+      }))
+      .filter((r) => r.saldo > 0);
+  }
+
   async remove(id: string) {
     const existing = await this.prisma.promotion.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Promoción no encontrada');
@@ -579,17 +691,24 @@ export class PromotionsService {
   // ---------------------------------------------------------- Facturación ----
 
   /**
-   * Promociones que hoy pueden aplicarse a una factura: vigentes y cuyo público
-   * alcanza al CLIENTE de esa factura. Sin factura no hay respuesta posible: la
-   * elegibilidad depende del cliente, no del usuario que pregunta.
+   * Promociones que hoy pueden aplicarse a una factura: vigentes, cuyo público
+   * alcanza al CLIENTE de esa factura y cuyo alcance llega a ESTA factura. Sin
+   * factura no hay respuesta posible: la elegibilidad depende del cliente, no del
+   * usuario que pregunta.
+   *
+   * El alcance se mira aquí y no sólo al aplicar porque `apply` responde 400 y eso,
+   * en pantalla, es ofrecer un botón que no funciona: una campaña de instalación
+   * aparecía en la mensualidad y sólo al pulsarla se sabía que no era para ella.
    */
   async available(invoiceId?: string) {
     if (!invoiceId) return [];
     const inv = await this.prisma.subInvoice.findUnique({
       where: { id: invoiceId },
-      select: { subscriberId: true },
+      select: { id: true, subscriberId: true, kind: true, invoiceDate: true, discount: true },
     });
     if (!inv?.subscriberId) return [];
+    // Ya rebajada por el portal del legacy: no se ofrece apilar otra encima.
+    if (yaRebajadaEnOrigen(inv)) return [];
     const facts = await subscriberFacts(this.prisma, inv.subscriberId);
     if (!facts) return [];
 
@@ -600,7 +719,7 @@ export class PromotionsService {
       include: this.targetInclude,
     });
     return vigentes
-      .filter((p) => reaches(audienceOfPromo(p), facts))
+      .filter((p) => reaches(audienceOfPromo(p), facts) && alcanzaLaFactura(p, inv, t))
       .map((p) => ({
         id: p.id,
         name: p.name,
@@ -635,7 +754,7 @@ export class PromotionsService {
     const invoice = await this.prisma.subInvoice.findUnique({
       where: { id: dto.invoiceId },
       select: {
-        id: true, total: true, subtotal: true, tid: true, subscriberId: true,
+        id: true, total: true, subtotal: true, paidAmount: true, tid: true, subscriberId: true,
         kind: true, invoiceDate: true, discount: true,
       },
     });
@@ -646,9 +765,7 @@ export class PromotionsService {
     // `alcanzaLaFactura` en `descuento-al-cobrar.ts`.
     if (!alcanzaLaFactura(promo, invoice, t)) {
       throw new BadRequestException(
-        promo.invoiceScope === 'MENSUALIDAD_DEL_MES'
-          ? 'Esta promoción sólo rebaja la mensualidad del mes en curso; esta factura no lo es'
-          : 'Esta promoción sólo rebaja mensualidades; esta factura es un cargo suelto',
+        `Esta promoción sólo rebaja ${alcanceEnPalabras(promo)}; esta factura no lo es`,
       );
     }
     // Ya trae descuento de cabecera (el portal de pagos del legacy se lo puso): no se
@@ -675,7 +792,12 @@ export class PromotionsService {
 
     // Base del descuento: "antes de imp." → subtotal (sin IVA); si no → total (con IVA).
     // Monto fijo → valor tope-limitado a la base; porcentaje → base × %.
-    const amount = montoDeDescuento(promo, invoice);
+    // Topado en lo que queda debiendo: sobre una factura ya abonada, el 50 % del total
+    // puede pasar del saldo, y una nota crédito mayor la dejaría sobrepagada (un saldo
+    // a favor que nadie pidió; ver [[facturas-sobrepagadas-legacy]]).
+    const saldo = round2(num(invoice.total) - num(invoice.paidAmount));
+    if (saldo <= 0) throw new BadRequestException('Esta factura ya está pagada');
+    const amount = Math.min(montoDeDescuento(promo, invoice), saldo);
     if (!(amount > 0))
       throw new BadRequestException('El descuento calculado es cero');
     const label = discountLabel(promo.discountFormat, promo.percentage, num(promo.flatAmount));

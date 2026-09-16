@@ -89,3 +89,42 @@ export function etiquetaProrrateo(v: VentanaProrrateo): string {
   const mes = MESES[v.hasta.getUTCMonth()];
   return `reconexión ${v.desde.getUTCDate()}–${v.hasta.getUTCDate()} ${mes} (${v.dias} ${v.dias === 1 ? 'día' : 'días'})`;
 }
+
+/** Lo que la cabecera de una factura dice del abonado: qué tiene y cómo está. */
+export type CabeceraDeServicios = {
+  serviceCombo: string | null;
+  serviceTv: string | null;
+  puntos: number | null;
+  /** Convención del legacy: NULL = el servicio está al aire; con valor = caído. */
+  estadoCombo: string | null;
+  estadoTv: string | null;
+};
+
+/**
+ * La cabecera con la que nace una factura de prorrateo.
+ *
+ * `invoices.combo` / `television` NO son "lo que este documento cobra": son el
+ * SNAPSHOT de lo que el cliente tiene contratado, y de ahí lo leen la ficha, el
+ * contrato en PDF y —cuando no hay renglones de los que deducirlo— la corrida del
+ * mes siguiente. Una reconexión suele devolver UN servicio, así que nombrar sólo
+ * ese le borraba el otro al cliente: el 08-09-2026 el abonado 56720 (internet+TV,
+ * cortado desde junio) quedó en la ficha como "servicio de internet" a secas,
+ * porque su última factura ya no nombraba la televisión.
+ *
+ * Regla: se arrastra lo que dijera su factura anterior y se pisa sólo lo que se
+ * cobra ahora, que es justo lo que acaba de volver (por eso su estado va a NULL).
+ * Lo que sigue cortado conserva su marca: dar por bueno un servicio que nadie ha
+ * restablecido es el error que el cliente llama a reclamar.
+ */
+export function cabeceraDeProrrateo(
+  previa: Partial<CabeceraDeServicios> | null | undefined,
+  cobrado: { INTERNET?: string | null; TV?: string | null; puntos?: number | null },
+): CabeceraDeServicios {
+  return {
+    serviceCombo: cobrado.INTERNET ?? previa?.serviceCombo ?? null,
+    serviceTv: cobrado.TV ?? previa?.serviceTv ?? null,
+    puntos: cobrado.puntos ?? previa?.puntos ?? null,
+    estadoCombo: cobrado.INTERNET ? null : previa?.estadoCombo ?? null,
+    estadoTv: cobrado.TV ? null : previa?.estadoTv ?? null,
+  };
+}

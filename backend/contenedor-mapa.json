@@ -19,11 +19,11 @@
   "src/billing/catalogo.service.ts#CatalogoService": "catalogoService",
   "src/network/mikrotik.service.ts#MikrotikService": "mikrotikService",
   "src/network/olt.service.ts#OltService": "oltService",
+  "src/network/onu-al-devolver.service.ts#OnuAlDevolverService": "onuAlDevolverService",
   "src/network/genieacs.service.ts#GenieacsService": "genieacsService",
   "src/network/reconexion.service.ts#ReconexionService": "reconexionService",
   "src/treasury/cobranzas.service.ts#CobranzasService": "cobranzasService",
   "src/billing/facturas.service.ts#FacturasService": "facturasService",
-  "src/billing/recurring.service.ts#RecurringService": "recurringService",
   "src/common/notifications/notifications.service.ts#NotificationsService": "notificationsService",
   "src/responsibilities/responsibilities.service.ts#ResponsibilitiesService": "responsibilitiesService",
   "src/responsibilities/responsibility-notifier.service.ts#ResponsibilityNotifierService": "responsibilityNotifierService",
@@ -116,5 +116,7 @@
   "src/network/ip-allocator.service.ts#IpAllocatorService": "ipAllocatorService",
   "src/online-payments/online-payments.service.ts#OnlinePaymentsService": "onlinePaymentsService",
   "src/subscribers/alta.service.ts#AltaClienteService": "altaClienteService",
-  "src/billing/cargo-orden.service.ts#CargoOrdenService": "cargoOrdenService"
+  "src/billing/cargo-orden.service.ts#CargoOrdenService": "cargoOrdenService",
+  "src/billing/orden-al-pagar.service.ts#OrdenAlPagarService": "ordenAlPagarService",
+  "src/portal-pagos/portal-pagos.service.ts#PortalPagosService": "portalPagosService"
 }

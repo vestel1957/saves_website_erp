@@ -429,6 +429,7 @@ export function CierreCajaModal({ open, onClose, onDone }: { open: boolean; onCl
       setResult(data);
       if (data.escrito) toast(`Caja cerrada · se barrieron ${cop(data.excedente)}`);
       else if (data.motivo === "ya-cerrado") toast("Esta caja ya estaba cerrada ese día");
+      else if (data.motivo === "sin-actividad") toast("Ese día no tiene movimientos: no hay nada que cerrar");
       else toast("Sin excedente: no había efectivo que arrastrar");
       onDone();
     } catch (e) { setErr(mensajeDeError(e)); } finally { setSaving(false); }
@@ -447,6 +448,16 @@ export function CierreCajaModal({ open, onClose, onDone }: { open: boolean; onCl
         <p className="mt-2 rounded-lg bg-warning-soft px-3 py-2 text-[12px] text-warning-text">
           Esta caja ya se cerró en esta fecha (se barrieron {cop(preview.guardado ?? 0)}). No se
           vuelve a arrastrar: cerrar dos veces duplicaría el saldo.
+        </p>
+      )}
+      {/* Día en blanco: lo del cajón es el arrastre del cierre anterior, no plata de ese
+          día. Cerrarlo lo marcaría como cerrado y le quitaría a la cajera el botón de
+          abrir la caja. */}
+      {!result && !preview?.yaCerrado && preview?.sinActividad && (
+        <p className="mt-2 rounded-lg bg-warning-soft px-3 py-2 text-[12px] text-warning-text">
+          Ese día no tiene ningún movimiento: lo que hay en el cajón ({cop(preview.excedente)}) es
+          el arrastre que dejó el cierre anterior, no recaudo de ese día. No se puede cerrar —
+          hacerlo dejaría el día marcado como cerrado y la caja no se podría abrir.
         </p>
       )}
       {!result && loadingPrev && <p className="mt-3 text-[12px] text-text-tertiary">Calculando el arqueo…</p>}
@@ -520,7 +531,11 @@ export function CierreCajaModal({ open, onClose, onDone }: { open: boolean; onCl
 
       <div className="mt-3 flex justify-end gap-2">
         <Button variant="secondary" onClick={onClose} disabled={saving}>{result ? "Cerrar" : "Cancelar"}</Button>
-        {!result && <Button onClick={submit} disabled={saving || loadingPrev}>{saving ? "Guardando…" : "Cerrar caja"}</Button>}
+        {!result && (
+          <Button onClick={submit} disabled={saving || loadingPrev || !!preview?.sinActividad}>
+            {saving ? "Guardando…" : "Cerrar caja"}
+          </Button>
+        )}
       </div>
     </Modal>
   );

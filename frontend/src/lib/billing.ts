@@ -13,6 +13,10 @@ export type InvoiceRow = {
   status: string;
   ron: string | null;
   kind: string;
+  /** Clave del motivo ('traslado', 'afiliacion'…). Null en las importadas y las de la corrida. */
+  purpose: string | null;
+  /** Ese motivo, ya escrito para leer ("Traslado"). */
+  purposeLabel: string | null;
   service: string | null;
   eInvoiceFlag: string | null; // 'Crear Factura Electronica' | 'Factura Electronica Creada' | null
 };
@@ -20,6 +24,11 @@ export type InvoiceRow = {
 export type InvoiceList = {
   items: InvoiceRow[];
   sum: { total: number; balance: number };
+  // Ventana de fechas que aplicó el servidor: por defecto el año en curso, para no
+  // barrer las 456.000 facturas importadas. La pantalla lo dice cuando no hay
+  // resultados, porque "no hay" y "no hay en 2026" no son lo mismo.
+  scope?: "anio" | "rango" | "historico";
+  scopeYear?: number | null;
   total: number; page: number; pageSize: number; pages: number;
 };
 

@@ -320,32 +320,38 @@ Este manual está dirigido al rol de **Sistemas (Configuración)** de SAVES, el 
 
 > El nombre de la plantilla debe existir y estar aprobado en Meta; si no coincide, el envío fallará. Esta pantalla registra la referencia y el mapeo de variables, pero la aprobación se hace del lado de Meta.
 
-## Envío masivo
+## Mensajes masivos
 
-**Dónde:** menú Configuración > WhatsApp > Envío masivo (`/configuracion/whatsapp/masivo`).
+**Dónde:** menú Principal > Mensajes masivos (`/whatsapp/masivo`). También desde la pantalla de una sede (Clientes > Grupos de clientes > la sede), con el botón **Campaña a esta sede**, que abre la campaña con esa sede ya elegida. La dirección vieja (`/configuracion/whatsapp/masivo`) lleva aquí.
 
-**Para qué sirve.** Enviar una plantilla de WhatsApp a un grupo de clientes de una sola vez (una "campaña"), y luego ver el reporte de cuántos mensajes se entregaron, se leyeron o fallaron.
+**Para qué sirve.** Enviar una plantilla de WhatsApp a muchos clientes de una vez (una "campaña") y luego ver cuántos mensajes se entregaron, se leyeron o fallaron.
 
 **Qué vas a ver.**
 
-- Un formulario **Nueva campaña**.
-- Una tabla **Campañas** con el histórico: nombre, plantilla, total, enviados, entregados, leídos, fallidos, estado y fecha, con un botón **Ver** para el reporte detallado.
+- Arriba, la **salud del número**: calidad según Meta, límite diario y una barra con el **cupo de hoy** (cuántos clientes nuevos se pueden contactar todavía en 24 horas).
+- Dos vistas: **Nueva campaña** (el asistente) y **Campañas** (el histórico, con avance, entregados, leídos, fallidos y estado).
 
 **Paso a paso (lanzar una campaña):**
 
-1. En **Nombre de la campaña** escribe un nombre (ejemplo: "Factura julio").
-2. En **Plantilla** elige una de las plantillas activas.
-3. En **Clientes con estado** elige a quién enviar según su estado: Activo, Cortado, Cartera, Suspendido o Retirado.
-4. (Opcional) En **Filtro** escribe un nombre, cédula o teléfono para acotar aún más.
-5. Presiona **Lanzar campaña**. Se enviará solo a los clientes que cumplan el filtro y que tengan un teléfono válido. Verás cuántos destinatarios recibieron el envío.
+1. **A quién.** Elige uno o varios **estados** de cliente (obligatorio) y, si quieres, **sedes**, **planes** y la condición de **deuda** (con deuda desde un valor mínimo, o al día). A la derecha verás en vivo cuántos clientes lo recibirán y cuántos quedan fuera y por qué: sin celular, hablando con una persona en la bandeja, o con el celular repetido en otra ficha (a esos les llega uno solo).
+2. Presiona **Siguiente**.
+3. **Qué mensaje.** Elige una plantilla. Solo aparecen las que Meta ya aprobó. A la derecha ves el mensaje tal como le llega a un cliente real de la lista.
+4. Presiona **Siguiente**.
+5. **Revisar y enviar.** Revisa el nombre de la campaña. Si el cupo de hoy no alcanza para todos, la pantalla dice cuántos salen hoy y en cuántos días termina.
+6. Escribe tu celular y presiona **Enviar prueba** para recibir el mensaje antes que los clientes.
+7. Presiona **Enviar a N clientes** y confirma. Si son 200 o más, escribe ENVIAR para confirmar.
+
+> Una plantilla de **marketing** (promociones, fechas especiales) cuesta más y Meta puede no entregarla a quien ya recibió muchas. Para cobros y avisos usa las de **utilidad**.
+
+**Qué pasa cuando se acaba el cupo.** La campaña queda en estado **Esperando cupo** y sigue sola cuando se libere, sin volver a lanzarla. El sistema guarda un 10 % del límite de Meta para las respuestas del bot y de la bandeja.
 
 **Paso a paso (ver el reporte y reintentar):**
 
-1. En la tabla **Campañas**, presiona **Ver**.
+1. En la vista **Campañas**, presiona **Ver** (o el nombre de la campaña).
 2. Revisa los totales por estado (Total, Enviados, Entregados, Leídos, Fallidos) y el detalle por cliente.
 3. Si hubo fallidos, presiona **Reintentar fallidos** para volver a encolar solo esos envíos.
 
-> Si aún no hay plantillas, la pantalla te pedirá crear una primero. Sin plantilla no se puede lanzar una campaña.
+> Si no hay plantillas aprobadas, créalas primero en Plantillas y espera la aprobación de Meta.
 
 ## Configurar API
 

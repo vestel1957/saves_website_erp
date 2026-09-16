@@ -17,6 +17,9 @@ type SubService = { kind: ServiceKind | string; planName?: string | null; price?
 /** Orden en que se muestran los servicios en el modal. */
 const KIND_ORDER: ServiceKind[] = ["INTERNET", "TV", "PUNTOS", "STREAMING"];
 
+/** Valor del selector que significa "ya no contrata este servicio" (el "No" del legacy). */
+const QUITAR = "__quitar__";
+
 /**
  * Cambia los planes de un abonado desde el catálogo. Internet y TV se manejan
  * por separado: hay un selector por cada servicio y se pueden cambiar juntos o
@@ -39,7 +42,10 @@ export function CambiarPlanModal({
   const { authFetch } = useAuth();
   const [plans, setPlans] = useState<Plan[] | null>(null);
   const [bundles, setBundles] = useState<Bundle[]>([]);
-  // Selección por kind: kind → planId elegido ("" = mantener el actual).
+  /**
+   * Selección por kind: kind → planId elegido ("" = mantener el actual, QUITAR = el
+   * cliente deja de tener ese servicio; es la opción "No" del selector del legacy).
+   */
   const [sel, setSel] = useState<Record<string, string>>({});
   /**
    * Se vende de dos maneras. Arranca en "sueltos" —lo de siempre— para no
@@ -54,10 +60,13 @@ export function CambiarPlanModal({
   const [puntos, setPuntos] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState<ChangePlanResult[] | null>(null);
+  /** Servicios dados de baja en la última aplicación (para el resumen del final). */
+  const [bajas, setBajas] = useState<string[]>([]);
 
   useEffect(() => {
     if (!open) return;
     setResults(null);
+    setBajas([]);
     setSel({});
     setModo("sueltos");
     setComboSel("");
@@ -79,9 +88,15 @@ export function CambiarPlanModal({
       if (!map.has(p.kind)) map.set(p.kind, []);
       map.get(p.kind)!.push(p);
     }
+    // Un servicio que el abonado YA tiene sale aunque el catálogo no tenga ningún plan
+    // activo de ese tipo (la mayoría del catálogo está oculta): si no, no habría por
+    // dónde quitárselo. Queda con su lista vacía y sólo la opción de darlo de baja.
+    const suyos = new Set(services.map((s) => s.kind));
     // PUNTOS se saca del selector: no se elige un plan, se dice cuántos son.
-    return KIND_ORDER.filter((k) => k !== "PUNTOS" && map.has(k)).map((k) => ({ kind: k, plans: map.get(k)! }));
-  }, [plans]);
+    return KIND_ORDER
+      .filter((k) => k !== "PUNTOS" && (map.has(k) || suyos.has(k)))
+      .map((k) => ({ kind: k, plans: map.get(k) ?? [] }));
+  }, [plans, services]);
 
   const currentByKind = useMemo(() => {
     const m: Record<string, string | null | undefined> = {};
@@ -89,7 +104,20 @@ export function CambiarPlanModal({
     return m;
   }, [services]);
 
-  const chosenIds = Object.values(sel).filter(Boolean);
+  /**
+   * Qué servicios tiene HOY contratados. Va aparte del nombre del plan porque hay
+   * fichas heredadas del legacy con el servicio puesto y el nombre vacío, y a ésas
+   * también hay que poder quitárselo.
+   */
+  const tieneByKind = useMemo(() => {
+    const m: Record<string, boolean> = {};
+    for (const s of services) m[s.kind] = true;
+    return m;
+  }, [services]);
+
+  const chosenIds = Object.values(sel).filter((v) => v && v !== QUITAR);
+  // Los servicios que se dan de baja. Sólo tiene sentido quitar lo que hoy tiene.
+  const quitados = Object.entries(sel).filter(([, v]) => v === QUITAR).map(([k]) => k);
   const combo = bundles.find((b) => b.id === comboSel) ?? null;
   const puntosPlan = (plans ?? []).find((p) => p.kind === "PUNTOS") ?? null;
   const suPunto = services.find((x) => x.kind === "PUNTOS");
@@ -98,7 +126,7 @@ export function CambiarPlanModal({
   // precio de lista); solo cae al catálogo cuando todavía no tiene puntos.
   const precioPunto = suPunto?.price ?? puntosPlan?.price ?? 0;
   const puntosCambian = puntos !== null && puntos !== puntosActuales;
-  const puedeAplicar = modo === "combo" ? Boolean(combo) : chosenIds.length > 0 || puntosCambian;
+  const puedeAplicar = modo === "combo" ? Boolean(combo) : chosenIds.length > 0 || quitados.length > 0 || puntosCambian;
 
   async function apply() {
     if (!puedeAplicar) return;
@@ -120,7 +148,7 @@ export function CambiarPlanModal({
       }
 
       let results: ChangePlanResult[] = [];
-      if (modo === "combo" || chosenIds.length > 0) {
+      if (modo === "combo" || chosenIds.length > 0 || quitados.length > 0) {
         const res = modo === "combo"
           ? await authFetch(`/subscribers/${subscriberId}/bundle`, {
               method: "POST",
@@ -128,7 +156,9 @@ export function CambiarPlanModal({
             })
           : await authFetch(`/subscribers/${subscriberId}/plans`, {
               method: "POST",
-              body: JSON.stringify({ planIds: chosenIds }),
+              // `remove` viaja en la misma llamada que los cambios: quitarle la TV y
+              // subirle el internet es UN solo movimiento para quien atiende.
+              body: JSON.stringify({ planIds: chosenIds, remove: quitados }),
             });
         if (!res.ok) {
           const msg = await res.json().catch(() => null);
@@ -138,10 +168,13 @@ export function CambiarPlanModal({
         results = data.results ?? [];
       }
       setResults(results);
+      setBajas(quitados);
       toast(
         modo === "combo" ? `Combo “${combo?.name}” aplicado`
-          : chosenIds.length === 0 ? `Puntos de TV: ${puntos}`
-          : "Planes actualizados",
+          : chosenIds.length === 0 && quitados.length === 0 ? `Puntos de TV: ${puntos}`
+          : quitados.length > 0 && chosenIds.length === 0
+            ? `Servicio dado de baja: ${quitados.map((k) => SERVICE_KIND_LABEL[k as ServiceKind] ?? k).join(", ")}`
+            : "Planes actualizados",
         "check",
       );
       onDone?.();
@@ -157,6 +190,17 @@ export function CambiarPlanModal({
       {/* Resultado (tras aplicar) */}
       {results ? (
         <div className="flex flex-col gap-3">
+          {bajas.map((kind) => (
+            <div key={`baja-${kind}`} className="rounded-lg border border-border-subtle bg-surface-2 p-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[13px] font-semibold text-text-primary">
+                  {SERVICE_KIND_LABEL[kind as ServiceKind] ?? kind}
+                </span>
+                <Badge tone="warning" label="DADO DE BAJA" />
+              </div>
+              <p className="mt-1 text-[11px] text-text-tertiary">Ya no lo tiene contratado; deja de cobrarse.</p>
+            </div>
+          ))}
           {results.map((result, idx) => (
             <div key={idx} className="rounded-lg border border-border-subtle bg-surface-2 p-3">
               <div className="flex items-center justify-between">
@@ -262,7 +306,17 @@ export function CambiarPlanModal({
                       {p.name} — {fullCurrency(p.price)}/mes{p.pppProfile ? ` (${p.pppProfile})` : ""}
                     </option>
                   ))}
+                  {/* La opción "No" del legacy: se ofrece sólo si hoy tiene el servicio,
+                      porque quitar lo que no tiene no significa nada. */}
+                  {tieneByKind[kind] && <option value={QUITAR}>No — quitarle {SERVICE_KIND_LABEL[kind].toLowerCase()}</option>}
                 </Select>
+                {sel[kind] === QUITAR && (
+                  <p className="mt-1.5 text-[11px] text-warning-text">
+                    Deja de tener {SERVICE_KIND_LABEL[kind].toLowerCase()}: no se le cobra desde la próxima
+                    facturación mensual. No toca los equipos ni el router
+                    {kind === "INTERNET" ? " — para dar de baja el servicio abre una orden de retiro." : "."}
+                  </p>
+                )}
                 {selected && (
                   <p className="mt-1.5 text-[11px] text-text-tertiary">
                     {selected.pppProfile
@@ -328,7 +382,11 @@ export function CambiarPlanModal({
             <span className="text-[11px] text-text-tertiary">
               {modo === "combo"
                 ? combo ? `${combo.items.length} servicio(s) por cambiar.` : "Elige un combo."
-                : chosenIds.length === 0 ? "Elige al menos un servicio a cambiar." : `${chosenIds.length} servicio(s) por cambiar.`}
+                : chosenIds.length === 0 && quitados.length === 0 ? "Elige al menos un servicio a cambiar."
+                : [
+                    chosenIds.length ? `${chosenIds.length} servicio(s) por cambiar` : null,
+                    quitados.length ? `${quitados.length} por quitar` : null,
+                  ].filter(Boolean).join(" · ") + "."}
             </span>
             <div className="flex gap-2">
               <Button variant="secondary" onClick={onClose}>Cancelar</Button>

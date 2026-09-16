@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listaJson, objetoJson } from "@/lib/errores";
 import Link from "next/link";
 import { PageHeading } from "@/components/ui/PageHeading";
@@ -14,8 +14,10 @@ import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { Button } from "@/components/ui/Button";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
+import { fmtDate, fmtHora } from "@/lib/format";
 import { type TxList, type TreasuryStats, TX_TYPE_LABEL, TX_TYPE_TONE, esCajera } from "@/lib/treasury";
-import { RangoFechas, rangoDePreset, etiquetaRango, type RangoFechasValor } from "@/components/ui/RangoFechas";
+import { RangoFechas, rangoDePreset, rangoDeUrl, rangoAUrl, etiquetaRango, type RangoFechasValor } from "@/components/ui/RangoFechas";
+import { ordenDeTexto, useFiltrosEnUrl, useFiltrosRecordados } from "@/lib/useFiltrosUrl";
 import dynamic from "next/dynamic";
 import { useRequest } from "@/lib/useRequest";
 import { useOrden } from "@/lib/useOrden";
@@ -35,30 +37,57 @@ function MiniStat({ label, value, tone = "text-text-primary", icon }: { label: s
   );
 }
 
+/**
+ * Todos los filtros de Movimientos viven en la URL (`?q=…&tipo=…&categoria=…&estado=…
+ * &sede=…&caja=…&periodo=…&desde=…&hasta=…&ord=…&pag=…&tam=…`): volver atrás desde
+ * una ficha, recargar o pasar el enlace deja la lista tal cual. Entrando por el menú
+ * vuelven los de la última visita (ver `useFiltrosRecordados`), que necesita
+ * Suspense y esperar a montar.
+ */
 export default function TesoreriaPage() {
+  return (
+    <Suspense fallback={<PageSkeleton />}>
+      <TesoreriaConFiltros />
+    </Suspense>
+  );
+}
+
+function TesoreriaConFiltros() {
+  const { loading: authLoading } = useAuth();
+  const inicial = useFiltrosRecordados();
+  if (authLoading || !inicial) return <PageSkeleton />;
+  return <Movimientos urlInicial={inicial.valores} recordado={inicial.recordado} />;
+}
+
+function Movimientos({ urlInicial, recordado }: { urlInicial: Record<string, string>; recordado: boolean }) {
   const { user, loading: authLoading, authFetch } = useAuth();
   const [stats, setStats] = useState<TreasuryStats | null>(null);
   const [cats, setCats] = useState<{ name: string }[]>([]);
 
-  const [search, setSearch] = useState("");
-  const [type, setType] = useState("");
-  const [category, setCategory] = useState("");
-  const [status, setStatus] = useState("");
+  // La pantalla puede abrirse ya buscando: el código de un movimiento en el cierre de
+  // caja enlaza aquí (`?q=<código>&desde=&hasta=`) para poder anular el pago sin tener
+  // que volver a buscarlo por nombre y monto.
+  const [search, setSearch] = useState(urlInicial.q ?? "");
+  const [type, setType] = useState(urlInicial.tipo ?? "");
+  const [category, setCategory] = useState(urlInicial.categoria ?? "");
+  const [status, setStatus] = useState(urlInicial.estado ?? "");
   /** Filtro por caja: hasta ahora los movimientos de una caja solo se veían dentro del
    *  detalle de un cierre, y solo del día de ese cierre. */
-  const [cashAccountId, setCashAccountId] = useState("");
+  const [cashAccountId, setCashAccountId] = useState(/^\d+$/.test(urlInicial.caja ?? "") ? urlInicial.caja : "");
   /** Sede: no es una columna del movimiento (vive en la caja), el backend la traduce.
    *  Mismo filtro que ya tienen Ingresos y Egresos, para no dejar la pantalla de
-   *  Movimientos por detrás de las suyas. */
-  const [sede, setSede] = useState("");
+   *  Movimientos por detrás de las suyas. "0" son los bancos. */
+  const [sede, setSede] = useState(/^\d+$/.test(urlInicial.sede ?? "") ? urlInicial.sede : "");
   /** Periodo. Sin él la pantalla abría con TODO el año corrido (así lo resuelve
    *  `scopeDate` en el backend) y los totales de arriba no eran los del mes: por eso
    *  parecía que había cifras enormes. La cajera no lo ve — va acotada a HOY y a su
-   *  ventanilla, y esa regla no la toca este control. */
-  const [rango, setRango] = useState<RangoFechasValor>(() => rangoDePreset("mes"));
+   *  ventanilla, y esa regla no la toca este control. Un enlace con día puesto (el
+   *  del cierre) manda sobre el mes en curso: si no, el movimiento de un cierre viejo
+   *  no saldría y la pantalla parecería no buscar. */
+  const [rango, setRango] = useState<RangoFechasValor>(() => rangoDeUrl(urlInicial));
   const [accounts, setAccounts] = useState<{ id: number; name: string; branchLegacy: number | null; sede: string | null }[]>([]);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(25);
+  const [page, setPage] = useState(Number(urlInicial.pag) > 1 ? Number(urlInicial.pag) : 1);
+  const [pageSize, setPageSize] = useState(Number(urlInicial.tam) > 0 ? Number(urlInicial.tam) : 25);
   const [egresoOpen, setEgresoOpen] = useState(false);
   const [cierreOpen, setCierreOpen] = useState(false);
   const [anularTx, setAnularTx] = useState<{ id: string; payer: string; amount: number } | null>(null);
@@ -89,7 +118,7 @@ export default function TesoreriaPage() {
   // Carga con cancelación: al teclear se aborta la petición en vuelo para que
   // una respuesta lenta no pise a otra más reciente. Ver lib/useRequest.
   // Pagina en el servidor: el orden viaja en la query.
-  const orden = useOrden();
+  const orden = useOrden(ordenDeTexto(urlInicial.ord));
 
   const { data, cargando: loading, error, refrescar: load } = useRequest<TxList>(
     () => {
@@ -102,13 +131,36 @@ export default function TesoreriaPage() {
       // "0" son los bancos: comparar contra cadena vacía, no por verdadero/falso.
       if (sede !== "") qs.set("sede", sede);
       if (!soloSuCaja) { qs.set("from", rango.desde); qs.set("to", rango.hasta); }
+      if (!soloSuCaja && rango.horaDesde) qs.set("horaDesde", rango.horaDesde);
+      if (!soloSuCaja && rango.horaHasta) qs.set("horaHasta", rango.horaHasta);
       return `/treasury/transactions?${qs}`;
     },
-    [page, pageSize, search, type, category, status, cashAccountId, sede, orden.clave, soloSuCaja, rango.desde, rango.hasta],
+    [page, pageSize, search, type, category, status, cashAccountId, sede, orden.clave, soloSuCaja, rango.desde, rango.hasta, rango.horaDesde, rango.horaHasta],
     { debounceMs: search ? 350 : 0, saltar: authLoading },
   );
 
-  useEffect(() => { setPage(1); }, [search, type, category, status, cashAccountId, sede, pageSize, orden.clave, rango.desde, rango.hasta]);
+  // Cambiar un filtro manda a la página 1 — pero no en el primer render, que
+  // borraría la página que venía en la URL.
+  const primerRender = useRef(true);
+  useEffect(() => {
+    if (primerRender.current) { primerRender.current = false; return; }
+    setPage(1);
+  }, [search, type, category, status, cashAccountId, sede, pageSize, orden.clave, rango.desde, rango.hasta, rango.horaDesde, rango.horaHasta]);
+
+  // Y de vuelta: lo que está puesto en pantalla se escribe en la dirección. A la
+  // cajera no se le escribe periodo: el servidor la lleva a hoy.
+  useFiltrosEnUrl({
+    q: search.trim(), tipo: type, categoria: category, estado: status, sede, caja: cashAccountId,
+    ...rangoAUrl(soloSuCaja ? null : rango),
+    pag: page > 1 ? page : "", tam: pageSize !== 25 ? pageSize : "", ord: orden.clave,
+  });
+
+  const hayFiltros = !!(search.trim() || type || category || status || cashAccountId || sede !== ""
+    || (!soloSuCaja && (rango.preset !== "mes" || rango.horaDesde || rango.horaHasta)));
+  function limpiar() {
+    setSearch(""); setType(""); setCategory(""); setStatus(""); setCashAccountId(""); setSede("");
+    setRango(rangoDePreset("mes"));
+  }
 
   useEffect(() => {
     if (authLoading) return;
@@ -141,7 +193,7 @@ export default function TesoreriaPage() {
 
       {!soloSuCaja && (
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <RangoFechas value={rango} onChange={setRango} />
+          <RangoFechas value={rango} onChange={setRango} presets={["hoy", "semana", "mes", "mesPasado", "anio", "personalizado"]} conHora />
           <span className="text-[12px] font-medium text-text-tertiary">{etiquetaRango(rango)}</span>
         </div>
       )}
@@ -189,7 +241,26 @@ export default function TesoreriaPage() {
             .filter((a) => sede === "" || String(a.branchLegacy) === sede)
             .map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
         </Select>
+        {hayFiltros && (
+          <button
+            type="button"
+            onClick={limpiar}
+            className="tap inline-flex items-center gap-1 px-2 py-2 text-[12px] font-semibold text-text-tertiary hover:text-text-primary"
+          >
+            <Icon name="x" size={13} /> Limpiar
+          </button>
+        )}
       </ListToolbar>
+
+      {/* Al entrar por el menú los filtros vuelven puestos: hay que DECIRLO, o una
+          lista corta parece un sistema roto y no una lista filtrada. */}
+      {recordado && hayFiltros && (
+        <p className="mb-3 flex flex-wrap items-center gap-1.5 text-[12px] text-text-tertiary">
+          <Icon name="history" size={13} />
+          Se aplicaron los filtros de tu última visita.
+          <button type="button" onClick={limpiar} className="font-semibold text-brand hover:underline">Ver todos los movimientos</button>
+        </p>
+      )}
 
       {loading && !data ? <PageSkeleton /> : (
         <div className="flex flex-col gap-3">
@@ -210,7 +281,15 @@ export default function TesoreriaPage() {
               { key: "codigo", header: "Código", sortable: true, render: (r) => r.codigo != null
                 ? <span className="font-mono text-[12px] text-text-secondary">{r.codigo}</span>
                 : <span className="text-text-tertiary">—</span> },
-              { key: "date", header: "Fecha", sortable: true, render: (r) => (r.date ? new Date(r.date).toLocaleDateString("es-CO") : "—") },
+              // `fmtDate` y no `toLocaleDateString` a pelo: la fecha del movimiento es un día
+              // sin hora (medianoche UTC) y en hora de Colombia se pintaba el día anterior.
+              // Día contable y, debajo, la hora en que se registró.
+              { key: "date", header: "Fecha", sortable: true, render: (r) => (
+                <span className="flex flex-col whitespace-nowrap leading-tight">
+                  {fmtDate(r.date)}
+                  {r.createdAt && <span className="text-[11px] text-text-tertiary">{fmtHora(r.createdAt)}</span>}
+                </span>
+              ) },
               { key: "type", header: "Tipo", sortable: true, render: (r) => <Badge label={TX_TYPE_LABEL[r.type] ?? r.type} tone={TX_TYPE_TONE[r.type] ?? "info"} /> },
               { key: "payer", header: "Pagador / Proveedor", render: (r) => r.subscriberId
                 ? <Link href={`/clientes/${r.subscriberId}`} className="font-medium text-brand hover:underline">{r.payer}</Link>

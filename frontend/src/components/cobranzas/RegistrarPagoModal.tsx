@@ -171,6 +171,15 @@ export function RegistrarPagoModal({
   /** Lo que el cliente se ahorra con este pago (las facturas que quedan saldadas). */
   const descuentoPreview = preview.reduce((s, p) => s + p.descuento, 0);
   const excedente = Math.max(0, Math.round((amountNum - deudaElegida - netoAdelanto) * 100) / 100);
+  /**
+   * Con la casilla de adelantar puesta, el monto tiene que ser EXACTO: lo que sobre
+   * no lleva el descuento y quedaría como saldo a favor suelto para el mes siguiente
+   * (caso real 2026-09-16: se cobraron 85.000 por un mes de 80.750 y los 4.250 de más
+   * salieron en el recibo como "noviembre"). El backend lo rechaza igual.
+   */
+  const sobraAdelanto = puedeAdelantar && adelantar && excedente > 1 ? excedente : 0;
+  /** Lo que le falta al monto para saldar lo marcado (0 = alcanza o sobra). */
+  const falta = Math.max(0, Math.round((deudaElegida + netoAdelanto - amountNum) * 100) / 100);
 
   /**
    * Lo que hay que cobrar por las facturas `ids` (ya con su descuento) más, si se
@@ -290,6 +299,20 @@ export function RegistrarPagoModal({
     </label>
   );
 
+  const avisoSobraAdelanto = sobraAdelanto > 0 && (
+    <p className="flex items-start gap-1.5 rounded-lg border border-error-subtle bg-error-soft p-2 text-[11px] text-error-text">
+      <Icon name="alert-circle" size={13} className="mt-px shrink-0" />
+      <span>
+        El monto trae <b>{cop(sobraAdelanto)}</b> de más: {listar(adelanto?.meses.map((m) => m.label) ?? [])} con
+        el descuento vale <b>{cop(adelanto?.neto ?? 0)}</b>. Lo que sobre no lleva descuento y quedaría como
+        saldo a favor.{" "}
+        <button type="button" className="font-semibold underline" onClick={() => setAmount(montoCuadrado(elegidas, true))}>
+          Cobrar {cop(Number(montoCuadrado(elegidas, true)) || 0)}
+        </button>
+      </span>
+    </p>
+  );
+
   /** En qué caja cae el recaudo. La cajera no elige, así que se le dice. */
   const avisoCaja = !isSuperadmin && (
     <p className="flex items-center gap-1.5 text-[11px] text-text-tertiary">
@@ -349,6 +372,7 @@ export function RegistrarPagoModal({
     // que marcar, así que la exigencia de marcar una factura no aplica.
     if (!sinFacturas && !seleccionadas.length) { setErr("Marca al menos una factura a pagar."); return; }
     if (amountNum <= 0) { setErr("Ingresa un monto mayor a cero."); return; }
+    if (sobraAdelanto > 0) { setErr("Corrige el monto: con el mes adelantado tiene que ser exacto."); return; }
     if (method === "Balance" && amountNum > (debt?.balance ?? 0)) {
       setErr("El saldo a favor del cliente no alcanza para ese monto."); return;
     }
@@ -578,6 +602,7 @@ export function RegistrarPagoModal({
                 </span>
               </div>
               {bloqueAdelanto}
+              {avisoSobraAdelanto}
               {camposDePago("Los meses que alcance salen en el recibo")}
               {avisoCaja}
             </>
@@ -668,12 +693,29 @@ export function RegistrarPagoModal({
               </div>
 
               {bloqueAdelanto}
+              {avisoSobraAdelanto}
 
               {/* Formulario */}
               {camposDePago(
                 adelantar
                   ? `Deuda marcada ${cop(deudaElegida)} + adelanto ${cop(adelanto?.neto ?? 0)}`
                   : `Deuda marcada: ${cop(deudaElegida)}`,
+              )}
+
+              {/* El monto no alcanza a saldar lo marcado. Se avisa en grande porque el
+                  hueco pequeño es el que se cuela: una factura recaudada con un peso
+                  de menos queda PARTIAL, el cliente se va creyendo que quedó a paz y
+                  salvo y la deuda reaparece al mes siguiente. Abonar a medias es
+                  legítimo —por eso avisa y no bloquea—, pero tiene que ser a propósito. */}
+              {falta > 0 && (
+                <p className="flex items-start gap-1.5 rounded-lg border border-warning-border bg-warning-soft p-2 text-[11px] text-warning-text">
+                  <Icon name="alert-circle" size={13} className="mt-px shrink-0" />
+                  <span>
+                    Faltan <b>{cop(falta)}</b> para dejar saldado lo marcado: la última factura
+                    queda como <b>abono parcial</b> y el cliente sigue debiendo. Si es a propósito,
+                    siga; si no, corrija el monto.
+                  </span>
+                </p>
               )}
 
               {/* Qué pasa con el SERVICIO al cobrar. Se pregunta siempre porque quien
@@ -729,7 +771,7 @@ export function RegistrarPagoModal({
             <Button variant="secondary" onClick={onClose} disabled={saving}>Cancelar</Button>
             <Button
               onClick={submit}
-              disabled={saving || amountNum <= 0 || (!sinFacturas && seleccionadas.length === 0)}
+              disabled={saving || amountNum <= 0 || sobraAdelanto > 0 || (!sinFacturas && seleccionadas.length === 0)}
             >
               {saving
                 ? "Registrando…"

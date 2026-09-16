@@ -146,7 +146,10 @@ export class WhatsappService {
     if (!this.enabled) {
       result = { ok: false, error: 'Kapso sin configurar: falta KAPSO_API_KEY o KAPSO_PHONE_NUMBER_ID.' };
     } else {
-      const fields = 'display_phone_number,verified_name,quality_rating,messaging_limit_tier,code_verification_status,platform_type';
+      // `messaging_limit_tier` es el campo viejo: el número de coexistencia vinculado
+      // en sep-2026 ya no lo trae y el límite llega en
+      // `whatsapp_business_manager_messaging_limit`. Se piden los dos.
+      const fields = 'display_phone_number,verified_name,quality_rating,messaging_limit_tier,whatsapp_business_manager_messaging_limit,code_verification_status,platform_type';
       const url = `${this.baseUrl}/${this.graphVersion}/${this.phoneNumberId}?fields=${fields}`;
       try {
         const res = await fetch(url, { headers: this.authHeaders() });
@@ -160,7 +163,7 @@ export class WhatsappService {
             phone: data.display_phone_number ?? null,
             name: data.verified_name ?? null,
             quality: data.quality_rating ?? null,
-            tier: data.messaging_limit_tier ?? null,
+            tier: data.messaging_limit_tier ?? data.whatsapp_business_manager_messaging_limit ?? null,
             codeVerification: data.code_verification_status ?? null,
             platform: data.platform_type ?? null,
           };

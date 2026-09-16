@@ -804,11 +804,11 @@ export function actividadReporte(d: any): ReporteData {
           { label: 'Fecha', peso: 14 },
           { label: 'Usuario', peso: 26 },
           { label: 'Módulo', peso: 18 },
-          { label: 'Operación', peso: 30 },
+          { label: 'Qué hizo', peso: 30 },
           { label: 'IP', peso: 12 },
         ],
         filas: eventos.slice(0, TOPE).map((e: any) => [
-          diaCorto(e.fecha), corto(e.usuario, 30), corto(e.modulo, 22), corto(e.operacion, 36), corto(e.ip ?? '—', 15),
+          diaCorto(e.fecha), corto(e.usuario, 30), corto(e.modulo, 22), corto(e.descripcion ?? e.operacion, 46), corto(e.ip ?? '—', 15),
         ]),
       },
     ],

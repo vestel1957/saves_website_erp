@@ -193,7 +193,7 @@ export async function concederDescuentosAdelantados(
   const conDescuento = await tx.customerAdvance.findMany({
     where: { subscriberId, status: 'ABIERTO', discountAmount: { gt: 0 } },
     orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
-    select: { id: true, date: true, discountPct: true, discountAmount: true, discountApplied: true, months: true },
+    select: { id: true, date: true, discountPct: true, discountAmount: true, discountApplied: true, months: true, monthlyNet: true },
   });
   const vivos = conDescuento
     .map((a) => ({
@@ -240,7 +240,17 @@ export async function concederDescuentosAdelantados(
       if (f.getUTCFullYear() * 12 + f.getUTCMonth() <= mesCorte) continue;
       const saldo = round2(num(inv.total) - num(inv.paidAmount));
       if (saldo <= 0) continue;
-      const monto = round2(Math.min(adv.porMes, adv.pendiente, saldo));
+      let monto = round2(Math.min(adv.porMes, adv.pendiente, saldo));
+      // La factura tiene que quedar CLAVADA en el neto que se cobró en ventanilla. El
+      // total del mes puede salir unos centavos distinto del que se prometió (IVA
+      // redondeado por renglón: 58.500 + 22.269·1,19 = 85.000,11 contra 85.000), y
+      // sin este ajuste el anticipo la dejaría PARTIAL debiendo 0,11 (caso 22093,
+      // 2026-09-16). Sólo por debajo de un peso: más que eso es otro precio.
+      const neto = num(adv.monthlyNet);
+      if (neto > 0) {
+        const clavado = round2(saldo - neto);
+        if (clavado > 0 && Math.abs(clavado - monto) < 1) monto = clavado;
+      }
       if (monto <= 0) continue;
 
       const pct = adv.discountPct != null ? num(adv.discountPct) : null;
@@ -642,7 +652,14 @@ export async function mesesCubiertos(
   return meses;
 }
 
-/** Descuento por adelantar un mes, en % (ajuste `billing.advanceDiscountPct`). */
+/**
+ * Descuento por adelantar un mes, en % (ajuste `billing.advanceDiscountPct`).
+ *
+ * El defecto es 5 (2026-09-16, decisión del usuario: "el que paga adelantado debe sí o
+ * sí quedar con el descuento"). Entre el 8 y el 16 de septiembre estuvo en 0 y los
+ * adelantos se cobraron sin rebaja. Si la fila del ajuste falta o trae basura se
+ * aplica el 5; para apagarlo hay que escribir 0 a propósito en Ajustes → Facturación.
+ */
 export const PCT_ADELANTO_DEFECTO = 5;
 
 export async function porcentajeAdelanto(tx: Prisma.TransactionClient): Promise<number> {

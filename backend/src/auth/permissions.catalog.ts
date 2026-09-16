@@ -157,12 +157,35 @@ export const APP_PERMISSIONS = {
   NETWORK_RECONNECT: 'network.reconnect', // reconectar servicio
   NETWORK_ROUTERS_MANAGE: 'network.routers.manage', // crear/borrar routers, tumbar sesiones PPPoE
   NETWORK_OLT_MANAGE: 'network.olt.manage', // autorizar/reiniciar/ELIMINAR ONUs por SSH
+  // El interruptor manual del legacy (ficha ▸ Activar/Desactivar): mete o saca la IP
+  // del abonado de la address-list MOROSOS y NADA MÁS —no toca el estado de la ficha,
+  // no tumba la sesión, no abre orden—. Es la herramienta de quien está depurando el
+  // parque a mano y necesita probar si un cliente pasa o no pasa por el firewall.
+  //
+  // Es NOMINAL (ver PERMISOS_NOMINALES): se pidió "sólo para Santiago García", y con
+  // veinte superusuarios activos un permiso normal no puede significar eso.
+  NETWORK_MOROSOS_TOGGLE: 'network.morosos.toggle',
   CRON_RUN: 'system.cron.run', // disparar cronjobs a mano (facturación masiva, cartera)
   PURCHASES_APPROVE: 'purchases.approve', // aprobar órdenes de compra (1ª y 2ª firma)
   // Editar el catálogo de cláusulas de permanencia. Va aparte del área porque esos
   // valores son lo que se le cobra a un cliente que se retira antes de tiempo: los
   // consulta cualquiera que dé de alta un abonado, los cambia gerencia.
   CONTRACTS_MANAGE: 'contracts.manage',
+  // Escribir sobre una ORDEN de servicio: abrirla, corregirla, asignarla, cambiarle
+  // el estado, documentarla, firmarla, descargarle material o equipo. Va aparte del
+  // área porque hasta ahora "ver las órdenes" y "tocarlas" eran lo mismo —el área
+  // técnicos/caja/administración abría las dos puertas—, y hay quien debe seguir la
+  // operación sin poder alterarla (jefaturas, auditoría). Sin este permiso, /soporte
+  // es una pantalla de consulta: la lista, el detalle, el PDF y el Excel, nada más.
+  SUPPORT_WRITE: 'support.write',
+  // Emitir notas crédito/débito sobre una factura: la del módulo /facturacion/notas
+  // (rebaja o recargo sobre cartera) y la nota crédito ELECTRÓNICA ante la DIAN.
+  //
+  // Es un permiso NOMINAL —ver PERMISOS_NOMINALES, más abajo—: se concede persona a
+  // persona y NO lo hereda el superusuario. Rebajarle la deuda a un abonado es mover
+  // plata sin que entre plata, y hasta 2026-09-10 podía hacerlo todo el área de
+  // contabilidad (y, por el atajo de `system.admin`, los trece superusuarios).
+  BILLING_NOTES_EMIT: 'billing.notes.emit',
 } as const;
 
 export type AppPermission = (typeof APP_PERMISSIONS)[keyof typeof APP_PERMISSIONS];
@@ -192,10 +215,44 @@ export const ALL_APP_PERMISSIONS: { key: string; label: string; group: string }[
   { key: A.NETWORK_RECONNECT, label: 'Reconectar servicio', group: 'Operaciones críticas' },
   { key: A.NETWORK_ROUTERS_MANAGE, label: 'Administrar routers y sesiones PPPoE', group: 'Operaciones críticas' },
   { key: A.NETWORK_OLT_MANAGE, label: 'Administrar ONUs de la OLT (autorizar/reiniciar/eliminar)', group: 'Operaciones críticas' },
+  { key: A.NETWORK_MOROSOS_TOGGLE, label: 'Activar/Desactivar la IP en la lista MOROSOS (interruptor manual)', group: 'Operaciones críticas' },
   { key: A.CRON_RUN, label: 'Ejecutar procesos programados a mano (facturación masiva)', group: 'Operaciones críticas' },
   { key: A.PURCHASES_APPROVE, label: 'Aprobar órdenes de compra', group: 'Operaciones críticas' },
   { key: A.CONTRACTS_MANAGE, label: 'Editar cláusulas de permanencia del contrato', group: 'Operaciones críticas' },
+  { key: A.SUPPORT_WRITE, label: 'Crear y modificar órdenes de servicio (sin él, solo consulta)', group: 'Soporte' },
+  { key: A.BILLING_NOTES_EMIT, label: 'Emitir notas crédito/débito (incluida la nota crédito DIAN)', group: 'Operaciones críticas' },
 ];
+
+/**
+ * Permisos que se conceden PERSONA A PERSONA y que el superusuario NO hereda.
+ *
+ * El `PermissionsGuard` deja pasar a `system.admin` cualquier comprobación, así que
+ * un permiso normal nunca puede significar "sólo estas dos personas": hay trece
+ * superusuarios activos y todos lo cumplirían por el atajo. Estos se comprueban
+ * mirando la lista de permisos efectivos TAL CUAL, sin atajo.
+ *
+ * Por lo mismo quedan fuera de los permisos del rol `super-admin` (que se siembra
+ * como "todo el catálogo"): si entraran ahí, una re-siembra de roles se los daría
+ * a los trece de vuelta y el candado se abriría sin que nadie lo pidiera.
+ */
+export const PERMISOS_NOMINALES: string[] = [
+  APP_PERMISSIONS.BILLING_NOTES_EMIT,
+  APP_PERMISSIONS.NETWORK_MOROSOS_TOGGLE,
+];
+
+/**
+ * ¿Este usuario tiene un permiso NOMINAL? Mira la lista de permisos efectivos tal
+ * cual: sin el atajo de `system.admin` y sin el de `inventory.admin`, que son los
+ * dos que `exigirPermisos` aplica. Se usa DENTRO de la operación (servicio o
+ * pantalla), no en la ruta: la ruta sigue exigiendo el permiso por el camino normal
+ * y esto es lo que remata el candado.
+ */
+export function tienePermisoNominal(
+  user: { permissions?: string[] | null } | null | undefined,
+  permiso: string,
+): boolean {
+  return !!user && (user.permissions ?? []).includes(permiso);
+}
 
 /** Permiso que otorga acceso total — verificado por el PermissionsGuard. */
 export const SUPERADMIN_PERMISSION = APP_PERMISSIONS.SYSTEM_ADMIN;
@@ -347,6 +404,17 @@ export const ALL_PAYROLL_PERMISSIONS: { key: string; label: string }[] = [
 /** Deriva la llave de permiso de una pantalla a partir de su href. */
 export const screenKey = (href: string) => 'screen' + href.replace(/\//g, '.');
 
+/** Sedes del módulo "Equipos disponibles". ESPEJO de `SEDES_DISPONIBLES` en `frontend/src/lib/nav.ts`. */
+export const SEDES_DISPONIBLES = [
+  { slug: 'yopal', label: 'Yopal' },
+  { slug: 'villanueva', label: 'Villanueva' },
+  { slug: 'monterrey', label: 'Monterrey' },
+  { slug: 'aguazul', label: 'Aguazul' },
+  { slug: 'tauramena', label: 'Tauramena' },
+  { slug: 'villavicencio', label: 'Villavicencio' },
+  { slug: 'mocoa', label: 'Mocoa' },
+] as const;
+
 export interface ScreenDef {
   href: string;
   label: string;
@@ -447,9 +515,25 @@ export const SCREENS: ScreenDef[] = [
   { href: '/contabilidad/mapeo-cuentas', label: 'Mapeo de cuentas', module: 'Contabilidad', areas: ['contabilidad'] },
 
   { href: '/clientes', label: 'Clientes', module: 'Clientes', areas: ['administracion', 'caja'] },
-  { href: '/playhub', label: 'PlayHub / IPTV', module: 'Clientes', areas: ['administracion'] },
+  // PlayHub (2026-09-04): la cajera lo vende y lo cancela en ventanilla, así que la
+  // pestaña de la ficha y este reporte son suyos. El reporte va acotado a SU sede
+  // (`ExtrasService.playhub`) y las operaciones por cliente pasan por
+  // `exigirSedeSuscriptor`. La barrida masiva sigue sin ser de caja.
+  { href: '/playhub', label: 'PlayHub / IPTV', module: 'Clientes', areas: ['administracion', 'caja'] },
 
-  { href: '/soporte', label: 'Tickets / Órdenes de trabajo', module: 'Soporte', areas: ['tecnicos', 'caja'] },
+  // Sin 'tecnicos' desde el 2026-09-10, a pedido del usuario («quitemos este módulo
+  // completo para los técnicos… es más, todo el módulo de clientes»). Era la ÚNICA
+  // pantalla que el técnico tenía en CLIENTES / CRM, así que al retirarla desaparece
+  // la sección entera de su menú — que es lo que se pidió.
+  //
+  // Lo que NO se le quita, porque es con lo que trabaja: la FICHA de su orden
+  // (`/soporte/:id`) y la del cliente (`/clientes/:id`, de consulta, a pedido del
+  // usuario el 2026-08-31). Ninguna de las dos es hoja del menú, así que
+  // `PantallaGate` no las toca y el área las sigue dejando pasar; lo que se cierra es
+  // el LISTADO de las 139.000 órdenes, que nunca fue suyo. Su lista de trabajo es su
+  // agenda del día. El permiso concedido en base lo retira
+  // `prisma/migrate-tecnico-sin-soporte-2026-09.ts`.
+  { href: '/soporte', label: 'Tickets / Órdenes de trabajo', module: 'Soporte', areas: ['caja'] },
   // Agendamiento (2026-07-31): la cajera reparte el día entre los técnicos y fija el
   // orden de las visitas. NO es del técnico — él sigue la agenda, no la arma —, y el
   // servicio se lo vuelve a negar por API (`AgendaService.mover`).
@@ -483,6 +567,12 @@ export const SCREENS: ScreenDef[] = [
   // "Bodega de equipos" SÍ se le deja, pero al técnico le muestra únicamente los
   // equipos que están a su nombre (ver `NetworkWriteService.equipmentWarehouses`).
   { href: '/red/bodegas', label: 'Bodega de equipos', module: 'Red / ISP', areas: ['tecnicos', 'administracion'] },
+  // Equipos disponibles (2026-09-14): una pantalla por sede, vacías por ahora. De
+  // administración y de la cajera; el jefe de bodega las recibe en su rol. El técnico
+  // no: él ve sólo lo suyo. Una llave por sede para poder repartirlas por empleado.
+  ...SEDES_DISPONIBLES.map((s): ScreenDef => ({
+    href: `/red/disponibles/${s.slug}`, label: `Equipos disponibles · ${s.label}`, module: 'Red / ISP', areas: ['administracion', 'caja'],
+  })),
   { href: '/red', label: 'Red / ISP (resumen)', module: 'Red / ISP', areas: ['administracion'] },
   { href: '/red/onus', label: 'ONUs', module: 'Red / ISP', areas: ['administracion'] },
   // Faltaban en el catálogo pese a estar en el nav: sin llave de pantalla, `can()`
@@ -521,8 +611,15 @@ export const SCREENS: ScreenDef[] = [
   // almacén (`InventoryService.actas`).
   { href: '/inventario/actas', label: 'Actas de traspaso', module: 'Inventario / Compras', areas: ['administracion', 'tecnicos', 'caja'] },
   // COMPRAS fuera del perfil de caja (2026-07-29): quien recauda no ordena compras.
-  { href: '/ordenes', label: 'Órdenes de compra', module: 'Inventario / Compras', areas: ['administracion'] },
-  { href: '/ordenes/historial', label: 'Historial de órdenes', module: 'Inventario / Compras', areas: ['administracion'] },
+  // Matiz de 2026-09-08 (a pedido del usuario): la cajera SÍ ve las órdenes, porque es
+  // quien tiene el papel en la mano —la factura del proveedor, el comprobante del pago—
+  // y hasta ahora tenía que pasárselo a otro para que lo subiera. Sigue sin ORDENAR
+  // compras: la API le abre sólo leer, el PDF y los adjuntos (`caja` en las rutas de
+  // lectura y en `POST /:id/files`); crear, editar, aprobar, pagar, recibir, notas y
+  // borrar siguen siendo de administración. Los catálogos (categorías, proveedores)
+  // tampoco son suyos.
+  { href: '/ordenes', label: 'Órdenes de compra', module: 'Inventario / Compras', areas: ['administracion', 'caja'] },
+  { href: '/ordenes/historial', label: 'Historial de órdenes', module: 'Inventario / Compras', areas: ['administracion', 'caja'] },
   { href: '/proveedores', label: 'Proveedores', module: 'Inventario / Compras', areas: ['administracion'] },
   { href: '/devoluciones', label: 'Devoluciones', module: 'Inventario / Compras', areas: ['administracion'] },
 
@@ -536,12 +633,21 @@ export const SCREENS: ScreenDef[] = [
   { href: '/documentos', label: 'Documentos', module: 'Personas y Proyectos', areas: ['administracion', 'sistemas'] },
   { href: '/proyectos', label: 'Proyectos', module: 'Personas y Proyectos', areas: ['administracion'] },
   { href: '/agenda', label: 'Agenda / Tareas', module: 'Personas y Proyectos', areas: ['administracion', 'caja'] },
-  { href: '/tareas', label: 'Tareas / Pendientes', module: 'Personas y Proyectos', areas: ['administracion', 'gerencia', 'tecnicos', 'caja'] },
+  // Sin 'tecnicos' desde el 2026-09-10, a pedido del usuario («eliminar el módulo
+  // Panel de Tareas: las actividades de los técnicos se gestionan mediante el
+  // agendamiento diario»). El módulo se conserva para administración, gerencia y
+  // caja, que lo usan para lo suyo; lo que se retira es del perfil del técnico —la
+  // pantalla, el permiso (`migrate-tecnico-agenda-diaria-2026-09.ts`) y las 15 rutas
+  // de la API (`tasks.router.ts`)—. Su lista de trabajo es su agenda del día.
+  { href: '/tareas', label: 'Tareas / Pendientes', module: 'Personas y Proyectos', areas: ['administracion', 'gerencia', 'caja'] },
 
   // WHATSAPP — bandeja de atención (módulo propio, 2026-07-29). La configuración del
   // canal (plantillas, masivos, API, bot) se queda en Sistemas: son dos oficios
   // distintos y no tienen por qué ir juntos.
   { href: '/whatsapp', label: 'Bandeja de WhatsApp (chats)', module: 'WhatsApp', areas: ['administracion', 'caja', 'sistemas'] },
+  // Campañas por plantilla (2026-09-14). Salió de Configuración porque se usa cada
+  // mes, no se configura una vez. La API sigue pidiendo `system.whatsapp`.
+  { href: '/whatsapp/masivo', label: 'Mensajes masivos (campañas)', module: 'WhatsApp', areas: ['sistemas'] },
 
   { href: '/configuracion', label: 'Configuración', module: 'Sistemas', areas: ['sistemas'] },
   { href: '/configuracion/planes', label: 'Planes de servicio', module: 'Sistemas', areas: ['sistemas'] },
@@ -603,7 +709,8 @@ export const ALL_ROLES: RoleDef[] = [
     name: 'Superadministrador',
     description: 'Acceso total a toda la plataforma',
     area: 'Administración',
-    permissions: ALL_PERMISSIONS.map((p) => p.key),
+    // Todo el catálogo MENOS los permisos nominales (ver PERMISOS_NOMINALES).
+    permissions: ALL_PERMISSIONS.map((p) => p.key).filter((k) => !PERMISOS_NOMINALES.includes(k)),
   },
   // ---- Áreas de acceso Vestel (organizan el sidebar por área) ----
   // El Superusuario es `super-admin` (system.admin ⇒ ve todas las áreas).
@@ -620,7 +727,7 @@ export const ALL_ROLES: RoleDef[] = [
     name: 'Administración',
     description: 'Clientes, inventario, compras, empleados y proyectos',
     area: 'Áreas Vestel',
-    permissions: [A.AREA_ADMINISTRACION, A.DASHBOARD_VIEW, A.HR_EMPLOYEES_READ, A.WHATSAPP_INBOX, ...screensForArea('administracion')],
+    permissions: [A.AREA_ADMINISTRACION, A.DASHBOARD_VIEW, A.HR_EMPLOYEES_READ, A.WHATSAPP_INBOX, A.SUPPORT_WRITE, ...screensForArea('administracion')],
   },
   {
     key: 'area-contabilidad',
@@ -638,7 +745,7 @@ export const ALL_ROLES: RoleDef[] = [
     // que antes de separarlas. Quitarlas de aquí es lo que permite tener un técnico
     // de consulta; esa decisión es de negocio, no del refactor.
     permissions: [
-      A.AREA_TECNICOS,
+      A.AREA_TECNICOS, A.SUPPORT_WRITE,
       A.NETWORK_CUT, A.NETWORK_RECONNECT, A.NETWORK_ROUTERS_MANAGE, A.NETWORK_OLT_MANAGE,
       ...screensForArea('tecnicos'),
     ],
@@ -660,13 +767,15 @@ export const ALL_ROLES: RoleDef[] = [
     // + clientes, tickets, agenda, la entrega de material a técnicos (traspasos) y,
     // desde 2026-08-27, emitir facturas de ventanilla (Administrar facturas).
     // NO ve las notas crédito/débito, ni la vista transversal de movimientos, ni el
-    // cargue de Efecty, ni compras, ni e-factura, ni config. Su sección propia en
-    // el sidebar se gatea con `area.caja`.
+    // cargue de Efecty, ni e-factura, ni config. De COMPRAS ve las órdenes (2026-09-08)
+    // para subirles la factura del proveedor y el comprobante del pago, pero no las
+    // crea ni las aprueba ni las paga. Su sección propia en el sidebar se gatea con
+    // `area.caja`.
     key: 'area-caja',
     name: 'Caja y ventas',
     description: 'Cajera: apertura/cierre de su caja, ingresos, egresos, transferencias, entrega de material a técnicos, transferencias de equipos, clientes y tickets',
     area: 'Áreas Vestel',
-    permissions: [A.AREA_CAJA, A.ACCOUNTING_VIEW, A.WHATSAPP_INBOX, ...screensForArea('caja')],
+    permissions: [A.AREA_CAJA, A.ACCOUNTING_VIEW, A.WHATSAPP_INBOX, A.SUPPORT_WRITE, ...screensForArea('caja')],
   },
   {
     key: 'auditor',
@@ -687,7 +796,7 @@ export const ALL_ROLES: RoleDef[] = [
       // El Jefe de bodega es, desde 2026-07-30, el ÚNICO que puede mandar equipo de
       // una sede a otra: sin esta pantalla no podría armar esa transferencia. (Su
       // 403 histórico en las rutas gateadas por área lo resuelve `@OrPermission`.)
-      ...(r.key === 'warehouse-manager' ? [screenKey('/red/transferencias')] : []),
+      ...(r.key === 'warehouse-manager' ? [screenKey('/red/transferencias'), ...SEDES_DISPONIBLES.map((s) => screenKey(`/red/disponibles/${s.slug}`))] : []),
     ],
   })),
   // ---- Recursos Humanos / Nómina ----

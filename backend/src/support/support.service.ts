@@ -15,7 +15,14 @@ import { esTrabajoDeCampo } from './field-work.policy';
 import { OrderScoreService } from './order-score.service';
 import { direccionDe, referenciaDe } from '../common/subscriber-address';
 import { ORDEN_CRONOLOGICO, porFecha } from './orden-cronologico';
-import { puedeAbrirOrden } from './turno';
+import { DIAS_REZAGO, whereTrabajoDelDia } from './agenda-dia';
+import { GeofenceService } from './geofence.service';
+import { esOrdenDeCampo } from './geofence.policy';
+import { esIpRemotaUtil, faltaLaIpRemota } from './ip-remota.policy';
+import { esUsuarioPppUtil } from '../subscribers/conexion-alta';
+import { esOrdenDeServicio, esReconexion } from './order-types';
+import { mixPorAbonado } from '../common/servicios-del-abonado';
+import { whereDeServicios } from './servicio-orden.filtro';
 
 /**
  * Días tras los cuales una orden abierta se marca como vencida en el panel del
@@ -25,21 +32,6 @@ import { puedeAbrirOrden } from './turno';
  * atraso leyendo un informe de gerencia.
  */
 const DIAS_VENCIMIENTO = 7;
-
-/**
- * A partir de aquí una orden abierta ya no es trabajo del día: es rezago.
- *
- * No es un capricho. De las 509 órdenes abiertas de la empresa, 164 llevan MÁS DE UN
- * AÑO sin cerrar y las más viejas son de 2021 — nadie las va a atender hoy. Metidas en
- * la misma lista y ordenadas por antigüedad (que es lo correcto para el trabajo real),
- * copaban las primeras pantallas y enterraban lo de esta semana: el técnico abría su
- * panel y lo primero que veía eran seis fantasmas de hace cinco años.
- *
- * Así que se separan: la agenda son las de los últimos 90 días y el rezago va aparte,
- * contado y consultable. Ocultarlo del todo sería mentir sobre su cola; ponerlo primero
- * sería inutilizar el panel.
- */
-const DIAS_REZAGO = 90;
 
 /** Una orden tal como la ve el técnico en su panel. */
 export type OrdenDeJornada = {
@@ -90,6 +82,14 @@ export class SupportService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly puntajes: OrderScoreService,
+    /**
+     * Sólo para saber QUÉ TIPOS son de campo al decir en la ficha lo que hace falta
+     * para cerrar la orden (`requisitosCierre`). Se lee de la misma fuente que usan
+     * los candados del cierre —el ajuste `tickets.geofence.fieldTypes`— y no de una
+     * lista propia: dos listas acabarían diciendo cosas distintas, y el síntoma
+     * sería una pantalla que promete un cierre que la API rechaza.
+     */
+    private readonly geofence: GeofenceService,
   ) {}
 
   /**
@@ -103,12 +103,20 @@ export class SupportService {
    * Un técnico SIN ficha de empleado recibe un filtro imposible, no la lista
    * completa: si no se puede saber qué es suyo, no se le enseña lo de los demás.
    */
-  private async soloMisOrdenes(user?: AuthUser): Promise<Prisma.TicketWhereInput | null> {
+  private async soloMisOrdenes(user?: AuthUser, todoSuHistorial = false): Promise<Prisma.TicketWhereInput | null> {
     if (!esTecnicoDeCampo(user)) return null;
     const ficha = await fichaDelUsuario(this.prisma, user!);
     if (!ficha) return { id: '—sin-ficha-de-empleado—' };
     const claves = clavesDe(ficha);
-    return { OR: [{ assignedStaffId: ficha.id }, ...(claves.length ? [{ assigned: { in: claves } }] : [])] };
+    const suyas: Prisma.TicketWhereInput = {
+      OR: [{ assignedStaffId: ficha.id }, ...(claves.length ? [{ assigned: { in: claves } }] : [])],
+    };
+    // Y de lo suyo, sólo el DÍA DE HOY (2026-09-10). Ver `whereTrabajoDelDia`: es la
+    // misma definición de "hoy" que usa su agenda, más lo que cerró hoy. Lo de días
+    // anteriores no se pierde — lo enseña su historial (`/mi-agenda/historial`), que
+    // pasa `todoSuHistorial` porque justamente va a buscar lo de otros días.
+    if (todoSuHistorial) return suyas;
+    return { AND: [suyas, whereTrabajoDelDia(hoyEnColombia())] };
   }
 
   async stats(user?: AuthUser) {
@@ -180,7 +188,10 @@ export class SupportService {
     code: 'code',
     priority: 'priority',
     orden: (dir: 'asc' | 'desc') => [{ subject: dir }, { type: dir }],
-    description: 'problem',
+    // Por la columna que de verdad se lee: `description` enseña `section` (la
+    // observación) y sólo cae en `problem` cuando no hay ninguna — ordenar por
+    // `problem` dejaba el 97% de las filas empatadas en vacío.
+    description: 'section',
     client: (dir: 'asc' | 'desc') => [
       { subscriber: { firstName: dir } },
       { subscriber: { lastName1: dir } },
@@ -195,7 +206,7 @@ export class SupportService {
     status: 'status',
   };
 
-  async tickets(params: { search?: string; status?: string; type?: string; tec?: string; priority?: string; sede?: string; subscriberId?: string; from?: string; to?: string; all?: string; page?: number; pageSize?: number; sortBy?: string; sortDir?: string }, user?: AuthUser) {
+  async tickets(params: { search?: string; status?: string; type?: string; servicio?: string; tec?: string; priority?: string; sede?: string; subscriberId?: string; from?: string; to?: string; all?: string; page?: number; pageSize?: number; sortBy?: string; sortDir?: string }, user?: AuthUser) {
     const { page, pageSize } = paginacion(params);
     const where: Prisma.TicketWhereInput = {};
     // Acceso por sede: el ticket la hereda de su suscriptor. Un ticket SIN suscriptor
@@ -221,6 +232,13 @@ export class SupportService {
     if (estados.length) where.status = { in: estados as any };
     const detalles = variosDeQuery(params.type);
     if (detalles.length) where.type = { in: detalles };
+    // QUÉ TIENE CONTRATADO EL CLIENTE (solo TV, solo internet, combo). Es el filtro
+    // hermano del cartel que lleva cada fila: quien reparte el trabajo puede así
+    // sacar de un golpe las órdenes de servicio de los abonados de solo televisión
+    // —a los que no hay que tocarles el internet— sin ir abriéndolas una por una.
+    // Ver `servicio-orden.filtro.ts`.
+    const porServicio = await whereDeServicios(this.prisma, variosDeQuery(params.servicio));
+    if (porServicio) and.push(porServicio);
     // Insensible a mayúsculas: `priority` es texto libre del legacy y "URGENTE"
     // también tiene que caer cuando se filtra por "Urgente". Con varias elegidas va
     // como OR de iguales y no como `in`, que en Postgres no respeta el `mode`.
@@ -303,11 +321,34 @@ export class SupportService {
       const n = Number(nb);
       return Number.isFinite(n) ? (barrioByLegacy.get(n) ?? null) : null;
     };
+    // EL CARTEL DE SERVICIO de cada fila: qué tiene contratado el CLIENTE —solo TV,
+    // solo internet, combo—, resuelto de una vez para los cien abonados de la
+    // página. No es lo que la orden nombra: 33 de las 38 'Reconexion Television2'
+    // abiertas el 2026-09-10 son de clientes que también tienen internet, y
+    // marcarlas "TV" era mandar a abrirlas una por una. Ver
+    // `common/servicios-del-abonado.ts`.
+    const mix = await mixPorAbonado(this.prisma, [...new Set(rows.map((t) => t.subscriberId).filter((id): id is string => !!id))]);
+    // Sólo lo llevan las órdenes que van de un servicio (`esOrdenDeServicio`): en
+    // una 'Instalacion' o un 'Cambio de equipo' el cartel sería ruido.
+    const cartelDe = (t: { type: string | null; subscriberId: string | null }) =>
+      (esOrdenDeServicio(t.type) && t.subscriberId ? mix.get(t.subscriberId) : null) ?? null;
     return {
       // `generadaPor` sale traducido por lo mismo que `assigned`: en las órdenes del
       // legacy lo que hay escrito es el username de quien la abrió ('SoniaCajera'),
       // no su nombre. Ver `generadaPorDe`.
-      items: rows.map((t) => ({ id: t.id, code: t.code, legacyId: t.legacyId, subject: t.subject, type: t.type, description: t.problem, priority: t.priority, created: t.created, status: t.status, assigned: tr.nombre(t.assigned), generadaPor: tr.nombre(t.createdByName ?? t.col), client: subName(t.subscriber), subscriberId: t.subscriber?.id ?? null, abonado: t.subscriber?.abonado ?? null, cedula: [t.subscriber?.docType, t.subscriber?.docNumber].filter(Boolean).join(' ') || null, telefono: t.subscriber?.phone1 ?? null, telefono2: t.subscriber?.phone2 ?? null, direccion: direccionDe(t.subscriber?.nomenclature, t.subscriber?.addressLine), referencia: referenciaDe(t.subscriber?.nomenclature), sede: t.subscriber?.branch?.name ?? null, barrio: barrioOf(t.subscriber?.neighborhood), finalDate: t.finalDate })),
+      //
+      // LO QUE DICE LA ORDEN son DOS campos, no uno (2026-09-07): `problem` es la
+      // falla en una línea y `section` la observación larga. La columna
+      // "Descripción" —pantalla, tarjeta móvil y Excel— leía sólo `problem`, y en
+      // 2026 lo tienen 1.349 órdenes de 49.248 contra las 47.622 que tienen
+      // `section`: el 97% del listado salía en blanco y el Excel llegaba sin las
+      // observaciones. Es el mismo reparto que ya hace la agenda (ver
+      // `AgendaService.TARJETA`), y por eso van los dos por separado.
+      //
+      // Los dos pasan por `textoPlano`: el legacy los editaba con un WYSIWYG y en la
+      // base hay '<p>SUSPENDER TV</p>'. Pintarlo como HTML sería XSS almacenado;
+      // crudo, le enseña las etiquetas a la cajera y las mete en la celda del Excel.
+      items: rows.map((t) => ({ id: t.id, code: t.code, legacyId: t.legacyId, subject: t.subject, type: t.type, servicio: cartelDe(t), problema: textoPlano(t.problem), observacion: textoPlano(t.section), description: textoPlano(t.section) ?? textoPlano(t.problem), priority: t.priority, created: t.created, status: t.status, assigned: tr.nombre(t.assigned), generadaPor: tr.nombre(t.createdByName ?? t.col), client: subName(t.subscriber), subscriberId: t.subscriber?.id ?? null, abonado: t.subscriber?.abonado ?? null, cedula: [t.subscriber?.docType, t.subscriber?.docNumber].filter(Boolean).join(' ') || null, telefono: t.subscriber?.phone1 ?? null, telefono2: t.subscriber?.phone2 ?? null, direccion: direccionDe(t.subscriber?.nomenclature, t.subscriber?.addressLine), referencia: referenciaDe(t.subscriber?.nomenclature), sede: t.subscriber?.branch?.name ?? null, barrio: barrioOf(t.subscriber?.neighborhood), finalDate: t.finalDate })),
       total, page, pageSize, pages: Math.ceil(total / pageSize),
     };
   }
@@ -387,41 +428,31 @@ export class SupportService {
     return nb?.name ?? null;
   }
 
-  /**
-   * Niega abrir una orden pendiente que no sea la que el técnico tiene en turno.
-   *
-   * La regla entera vive en `turno.ts`, compartida con la pantalla del técnico, para
-   * que las dos no puedan discrepar. Un técnico sin ficha de empleado no llega hasta
-   * aquí: `soloMisOrdenes` ya lo dejó sin ninguna orden que abrir.
-   */
-  private async exigirTurno(user: AuthUser, ticketId: string) {
-    const ficha = await fichaDelUsuario(this.prisma, user);
-    if (!ficha) return;
-    const t = await this.prisma.ticket.findUnique({ where: { id: ticketId }, select: { id: true, status: true } });
-    if (!t) return; // El 404 lo da el llamador con su propio mensaje.
-    const v = await puedeAbrirOrden(this.prisma, ficha.id, t);
-    if (!v.permitido) throw new ForbiddenException(v.motivo);
-  }
-
   async ticketDetail(id: string, user?: AuthUser) {
     const dueno = await this.prisma.ticket.findUnique({ where: { id }, select: { subscriberId: true } });
     // La lista ya va acotada, pero la ficha se abre por URL: sin esta puerta bastaba
     // con teclear un id para leer (y cerrar) la orden de otro técnico.
-    const mias = await this.soloMisOrdenes(user);
+    //
+    // Aquí el alcance es TODAS las suyas y no sólo las de hoy (`todoSuHistorial`): la
+    // lista se le recortó al día (2026-09-10), pero su historial —el de `/mi-agenda/
+    // historial`, que se le conserva— enlaza al detalle de lo que hizo días atrás, y
+    // acotar también esta puerta lo mandaría a un 403 desde su propia pantalla.
+    const mias = await this.soloMisOrdenes(user, true);
     if (mias) {
       if (!(await this.prisma.ticket.findFirst({ where: { AND: [{ id }, mias] }, select: { id: true } }))) {
         throw new ForbiddenException('Esta orden no está asignada a ti.');
       }
       // Ser suya basta para el alcance: no se le pide además que el cliente sea de su
       // sede (mismo criterio que la lista, o no podría abrir las 38 que le salen ahí).
-
-      // Segunda puerta, la del turno: ser suya ya no alcanza para abrirla si tiene
-      // otra visita en turno. Sin esto el turno obligatorio sería de fachada — le
-      // bastaría con ir a su lista y abrir la que prefiriera.
-      await this.exigirTurno(user!, id);
     } else if (dueno?.subscriberId) {
       await exigirSedeSuscriptor(this.prisma, user, dueno.subscriberId);
     }
+    // Aquí NO hay candado de "una orden a la vez" (2026-09-10). Lo hubo durante un día
+    // —abrir la ficha de una segunda orden daba 403— y se quitó al mirar el legacy: allá
+    // la regla vive sólo en el momento de EMPEZAR (`update_status` con `Realizando`) y
+    // ver una orden nunca se bloquea. Consultar no es trabajar dos cosas a la vez, y
+    // taparlo dejaba al técnico sin poder mirar la siguiente visita para llamar al
+    // cliente. El candado, entero, está en `SupportWriteService.updateStatus`.
     const t = await this.prisma.ticket.findUnique({
       where: { id },
       include: {
@@ -429,6 +460,8 @@ export class SupportService {
           select: {
             ...SUB, docNumber: true, phone1: true, phone2: true, addressLine: true, nomenclature: true,
             neighborhood: true, gpsLat: true, gpsLng: true, pppProfile: true, macEquipo: true,
+            // Los dos que mira el candado de la IP remota al cerrar (ver `requisitosCierre`).
+            pppUsername: true, ipRemote: true,
             branch: { select: { name: true } },
           },
         },
@@ -469,7 +502,57 @@ export class SupportService {
     const nomen = (sub?.nomenclature ?? null) as Record<string, unknown> | null;
     const strOf = (k: string) => (nomen && typeof nomen[k] === 'string' ? (nomen[k] as string) : null);
 
+    /**
+     * QUÉ HACE FALTA para poder cerrar esta orden (2026-09-10). Lo dice el servidor
+     * porque son SUS reglas: la geo-cerca (`geofence.policy.ts`) y el registro
+     * fotográfico (`foto-cierre.policy.ts`). La pantalla sólo lo pinta.
+     *
+     * Sin esto el técnico se enteraba de los dos requisitos chocando con ellos, con
+     * la visita ya terminada y el cliente en la puerta — que es el peor momento para
+     * descubrir que hay que volver a sacar el teléfono.
+     *
+     * `fotos` cuenta las que ya lleva el hilo: son las mismas que cuenta el candado
+     * (`TicketThread.attach`, por número de orden).
+     */
+    const deCampo = esOrdenDeCampo(t.type, await this.geofence.tiposCampo());
+    const requisitosCierre = {
+      deCampo,
+      // La FIRMA de quien recibe no es nueva —la exige `updateStatus` desde el port
+      // del legacy— pero no se anunciaba en ninguna parte: se descubría al intentar
+      // cerrar. Puesta aquí, los tres requisitos se leen juntos y de una vez, que es
+      // lo que evita el "y ahora esto otro" con el cliente en la puerta.
+      firma: process.env.TICKET_REQUIRE_SIGNATURE !== 'false' && !esReconexion(t.type) && !t.signatureName,
+      // El modo puede estar en `observar` u `off`: entonces la ubicación se manda
+      // igual, pero no frena el cierre y no hay por qué anunciarla como requisito.
+      ubicacion: deCampo && (await this.geofence.modo()) === 'exigir',
+      foto: deCampo && process.env.TICKET_REQUIRE_PHOTO !== 'false',
+      fotos: threads.filter((h) => h.attach).length,
+      /**
+       * IP remota del cliente (2026-09-10). Se calcula con la MISMA función que
+       * frena el cierre (`faltaLaIpRemota`) y con los mismos datos, para que la
+       * pantalla no prometa un cierre que la API va a rechazar.
+       *
+       * `ipRemotaValor` viaja para poder decir cuál es cuando ya está: el técnico
+       * que ve la dirección sabe que ahí se puede entrar, y sistemas la lee sin
+       * abrir otra pantalla.
+       */
+      ipRemota: faltaLaIpRemota({
+        activo: process.env.TICKET_REQUIRE_REMOTE_IP !== 'false',
+        tipoOrden: t.type,
+        tiposCampo: await this.geofence.tiposCampo(),
+        permisosUsuario: user?.permissions,
+        hayUsuario: Boolean(user?.id),
+        hayCliente: Boolean(sub?.id),
+        tieneInternet: esUsuarioPppUtil(sub?.pppUsername),
+        ipRemota: sub?.ipRemote ?? null,
+      }),
+      ipRemotaValor: esIpRemotaUtil(sub?.ipRemote) ? sub!.ipRemote!.trim() : null,
+      /** Sólo a quien tiene internet se le puede activar: el de sólo TV no tiene secret. */
+      tieneInternet: esUsuarioPppUtil(sub?.pppUsername),
+    };
+
     return {
+      requisitosCierre,
       id: t.id, code: t.code, subject: t.subject, type: t.type, created: t.created, finalDate: t.finalDate,
       // `problem` y `section` vienen del WYSIWYG del legacy: salen ya en texto plano.
       status: t.status, priority: t.priority, problem: textoPlano(t.problem), section: textoPlano(t.section),
@@ -495,9 +578,10 @@ export class SupportService {
       /**
        * A CUÁNTAS MEGAS pasa la orden al cliente: de cuánto venía, a cuánto va y si
        * el plan se le llegó a cambiar (`aplicado`). `null` en todo lo que no sea una
-       * orden de megas — y en las que nacieron sin decirlas: las 2.741 'Subir megas'
-       * del legacy (allá el plan destino vive en su tabla `temporales`, que todavía
-       * no se trae) y las que abre el chatbot con el plan por confirmar.
+       * orden de megas — y en las que nacieron sin decirlas: las que abre el chatbot
+       * con el plan por confirmar y las del legacy que dejaron en blanco la casilla
+       * de su tabla `temporales` (el plan de las otras 2.723 ya lo trae el sync; ver
+       * `syncPlanDeMegas`).
        */
       megas: t.planToName || t.planToMegas != null
         ? {

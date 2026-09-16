@@ -14,7 +14,20 @@ export class OrderItemDto {
   @IsOptional() @IsNumber() @Min(0) taxRate?: number;
 }
 
-export class CreateOrderDto {
+/**
+ * Datos de la consignación de la orden (a qué cuenta se paga). Van en la orden y
+ * no sólo en el proveedor: la orden impresa tiene que decir a dónde se consignó
+ * aunque el proveedor cambie de cuenta después.
+ */
+export class ConsignacionDto {
+  @IsOptional() @IsString() @MaxLength(80) payBank?: string;
+  @IsOptional() @IsString() @MaxLength(40) payAccountType?: string;
+  @IsOptional() @IsString() @MaxLength(40) payAccount?: string;
+  @IsOptional() @IsString() @MaxLength(120) payHolder?: string;
+  @IsOptional() @IsString() @MaxLength(30) payHolderDoc?: string;
+}
+
+export class CreateOrderDto extends ConsignacionDto {
   @IsString() supplierId!: string;
   @IsOptional() @IsString() orderDate?: string;
   @IsOptional() @IsString() dueDate?: string;
@@ -28,7 +41,14 @@ export class CreateOrderDto {
 }
 
 /** Edición de una orden PENDIENTE: cabecera y/o reemplazo de ítems. */
-export class UpdateOrderDto {
+export class UpdateOrderDto extends ConsignacionDto {
+  /**
+   * Estado a la fuerza. SOLO lo aplica el superusuario (el servicio lo rechaza a
+   * cualquier otro): es para corregir una orden mal encaminada, no un atajo al flujo
+   * —aprobar, pagar, recibir y finalizar siguen teniendo su endpoint, que sí mueve
+   * plata y stock—. Ver `ESTADOS_ORDEN` en orders.service.
+   */
+  @IsOptional() @IsString() status?: string;
   @IsOptional() @IsString() orderDate?: string;
   @IsOptional() @IsString() dueDate?: string;
   @IsOptional() @IsString() categoryRef?: string;

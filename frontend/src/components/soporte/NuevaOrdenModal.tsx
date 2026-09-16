@@ -33,6 +33,25 @@ type ClaseOrden = { clase: string; etiqueta: string; descripcion: string; detall
  */
 type CargoOrden = { clave: string; tipo: string; etiqueta: string; activo: boolean; precio: number };
 
+/**
+ * Una factura del cliente que YA cobra este trabajo y todavía no tiene orden detrás,
+ * tal como la sirve `/support/cargo-orden?tipo=…&subscriberId=…`.
+ *
+ * El mismo trabajo se puede cobrar por dos caminos —la factura primero (y la orden
+ * nace al pagarse) o la orden primero (y la factura sale sola)—, y quien cobra en
+ * ventanilla y abre la orden después recorre los dos: el cliente acaba con dos
+ * facturas de 30.000 de lo mismo. Aquí se enseñan para poder decir «ésta ya es».
+ */
+type FacturaYaCobrada = {
+  tid: number;
+  fecha: string;
+  total: number;
+  status: string;
+  concepto: string | null;
+  notes: string | null;
+  mismoConcepto: boolean;
+};
+
 /** Hoy en Colombia, en el formato que espera <input type="date">. */
 const hoy = () =>
   new Intl.DateTimeFormat("en-CA", { timeZone: "America/Bogota", year: "numeric", month: "2-digit", day: "2-digit" })
@@ -113,6 +132,18 @@ export function NuevaOrdenModal({ open, onClose, onDone, fixedSub }: { open: boo
    * puede seguir diciendo 30.000 mientras la factura dice otra cosa.
    */
   const [cargos, setCargos] = useState<CargoOrden[]>([]);
+  /**
+   * Lo que este cliente YA tiene facturado de este mismo trabajo (y sin orden
+   * detrás). Se pide en cuanto hay cliente y el detalle elegido lleva cargo.
+   */
+  const [yaFacturadas, setYaFacturadas] = useState<FacturaYaCobrada[]>([]);
+  /**
+   * «Ya está pagada, no la vuelvas a cobrar»: el número de esa factura. Va al
+   * backend (`yaFacturadaTid`), que apaga el cargo automático y ata la orden a
+   * ella. Lo marca una persona a propósito: descontarlo solo se equivocaría con el
+   * cliente que pide dos traslados en el mismo mes.
+   */
+  const [yaFacturadaTid, setYaFacturadaTid] = useState<number | null>(null);
   const [techs, setTechs] = useState<any[]>([]);
   /**
    * Lo que este cliente ya tiene sin cerrar. Una orden nueva sobre un trabajo que
@@ -138,6 +169,7 @@ export function NuevaOrdenModal({ open, onClose, onDone, fixedSub }: { open: boo
     setDir(DIRECCION_VACIA); setDirActual(null);
     setPlanNuevo(""); setServicios([]);
     setAbiertas([]); setAbiertasTotal(0); setAvisando(false); setAvisado(false);
+    setYaFacturadas([]); setYaFacturadaTid(null);
     void authFetch("/support/technicians").then(listaJson).then(setTechs).catch(() => {});
     void authFetch("/support/order-catalog").then(listaJson).then(setCatalogo).catch(() => {});
     // Cuánto valen HOY los trabajos que se cobran al abrirlos. Se piden todos de
@@ -176,6 +208,17 @@ export function NuevaOrdenModal({ open, onClose, onDone, fixedSub }: { open: boo
   const porMegas = type.trim().toLowerCase().includes("megas");
   const subeMegas = porMegas && type.trim().toLowerCase().includes("subir");
   const bajaMegas = porMegas && type.trim().toLowerCase().includes("bajar");
+  /**
+   * 'AgregarInternet': al que sólo tiene televisión se le monta el internet. Pide el
+   * mismo plan que las de megas —y por eso comparten desplegable— pero no hay "de
+   * cuánto viene" ni sentido que comprobar: es el primero que tiene.
+   *
+   * Sin esto la orden salía sin plan y cerrarla no le montaba nada al cliente: se le
+   * cobraban los 30.000 del cargo y la ficha seguía enseñando la televisión sola.
+   */
+  const porAgregarInternet = type.trim().toLowerCase() === "agregarinternet";
+  /** ¿Este trabajo lleva plan de internet destino? (backend: `ordenLlevaPlanInternet`) */
+  const conPlanInternet = porMegas || porAgregarInternet;
   /** El plan de internet que tiene hoy: de ahí sale el "de cuánto viene". */
   const internetActual = useMemo(() => servicios.find((s) => s.kind === "INTERNET") ?? null, [servicios]);
   /** Los de internet, del más lento al más rápido: así se lee el desplegable. */
@@ -196,6 +239,14 @@ export function NuevaOrdenModal({ open, onClose, onDone, fixedSub }: { open: boo
       ? (subeMegas && planElegido.megas <= internetActual.megas) || (bajaMegas && planElegido.megas >= internetActual.megas)
       : false;
   const direccionNueva = direccionArmada(dir);
+  /**
+   * La dirección escrita es la que el cliente ya tiene. NO frena la orden (decisión del
+   * usuario, 2026-09-08: «puede que vaya para el segundo piso»); solo se dice, por si de
+   * verdad fue un error de dedo, y se recuerda dónde se escribe el piso para que la ficha
+   * quede distinguiendo los dos sitios.
+   */
+  const mismaDireccion =
+    !!dirActual && !!direccionNueva && direccionNueva.toLowerCase() === dirActual.toLowerCase();
   /**
    * El cargo del detalle elegido, si es de los que se cobran y está encendido. Es
    * lo que hay que decirle a quien abre la orden ANTES de guardarla: la factura se
@@ -235,6 +286,23 @@ export function NuevaOrdenModal({ open, onClose, onDone, fixedSub }: { open: boo
     return () => { vivo = false; };
   }, [open, sub, authFetch]);
 
+  /**
+   * ¿Este cliente YA pagó este trabajo? Se pregunta en cuanto hay cliente y el
+   * detalle elegido lleva cargo, y no al guardar: enterarse después de emitir la
+   * segunda factura de 30.000 es enterarse tarde.
+   */
+  useEffect(() => {
+    setYaFacturadas([]); setYaFacturadaTid(null);
+    if (!open || !sub || !cargoActual) return;
+    let vivo = true;
+    const qs = new URLSearchParams({ tipo: cargoActual.tipo, subscriberId: sub.id });
+    void authFetch(`/support/cargo-orden?${qs.toString()}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (vivo) setYaFacturadas(Array.isArray(d?.yaFacturadas) ? (d.yaFacturadas as FacturaYaCobrada[]) : []); })
+      .catch(() => {});
+    return () => { vivo = false; };
+  }, [open, sub, cargoActual, authFetch]);
+
   // Los motivos, solo cuando se elige un retiro: son 20 renglones que no pintan
   // nada en el 98% de las órdenes. Se piden una vez por formulario abierto.
   useEffect(() => {
@@ -252,17 +320,17 @@ export function NuevaOrdenModal({ open, onClose, onDone, fixedSub }: { open: boo
   // nada. El catálogo se pide una vez por formulario abierto; lo contratado, cada
   // vez que se cambia de cliente.
   useEffect(() => {
-    if (!porMegas || planes.length) return;
+    if (!conPlanInternet || planes.length) return;
     let vivo = true;
     void authFetch("/plans?activeOnly=true&kind=INTERNET")
       .then(listaJson)
       .then((d) => { if (vivo) setPlanes(d as Plan[]); })
       .catch(() => {});
     return () => { vivo = false; };
-  }, [porMegas, planes.length, authFetch]);
+  }, [conPlanInternet, planes.length, authFetch]);
 
   useEffect(() => {
-    if (!porMegas || !sub) return;
+    if (!conPlanInternet || !sub) return;
     let vivo = true;
     void authFetch(`/subscribers/${sub.id}/plan`)
       .then(listaJson)
@@ -323,6 +391,12 @@ export function NuevaOrdenModal({ open, onClose, onDone, fixedSub }: { open: boo
     if (porMegas && !planNuevo) {
       setErr("Elige a qué plan se pasa el cliente: la orden tiene que decir cuántas megas."); return;
     }
+    if (porAgregarInternet && !planNuevo) {
+      setErr("Elige con qué plan de internet queda el cliente: sin plan, cerrar la orden no le monta nada."); return;
+    }
+    if (porAgregarInternet && internetActual) {
+      setErr(`El cliente ya tiene internet («${internetActual.planName ?? "plan sin nombre"}»). Para moverlo de plan usa 'Subir megas' o 'Bajar megas'.`); return;
+    }
     if (megasAlReves) {
       setErr(
         subeMegas
@@ -333,9 +407,6 @@ export function NuevaOrdenModal({ open, onClose, onDone, fixedSub }: { open: boo
     }
     if (porTraslado && !direccionNueva) {
       setErr("Escribe la dirección a la que se muda el cliente."); return;
-    }
-    if (porTraslado && dirActual && direccionNueva.toLowerCase() === dirActual.toLowerCase()) {
-      setErr("La dirección nueva es la misma que ya tiene el cliente."); return;
     }
     if (abiertas.length && !forzar && !avisado) { setAvisando(true); return; }
     setSaving(true);
@@ -359,7 +430,11 @@ export function NuevaOrdenModal({ open, onClose, onDone, fixedSub }: { open: boo
           // A qué plan se pasa. El backend le cambia el plan al cliente en el acto
           // (igual que la dirección de un traslado): el precio de su próxima factura
           // y el perfil del router quedan al día desde que se abre la orden.
-          planToId: porMegas ? planNuevo : undefined,
+          planToId: conPlanInternet ? planNuevo : undefined,
+          // «Esto ya se le cobró»: la orden se ata a esa factura y NO se emite el
+          // cargo automático. Sin esto, facturar en ventanilla y abrir la orden
+          // después le deja al cliente dos facturas del mismo trabajo.
+          yaFacturadaTid: cargoActual && yaFacturadaTid ? yaFacturadaTid : undefined,
           moveTo: porTraslado
             ? {
                 nomenclature: Object.fromEntries(NOM_KEYS.map((k) => [k, dir[k] || null])),
@@ -378,9 +453,11 @@ export function NuevaOrdenModal({ open, onClose, onDone, fixedSub }: { open: boo
       toast(
         d?.traslado
           ? `Orden #${d.code} creada · dirección actualizada${d.traslado.factura ? ` · factura #${d.traslado.factura}` : ""}`
-          : d?.cargo?.factura
-            ? `Orden #${d.code} creada · factura #${d.cargo.factura} por ${fullCurrency(d.cargo.precio)}`
-            : agendar ? `Orden #${d.code} creada y agendada` : `Orden #${d.code} creada`,
+          : yaFacturadaTid
+            ? `Orden #${d.code} creada · ya estaba cobrada en la factura #${yaFacturadaTid}, no se volvió a facturar`
+            : d?.cargo?.factura
+              ? `Orden #${d.code} creada · factura #${d.cargo.factura} por ${fullCurrency(d.cargo.precio)}`
+              : agendar ? `Orden #${d.code} creada y agendada` : `Orden #${d.code} creada`,
       );
       // El cargo que NO se pudo emitir se dice aparte y en tono de aviso: la orden
       // existe, pero no hay nada que cobrar en ventanilla y alguien tiene que
@@ -490,13 +567,61 @@ export function NuevaOrdenModal({ open, onClose, onDone, fixedSub }: { open: boo
               bloque del traslado —que tiene el suyo, junto a la dirección— porque
               para el resto de los cargos éste es el único sitio donde se ve que
               abrir la orden le genera una factura al cliente. */}
-          {cargoActual && !porTraslado && (
+          {cargoActual && !porTraslado && !yaFacturadaTid && (
             <div className="sm:col-span-2 flex items-start gap-2 rounded-lg border border-warning-border bg-warning-soft px-3 py-2">
               <Icon name="receipt" className="mt-[2px] h-4 w-4 shrink-0 text-warning-text" />
               <p className="text-[12px] leading-snug text-text-secondary">
                 Al crear la orden se le factura <b className="text-text-primary">{fullCurrency(cargoActual.precio)}</b>{" "}
                 por {cargoActual.etiqueta.toLowerCase()}: un pago único, en factura aparte, que vence hoy.
               </p>
+            </div>
+          )}
+          {/* ¿YA SE LE COBRÓ? Este trabajo se puede facturar en ventanilla y abrir
+              la orden después, y ahí el cargo automático emitiría la SEGUNDA factura
+              de lo mismo. Se enseñan las facturas del cliente que todavía no son de
+              ninguna orden para poder decir cuál es — marcarlo ata la orden a esa
+              factura y no se cobra nada. No se marca solo a propósito: un cliente
+              puede pedir dos traslados en el mismo mes y el segundo se cobra igual. */}
+          {cargoActual && yaFacturadas.length > 0 && (
+            <div className="sm:col-span-2 rounded-lg border border-warning-border bg-warning-soft px-3 py-2">
+              <div className="flex items-start gap-2">
+                <Icon name="alert-circle" className="mt-[2px] h-4 w-4 shrink-0 text-warning-text" />
+                <p className="text-[12px] leading-snug text-text-secondary">
+                  Este cliente tiene {yaFacturadas.length === 1 ? "una factura reciente" : `${yaFacturadas.length} facturas recientes`}{" "}
+                  sin orden detrás. Si {yaFacturadas.length === 1 ? "es" : "alguna es"} el cobro de{" "}
+                  {cargoActual.etiqueta.toLowerCase()}, márca{yaFacturadas.length === 1 ? "la" : "la que sea"}: la orden se ata a
+                  ella y NO se le vuelve a facturar.
+                </p>
+              </div>
+              <ul className="mt-2 flex flex-col gap-1">
+                {yaFacturadas.map((f) => (
+                  <li key={f.tid}>
+                    <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-border-subtle bg-surface px-2.5 py-1.5 text-[12px]">
+                      <input
+                        type="checkbox"
+                        className="mt-[3px]"
+                        checked={yaFacturadaTid === f.tid}
+                        onChange={(e) => setYaFacturadaTid(e.target.checked ? f.tid : null)}
+                      />
+                      <span className="min-w-0">
+                        <span className="text-text-primary">
+                          Factura #{f.tid} · <b>{fullCurrency(f.total)}</b>
+                        </span>{" "}
+                        <span className="text-text-tertiary">
+                          {fmtDate(f.fecha)} · {f.status === "PAID" ? "pagada" : f.status === "PARTIAL" ? "abonada" : "sin pagar"}
+                          {f.concepto ? ` · ${f.concepto}` : ""}
+                        </span>
+                        {f.notes && <span className="block truncate text-text-tertiary">{f.notes}</span>}
+                      </span>
+                    </label>
+                  </li>
+                ))}
+              </ul>
+              {yaFacturadaTid && (
+                <p className="mt-1.5 text-[12px] text-text-secondary">
+                  La orden queda cobrada en la factura <b className="text-text-primary">#{yaFacturadaTid}</b>: no se emite ninguna otra.
+                </p>
+              )}
             </div>
           )}
           {porDias && (
@@ -509,11 +634,13 @@ export function NuevaOrdenModal({ open, onClose, onDone, fixedSub }: { open: boo
               cliente y en cuánto queda ANTES de guardar. El plan NO se le cambia
               aquí: se le cambia al CERRAR la orden, que es cuando la velocidad
               nueva ya está puesta (y ahí se le reprecia la factura del mes). */}
-          {porMegas && (
+          {conPlanInternet && (
             <div className="rounded-lg border border-border-default bg-surface-2 p-3 sm:col-span-2">
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                 <span className="text-[13px] font-semibold text-text-primary">
-                  {bajaMegas ? "¿A cuántas megas se baja?" : "¿A cuántas megas se sube?"}
+                  {porAgregarInternet
+                    ? "¿Con qué plan de internet queda?"
+                    : bajaMegas ? "¿A cuántas megas se baja?" : "¿A cuántas megas se sube?"}
                 </span>
                 {internetActual && (
                   <span className="text-[12px] text-text-secondary">
@@ -524,7 +651,22 @@ export function NuevaOrdenModal({ open, onClose, onDone, fixedSub }: { open: boo
                   </span>
                 )}
               </div>
-              {!sub && <p className="mb-2 text-[12px] text-text-tertiary">Elige primero el cliente para ver de cuántas megas viene.</p>}
+              {!sub && (
+                <p className="mb-2 text-[12px] text-text-tertiary">
+                  {porAgregarInternet
+                    ? "Elige primero el cliente para comprobar que no tenga ya internet."
+                    : "Elige primero el cliente para ver de cuántas megas viene."}
+                </p>
+              )}
+              {/* Agregar internet a quien YA lo tiene no es esta orden: es un cambio
+                  de plan. Se avisa aquí y lo frena el backend. */}
+              {porAgregarInternet && internetActual && (
+                <p className="mb-2 flex items-start gap-1.5 text-[12px] text-warning-text">
+                  <Icon name="alert-triangle" size={13} className="mt-[2px] shrink-0" />
+                  Este cliente ya tiene internet («{internetActual.planName ?? "plan sin nombre"}»). Para moverlo de
+                  plan usa &apos;Subir megas&apos; o &apos;Bajar megas&apos;.
+                </p>
+              )}
               <Field label="Plan nuevo" required hint="La velocidad la pone el plan: es también el precio de la próxima factura y el perfil que se le empuja al router">
                 <Select value={planNuevo} onChange={(e) => setPlanNuevo(e.target.value)} disabled={!planesInternet.length}>
                   <option value="">{planesInternet.length ? "— elige el plan —" : "Cargando…"}</option>
@@ -539,8 +681,10 @@ export function NuevaOrdenModal({ open, onClose, onDone, fixedSub }: { open: boo
                 <p className="mt-2 text-[12px] text-text-secondary">
                   Queda en{" "}
                   <b className="text-text-primary">{planElegido.megas != null ? `${planElegido.megas} Megas` : planElegido.name}</b>
-                  {" · "}{fullCurrency(planElegido.price)} al mes. Se le aplica al cerrar la orden, y ahí se le
-                  reprecia la factura de este mes.
+                  {" · "}{fullCurrency(planElegido.price)} al mes.{" "}
+                  {porAgregarInternet
+                    ? "Al cerrar la orden se le monta el servicio, se le crea el secret en el router y se le cobran los días que quedan del mes."
+                    : "Se le aplica al cerrar la orden, y ahí se le reprecia la factura de este mes."}
                 </p>
               )}
               {megasAlReves && (
@@ -608,7 +752,9 @@ export function NuevaOrdenModal({ open, onClose, onDone, fixedSub }: { open: boo
               <span className="text-[13px] font-semibold text-text-primary">Nueva dirección del cliente</span>
               {cargoActual && (
                 <span className="text-[12px] text-text-secondary">
-                  Se le facturarán <b className="text-text-primary">{fullCurrency(cargoActual.precio)}</b> por el traslado
+                  {yaFacturadaTid
+                    ? <>Ya cobrado en la factura <b className="text-text-primary">#{yaFacturadaTid}</b>: no se factura de nuevo</>
+                    : <>Se le facturarán <b className="text-text-primary">{fullCurrency(cargoActual.precio)}</b> por el traslado</>}
                 </span>
               )}
             </div>
@@ -622,6 +768,13 @@ export function NuevaOrdenModal({ open, onClose, onDone, fixedSub }: { open: boo
             <p className="mt-2 text-[12px] text-text-secondary">
               Queda como: <b className="text-text-primary">{direccionNueva || "— escribe la vía y su número —"}</b>
             </p>
+            {mismaDireccion && (
+              <p className="mt-1 text-[12px] text-text-tertiary">
+                Es la misma dirección que ya tiene. La orden se abre igual —mudarse dentro del mismo
+                inmueble es un traslado—; si cambia de piso o de apartamento, dilo en «Torre / piso»
+                o «Apto / casa» y la ficha lo recoge.
+              </p>
+            )}
           </div>
         )}
 

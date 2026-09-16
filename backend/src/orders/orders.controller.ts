@@ -25,6 +25,14 @@ export const ALLOWED_EXT = new Set(['.pdf', '.jpg', '.jpeg', '.png', '.gif', '.w
 // Se quita también aquí y no sólo del menú — si no, la API seguía abierta a `caja`.
 // Ninguna pantalla suya llama a `/orders`: el único consumidor fuera de /ordenes es
 // OrdersFilterButton, que vive dentro de las propias pantallas de compras.
+//
+// EXCEPCIÓN de 2026-09-08 (a pedido del usuario): la cajera vuelve a entrar, pero sólo
+// a MIRAR y a poner el papel. `caja` está en el listado, el detalle, los catálogos que
+// alimentan sus filtros (sedes/categorías/proveedores), el Excel, el PDF, la SUBIDA de
+// adjuntos y su descarga. Todo lo que mueve la orden —crear, editar, aprobar, cancelar,
+// finalizar, recibir, pagar, notas, borrar la orden o un adjunto— sigue exigiendo
+// `administracion`, así que la pantalla puede esconderle botones sin que eso sea el
+// único freno.
 export class OrdersController {
   constructor(private readonly orders: OrdersService) {}
 
@@ -128,6 +136,7 @@ export class OrdersController {
       tid: d.tid, kind: d.kind, status: d.status, date: d.date, dueDate: d.dueDate,
       branchRef: d.branchRef, categoryRef: undefined, notes: d.notes,
       supplier: d.supplier ? { name: d.supplier.name, nit: d.supplier.nit, phone: d.supplier.phone } : null,
+      consignment: d.consignment,
       items: d.items.map((it) => ({ ...it, product: it.product ?? '—' })),
       noteLines: d.noteLines.map((n) => ({ ...n, type: n.type ?? 'Nota' })),
       subtotal: d.subtotal, tax: d.tax, total: d.total, paid: d.paid, balance: d.balance,

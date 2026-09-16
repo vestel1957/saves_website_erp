@@ -14,11 +14,12 @@ import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { Modal } from "@/components/Modal";
 import { useAuth } from "@/context/AuthProvider";
 import { cop, waLink } from "@/lib/subscribers";
-import { esCambioDeMegas, esReconexion, esTecnico, esTraslado, ORIGEN_ORDEN, TICKET_STATUS_LABEL, TICKET_STATUS_TONE, TICKET_PRIORITIES, TICKET_PRIORITY_TONE } from "@/lib/support";
+import { esCambioDeMegas, esReconexion, esTecnico, esTraslado, puedeEditarOrdenes, ORIGEN_ORDEN, TICKET_STATUS_LABEL, TICKET_STATUS_TONE, TICKET_PRIORITIES, TICKET_PRIORITY_TONE } from "@/lib/support";
 import { AsignarEquipoModal } from "@/components/soporte/AsignarEquipoModal";
 import { AutenticarOnuOrden } from "@/components/soporte/AutenticarOnuOrden";
-import { ConsumirMaterialModal } from "@/components/soporte/ConsumirMaterialModal";
+import { ConsumirMaterialModal } from "@/components/inventory/ConsumirMaterialModal";
 import { EditarOrdenModal } from "@/components/soporte/EditarOrdenModal";
+import type { OrdenEnCurso } from "@/components/soporte/VisitaAgendada";
 import { SignaturePad } from "@/components/support/SignaturePad";
 import { fmtDate } from "@/lib/format";
 import { ACCEPT_IMAGEN } from "@/lib/adjuntos";
@@ -159,10 +160,16 @@ function FirmaImg({ ticketId }: { ticketId: string }) {
 
 export default function OrdenDetallePage() {
   const { id } = useParams<{ id: string }>();
-  const { loading: authLoading, authFetch, user } = useAuth();
+  const { loading: authLoading, authFetch, user, isSuperadmin } = useAuth();
   const [t, setT] = useState<any | null>(null);
   /** El motivo por el que no se pudo cargar, tal cual lo dice el backend. */
   const [err, setErr] = useState("");
+  /**
+   * La orden que ya tiene abierta, cuando el 403 viene del candado de "una orden a la
+   * vez" (2026-09-09). Se guarda aparte del mensaje porque lo que hace falta es el
+   * ENLACE: decirle "ciérrala primero" sin llevarlo a ella es dejarlo buscándola.
+   */
+  const [bloqueo, setBloqueo] = useState<OrdenEnCurso | null>(null);
   const [techs, setTechs] = useState<any[]>([]);
   const [reply, setReply] = useState("");
   const [solucion, setSolucion] = useState("");
@@ -181,6 +188,56 @@ export default function OrdenDetallePage() {
     estado: string; razon: string; message: string; distanciaM?: number; radioM?: number;
   } | null>(null);
   const [motivo, setMotivo] = useState("");
+  /** Bloqueo por falta de registro fotográfico (2026-09-10). */
+  const [faltaFoto, setFaltaFoto] = useState<string | null>(null);
+  /** Bloqueo por IP remota: el cliente se queda sin acceso remoto (2026-09-10). */
+  const [faltaIp, setFaltaIp] = useState<string | null>(null);
+
+  /**
+   * Deja dicho en el seguimiento que el punto guardado del cliente no corresponde.
+   *
+   * No cierra nada: desde el 2026-09-10 fuera de rango no se cierra ni con motivo
+   * (lo pidió el usuario). Pero el técnico que SÍ está en la puerta necesita poder
+   * dejar constancia sin llamar a nadie, y alguien tiene que poder corregir la
+   * coordenada — esto es lo que se lo dice.
+   */
+  async function avisarUbicacionMal() {
+    const dist = cerca?.distanciaM != null ? `${Math.round(cerca.distanciaM)} m` : "otro punto";
+    const texto =
+      `⚠ No pudo cerrar por la ubicación: el sistema lo ubica a ${dist} del punto guardado del `
+      + `cliente. Dice: ${motivo.trim()}`;
+    setBusy(true);
+    try {
+      const res = await authFetch(`/support/tickets/${id}/thread`, {
+        method: "POST",
+        body: JSON.stringify({ message: texto }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d?.message || "Error");
+      setCerca(null); setMotivo("");
+      toast("Aviso registrado en el seguimiento");
+      reload();
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setBusy(false); }
+  }
+
+  /**
+   * Le activa la IP remota al cliente: el sistema le reparte una dirección fija de
+   * las que su router ya usa y se la escribe en el secret. El técnico no elige nada
+   * —no tiene por qué saber qué /24 le toca— y la respuesta dice cuál quedó.
+   */
+  async function activarIpRemota() {
+    setBusy(true);
+    try {
+      const res = await authFetch(`/support/tickets/${id}/ip-remota`, { method: "POST" });
+      const d = await res.json();
+      if (!res.ok || d?.ok === false) throw new Error(d?.message || "No se pudo activar la IP remota");
+      setFaltaIp(null);
+      toast(d.dryRun ? `Simulación: ${d.message}` : `IP remota activada: ${d.ip}`);
+      reload();
+    } catch (e) {
+      toast(mensajeDeError(e), "alert-triangle");
+    } finally { setBusy(false); }
+  }
 
   /** Abre el PDF de la orden (endpoint autenticado → blob → pestaña nueva). */
   async function abrirPdf() {
@@ -198,9 +255,14 @@ export default function OrdenDetallePage() {
     void authFetch(`/support/tickets/${id}`)
       .then(async (r) => {
         if (r.ok) return r.json();
-        // El motivo importa: con el turno obligatorio, abrir por URL una orden que no
-        // toca da 403 y decirle "no encontrada" lo manda a buscar una avería que no
-        // existe. Se enseña lo que responde el backend, que ya explica qué hacer.
+        // El motivo importa: un 403 de alcance ("esta orden no está asignada a ti") y
+        // un 404 mandan a sitios distintos, y decir "no encontrada" a lo primero lo
+        // manda a buscar una avería que no existe. Se enseña lo que responde el
+        // backend, que ya explica qué hacer.
+        //
+        // Aquí ya NO llega el candado de "una orden a la vez": desde el 2026-09-10
+        // abrir una orden nunca se bloquea (regla del legacy). El 403 de `enCurso`
+        // sale sólo al pulsar "Empezar" — se maneja en `cambiarEstado`.
         const cuerpo = await r.json().catch(() => null);
         throw new Error(cuerpo?.message ?? "");
       })
@@ -224,6 +286,18 @@ export default function OrdenDetallePage() {
     } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setBusy(false); }
   }
 
+  /** Borrar un renglón del seguimiento. Sólo superusuario (el backend lo exige igual). */
+  async function borrarSeguimiento(threadId: string) {
+    if (!confirm("¿Eliminar este reporte del seguimiento? Esta acción no se puede deshacer.")) return;
+    setBusy(true);
+    try {
+      const res = await authFetch(`/support/threads/${threadId}`, { method: "DELETE" });
+      const d = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(d?.message || "Error");
+      toast("Reporte eliminado"); reload();
+    } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setBusy(false); }
+  }
+
   /**
    * Cambia el estado de la orden. Al cerrarla (RESUELTO) adjunta la ubicación:
    * el servidor comprueba que el técnico esté en el domicilio (geo-cerca).
@@ -231,7 +305,7 @@ export default function OrdenDetallePage() {
    * Se manda SIEMPRE que se pueda, aunque el cliente no tenga coordenada
    * guardada: en ese caso el propio cierre lo georreferencia.
    */
-  async function cambiarEstado(nuevo: string, justificacion?: string) {
+  async function cambiarEstado(nuevo: string) {
     const etiqueta = TICKET_STATUS_LABEL[nuevo] ?? nuevo;
     let geo: Record<string, number> = {};
     if (nuevo === "RESUELTO") {
@@ -244,7 +318,7 @@ export default function OrdenDetallePage() {
     try {
       const res = await authFetch(`/support/tickets/${id}/status`, {
         method: "POST",
-        body: JSON.stringify({ status: nuevo, ...geo, ...(justificacion ? { justificacion } : {}) }),
+        body: JSON.stringify({ status: nuevo, ...geo }),
       });
       const d = await res.json();
       if (!res.ok) {
@@ -254,9 +328,33 @@ export default function OrdenDetallePage() {
           setCerca({ estado: nuevo, ...d });
           return;
         }
+        // 422 con code FOTO_REQUERIDA = falta la evidencia de la visita. Como el de
+        // la cerca, no es un error a secas: hay algo concreto que hacer y está en
+        // esta misma pantalla, unos centímetros más abajo.
+        if (res.status === 422 && d?.code === "FOTO_REQUERIDA") {
+          setFaltaFoto(d.message as string);
+          return;
+        }
+        // 422 con code IP_REMOTA_REQUERIDA = el cliente no tiene IP fija, así que
+        // sistemas no podría entrar a su equipo ni cartera cortarlo. Tampoco es un
+        // error a secas: se arregla desde aquí mismo, con un botón.
+        if (res.status === 422 && d?.code === "IP_REMOTA_REQUERIDA") {
+          setFaltaIp(d.message as string);
+          return;
+        }
+        // 403 con code ORDEN_EN_CURSO = "una orden a la vez" (`support/turno.ts`, la
+        // regla del legacy): ya tiene otra EMPEZADA. Como los dos de arriba, no es un
+        // error a secas —hay algo concreto que hacer y está en otra orden—, así que se
+        // guarda entera para pintar el enlace en vez de dejar sólo un toast que se va.
+        if (res.status === 403 && d?.code === "ORDEN_EN_CURSO") {
+          setBloqueo((d.enCurso as OrdenEnCurso) ?? null);
+          toast(d.message as string, "alert-triangle");
+          return;
+        }
         throw new Error(d?.message || "Error");
       }
       setCerca(null);
+      setBloqueo(null);
       setMotivo("");
       // Lo que hicieron (o no pudieron hacer) los equipos al cerrar: si la TV no
       // volvió, quien cierra tiene que enterarse aquí y no por la llamada del
@@ -299,7 +397,18 @@ export default function OrdenDetallePage() {
   }
 
   if (authLoading || (!t && !err)) return <PageSkeleton />;
-  if (err) return <div className="rounded-xl border border-border-subtle bg-surface p-6 text-[13px] text-text-secondary">{err} <Link href="/soporte" className="text-brand">Volver</Link></div>;
+  if (err)
+    return (
+      <div className="rounded-xl border border-border-subtle bg-surface p-6 text-[13px] text-text-secondary">
+        {err}{" "}
+        {/* Aquí ya no hay caso de candado: desde el 2026-09-10 abrir una orden nunca
+            da 403 (ver `reload`). Lo que queda son el alcance y el 404, y de los dos
+            se sale volviendo a la lista. */}
+        <Link href="/soporte" className="text-brand">
+          Volver
+        </Link>
+      </div>
+    );
 
   const s = t.subscriber;
   const serviciosStr: string = s?.services?.length ? s.services.map((x: any) => `${SERVICE_LABEL[x.kind] ?? x.kind}: ${x.plan ?? "—"}`).join(" · ") : "";
@@ -307,8 +416,16 @@ export default function OrdenDetallePage() {
   const equipoStr: string = eq ? `${eq.mac ?? "sin MAC"}  ${eq.installType ?? ""}${eq.vlan != null ? ` V:${eq.vlan}` : ""}${eq.nat != null ? ` N:${eq.nat}` : ""}${eq.port != null ? ` PN:${eq.port}` : ""}`.trim() : (s?.macEquipo || "");
   const debt = Number(s?.debt ?? 0);
   const abierta = t.status !== "RESUELTO" && t.status !== "ANULADA";
-  /** Corregir la orden es cosa de quien la abre (caja/administración), no del técnico. */
-  const puedeEditar = !esTecnico(user);
+  /**
+   * ¿Se puede tocar esta orden? Dos condiciones distintas, no una:
+   *  · `support.write` — quien no lo tiene entra a MIRAR (jefaturas, auditoría).
+   *  · no ser técnico   — corregir la orden es de quien la abre, no de quien la
+   *    atiende: si está mal, el técnico lo dice en el seguimiento.
+   * Lo segundo restringe solo la corrección; lo primero apaga TODO control, que
+   * es lo que el servidor va a exigir de todas formas.
+   */
+  const puedeEscribir = puedeEditarOrdenes(user);
+  const puedeEditar = puedeEscribir && !esTecnico(user);
   const paso = SIGUIENTE[t.status];
   const wa = waLink(s?.phone);
   // El barrio NO tapa la falta de dirección: llegar a "Mirador" no es llegar a
@@ -318,6 +435,30 @@ export default function OrdenDetallePage() {
 
   return (
     <div className="w-full">
+      {/* "Ya tienes una orden abierta": sale al intentar EMPEZAR ésta teniendo otra a
+          medias. Va arriba del todo y con el enlace, porque el camino de salida no es
+          esta pantalla sino la otra orden — igual que el `<a>` del error del legacy. */}
+      {bloqueo && (
+        <div className="mb-3 flex flex-col gap-2 rounded-xl border border-warning-border bg-warning-soft px-3.5 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-2">
+            <Icon name="lock" size={16} className="mt-0.5 shrink-0 text-warning-text" />
+            <p className="text-[12.5px] text-text-primary">
+              No puedes empezar ésta: ya tienes abierta la{" "}
+              <b>
+                {bloqueo.code ? `#${bloqueo.code} · ` : ""}
+                {bloqueo.type}
+              </b>
+              {bloqueo.cliente ? ` · ${bloqueo.cliente}` : ""}. Ciérrala y vuelve.
+            </p>
+          </div>
+          <Link
+            href={`/soporte/${bloqueo.id}`}
+            className="tap inline-flex min-h-[36px] shrink-0 items-center justify-center gap-1.5 rounded-lg bg-brand px-3.5 text-[12px] font-semibold text-on-brand transition-opacity hover:opacity-90"
+          >
+            <Icon name="arrow-right" size={14} /> Ver la orden abierta
+          </Link>
+        </div>
+      )}
       {/* Esta pantalla se trabaja desde el celular, en la calle: el encabezado
           común ya baja los controles a ancho completo en móvil, y el botón del
           paso siguiente ocupa la fila entero, donde el pulgar lo alcanza.
@@ -353,7 +494,7 @@ export default function OrdenDetallePage() {
             <Button variant="secondary" size="sm" disabled={pdfBusy} onClick={abrirPdf} className="w-full sm:w-auto">
               <Icon name="download" size={13} /> {pdfBusy ? "Generando…" : "Orden PDF"}
             </Button>
-            {paso && (
+            {puedeEscribir && paso && (
               <Button size="sm" disabled={busy} onClick={() => void cambiarEstado(paso.estado)} className="w-full sm:w-auto">
                 <Icon name={paso.icon} size={13} /> {paso.label}
               </Button>
@@ -361,6 +502,7 @@ export default function OrdenDetallePage() {
             {/* Los demás estados no compiten con el paso natural: viven en el menú
                 (antes eran tres botones iguales, y "Anulada" quedaba al lado de
                 "Cerrar" con el mismo peso visual). */}
+            {puedeEscribir && (
             <Dropdown
               width={230}
               triggerClassName="w-full sm:w-auto"
@@ -381,9 +523,82 @@ export default function OrdenDetallePage() {
                 </>
               )}
             </Dropdown>
+            )}
           </>
         }
       />
+
+      {/* QUÉ HACE FALTA PARA CERRARLA (2026-09-10). Sólo en las visitas a domicilio
+          y mientras siga abierta: en un corte o una reconexión no aplica ninguno de
+          los dos requisitos y anunciarlos sería ruido en el 85% de las órdenes.
+          Se pinta con lo que manda el servidor (`requisitosCierre`) y no con una
+          lista de tipos repetida aquí. */}
+      {abierta && puedeEscribir && t.requisitosCierre?.deCampo
+        && (t.requisitosCierre.foto || t.requisitosCierre.ubicacion || t.requisitosCierre.firma
+          || t.requisitosCierre.ipRemota || t.requisitosCierre.ipRemotaValor) && (
+        <div className="mb-3 rounded-xl border border-border-subtle bg-surface p-3">
+          <div className="mb-1.5 flex items-center gap-2 text-[12.5px] font-bold text-text-primary">
+            <Icon name="clipboard-check" size={14} className="text-brand" /> Para cerrar esta visita
+          </div>
+          <ul className="flex flex-col gap-1">
+            {t.requisitosCierre.foto && (
+              <li className="flex items-start gap-1.5 text-[12.5px] text-text-secondary">
+                <Icon
+                  name={t.requisitosCierre.fotos > 0 ? "check" : "camera"}
+                  size={14}
+                  className={`mt-0.5 shrink-0 ${t.requisitosCierre.fotos > 0 ? "text-success-text" : "text-warning-text"}`}
+                />
+                <span>
+                  {t.requisitosCierre.fotos > 0
+                    ? `Foto de la visita: ${t.requisitosCierre.fotos} adjunta${t.requisitosCierre.fotos === 1 ? "" : "s"}.`
+                    : "Falta la foto de la visita. Adjúntala abajo, en el seguimiento."}
+                </span>
+              </li>
+            )}
+            {t.requisitosCierre.ubicacion && (
+              <li className="flex items-start gap-1.5 text-[12.5px] text-text-secondary">
+                <Icon name="map-pin" size={14} className="mt-0.5 shrink-0 text-warning-text" />
+                <span>
+                  Cerrarla desde la casa del cliente, con el GPS encendido y el permiso de
+                  ubicación aceptado. Desde otro sitio no se cierra: no hay excepción por motivo.
+                </span>
+              </li>
+            )}
+            {t.requisitosCierre.firma && (
+              <li className="flex items-start gap-1.5 text-[12.5px] text-text-secondary">
+                <Icon name="pencil" size={14} className="mt-0.5 shrink-0 text-warning-text" />
+                <span>Falta la firma de quien recibe, al pie de la orden.</span>
+              </li>
+            )}
+            {/* IP remota (2026-09-10). Cuando falta, el arreglo está en el propio
+                renglón: el técnico no tiene que ir a Red ni llamar a sistemas. Y
+                cuando ya está, se enseña cuál es — es la dirección por la que se
+                entra al equipo del cliente. */}
+            {(t.requisitosCierre.ipRemota || t.requisitosCierre.ipRemotaValor) && (
+              <li className="flex flex-wrap items-start gap-1.5 text-[12.5px] text-text-secondary">
+                <Icon
+                  name={t.requisitosCierre.ipRemota ? "wifi" : "check"}
+                  size={14}
+                  className={`mt-0.5 shrink-0 ${t.requisitosCierre.ipRemota ? "text-warning-text" : "text-success-text"}`}
+                />
+                {t.requisitosCierre.ipRemota ? (
+                  <>
+                    <span>
+                      El cliente no tiene IP remota activa: sin ella sistemas no puede entrar a
+                      su equipo y tampoco se le puede cortar.
+                    </span>
+                    <Button size="sm" variant="secondary" disabled={busy} onClick={() => void activarIpRemota()}>
+                      Asignar IP remota
+                    </Button>
+                  </>
+                ) : (
+                  <span>IP remota activa: {t.requisitosCierre.ipRemotaValor}.</span>
+                )}
+              </li>
+            )}
+          </ul>
+        </div>
+      )}
 
       {/* Dos columnas desde xl: el trabajo a la izquierda y el cliente —a quién
           se va a ver y dónde— fijo a la derecha. En pantallas menores se apila,
@@ -478,17 +693,24 @@ export default function OrdenDetallePage() {
                   {t.megas.aplicado
                     ? <>El plan ya está cambiado en la ficha ({fmtT(t.megas.aplicado)}).</>
                     : t.status === "RESUELTO" || t.status === "ANULADA"
-                      ? <>La orden se cerró y el plan NO llegó a cambiarse: hazlo desde su ficha (Cambiar plan).</>
+                      // Una orden del sistema viejo nunca lleva la marca de aplicado: el
+                      // cambio de plan lo hizo ÉL al cerrarla, y esa marca dice "lo aplicó
+                      // este sistema". Decirle a la cajera que no se cambió sería mandarla
+                      // a repetir a mano un cambio que ya está hecho.
+                      ? t.generadaPor?.origen === "LEGACY"
+                        ? <>Se cerró en el sistema viejo, que es donde se le cambió el plan: compruébalo en su ficha.</>
+                        : <>La orden se cerró y el plan NO llegó a cambiarse: hazlo desde su ficha (Cambiar plan).</>
                       : <>El cliente sigue en su plan de hoy: pasa a éste —y se le reprecia la factura del mes— al cerrar la orden.</>}
                   {puedeEditar && <> Si no es el plan que se acordó, corrígelo en «Corregir orden».</>}
                 </p>
               </div>
             )}
-            {/* Una orden de megas que no dice cuántas. Es lo que pasa con las que se
-                abren en el sistema viejo —allá el plan destino vive en otra tabla— y
-                con las que entran por el chatbot, donde el cliente pide "más megas"
-                sin elegir plan. Sin este aviso el técnico salía a preguntar por
-                teléfono a qué velocidad tenía que dejar al cliente. */}
+            {/* Una orden de megas que no dice cuántas. Desde 2026-09-04 el sync trae el
+                plan de las del sistema viejo (allá vive en `temporales.internet`), así
+                que aquí quedan las que de verdad nacieron sin decirlo: las del chatbot
+                —el cliente pide "más megas" y el plan lo confirma quien atienda— y las
+                130 del legacy que dejaron esa casilla en blanco. Sin este aviso el
+                técnico salía a preguntar por teléfono a qué velocidad dejar al cliente. */}
             {!t.megas && esCambioDeMegas(t.type) && (
               <div className="mt-3 rounded-lg border border-warning-border bg-warning-soft p-3">
                 <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-warning-text">
@@ -546,17 +768,19 @@ export default function OrdenDetallePage() {
           {/* Autenticar la ONU contra la OLT (solo en órdenes que lo requieren).
               Se monta aquí, junto a la instalación, y no en una pantalla aparte:
               la velocidad la pone el plan, así que no hay nada más que preguntar. */}
-          <AutenticarOnuOrden ticketId={id} tipo={t.type} estadoOrden={t.status} onDone={reload} />
+          {puedeEscribir && <AutenticarOnuOrden ticketId={id} tipo={t.type} estadoOrden={t.status} onDone={reload} />}
 
           {/* Equipo asignado + material consumido */}
           <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
             <CardTitle
               icon="boxes"
               right={
-                <div className="flex gap-2">
-                  <Button variant="secondary" size="sm" onClick={() => setEqModal(true)}><Icon name="radio-tower" size={13} /> Asignar equipo</Button>
-                  <Button variant="secondary" size="sm" onClick={() => setMatModal(true)}><Icon name="package-check" size={13} /> Registrar material</Button>
-                </div>
+                !puedeEscribir ? undefined : (
+                  <div className="flex gap-2">
+                    <Button variant="secondary" size="sm" onClick={() => setEqModal(true)}><Icon name="radio-tower" size={13} /> Asignar equipo</Button>
+                    <Button variant="secondary" size="sm" onClick={() => setMatModal(true)}><Icon name="package-check" size={13} /> Registrar material</Button>
+                  </div>
+                )
               }
             >
               Equipo y material
@@ -642,10 +866,17 @@ export default function OrdenDetallePage() {
                     <li key={h.id} className="flex gap-3 border-b border-border-subtle pb-3 last:border-0 last:pb-0">
                       <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-surface-2"><Icon name="message-square" size={13} className="text-text-tertiary" /></span>
                       <div className="min-w-0 flex-1">
-                        <p className="text-[11px] text-text-tertiary">
-                          <span className="font-semibold text-text-secondary">{h.author ?? (h.employeeId ? `Empleado #${h.employeeId}` : "Sistema")}</span>
-                          {" · "}{fmtT(h.date)}
-                        </p>
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="text-[11px] text-text-tertiary">
+                            <span className="font-semibold text-text-secondary">{h.author ?? (h.employeeId ? `Empleado #${h.employeeId}` : "Sistema")}</span>
+                            {" · "}{fmtT(h.date)}
+                          </p>
+                          {isSuperadmin && (
+                            <button type="button" disabled={busy} onClick={() => borrarSeguimiento(h.id)} title="Eliminar reporte" aria-label="Eliminar reporte" className="shrink-0 rounded p-1 text-text-tertiary hover:bg-surface-2 hover:text-error-text disabled:opacity-50">
+                              <Icon name="trash" size={13} />
+                            </button>
+                          )}
+                        </div>
                         {causa && <span className="mt-1 inline-block"><Badge label={causa} tone="info" /></span>}
                         {texto && <p className="mt-0.5 whitespace-pre-wrap text-[13px] text-text-primary">{texto}</p>}
                         {!texto && !causa && <p className="mt-0.5 text-[12px] italic text-text-tertiary">Sin texto</p>}
@@ -666,7 +897,9 @@ export default function OrdenDetallePage() {
               </ol>
             ) : <p className="mb-3 text-[12px] text-text-tertiary">Sin mensajes de seguimiento.</p>}
 
-            {/* Formulario de respuesta */}
+            {/* Formulario de respuesta. Quien solo consulta lee el seguimiento
+                completo; documentar la visita es de quien la hace. */}
+            {puedeEscribir && (
             <div className="flex flex-col gap-2 border-t border-border-subtle pt-3">
               <Select value={solucion} onChange={(e) => setSolucion(e.target.value)}>
                 <option value="">— Solución / causa (opcional) —</option>
@@ -674,7 +907,7 @@ export default function OrdenDetallePage() {
               </Select>
               <Textarea rows={3} placeholder="Escribe la documentación / avance…" value={reply} onChange={(e) => setReply(e.target.value)} />
               {/* Foto de evidencia (con cámara en móvil; intenta geo-etiquetar al subir) */}
-              <div className="flex flex-wrap items-center justify-between gap-2">
+              <div id="seguimiento-foto" className="flex flex-wrap items-center justify-between gap-2">
                 {/* Dos botones a propósito: `capture="environment"` abre la cámara y se
                     salta el selector, así que con un único botón la galería quedaba
                     inalcanzable y tocaba "convertir la foto en archivo" para subirla. */}
@@ -699,6 +932,7 @@ export default function OrdenDetallePage() {
               </div>
               {photo && <p className="text-[10px] text-text-tertiary">Se intentará adjuntar la ubicación del dispositivo (requiere HTTPS; sobre HTTP la foto sube sin coordenadas).</p>}
             </div>
+            )}
           </div>
 
           {/* Acta de recibido / firma. Con la orden cerrada y sin firma el bloque
@@ -707,30 +941,45 @@ export default function OrdenDetallePage() {
 
               La reconexión no lleva acta: se resuelve desde el sistema y no hay
               a quién pedirle la firma, así que el bloque ni se pinta (solo si esa
-              orden ya trae una firma vieja, para no esconder lo que se guardó). */}
+              orden ya trae una firma vieja, para no esconder lo que se guardó).
+
+              Y con la orden REABIERTA se puede volver a firmar (2026-09-12): una
+              orden que se cerró y se volvió a abrir se atiende otra vez, y el acta
+              de la primera visita ya no es la del trabajo que se entrega. Con la
+              firma guardada el lienzo no se pinta solo —firmar de nuevo es la
+              excepción— pero el botón está ahí. El servidor siempre lo permitió
+              (`saveSignature` reescribe); era la pantalla la que no ofrecía por
+              dónde, y el técnico se quedaba en la puerta sin poder recogerla. */}
           {(t.signature || !esReconexion(t.type)) && (
           <div className="mb-6 rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
             <CardTitle
               icon="user-check"
               right={
-                !t.signature && !abierta ? (
+                puedeEscribir && (t.signature ? abierta : !abierta) ? (
                   <Button variant="ghost" size="sm" onClick={() => setVerFirma((v) => !v)}>
-                    {verFirma ? "Ocultar" : "Firmar de todos modos"}
+                    {verFirma ? "Ocultar" : t.signature ? "Firmar de nuevo" : "Firmar de todos modos"}
                   </Button>
                 ) : undefined
               }
             >
               Firma de quien recibe
             </CardTitle>
-            {t.signature ? (
+            {t.signature && !(abierta && verFirma && puedeEscribir) ? (
               <div className="flex flex-col gap-2">
                 <p className="text-[12px] text-text-secondary">Firmó: <b>{t.signature.name}</b> {t.signature.cc ? `(CC ${t.signature.cc})` : ""} {t.signature.rel ? `· ${t.signature.rel}` : ""}</p>
                 {t.signature.hasImage && <FirmaImg ticketId={id} />}
               </div>
+            ) : !puedeEscribir ? (
+              <p className="text-[12px] text-text-tertiary">Esta orden todavía no tiene acta firmada.</p>
             ) : !abierta && !verFirma ? (
               <p className="text-[12px] text-text-tertiary">Esta orden se cerró sin acta firmada.</p>
             ) : (
               <div className="flex flex-col gap-2">
+                {t.signature && (
+                  <p className="rounded-lg border border-warning-border bg-warning-soft p-2 text-[12px] text-warning-text">
+                    Esta orden ya tiene el acta de <b>{t.signature.name}</b>{t.signature.cc ? ` (CC ${t.signature.cc})` : ""}, de la visita anterior. La firma que guardes ahora la reemplaza; la anterior queda anotada en el seguimiento.
+                  </p>
+                )}
                 <div className="flex flex-wrap gap-2">
                   <Input className="min-w-[140px] flex-1" placeholder="Nombre completo quien recibe" value={sig.name} onChange={(e) => setSig({ ...sig, name: e.target.value })} />
                   <Input className="w-28" placeholder="Cédula" value={sig.cc} onChange={(e) => setSig({ ...sig, cc: e.target.value })} />
@@ -824,7 +1073,7 @@ export default function OrdenDetallePage() {
                   <span className={`text-[16px] font-bold ${debt > 0 ? "text-error-text" : "text-success-text"}`}>{cop(debt)}</span>
                 </div>
                 {debt > 0 && (
-                  <Link href={`/clientes/${s.id}`} className="text-[12px] font-semibold text-brand hover:underline">Ver facturas</Link>
+                  <Link href={`/clientes/${s.id}?tab=facturas`} className="text-[12px] font-semibold text-brand hover:underline">Ver facturas</Link>
                 )}
               </div>
             </div>
@@ -835,18 +1084,26 @@ export default function OrdenDetallePage() {
           <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
             <CardTitle icon="settings">Gestión de la orden</CardTitle>
             <div className="mb-1 text-[11px] font-semibold text-text-tertiary">Técnico asignado</div>
-            <div className="flex gap-2">
-              <Select value={assign} onChange={(e) => setAssign(e.target.value)}>
-                <option value="">— Sin asignar —</option>
-                {techs.map((tt) => <option key={tt.id} value={tt.name}>{tt.name}</option>)}
-              </Select>
-              <Button size="sm" disabled={busy || assign === (t.assigned || "")} onClick={() => post(`/support/tickets/${id}/assign`, { assigned: assign }, "Técnico asignado")}>Guardar</Button>
-            </div>
+            {puedeEscribir ? (
+              <div className="flex gap-2">
+                <Select value={assign} onChange={(e) => setAssign(e.target.value)}>
+                  <option value="">— Sin asignar —</option>
+                  {techs.map((tt) => <option key={tt.id} value={tt.name}>{tt.name}</option>)}
+                </Select>
+                <Button size="sm" disabled={busy || assign === (t.assigned || "")} onClick={() => post(`/support/tickets/${id}/assign`, { assigned: assign }, "Técnico asignado")}>Guardar</Button>
+              </div>
+            ) : (
+              <p className="text-[13px] font-semibold text-text-primary">{t.assigned || "Sin asignar"}</p>
+            )}
             <div className="mb-1 mt-3 text-[11px] font-semibold text-text-tertiary">Prioridad</div>
-            <Select value={t.priority ?? "Media"} disabled={busy}
-              onChange={(e) => post(`/support/tickets/${id}/priority`, { priority: e.target.value }, `Prioridad: ${e.target.value}`)}>
-              {TICKET_PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
-            </Select>
+            {puedeEscribir ? (
+              <Select value={t.priority ?? "Media"} disabled={busy}
+                onChange={(e) => post(`/support/tickets/${id}/priority`, { priority: e.target.value }, `Prioridad: ${e.target.value}`)}>
+                {TICKET_PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
+              </Select>
+            ) : (
+              <p className="text-[13px] font-semibold text-text-primary">{t.priority ?? "Media"}</p>
+            )}
             {/* Las dos puntas de la orden: quién la mandó y quién la hace. Lo
                 primero no se guardaba en ninguna parte y se preguntaba por
                 teléfono; ahora la orden lo dice. Las heredadas del legacy que
@@ -866,8 +1123,11 @@ export default function OrdenDetallePage() {
         </aside>
       </div>
 
-      <AsignarEquipoModal open={eqModal} onClose={() => setEqModal(false)} onDone={reload} ticketId={id} />
-      <ConsumirMaterialModal open={matModal} onClose={() => setMatModal(false)} onDone={reload} ticketId={id} />
+      {/* El cliente viaja junto a la orden (2026-09-04): con él, el selector pone
+          primero el equipo que ya está apartado a su nombre y el stock de SU sede. La
+          entrega se sigue anotando en esta orden — eso lo decide `ticketId`. */}
+      {puedeEscribir && <AsignarEquipoModal open={eqModal} onClose={() => setEqModal(false)} onDone={reload} ticketId={id} subscriberId={t.subscriber?.id ?? undefined} />}
+      {puedeEscribir && <ConsumirMaterialModal open={matModal} onClose={() => setMatModal(false)} onDone={reload} ticketId={id} />}
       {puedeEditar && editModal && (
         <EditarOrdenModal
           open={editModal}
@@ -882,6 +1142,62 @@ export default function OrdenDetallePage() {
           }}
         />
       )}
+
+      {/* Falta la foto: la orden NO se cerró. Aquí no hay salida por justificación —
+          la evidencia se sube o no se cierra—, así que el diálogo sólo tiene un
+          camino: ir a adjuntarla, que está en esta misma pantalla. */}
+      <Modal
+        open={!!faltaFoto}
+        onClose={() => setFaltaFoto(null)}
+        title="Falta la foto de la visita"
+        maxWidth="max-w-md"
+      >
+        <div className="space-y-3">
+          <p className="rounded-lg border border-warning bg-warning-soft px-3 py-2 text-[12.5px] leading-relaxed text-text-secondary">
+            {faltaFoto}
+          </p>
+          <p className="text-[12.5px] text-text-tertiary">
+            Con la foto queda constancia de lo que se hizo y de que la visita ocurrió: es lo
+            que se mira cuando el cliente vuelve a llamar por lo mismo.
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setFaltaFoto(null)}>Cancelar</Button>
+            <Button
+              onClick={() => {
+                setFaltaFoto(null);
+                document.getElementById("seguimiento-foto")?.scrollIntoView({ behavior: "smooth", block: "center" });
+              }}
+            >
+              Adjuntar la foto
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Falta la IP remota: la orden NO se cerró. Aquí sí hay salida inmediata —el
+          sistema reparte la dirección y la escribe en el router—, así que el camino
+          del diálogo es hacerlo y volver a cerrar. */}
+      <Modal
+        open={!!faltaIp}
+        onClose={() => setFaltaIp(null)}
+        title="Falta la IP remota del cliente"
+        maxWidth="max-w-md"
+      >
+        <div className="space-y-3">
+          <p className="rounded-lg border border-warning bg-warning-soft px-3 py-2 text-[12.5px] leading-relaxed text-text-secondary">
+            {faltaIp}
+          </p>
+          <p className="text-[12.5px] text-text-tertiary">
+            La IP fija es por donde sistemas entra al equipo del abonado, y es la dirección
+            que el corte bloquea: sin ella, el cliente no se puede cortar aunque deba.
+            Al asignarla se le reinicia la conexión un momento.
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setFaltaIp(null)}>Cancelar</Button>
+            <Button disabled={busy} onClick={() => void activarIpRemota()}>Asignar IP remota</Button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Geo-cerca: la orden NO se cerró. O se acerca al domicilio, o explica por qué no. */}
       <Modal
@@ -912,29 +1228,44 @@ export default function OrdenDetallePage() {
               </>
             ) : (
               <>
+                {/* Fuera de rango YA NO se cierra escribiendo un motivo (2026-09-10).
+                    Lo que queda aquí son las dos salidas de verdad: reintentar desde
+                    el domicilio, o dejar dicho que la dirección guardada está mal —lo
+                    que se escribe va al seguimiento, NO cierra la orden— para que se
+                    corrija la coordenada y la cierre quien responde por el trabajo. */}
                 <p className="text-[12.5px] text-text-secondary">
                   Si estás en el domicilio y el GPS no agarra bien, acércate a una ventana o sal un
-                  momento y reintenta. Si de verdad tienes que cerrarla desde donde estás, escribe
-                  el motivo: queda registrado en la orden y lo revisa administración.
+                  momento y reintenta. Esta orden no se puede cerrar desde otro sitio.
                 </p>
+                {cerca.distanciaM != null && (
+                  <p className="text-[12px] text-text-tertiary">
+                    El sistema te ubica a {Math.round(cerca.distanciaM).toLocaleString("es-CO")} m del
+                    punto guardado del cliente{cerca.radioM ? ` (el máximo es ${cerca.radioM} m)` : ""}.
+                  </p>
+                )}
                 <Textarea
                   rows={3}
-                  placeholder="Ej.: el cliente confirmó por teléfono que ya tiene servicio; la casa no aparece en el GPS…"
+                  placeholder="Ej.: estoy en la casa del cliente y la dirección guardada apunta a otro barrio…"
                   value={motivo}
                   onChange={(e) => setMotivo(e.target.value)}
                 />
+                <p className="text-[11px] text-text-tertiary">
+                  Esto NO cierra la orden: queda en el seguimiento para que se corrija la ubicación
+                  del cliente y la cierre tu coordinador.
+                </p>
                 <div className="flex flex-wrap justify-end gap-2">
                   <Button variant="secondary" onClick={() => { setCerca(null); setMotivo(""); }}>
                     Cancelar
                   </Button>
-                  <Button variant="secondary" onClick={() => void cambiarEstado(cerca.estado)} disabled={busy}>
-                    Reintentar ubicación
-                  </Button>
                   <Button
-                    onClick={() => void cambiarEstado(cerca.estado, motivo.trim())}
+                    variant="secondary"
+                    onClick={() => void avisarUbicacionMal()}
                     disabled={busy || motivo.trim().length < 10}
                   >
-                    Cerrar con este motivo
+                    Avisar en el seguimiento
+                  </Button>
+                  <Button onClick={() => void cambiarEstado(cerca.estado)} disabled={busy}>
+                    {busy ? "Ubicando…" : "Reintentar ubicación"}
                   </Button>
                 </div>
                 {motivo.trim().length > 0 && motivo.trim().length < 10 && (

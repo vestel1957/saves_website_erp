@@ -1,19 +1,21 @@
 "use client";
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { Icon } from "@/components/Icon";
 import { DataTable } from "@/components/ui/DataTable";
 import { Badge } from "@/components/ui/Badge";
 import { Pagination } from "@/components/ui/Pagination";
+import { Button } from "@/components/ui/Button";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { useOrden } from "@/lib/useOrden";
 import { cop } from "@/lib/subscribers";
 import { type TxRow, type TxList, TX_TYPE_LABEL, TX_TYPE_TONE, esCajera } from "@/lib/treasury";
-import { FiltrosMovimientos, filtrosVacios, type FiltrosTx } from "@/components/cobranzas/FiltrosMovimientos";
-import { fmtDate } from "@/lib/format";
+import { FiltrosMovimientos, filtrosActivos, filtrosTxAUrl, filtrosTxDeUrl, filtrosVacios, type FiltrosTx } from "@/components/cobranzas/FiltrosMovimientos";
+import { ordenDeTexto, useFiltrosEnUrl, useFiltrosRecordados } from "@/lib/useFiltrosUrl";
+import { fmtDate, fmtHora } from "@/lib/format";
 import { mensajeDeError } from "@/lib/errores";
 import { imprimirPdf } from "@/lib/imprimir";
 import { columnasEditables, useEdicionEnLinea } from "@/components/cobranzas/EdicionEnLinea";
@@ -62,14 +64,7 @@ function ReciboCell({ tx }: { tx: TxRow }) {
  * nota se vuelven inputs y la columna de acciones pasa a Guardar/Cancelar (ver
  * EdicionEnLinea). Solo lo enseña a quien puede — el permiso lo decide el hook.
  */
-export function TxTable({
-  params,
-  refreshKey = 0,
-  rowAction,
-  extraColumns,
-  editable = false,
-  empty = "No se encontraron movimientos.",
-}: {
+type TxTableProps = {
   /** Lo que FIJA la pantalla (Ingresos = tipo, Anulaciones = estado). No es filtrable. */
   params: { type?: string; status?: string };
   refreshKey?: number;
@@ -78,29 +73,60 @@ export function TxTable({
   /** Permite corregir la fila sin salir de la lista (solo contabilidad/superusuario). */
   editable?: boolean;
   empty?: string;
-}) {
+};
+
+/**
+ * Resuelve con qué filtros arranca la tabla —los de la URL o, si se entró por el
+ * menú, los de la última visita— y la monta ya con ellos (ver `useFiltrosRecordados`).
+ * Espera también a la sesión: hasta saber si es cajera no se sabe si lleva periodo.
+ */
+export function TxTable(props: TxTableProps) {
+  return (
+    <Suspense fallback={<PageSkeleton />}>
+      <TxTableConFiltros {...props} />
+    </Suspense>
+  );
+}
+
+function TxTableConFiltros(props: TxTableProps) {
+  const { loading: authLoading } = useAuth();
+  const inicial = useFiltrosRecordados();
+  if (authLoading || !inicial) return <PageSkeleton />;
+  return <TxTableLista {...props} urlInicial={inicial.valores} recordado={inicial.recordado} />;
+}
+
+function TxTableLista({
+  params,
+  refreshKey = 0,
+  rowAction,
+  extraColumns,
+  editable = false,
+  empty = "No se encontraron movimientos.",
+  urlInicial,
+  recordado,
+}: TxTableProps & { urlInicial: Record<string, string>; recordado: boolean }) {
   const { loading: authLoading, authFetch, user } = useAuth();
   const [data, setData] = useState<TxList | null>(null);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(25);
+  const [search, setSearch] = useState(urlInicial.q ?? "");
+  const [page, setPage] = useState(Number(urlInicial.pag) > 1 ? Number(urlInicial.pag) : 1);
+  const [pageSize, setPageSize] = useState(Number(urlInicial.tam) > 0 ? Number(urlInicial.tam) : 25);
   // La cajera va acotada a su caja y al día de hoy —lo impone el servidor—, así que ni
   // se le enseña el periodo ni el selector de caja (ver FiltrosMovimientos).
   const cajera = esCajera(user);
-  const [filtros, setFiltros] = useState<FiltrosTx>(() => filtrosVacios(cajera));
-  // El alcance llega con la sesión: hasta que no se sabe si es cajera, el periodo por
-  // defecto puede estar mal puesto.
-  useEffect(() => { setFiltros(filtrosVacios(cajera)); }, [cajera]);
+  const [filtros, setFiltros] = useState<FiltrosTx>(() => filtrosTxDeUrl(urlInicial, cajera));
   // Pagina en el servidor: el orden viaja en la query.
-  const orden = useOrden();
+  const orden = useOrden(ordenDeTexto(urlInicial.ord));
 
   /** La query de filtros, aparte para que el `useCallback` dependa de UN valor. */
   const claveFiltros = JSON.stringify(filtros);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize), ...orden.params });
+  /**
+   * Los filtros en forma de query. Los comparten la tabla y el Excel: si cada uno armara
+   * los suyos, el archivo acabaría trayendo otra cosa que lo que se ve en pantalla.
+   */
+  const filtrosQs = () => {
+    const qs = new URLSearchParams(orden.params);
     if (search.trim()) qs.set("search", search.trim());
     // Lo que fija la pantalla manda sobre el filtro: en Ingresos no se puede pedir
     // egresos por mucho que el desplegable exista en otra pantalla.
@@ -109,6 +135,8 @@ export function TxTable({
     if (params.status) qs.set("status", params.status);
     else if (filtros.status) qs.set("status", filtros.status);
     if (filtros.rango) { qs.set("from", filtros.rango.desde); qs.set("to", filtros.rango.hasta); }
+    if (filtros.rango?.horaDesde) qs.set("horaDesde", filtros.rango.horaDesde);
+    if (filtros.rango?.horaHasta) qs.set("horaHasta", filtros.rango.horaHasta);
     // `sede` puede ser "0" (los bancos): comparar contra cadena vacía, no por verdadero.
     if (filtros.sede !== "") qs.set("sede", filtros.sede);
     if (filtros.cashAccountId) qs.set("cashAccountId", filtros.cashAccountId);
@@ -117,16 +145,64 @@ export function TxTable({
     if (filtros.min) qs.set("min", filtros.min);
     if (filtros.max) qs.set("max", filtros.max);
     if (filtros.attach) qs.set("attach", filtros.attach);
+    return qs;
+  };
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const qs = filtrosQs();
+    qs.set("page", String(page));
+    qs.set("pageSize", String(pageSize));
     try { setData(await (await authFetch(`/treasury/transactions?${qs}`)).json()); }
     finally { setLoading(false); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authFetch, page, pageSize, search, params.type, params.status, orden.clave, claveFiltros]);
 
+  /** Excel de TODO lo filtrado (todas las páginas), con los mismos filtros de la tabla. */
+  const [exportando, setExportando] = useState(false);
+  async function exportar() {
+    setExportando(true);
+    try {
+      const res = await authFetch(`/treasury/transactions/export.xlsx?${filtrosQs()}`);
+      // El servidor dice por qué no (p. ej. demasiadas filas: hay que acotar el periodo).
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.message ?? "No se pudo exportar");
+      const nombre = params.status === "ANULADA" ? "anulaciones"
+        : params.type === "EXPENSE" ? "egresos"
+        : params.type === "INCOME" ? "ingresos"
+        : "movimientos";
+      const periodo = filtros.rango ? `${filtros.rango.desde}_a_${filtros.rango.hasta}` : new Date().toISOString().slice(0, 10);
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(await res.blob());
+      a.download = `${nombre}-${periodo}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (e) {
+      toast(mensajeDeError(e), "alert-triangle");
+    } finally {
+      setExportando(false);
+    }
+  }
+
   // Edición en la propia fila; al guardar, recarga desde el servidor.
   const edicion = useEdicionEnLinea({ onDone: load, habilitada: editable });
 
   useEffect(() => { if (!authLoading) { const t = setTimeout(load, search ? 350 : 0); return () => clearTimeout(t); } }, [authLoading, load, refreshKey]);
-  useEffect(() => { setPage(1); }, [search, pageSize, orden.clave, claveFiltros]);
+  // Cambiar un filtro manda a la página 1 — pero no en el primer render, que
+  // borraría la página que venía en la URL.
+  const primerRender = useRef(true);
+  useEffect(() => {
+    if (primerRender.current) { primerRender.current = false; return; }
+    setPage(1);
+  }, [search, pageSize, orden.clave, claveFiltros]);
+
+  // Y de vuelta: lo que está puesto en pantalla se escribe en la dirección.
+  useFiltrosEnUrl({
+    q: search.trim(), ...filtrosTxAUrl(filtros),
+    pag: page > 1 ? page : "", tam: pageSize !== 25 ? pageSize : "", ord: orden.clave,
+  });
+  const periodoCambiado = !!filtros.rango
+    && (filtros.rango.preset !== "mes" || !!filtros.rango.horaDesde || !!filtros.rango.horaHasta);
+  const hayFiltros = filtrosActivos(filtros) > 0 || !!search.trim() || periodoCambiado;
 
   if (authLoading || (loading && !data)) return <PageSkeleton />;
 
@@ -141,7 +217,25 @@ export function TxTable({
         fijos={params}
         totales={data?.totales}
         resultados={data?.total}
+        acciones={
+          // Se apaga sin resultados: un Excel con la cabecera sola parece un fallo.
+          <Button variant="secondary" onClick={exportar} disabled={exportando || !data?.total}>
+            <Icon name="download" size={15} /> {exportando ? "Exportando…" : "Excel"}
+          </Button>
+        }
       />
+
+      {/* Al entrar por el menú los filtros vuelven puestos: hay que DECIRLO, o una
+          lista corta parece un sistema roto y no una lista filtrada. */}
+      {recordado && hayFiltros && (
+        <p className="-mt-3 flex flex-wrap items-center gap-1.5 text-[12px] text-text-tertiary">
+          <Icon name="history" size={13} />
+          Se aplicaron los filtros de tu última visita.
+          <button type="button" onClick={() => { setSearch(""); setFiltros(filtrosVacios(cajera)); }} className="font-semibold text-brand hover:underline">
+            Quitar filtros
+          </button>
+        </p>
+      )}
 
       <DataTable
         sort={orden.sort}
@@ -158,7 +252,13 @@ export function TxTable({
           { key: "codigo", header: "Código", sortable: true, render: (r: TxRow) => r.codigo != null
             ? <span className="font-mono text-[12px] text-text-secondary">{r.codigo}</span>
             : <span className="text-text-tertiary">—</span> },
-          { key: "date", header: "Fecha", sortable: true, render: (r: TxRow) => fmtDate(r.date) },
+          // Día contable y, debajo, la hora en que se registró.
+          { key: "date", header: "Fecha", sortable: true, render: (r: TxRow) => (
+            <span className="flex flex-col whitespace-nowrap leading-tight">
+              {fmtDate(r.date)}
+              {r.createdAt && <span className="text-[11px] text-text-tertiary">{fmtHora(r.createdAt)}</span>}
+            </span>
+          ) },
           { key: "cuenta", header: "Cuenta", sortable: true, render: (r: TxRow) => <span className="text-text-secondary">{r.account ?? r.bank ?? "—"}</span> },
           // El Tipo solo dice algo donde la pantalla NO lo fija: en Egresos e Ingresos
           // sería una columna entera del mismo badge.

@@ -30,7 +30,7 @@ const GenerarFacturasModal = dynamic(() => import("@/components/billing/GenerarF
 const isOverdue = (r: InvoiceRow) => r.balance > 0 && !!r.dueDate && new Date(r.dueDate).getTime() < Date.now();
 
 export default function FacturacionPage() {
-  const { loading: authLoading, authFetch, can, isSuperadmin, sedeScoped } = useAuth();
+  const { loading: authLoading, authFetch, can, isSuperadmin, sedeScoped, puedeEmitirNotas } = useAuth();
   const canEmit = isSuperadmin || can(PERM.AREA_CONTABILIDAD);
   const [eMode, setEMode] = useState<{ live: boolean } | null>(null);
   const [emittingId, setEmittingId] = useState<string | null>(null);
@@ -45,6 +45,9 @@ export default function FacturacionPage() {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [overdue, setOverdue] = useState(false);
+  // Histórico completo: sin esto el listado solo alcanzaba el año en curso y no había
+  // forma de llegar a una factura vieja salvo adivinando un rango de fechas.
+  const [todo, setTodo] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
 
@@ -55,7 +58,7 @@ export default function FacturacionPage() {
   const [hydrated, setHydrated] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-  const anyFilter = !!(search || status || ron || branchId || from || to || overdue);
+  const anyFilter = !!(search || status || ron || branchId || from || to || overdue || todo);
   // Filtros "avanzados" que viven en el panel colapsable (se muestran como chips
   // cuando el panel está cerrado, para no perder contexto sin ocupar espacio).
   const chips = [
@@ -64,6 +67,7 @@ export default function FacturacionPage() {
     branchId && { key: "branch", label: `Sede: ${branches.find((b) => b.id === branchId)?.name ?? "—"}`, clear: () => setBranchId("") },
     from && { key: "from", label: `Desde ${from}`, clear: () => setFrom("") },
     to && { key: "to", label: `Hasta ${to}`, clear: () => setTo("") },
+    todo && { key: "todo", label: "Todo el histórico", clear: () => setTodo(false) },
   ].filter(Boolean) as { key: string; label: string; clear: () => void }[];
 
   // El listado pagina en el servidor, así que el orden va con él.
@@ -79,8 +83,9 @@ export default function FacturacionPage() {
     if (from) qs.set("from", from);
     if (to) qs.set("to", to);
     if (overdue) qs.set("overdue", "1");
+    if (todo) qs.set("all", "1");
     return qs;
-  }, [search, status, ron, branchId, from, to, overdue]);
+  }, [search, status, ron, branchId, from, to, overdue, todo]);
 
   const loadStats = useCallback(() => {
     void authFetch("/billing/stats").then(objetoJson).then(setStats).catch(() => {});
@@ -97,6 +102,7 @@ export default function FacturacionPage() {
     if (g("from")) setFrom(g("from"));
     if (g("to")) setTo(g("to"));
     if (g("overdue")) setOverdue(g("overdue") === "1");
+    if (g("all")) setTodo(g("all") === "1");
     setHydrated(true);
   }, []);
 
@@ -125,10 +131,10 @@ export default function FacturacionPage() {
     { debounceMs: search ? 350 : 0, saltar: authLoading || !hydrated },
   );
 
-  useEffect(() => { setPage(1); }, [search, status, ron, branchId, from, to, overdue, pageSize, orden.clave]);
+  useEffect(() => { setPage(1); }, [search, status, ron, branchId, from, to, overdue, todo, pageSize, orden.clave]);
 
   function clearFilters() {
-    setSearch(""); setStatus(""); setRon(""); setBranchId(""); setFrom(""); setTo(""); setOverdue(false);
+    setSearch(""); setStatus(""); setRon(""); setBranchId(""); setFrom(""); setTo(""); setOverdue(false); setTodo(false);
   }
 
   async function openPdf(id: string) {
@@ -361,6 +367,12 @@ export default function FacturacionPage() {
             )}
             <Field label="Desde"><Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></Field>
             <Field label="Hasta"><Input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></Field>
+            <Field label="Periodo">
+              <Select value={todo ? "1" : ""} onChange={(e) => setTodo(e.target.value === "1")} disabled={!!(from || to)}>
+                <option value="">Año en curso</option>
+                <option value="1">Todo el histórico</option>
+              </Select>
+            </Field>
           </div>
           <div className="mt-3 flex items-center justify-between gap-2">
             <span className="text-[12px] text-text-tertiary">
@@ -392,7 +404,12 @@ export default function FacturacionPage() {
         <div className="flex flex-col gap-3">
           <DataTable
             rows={data?.items ?? []}
-            empty="No se encontraron facturas."
+            empty={data?.scope === "anio"
+              // "No hay" y "no hay en 2026" no son lo mismo: el listado arranca en el
+              // año en curso, y callarlo es lo que hacía pensar que una factura
+              // importada de 2024 no se había migrado.
+              ? `No se encontraron facturas de ${data.scopeYear}. El listado parte del año en curso: en Filtros → Periodo elige «Todo el histórico».`
+              : "No se encontraron facturas."}
             sort={orden.sort}
             onSort={orden.onSort}
             columns={[
@@ -400,7 +417,15 @@ export default function FacturacionPage() {
               { key: "sub", header: "Cliente", sortable: true, render: (r) => r.subscriberId
                 ? <Link href={`/clientes/${r.subscriberId}`} className="font-medium text-brand hover:underline">{r.subscriber}</Link>
                 : <span className="font-medium text-text-primary">{r.subscriber}</span> },
-              { key: "service", header: "Servicio", sortable: true, render: (r) => <span className="text-text-secondary">{r.service ?? "—"}</span> },
+              // Servicio (lo que factura una recurrente) o MOTIVO (por qué existe una
+              // fija): sin el motivo, un traslado y una venta de equipo se ven igual
+              // en la lista y hay que abrir las dos para saber cuál es cuál.
+              { key: "service", header: "Servicio o motivo", sortable: true, render: (r) => (
+                <span className="flex flex-wrap items-center gap-1.5 text-text-secondary">
+                  {r.service ?? (r.purposeLabel ? null : "—")}
+                  {r.purposeLabel && <Badge label={r.purposeLabel} tone="info" />}
+                </span>
+              ) },
               { key: "date", header: "Fecha", sortable: true, render: (r) => fmtDate(r.date) },
               { key: "due", header: "Vence", sortable: true, render: (r) => (
                 <span className={isOverdue(r) ? "inline-flex items-center gap-1 font-semibold text-error-text" : "text-text-secondary"}>
@@ -423,9 +448,14 @@ export default function FacturacionPage() {
                   {canEmit && (r.eInvoiceFlag === "Factura Electronica Creada"
                     ? <>
                         <span title="Factura electrónica ya emitida" className="inline-flex rounded-lg border border-success/40 bg-success-soft p-1.5 text-success-text"><Icon name="file-signature" size={14} /></span>
-                        <button type="button" onClick={() => creditNote(r)} disabled={emittingId === r.id} title={eMode?.live ? "Nota crédito (DIAN)" : "Nota crédito (DRY-RUN)"}
-                          className="tap rounded-lg border border-border-default p-1.5 text-text-secondary transition-colors hover:bg-surface-2 disabled:opacity-40">
-                          <Icon name={emittingId === r.id ? "loader" : "receipt"} size={14} className={emittingId === r.id ? "animate-spin" : ""} /></button>
+                        {/* La nota crédito DIAN es el mismo acto que la nota del
+                            módulo de notas, así que lleva el mismo candado nominal.
+                            OJO: sin ella no se puede anular una factura ya timbrada. */}
+                        {puedeEmitirNotas && (
+                          <button type="button" onClick={() => creditNote(r)} disabled={emittingId === r.id} title={eMode?.live ? "Nota crédito (DIAN)" : "Nota crédito (DRY-RUN)"}
+                            className="tap rounded-lg border border-border-default p-1.5 text-text-secondary transition-colors hover:bg-surface-2 disabled:opacity-40">
+                            <Icon name={emittingId === r.id ? "loader" : "receipt"} size={14} className={emittingId === r.id ? "animate-spin" : ""} /></button>
+                        )}
                       </>
                     : <button type="button" onClick={() => setConfirmar(r)} disabled={emittingId === r.id} title={eMode?.live ? "Emitir e-factura (DIAN)" : "Emitir e-factura (DRY-RUN)"}
                         className="tap rounded-lg border border-border-default p-1.5 text-text-secondary transition-colors hover:bg-surface-2 disabled:opacity-40">

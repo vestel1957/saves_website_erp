@@ -300,7 +300,11 @@ export function Mapa({
   }, [firma, ajustarA, rutaAproximada]);
 
   return (
-    <div className="relative h-full w-full">
+    // `isolate` es lo que mantiene el mapa por debajo de los modales: Leaflet
+    // reparte z-index propios (paneles 400-700, controles 1000) y, sin un
+    // contexto de apilamiento aquí, compiten con el del buscador y el de los
+    // modales (z-90) y les quedan encima.
+    <div className="relative isolate h-full w-full">
       <div ref={divRef} style={{ height: alto, width: "100%" }} className="rounded-xl" />
       <p className="pointer-events-none absolute bottom-1 left-1/2 z-[400] -translate-x-1/2 rounded bg-surface/80 px-2 py-0.5 text-[10px] text-text-tertiary">
         Usa Ctrl + rueda para acercar

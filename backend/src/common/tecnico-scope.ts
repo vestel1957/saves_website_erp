@@ -137,3 +137,68 @@ export async function usuarioDelTecnico(
     select: { id: true, name: true },
   });
 }
+
+/**
+ * ¿Este abonado es de alguna orden SUYA? (2026-09-10, a pedido del usuario: «los
+ * técnicos solo podrán visualizar los usuarios correspondientes a las órdenes
+ * asignadas en su agendamiento».)
+ *
+ * Es el segundo tramo del cierre del buscador. El 2026-09-10 se le quitó el ⌘K y el
+ * listado de clientes (`SubscribersController.sinBuscador`), pero la FICHA seguía
+ * abierta por URL para cualquiera de los 20.000 abonados: bastaba teclear un id —o
+ * probar los del historial de otro— para leer teléfono, dirección, deuda y equipos de
+ * un cliente que no tenía nada que ver con su trabajo.
+ *
+ * "Suya" es lo mismo que en todas partes: por la FK (`assignedStaffId`) o por el texto
+ * libre del legacy (`assigned`), que se reparten su cola casi por mitades. **Y de
+ * CUALQUIER fecha**, no sólo de hoy: su pantalla se acotó al día, pero desde su
+ * historial abre la visita del martes, y desde ella el cliente. Acotarlo también aquí
+ * dejaría su propio historial lleno de enlaces muertos.
+ *
+ * Sin ficha de empleado no es de nadie: `false`, que es el lado seguro de siempre.
+ */
+export async function esClienteDeSuOrden(
+  prisma: PrismaService,
+  user: AuthUser,
+  subscriberId: string,
+): Promise<boolean> {
+  const ficha = await fichaDelUsuario(prisma, user);
+  if (!ficha) return false;
+  const claves = clavesDe(ficha);
+  const orden = await prisma.ticket.findFirst({
+    where: {
+      subscriberId,
+      OR: [{ assignedStaffId: ficha.id }, ...(claves.length ? [{ assigned: { in: claves } }] : [])],
+    },
+    select: { id: true },
+  });
+  return Boolean(orden);
+}
+
+/**
+ * Filtro de abonados "sólo los de MIS órdenes", o `null` si a este usuario no hay
+ * que acotarlo (2026-09-10).
+ *
+ * Es la versión en `where` de `esClienteDeSuOrden`, para las pantallas que listan
+ * abonados en vez de abrir uno: hoy el MAPA, que además trae buscador por nombre y
+ * dirección — o sea, el buscador de clientes que se acababa de cerrar, entrando por
+ * otra puerta. Con esto el técnico sigue viendo en el mapa a dónde tiene que ir (y
+ * el "cómo llegar" de su visita), pero no la vecindad entera de su sede.
+ *
+ * Un técnico sin ficha recibe un filtro imposible y no la lista completa, que es el
+ * criterio de siempre.
+ */
+export async function whereSuscriptoresDeSusOrdenes(
+  prisma: PrismaService,
+  user?: AuthUser | null,
+): Promise<{ id?: { in: string[] }; tickets?: object } | null> {
+  if (!esTecnicoDeCampo(user)) return null;
+  const ficha = await fichaDelUsuario(prisma, user!);
+  if (!ficha) return { id: { in: [] } };
+  const claves = clavesDe(ficha);
+  return {
+    tickets: {
+      some: { OR: [{ assignedStaffId: ficha.id }, ...(claves.length ? [{ assigned: { in: claves } }] : [])] },
+    },
+  };
+}

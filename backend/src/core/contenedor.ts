@@ -25,7 +25,6 @@ import { CatalogoService } from '../billing/catalogo.service';
 import { FacturasService } from '../billing/facturas.service';
 import { ProrrateoReconexionService } from '../billing/prorrateo-reconexion.service';
 import { CargoOrdenService } from '../billing/cargo-orden.service';
-import { RecurringService } from '../billing/recurring.service';
 import { AvisosProactivosService } from '../chatbot/avisos-proactivos.service';
 import { ChatAccessService } from '../chatbot/chat-access.service';
 import { ChatbotActividadService } from '../chatbot/chatbot-actividad.service';
@@ -89,10 +88,12 @@ import { NetworkWriteService } from '../network/network-write.service';
 import { NetworkService } from '../network/network.service';
 import { OltPlanProfileService } from '../network/olt-plan-profile.service';
 import { OltService } from '../network/olt.service';
+import { OnuAlDevolverService } from '../network/onu-al-devolver.service';
 import { ReconexionService } from '../network/reconexion.service';
 import { OmniService } from '../omni/omni.service';
 import { OrdersService } from '../orders/orders.service';
 import { OnlinePaymentsService } from '../online-payments/online-payments.service';
+import { PortalPagosService } from '../portal-pagos/portal-pagos.service';
 import { PaymentImportsService } from '../payment-imports/payment-imports.service';
 import { PlansService } from '../plans/plans.service';
 import { BundlesService } from '../plans/bundles.service';
@@ -118,6 +119,7 @@ import { SettingsService } from '../settings/settings.service';
 import { StaffDocumentsService } from '../staff/staff-documents.service';
 import { StaffService } from '../staff/staff.service';
 import { AltaClienteService } from '../subscribers/alta.service';
+import { OrdenAlPagarService } from '../billing/orden-al-pagar.service';
 import { SubscriberFilesService } from '../subscribers/subscriber-files.service';
 import { SubscriberGeoService } from '../subscribers/subscriber-geo.service';
 import { SubscriberNotesService } from '../subscribers/subscriber-notes.service';
@@ -154,18 +156,28 @@ export const mailService = new MailService(prismaService, settingsService);
 export const billingService = new BillingService(prismaService, whatsappService, mailService);
 export const catalogoService = new CatalogoService(prismaService);
 export const ipAllocatorService = new IpAllocatorService(prismaService);
-export const mikrotikService = new MikrotikService(prismaService, whatsappService, ipAllocatorService);
-export const oltService = new OltService(prismaService);
-export const genieacsService = new GenieacsService(prismaService, oltService);
 // Avisos por cargo. Se construye ANTES que la reconexión porque las órdenes que
 // abre el sistema (`OrdenesAutomaticasService`) tienen que avisarle a quien reparte
 // el trabajo de campo.
 export const notificationsService = new NotificationsService(prismaService);
 export const avisoTecnicoService = new AvisoTecnicoService(prismaService, notificationsService);
 export const responsibilitiesService = new ResponsibilitiesService(prismaService);
-export const responsibilityNotifierService = new ResponsibilityNotifierService(responsibilitiesService, notificationsService, eventos);
+export const responsibilityNotifierService = new ResponsibilityNotifierService(responsibilitiesService, notificationsService, eventos, prismaService);
 // Órdenes de servicio que abre el sistema cuando algo no se pudo hacer por red.
 export const ordenesAutomaticasService = new OrdenesAutomaticasService(prismaService, responsibilityNotifierService);
+// BAJA hasta aquí, detrás de las órdenes automáticas: el corte masivo de TV deja la
+// orden que lo respalda (se hace a mano en la mayoría de los casos, porque el TR-069
+// no alcanza al parque), y una `const` todavía en zona muerta temporal revienta al
+// arrancar.
+// El Mikrotik baja aquí por lo MISMO que genieacs: el corte de internet deja su
+// orden 'Corte Internet' ya cerrada y el estado del servicio en la ficha, y para eso
+// necesita las órdenes automáticas, que se construyen justo arriba.
+export const mikrotikService = new MikrotikService(prismaService, whatsappService, ipAllocatorService, ordenesAutomaticasService, eventos);
+// La OLT baja detrás del Mikrotik: la señal óptica de la ficha le pregunta con qué
+// MAC navega el cliente cuando el equipo del inventario no aparece en la OLT.
+export const oltService = new OltService(prismaService, mikrotikService);
+export const onuAlDevolverService = new OnuAlDevolverService(prismaService, oltService);
+export const genieacsService = new GenieacsService(prismaService, oltService, ordenesAutomaticasService);
 // Cobro de los días que quedan del mes al devolver un servicio cortado (las órdenes
 // "…2" del legacy). Se construye ANTES de la reconexión y del soporte porque las dos
 // puertas por las que vuelve un servicio —el pago en caja y el técnico que cierra la
@@ -180,13 +192,15 @@ export const reconexionService = new ReconexionService(prismaService, mikrotikSe
 // una `const` todavía en zona muerta temporal revienta al arrancar.
 export const onlinePaymentsService = new OnlinePaymentsService(prismaService, reconexionService);
 export const cobranzasService = new CobranzasService(prismaService, postingService, reconexionService, eventos);
+// El web service que atiende al portal de pagos en línea. Va detrás de `cobranzasService`
+// porque el pago del portal entra por `collect`, igual que el de la ventanilla.
+export const portalPagosService = new PortalPagosService(prismaService, cobranzasService);
 // Sube AQUÍ, fuera del orden alfabético: `facturasService` lo necesita para "asignar
 // servicio" —el cambio de plan desde la factura pasa por el mismo camino que desde la
 // ficha del abonado— y una `const` todavía en zona muerta temporal revienta al arrancar.
 export const mikrotikAdminService = new MikrotikAdminService(prismaService);
-export const subscribersService = new SubscribersService(prismaService, mikrotikService, mikrotikAdminService, genieacsService, eventos);
+export const subscribersService = new SubscribersService(prismaService, mikrotikService, mikrotikAdminService, genieacsService, eventos, ordenesAutomaticasService, onuAlDevolverService);
 export const facturasService = new FacturasService(prismaService, postingService, cobranzasService, subscribersService);
-export const recurringService = new RecurringService(prismaService, facturasService);
 export const whatsappInboxService = new WhatsappInboxService(prismaService, whatsappService, notificationsService, responsibilityNotifierService);
 export const chatbotSessionStore = new ChatbotSessionStore(prismaService, whatsappInboxService);
 export const chatbotUsageService = new ChatbotUsageService(prismaService);
@@ -196,7 +210,11 @@ export const chatAccessService = new ChatAccessService(prismaService, whatsappSe
 export const chatbotActividadService = new ChatbotActividadService(prismaService);
 export const contractsService = new ContractsService(prismaService);
 export const orderScoreService = new OrderScoreService(prismaService);
-export const supportService = new SupportService(prismaService, orderScoreService);
+// `geofenceService` sube aquí (2026-09-10): `supportService` lo consulta para decir
+// en la ficha de la orden qué hace falta para cerrarla —foto y ubicación—, y el
+// orden de este fichero es topológico. Sólo depende de `prismaService`.
+export const geofenceService = new GeofenceService(prismaService);
+export const supportService = new SupportService(prismaService, orderScoreService, geofenceService);
 export const treasuryService = new TreasuryService(prismaService);
 export const ordersService = new OrdersService(prismaService, responsibilityNotifierService, signatureOtpService);
 export const reportsService = new ReportsReportsService(prismaService);
@@ -208,13 +226,15 @@ export const dashboardService = new DashboardService(prismaService);
 export const chatbotDocsService = new ChatbotDocsService(subscribersService, contractsService, billingService, supportService, treasuryService, ordersService, reportsService, performanceService, staffReportsService, ispReportsService, metricsService, dashboardService);
 export const chatbotIdentityService = new ChatbotIdentityService(prismaService, authService, chatAccessService);
 export const chatbotLinkService = new ChatbotLinkService(prismaService);
-export const geofenceService = new GeofenceService(prismaService);
 // `routingService` sube aquí porque `agendaService` lo usa para la matriz de
 // distancias del recorrido sugerido, y el orden de este fichero es topológico.
 export const routingService = new RoutingService();
 export const agendaService = new AgendaService(prismaService, eventos, routingService);
-export const supportWriteService = new SupportWriteService(prismaService, mikrotikService, geofenceService, responsibilityNotifierService, eventos, agendaService, orderScoreService, prorrateoReconexionService, genieacsService, cargoOrdenService, subscribersService);
+export const supportWriteService = new SupportWriteService(prismaService, mikrotikService, geofenceService, responsibilityNotifierService, eventos, agendaService, orderScoreService, prorrateoReconexionService, genieacsService, cargoOrdenService, subscribersService, oltService);
 export const altaClienteService = new AltaClienteService(prismaService, subscribersService, mikrotikService, facturasService, supportWriteService);
+// La orden que nace del pago de su factura (hoy, el traslado). Va detrás de
+// `supportWriteService` porque abre órdenes con él.
+export const ordenAlPagarService = new OrdenAlPagarService(prismaService, supportWriteService);
 export const ticketConfirmacionService = new TicketConfirmacionService(prismaService, whatsappService, supportWriteService, chatbotGateService);
 export const savesTransport = new SavesTransport(whatsappService, chatbotGateService, ticketConfirmacionService);
 export const internoAbonadosToolset = new InternoAbonadosToolset(subscribersService, cobranzasService, chatbotDocsService);
@@ -231,13 +251,13 @@ export const plansService = new PlansService(prismaService);
 export const bundlesService = new BundlesService(prismaService);
 export const configDataService = new ConfigDataService(prismaService);
 export const comercialToolset = new ComercialToolset(plansService, configDataService, chatbotGateService);
-export const tramitesToolset = new TramitesToolset(subscribersService, cobranzasService, supportWriteService, genieacsService);
+export const tramitesToolset = new TramitesToolset(subscribersService, cobranzasService, supportWriteService, genieacsService, prismaService);
 export const staffService = new StaffService(prismaService, authService, auditService);
 export const internoRrhhToolset = new InternoRrhhToolset(staffService);
 export const internoComprasToolset = new InternoComprasToolset(ordersService, chatbotDocsService);
 export const einvoiceService = new EinvoiceService(prismaService);
-export const internoFacturacionToolset = new InternoFacturacionToolset(billingService, facturasService, recurringService, einvoiceService, chatbotDocsService);
-export const collectionsService = new CollectionsService(prismaService, responsibilityNotifierService);
+export const internoFacturacionToolset = new InternoFacturacionToolset(billingService, facturasService, einvoiceService, chatbotDocsService);
+export const collectionsService = new CollectionsService(prismaService, responsibilityNotifierService, notificationsService);
 export const internoCobranzaToolset = new InternoCobranzaToolset(collectionsService, cobranzasService);
 export const promotionsService = new PromotionsService(prismaService, facturasService);
 export const returnsService = new ReturnsService(prismaService);
@@ -251,13 +271,13 @@ export const whatsappCampaignService = new WhatsappCampaignService(prismaService
 export const whatsappInternalAlertListener = new WhatsappInternalAlertListener(whatsappService);
 export const whatsappLogService = new WhatsappLogService(prismaService, whatsappInboxService);
 export const whatsappRemindersService = new WhatsappRemindersService(prismaService, whatsappCampaignService);
-export const cronService = new CronService(prismaService, facturasService, mailService, whatsappRemindersService, metricsService, responsibilityNotifierService, altaClienteService, onlinePaymentsService);
+export const cronService = new CronService(prismaService, facturasService, mailService, whatsappRemindersService, metricsService, responsibilityNotifierService, altaClienteService, onlinePaymentsService, portalPagosService, ordenAlPagarService, mikrotikService);
 export const dataService = new DataService(prismaService);
 export const einvoiceEmitService = new EinvoiceEmitService(prismaService);
 export const extrasService = new ExtrasService(prismaService);
 export const inventoryAlertsService = new InventoryAlertsService(prismaService);
 export const manualsService = new ManualsService();
-export const networkWriteService = new NetworkWriteService(prismaService, signatureOtpService, whatsappService, notificationsService);
+export const networkWriteService = new NetworkWriteService(prismaService, signatureOtpService, whatsappService, notificationsService, onuAlDevolverService);
 export const networkService = new NetworkService(prismaService);
 export const oltPlanProfileService = new OltPlanProfileService(prismaService, oltService);
 export const omniService = new OmniService(prismaService, postingService);
@@ -272,8 +292,8 @@ export const staffDocumentsService = new StaffDocumentsService(prismaService);
 export const subscriberFilesService = new SubscriberFilesService(prismaService);
 export const subscriberGeoService = new SubscriberGeoService(prismaService);
 export const subscriberNotesService = new SubscriberNotesService(prismaService);
-export const equipoReservaService = new EquipoReservaService(prismaService);
-export const onuProvisionService = new OnuProvisionService(prismaService, oltService, oltPlanProfileService, equipoReservaService);
+export const equipoReservaService = new EquipoReservaService(prismaService, onuAlDevolverService);
+export const onuProvisionService = new OnuProvisionService(prismaService, oltService, oltPlanProfileService, mikrotikService, equipoReservaService, subscribersService);
 export const tasksService = new TasksService(prismaService);
 export const pagosFijosService = new PagosFijosService(prismaService, cobranzasService);
 
@@ -301,11 +321,11 @@ export const todosLosServicios = [
   ipAllocatorService,
   mikrotikService,
   oltService,
+  onuAlDevolverService,
   genieacsService,
   reconexionService,
   cobranzasService,
   facturasService,
-  recurringService,
   notificationsService,
   responsibilitiesService,
   responsibilityNotifierService,
@@ -337,6 +357,7 @@ export const todosLosServicios = [
   supportWriteService,
   ordenesAutomaticasService,
   altaClienteService,
+  ordenAlPagarService,
   ticketConfirmacionService,
   savesTransport,
   internoAbonadosToolset,

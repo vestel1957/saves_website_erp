@@ -1,6 +1,8 @@
 import { BadRequestException, NotFoundException } from '../core/http/errores';
 import { Logger } from '../core/logger';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuthUser } from '../auth/current-user.decorator';
+import { exigirSedeSuscriptor } from '../common/sede-scope';
 import { PlayhubClient, PLAYHUB_CATALOG, playhubProductName, playhubErrorMessage } from './playhub.client';
 
 /** Fila "solo cuenta": el cliente tiene cuenta en PlayHub pero ninguna suscripción. */
@@ -91,15 +93,22 @@ export class PlayhubService {
     return (email || '').trim();
   }
 
-  private async loadSub(subscriberId: string): Promise<SubRow> {
+  /**
+   * Carga el cliente TRAS comprobar que quien pregunta llega a su sede. Todos los
+   * endpoints por cliente pasan por aquí, así que la puerta vive en un solo sitio:
+   * desde que la cajera opera PlayHub (área `caja`), sin esto le bastaría cambiar
+   * el id de la URL para tocar la cuenta de un abonado de otra sede.
+   */
+  private async loadSub(subscriberId: string, user?: AuthUser): Promise<SubRow> {
+    await exigirSedeSuscriptor(this.prisma, user, subscriberId);
     const s = await this.prisma.subscriber.findUnique({ where: { id: subscriberId }, select: SUB_SELECT });
     if (!s) throw new NotFoundException('Cliente no encontrado');
     return s;
   }
 
   /** Suscripciones EN VIVO del cliente (consulta a PlayHub). */
-  async liveSubscriptions(subscriberId: string) {
-    const s = await this.loadSub(subscriberId);
+  async liveSubscriptions(user: AuthUser | undefined, subscriberId: string) {
+    const s = await this.loadSub(subscriberId, user);
     const login = this.login(s.email);
     if (!login) throw new BadRequestException('El cliente no tiene email; no tiene cuenta en PlayHub.');
     if (!this.client.isConfigured) throw new BadRequestException('PlayHub no está configurado.');
@@ -112,9 +121,9 @@ export class PlayhubService {
   }
 
   /** Suscribir un producto. Crea el cliente en PlayHub si no existe (404) y reintenta. */
-  async subscribe(subscriberId: string, productId: string) {
+  async subscribe(user: AuthUser | undefined, subscriberId: string, productId: string) {
     if (!productId) throw new BadRequestException('Producto requerido');
-    const s = await this.loadSub(subscriberId);
+    const s = await this.loadSub(subscriberId, user);
     const login = this.login(s.email);
     if (!login) throw new BadRequestException('El cliente no tiene email. Cárgalo para registrarlo en PlayHub.');
     if (!this.client.isConfigured) throw new BadRequestException('PlayHub no está configurado.');
@@ -150,9 +159,9 @@ export class PlayhubService {
   }
 
   /** Cancelar una suscripción. */
-  async unsubscribe(subscriberId: string, productId: string) {
+  async unsubscribe(user: AuthUser | undefined, subscriberId: string, productId: string) {
     if (!productId) throw new BadRequestException('Producto requerido');
-    const s = await this.loadSub(subscriberId);
+    const s = await this.loadSub(subscriberId, user);
     const login = this.login(s.email);
     if (!login) throw new BadRequestException('El cliente no tiene email; no tiene cuenta en PlayHub.');
     if (!this.client.isConfigured) throw new BadRequestException('PlayHub no está configurado.');
@@ -166,8 +175,8 @@ export class PlayhubService {
   }
 
   /** Sincroniza (crea/actualiza) la cuenta del cliente en PlayHub. */
-  async syncCustomer(subscriberId: string) {
-    const s = await this.loadSub(subscriberId);
+  async syncCustomer(user: AuthUser | undefined, subscriberId: string) {
+    const s = await this.loadSub(subscriberId, user);
     const login = this.login(s.email);
     if (!login) throw new BadRequestException('El cliente no tiene email; no se puede registrar en PlayHub.');
     if (!this.client.isConfigured) throw new BadRequestException('PlayHub no está configurado.');
@@ -186,9 +195,9 @@ export class PlayhubService {
   }
 
   /** Refresca la tabla local de un cliente contra sus suscripciones en vivo. */
-  async syncSubscriber(subscriberId: string) {
-    const { subscriptions } = await this.liveSubscriptions(subscriberId);
-    const s = await this.loadSub(subscriberId);
+  async syncSubscriber(user: AuthUser | undefined, subscriberId: string) {
+    const { subscriptions } = await this.liveSubscriptions(user, subscriberId);
+    const s = await this.loadSub(subscriberId, user);
     await this.prisma.$transaction(async (tx) => {
       await tx.playhubSubscription.deleteMany({ where: { subscriberId } });
       if (subscriptions.length) {
@@ -344,8 +353,8 @@ export class PlayhubService {
   }
 
   /** Elegibilidad del cliente para PlayHub (la usa el panel de la ficha). */
-  async eligibility(subscriberId: string) {
-    const s = await this.loadSub(subscriberId);
+  async eligibility(user: AuthUser | undefined, subscriberId: string) {
+    const s = await this.loadSub(subscriberId, user);
     const { megas, plan } = await this.megasDeCliente(s);
     return { megas, plan, minMegas: this.minMegas, elegible: this.minMegas <= 0 || megas >= this.minMegas };
   }
@@ -380,7 +389,8 @@ export class PlayhubService {
   }
 
   /** Suscripciones locales de un cliente (para la ficha). Sin el placeholder de "solo cuenta". */
-  async localSubscriptions(subscriberId: string) {
+  async localSubscriptions(user: AuthUser | undefined, subscriberId: string) {
+    await exigirSedeSuscriptor(this.prisma, user, subscriberId);
     const rows = await this.prisma.playhubSubscription.findMany({
       where: { subscriberId, NOT: { productId: SOLO_CUENTA } }, orderBy: { syncedAt: 'desc' },
     });

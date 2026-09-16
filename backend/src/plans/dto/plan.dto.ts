@@ -1,4 +1,4 @@
-import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsEnum, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsBoolean, IsEnum, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
 import { ServiceKind } from '@prisma/client';
 
 /** Crear un plan del catálogo. */
@@ -67,9 +67,20 @@ export class SetPuntosDto {
 /**
  * Asignar varios planes a la vez (ej. Internet + TV en un solo cambio).
  * Cada planId actualiza el servicio de su propio `kind`.
+ *
+ * `remove` son los servicios que el abonado DEJA de tener (la opción "No" del
+ * legacy: quitarle la TV y dejarlo sólo con internet). Puede venir solo —sin
+ * ningún plan— porque quitar un servicio no es cambiar ninguno; el servicio
+ * exige que llegue al menos una de las dos cosas.
  */
 export class AssignPlansDto {
-  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(6)
+  @IsOptional()
+  @IsArray() @ArrayMaxSize(6)
   @IsString({ each: true })
-  planIds!: string[];
+  planIds?: string[];
+
+  @IsOptional()
+  @IsArray() @ArrayMaxSize(6)
+  @IsEnum(ServiceKind, { each: true })
+  remove?: ServiceKind[];
 }

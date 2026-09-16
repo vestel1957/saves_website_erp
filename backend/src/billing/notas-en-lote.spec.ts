@@ -15,6 +15,7 @@ import { validar } from '../core/http/validar';
 import { CreateNotesBulkDto } from './dto/facturas.dto';
 import { FacturasService } from './facturas.service';
 import type { AuthUser } from '../auth/current-user.decorator';
+import { APP_PERMISSIONS } from '../auth/permissions.catalog';
 
 const lote = (extra: Record<string, unknown>) => ({
   type: 'CREDITO',
@@ -88,7 +89,14 @@ function prismaFalso(facturas: FacturaFalsa[]) {
 }
 
 /** Sin sedes marcadas = sin acotar (ver common/sede-scope). */
-const usuario = { id: 'u1', email: 'cartera@vestel.com.co', name: 'Cartera', permissions: [], sedes: [] } as unknown as AuthUser;
+// Emitir notas es NOMINAL desde 2026-09-10 (`emisor-de-notas.ts`): sin el permiso
+// concedido a mano, `createNotes` corta con un 403 antes de mirar el lote. El
+// usuario de estas pruebas lo lleva porque aquí se prueba el LOTE, no el candado;
+// del candado se ocupa `emisor-de-notas.spec.ts`.
+const usuario = {
+  id: 'u1', email: 'cartera@vestel.com.co', name: 'Cartera',
+  permissions: [APP_PERMISSIONS.BILLING_NOTES_EMIT], sedes: [],
+} as unknown as AuthUser;
 
 const servicio = (prisma: any) => new FacturasService(prisma, {} as any, {} as any, {} as any);
 

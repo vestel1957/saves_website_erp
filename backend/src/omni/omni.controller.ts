@@ -23,6 +23,20 @@ export class OmniController {
   ) {
     return this.omni.eventsStats({ search, from, to, priority, assignedBy });
   }
+  /**
+   * Los eventos que CRUZAN una ventana de días — lo que pinta la rejilla del calendario.
+   *
+   * Va aparte del listado a propósito: aquél pagina y filtra por el día en que el
+   * evento EMPIEZA; éste devuelve la ventana entera sin paginar (con tope) y cuenta
+   * también los que vienen de antes y siguen dentro. Ver `eventsCalendar`.
+   */
+  eventsCalendar(
+    from?: string, to?: string,
+    search?: string,
+    priority?: string, assignedBy?: string,
+  ) {
+    return this.omni.eventsCalendar({ from, to, search, priority, assignedBy });
+  }
   /** Opciones de los desplegables del filtro (gente que aparece, prioridades). */
   eventFilters() { return this.omni.eventFilters(); }
   createEvent(dto: EventDto, user: AuthUser) { return this.omni.createEvent(dto, user); }

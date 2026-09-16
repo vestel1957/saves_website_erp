@@ -229,6 +229,59 @@ const BAJAS_LIVE = !process.argv.includes('--dry')
   && (TARGET === 'copy' || LIVE_GATE || process.env.LEGACY_WRITEBACK_BAJAS_LIVE === 'true');
 /** Hasta dónde atrás se miran bajas por empujar. */
 const BAJAS_DIAS = Number(process.env.LEGACY_WRITEBACK_BAJAS_DIAS || 7);
+/**
+ * Gate SOLO para la ACTIVACIÓN por instalación: que el legacy se entere de que el
+ * abonado que estaba 'Instalar' ya quedó instalado.
+ *
+ * Es el mismo agujero que taparon el de reconexión y el de bajas, en la tercera de las
+ * tres puertas por las que se mueve el estado de un abonado. La cascada de cierre
+ * (`applyCloseCascade`, rama 'instalac') deja el cliente ACTIVO aquí y `pushEstados` le
+ * lleva al legacy la fila de `estados`… pero nadie le tocaba `customers.usu_estado`, que
+ * es lo que la ida devuelve cada 15 minutos. Resultado: el técnico instalaba, cerraba la
+ * orden, y el cliente volvía a 'INSTALAR' él solo. Nueve abonados así entre el 02 y el
+ * 05-09-2026 (57442, 57443, 57444, 57445, 57446, 57448, 57449, 57450 y 57520); al 57443
+ * hasta se lo pusieron a mano y también se deshizo.
+ *
+ * Se copia el bloque de 'Instalacion' del legacy (`Tickets.php`, línea 1302):
+ * `ultimo_estado` = el estado que tenía, `fecha_cambio` y `usu_estado='Activo'`. El
+ * historial (`estados`) ya lo empuja `pushEstados`, igual que en la reconexión.
+ *
+ * El candado es de una pieza y muy estrecho: SÓLO se escribe sobre abonados que en el
+ * legacy están en **'Instalar'**. Ese estado no es operativo —no lo mueve la mora, ni la
+ * cartera, ni un corte— y sólo significa "aún no instalado", así que no hay nada del
+ * legacy que se pueda pisar. A un Cortado, un Cartera o un Retirado no se le levanta el
+ * estado por cerrar una reinstalación. Y como en las hermanas: si el `fecha_cambio` de
+ * allá es posterior a la instalación de aquí, manda el legacy.
+ *
+ * Es idempotente (cuando allá ya dice Activo no queda nada que empujar), así que una
+ * pasada perdida se recupera sola en la siguiente.
+ */
+const ACTIVACION_LIVE = !process.argv.includes('--dry')
+  && (TARGET === 'copy' || LIVE_GATE || process.env.LEGACY_WRITEBACK_ACTIVACION_LIVE === 'true');
+/** Hasta dónde atrás se miran instalaciones por empujar. */
+const ACTIVACION_DIAS = Number(process.env.LEGACY_WRITEBACK_ACTIVACION_DIAS || 7);
+/** El único estado del legacy sobre el que una instalación cerrada aquí manda. */
+const ESTADO_POR_INSTALAR_LEGACY = 'Instalar';
+/**
+ * Trabajos del legacy que dejan al abonado INSTALADO y que allá NO lo reactivan.
+ *
+ * `detalle` EXACTO (el `IN` de la consulta), no un LIKE: son los trabajos que sacan
+ * al cliente a 'Instalar' para que salga la visita, y sólo la 'Instalacion' tiene
+ * bloque de activación en `Tickets.php`. Los demás se cierran y el abonado se queda
+ * ahí colgado, sin servicio que cobrar aunque esté navegando. 'Autenticacion' NO está
+ * a propósito: autenticar una ONU también pasa en una reconexión, y ése no es un
+ * trabajo que por sí solo diga que alguien quedó instalado.
+ *
+ * Los cinco son los mismos que reconoce `esTrabajoDeConexion` en el backend
+ * (`support/order-types.ts`), escritos aquí como los escribe el legacy. El candado
+ * de la función —sólo se toca a quien allá sigue en 'Instalar' y sólo si la orden se
+ * cerró dentro de la ventana— es lo que hace seguro tener 'Traslado' y 'Cambio de
+ * equipo' en la lista: si el cliente está en cualquier otro estado, no se le toca.
+ */
+const TRABAJOS_QUE_INSTALAN = [
+  'Instalacion', 'Reinstalación', 'AgregarInternet', 'Migracion', 'Traslado', 'Cambio de equipo',
+];
+
 /** Bajas del legacy que una suspensión de aquí NO puede rebajar. */
 const ESTADOS_BAJA_LEGACY = new Set(['Retirado', 'Depurado', 'Anulado', 'Dado de Baja', 'Suspendido']);
 /** …y las que no se tocan ni para retirar: de ahí ya no se vuelve. */
@@ -318,6 +371,13 @@ const SOLO_BAJAS = arg('solo') === 'bajas';
  * que las otras cortas: la ida vuelve a traer esas columnas cada 15 minutos.
  */
 const SOLO_ESTADO_SERVICIO = arg('solo') === 'estado-servicio';
+/**
+ * `--solo=activacion` — pasada MÍNIMA: sólo la activación por instalación. La dispara
+ * el cierre de la orden, por lo mismo que la de reconexión y la de bajas: si no llega
+ * al legacy antes de la siguiente ida (15 min), vuelve el 'Instalar' y el cliente que
+ * ya está instalado y navegando sigue saliendo "por instalar" en las dos pantallas.
+ */
+const SOLO_ACTIVACION = arg('solo') === 'activacion';
 /**
  * `--solo=ordenes` — pasada MÍNIMA: sólo las órdenes de servicio. Es la que dispara el
  * backend en cuanto se crea o se reasigna una orden, por lo mismo que la de caja: el
@@ -536,6 +596,12 @@ async function nextLegacyInvoiceTid(my) {
  * asiento contable, que lo lleva en el texto y en la referencia (`Factura de venta N`),
  * y se mueve por `sourceId` —el id de la factura, que no cambia— y no por el número
  * viejo: buscar por número engancharía el asiento de otra factura que lo tuviera.
+ *
+ * Y cuelga de él la ORDEN que la emitió: `Ticket.chargeInvoiceTid` (y `moveInvoiceTid`
+ * en los traslados) guardan el NÚMERO, no el id, porque es lo que se enseña en la
+ * tarjeta de la orden y lo que viaja al legacy. Sin renumerarlos también, la orden se
+ * queda apuntando a una factura que ya no existe —pasó con nueve órdenes de
+ * septiembre— y con ella se pierde el único rastro de que ese trabajo ya está cobrado.
  */
 async function renumerarFactura(f, nuevo) {
   if (f.tid === nuevo) return;
@@ -545,6 +611,8 @@ async function renumerarFactura(f, nuevo) {
       where: { sourceType: 'SALES_INVOICE', sourceId: f.id },
       data: { reference: String(nuevo), description: `Factura de venta ${nuevo}` },
     });
+    await tx.ticket.updateMany({ where: { chargeInvoiceTid: f.tid }, data: { chargeInvoiceTid: nuevo } });
+    await tx.ticket.updateMany({ where: { moveInvoiceTid: f.tid }, data: { moveInvoiceTid: nuevo } });
   });
 }
 
@@ -661,6 +729,13 @@ async function pushEditedInvoices(my, st, sum) {
  * El legacy guarda '' donde aquí puede haber null, así que se normaliza antes de
  * comparar; de lo contrario cada pasada vería una diferencia que no existe y
  * reescribiría las mismas filas para siempre.
+ *
+ * NULL AQUÍ NO ES UN 'no' ALLÁ: se empujan sólo las columnas que este lado sabe. La
+ * marca la pone tanto quien asigna el servicio en la factura (que escribe las tres a
+ * la vez) como quien QUITA un servicio del abonado (que escribe una sola, ver
+ * `removeService`). Dando por 'no' lo que aquí está en null, quitarle la televisión a
+ * un abonado con la cabecera en blanco le apagaba de paso el internet en el legacy:
+ * pasó con la factura #505088 del abonado 56130 el 09-09-2026.
  */
 async function pushServicioAsignado(my, sum) {
   const marcadas = await prisma.subInvoice.findMany({
@@ -684,11 +759,14 @@ async function pushServicioAsignado(my, sum) {
   for (const f of marcadas) {
     const r = porId.get(f.legacyId);
     if (!r) continue; // borrada allá: no se resucita desde aquí
-    const want = { television: f.serviceTv ?? 'no', combo: f.serviceCombo ?? 'no', puntos: f.puntos ?? 0 };
-    if (norm(r.television) !== want.television || norm(r.combo) !== want.combo
-      || Number(r.puntos ?? 0) !== Number(want.puntos)) {
-      cambios.push({ id: f.legacyId, tid: f.tid, want });
-    }
+    const want = {};
+    if (f.serviceTv != null) want.television = f.serviceTv;
+    if (f.serviceCombo != null) want.combo = f.serviceCombo;
+    if (f.puntos != null) want.puntos = f.puntos;
+    const difiere = ('television' in want && norm(r.television) !== want.television)
+      || ('combo' in want && norm(r.combo) !== want.combo)
+      || ('puntos' in want && Number(r.puntos ?? 0) !== Number(want.puntos));
+    if (difiere) cambios.push({ id: f.legacyId, tid: f.tid, want });
   }
   sum.servicioAsignado.pendientes = cambios.length;
   if (!SERVICIO_LIVE) {
@@ -698,7 +776,7 @@ async function pushServicioAsignado(my, sum) {
   for (const c of cambios) await updateRow(my, 'invoices', 'id', c.id, c.want);
   sum.servicioAsignado.aplicados = cambios.length;
   if (cambios.length) {
-    log(`servicio: ${cambios.length} facturas con el plan actualizado en el legacy (${cambios.slice(0, 5).map((c) => `#${c.tid} ${c.want.combo}/${c.want.television}`).join(', ')})`);
+    log(`servicio: ${cambios.length} facturas con el plan actualizado en el legacy (${cambios.slice(0, 5).map((c) => `#${c.tid} ${c.want.combo ?? '·'}/${c.want.television ?? '·'}`).join(', ')})`);
   }
 }
 
@@ -781,25 +859,33 @@ async function pushEstadoServicio(my, sum) {
   sum.estadoServicio.pendientes = cambios.length;
   sum.estadoServicio.retenidas = retenidas;
   sum.estadoServicio.muestra = cambios.slice(0, 5).map((c) => ({ abonado: c.abonado, tid: c.tid, ...c.set }));
+
   // Manda el gate de cada dirección, no el `DRY` global: igual que `pushBajas` y
   // `pushReconexiones`, esto escribe aunque `LEGACY_WRITEBACK_LIVE` siga en false.
-  if (!porEscribir.length) {
-    if (cambios.length) {
-      log(`estado-servicio: ${cambios.length} facturas ${DRY && !BAJAS_LIVE && !RECONEXION_LIVE ? 'en plan (seco)' : 'RETENIDAS (gates de baja/reconexión cerrados)'}`);
-    }
-    return;
+  if (porEscribir.length) {
+    for (const c of porEscribir) await updateRow(my, 'invoices', 'id', c.id, c.set);
+    sum.estadoServicio.aplicados = porEscribir.length;
+  } else if (cambios.length) {
+    log(`estado-servicio: ${cambios.length} facturas ${DRY && !BAJAS_LIVE && !RECONEXION_LIVE ? 'en plan (seco)' : 'RETENIDAS (gates de baja/reconexión cerrados)'}`);
   }
-  for (const c of porEscribir) await updateRow(my, 'invoices', 'id', c.id, c.set);
-  sum.estadoServicio.aplicados = porEscribir.length;
 
   // La marca se suelta cuando el legacy ya tiene lo mismo —lo acabemos de empujar o
   // porque allá ya estaba igual—: a partir de ahí el corte vuelve a mandarlo él, que es
   // lo que tiene que pasar (allá se corta por mora todos los meses). Lo que un gate
   // retuvo conserva su marca y se reintenta en la siguiente pasada.
   //
+  // Va FUERA del `if` de arriba a propósito. Estaba dentro, después de un `return`
+  // temprano, así que las facturas que YA coincidían con el legacy (`alDia`) sólo se
+  // soltaban si en esa misma pasada había alguna otra que escribir: cuando no la había
+  // —lo normal en cuanto se pone al día— la marca se quedaba puesta para siempre, y con
+  // la marca puesta la ida deja de traer `estado_tv`/`estado_combo` de esa factura. O
+  // sea: el corte por mora que el legacy le hiciera después a ese abonado ya no llegaba
+  // aquí nunca.
+  //
   // Nunca contra la base de ENSAYO: sus `legacyId` no son los de producción y soltaría
-  // marcas que aquí no se han empujado de verdad.
-  if (TARGET !== 'copy') {
+  // marcas que aquí no se han empujado de verdad. Ni en `--dry`, que no escribe nada en
+  // ningún lado: soltar la marca ES una escritura.
+  if (TARGET !== 'copy' && !process.argv.includes('--dry')) {
     const liberar = [...alDia.map((f) => f.id), ...porEscribir.filter((c) => c.completo).map((c) => c.pgId)];
     if (liberar.length) {
       await prisma.subInvoice.updateMany({ where: { id: { in: liberar } }, data: { serviceStatusAt: null } });
@@ -1252,15 +1338,26 @@ async function pushReconexiones(my, sum) {
   //    el estado: son 221 casos), y
   //  · la orden `Reconexion …` que deja `registrarReconexion` por cada servicio que
   //    volvió de verdad — ésa sí se escribe siempre, y además dice QUÉ volvió.
-  // Sólo las órdenes NACIDAS AQUÍ (`legacyId: null`): las que bajaron por la ida son
-  // reconexiones que hizo el propio legacy y no hay nada que devolverle.
+  // Sólo las órdenes NACIDAS AQUÍ: las que bajaron por la ida son reconexiones que hizo
+  // el propio legacy y no hay nada que devolverle. El discriminante es
+  // `createdBySource` —quién la abrió— y NO `legacyId: null`, que es lo que había y
+  // dejaba esta pasada prácticamente ciega: `pushTickets` le sella el `legacyId` a la
+  // orden en cuanto la empuja, y eso pasa a los pocos segundos de crearla
+  // (`TICKET_CREADO_EVENT` dispara el empuje inmediato). Cuando esta consulta corría, la
+  // orden de reconexión YA tenía `legacyId` y no la veía nadie: el corte se quedaba en
+  // la factura del legacy y la ida lo devolvía aquí (orden #505799, 09-09-2026; en toda
+  // la base sólo quedaban 7 órdenes con `legacyId` nulo).
   const [hist, ordenes] = await Promise.all([
     prisma.subscriberStatusHistory.findMany({
       where: { status: 'ACTIVO', date: { gte: desde }, note: { startsWith: 'Reconexión' } },
       include: { subscriber: { select: { id: true, abonado: true, legacyId: true } } },
     }),
     prisma.ticket.findMany({
-      where: { createdAt: { gte: desde }, legacyId: null, type: { startsWith: 'Reconexion ' } },
+      where: {
+        createdAt: { gte: desde },
+        createdBySource: { in: ['USUARIO', 'SISTEMA', 'CHATBOT'] },
+        type: { startsWith: 'Reconexion ' },
+      },
       select: {
         subscriberId: true, type: true, createdAt: true,
         subscriber: { select: { id: true, abonado: true, legacyId: true } },
@@ -1306,10 +1403,28 @@ async function pushReconexiones(my, sum) {
     if (!rec) continue;
     const estado = norm(r.usu_estado);
     const corteLegacy = r.fecha_cambio ? new Date(r.fecha_cambio) : null;
-    const entrada = { cid: r.id, abonado: rec.sub.abonado, subId: rec.sub.id, anterior: estado, fecha: rec.fecha, corteLegacy, ...rec };
-    // El legacy manda si lo suyo es más nuevo: un corte POSTERIOR a la reconexión no se
+    // `corteLegacy` en la entrada es "la fecha del corte que el legacy TODAVÍA enseña",
+    // no la de su último cambio de estado: si allá ya no está cortado, no hay tal corte
+    // y no tiene que frenar nada más abajo (`vale`).
+    const entrada = {
+      cid: r.id, abonado: rec.sub.abonado, subId: rec.sub.id, anterior: estado, fecha: rec.fecha,
+      corteLegacy: ESTADOS_CORTE_LEGACY.has(estado) ? corteLegacy : null,
+      ...rec,
+    };
+    // El legacy manda si lo suyo es más nuevo: un CORTE posterior a la reconexión no se
     // levanta desde aquí (pagó, y después volvió a caer en mora).
-    if (corteLegacy && corteLegacy > rec.fecha) { omitir(rec.sub.abonado, 'el legacy cambió el estado después de la reconexión'); continue; }
+    //
+    // Y sólo si lo que hizo después es un corte. `fecha_cambio` no es "cuándo lo
+    // cortaron" sino "cuándo le cambiaron el estado por última vez", así que una
+    // REACTIVACIÓN posterior del legacy caía en este mismo freno y se descartaba al
+    // abonado entero — justo cuando más falta hace, porque la cajera de allá reconecta
+    // a medias: pone `usu_estado='Activo'` y deja el `estado_combo` de la factura en
+    // 'Cortado', que es lo que pinta la ficha. Es lo que le pasó al abonado 2131 el
+    // 09-09-2026 (el legacy lo activó a las 13:52 y su factura siguió cortada).
+    if (corteLegacy && corteLegacy > rec.fecha && ESTADOS_CORTE_LEGACY.has(estado)) {
+      omitir(rec.sub.abonado, 'el legacy lo volvió a cortar después de la reconexión');
+      continue;
+    }
     if (estado === 'Activo') { conFacturas.push(entrada); continue; } // allá ya está al día
     // El acuerdo de pago se respeta: su factura sí deja de estar cortada —el servicio
     // volvió de verdad y es lo que el cliente ve— pero el estado se queda en Compromiso.
@@ -1389,6 +1504,136 @@ async function pushReconexiones(my, sum) {
   for (const f of facturas) await updateRow(my, 'invoices', 'id', f.id, f.set);
   sum.reconexiones.aplicados = plan.length;
   log(`reconexión: ${plan.length} clientes y ${facturas.length} facturas puestos en Activo en el legacy`);
+}
+
+/**
+ * ACTIVACIÓN del que quedó instalado → legacy. Ver el gate `ACTIVACION_LIVE`.
+ *
+ * TRES rastros, porque ninguno solo los cubre todos:
+ *  · la orden de instalación CERRADA AQUÍ (`editedAt`) — el rastro que nunca falta,
+ *    porque sobrevive a que la ida ya haya devuelto el 'INSTALAR' a la ficha (que es
+ *    justo lo que pasa: cuando esta pasada corre, el estado de aquí puede estar ya
+ *    deshecho y sólo queda la orden para saber que se instaló);
+ *  · la fila de historial en ACTIVO — que recoge lo que no viene de una orden: el
+ *    cambio de estado a mano desde la ficha, que se deshacía igual; y
+ *  · los TRABAJOS QUE DEJAN INSTALADO cerrados EN EL LEGACY (`TRABAJOS_QUE_INSTALAN`).
+ *    Éste es de otra clase y merece explicación: el legacy pone al abonado en
+ *    'Instalar' al abrir un 'AgregarInternet' o una 'Migracion' —para que salga la
+ *    visita— pero su bloque de activación (`Tickets.php`) sólo contempla 'Instalacion',
+ *    'Activacion' y las 'Reconexion …2', así que al cerrarlas NO lo devuelve. Nadie lo
+ *    devuelve: se queda en 'Instalar' para siempre. Y en 'Instalar' NO SE FACTURA —la
+ *    corrida sólo mira facturables—, así que es un cliente conectado, con la ONU
+ *    autenticada y al día, al que se dejó de cobrar. El abonado 3504 llevaba así desde
+ *    el 10-08-2026 (se le saltó septiembre) y el 3653 desde el 19-08-2025: un año.
+ *    Por eso este rastro se lee de la tabla `tickets` del LEGACY y no de la de aquí:
+ *    esas órdenes las cierra allá el técnico, así que en nexus no traen `resolvedAt`
+ *    —es un sello nuestro— y su `finalDate` puede venir sin refrescar.
+ */
+async function pushActivaciones(my, sum) {
+  const desde = new Date(Date.now() - ACTIVACION_DIAS * 24 * 3600 * 1000);
+  const [ordenes, hist, delLegacy] = await Promise.all([
+    prisma.ticket.findMany({
+      where: {
+        status: 'RESUELTO',
+        resolvedAt: { gte: desde },
+        editedAt: { not: null }, // cerrada aquí: la 'Instalacion' que cerró el legacy ya se activó allá
+        // Los cinco trabajos que dejan al cliente conectado, no sólo la instalación:
+        // cerrar aquí un 'AgregarInternet', una 'Migracion', un 'Traslado' o un
+        // 'Cambio de equipo' también deja instalado a quien venía en 'Instalar'
+        // (`esTrabajoDeConexion` en el backend). Quién se activa de verdad lo decide
+        // el candado de abajo: el que allá siga en 'Instalar', nadie más.
+        OR: [
+          { type: { contains: 'nstalac', mode: 'insensitive' } }, // Instalacion · Reinstalación
+          { type: { contains: 'traslado', mode: 'insensitive' } },
+          { type: { contains: 'migraci', mode: 'insensitive' } },
+          { type: { contains: 'cambio de equipo', mode: 'insensitive' } },
+          { type: { contains: 'agregarinternet', mode: 'insensitive' } },
+        ],
+      },
+      select: {
+        code: true, resolvedAt: true,
+        subscriber: { select: { id: true, abonado: true, legacyId: true } },
+      },
+    }),
+    prisma.subscriberStatusHistory.findMany({
+      where: { status: 'ACTIVO', date: { gte: desde } },
+      include: { subscriber: { select: { id: true, abonado: true, legacyId: true } } },
+    }),
+    // El tercer rastro, contra el legacy y ya acotado a los que allá siguen 'Instalar':
+    // es una lista corta (decenas), no hace falta traerse la tabla.
+    my.query(
+      `SELECT t.cid, t.codigo, MAX(COALESCE(NULLIF(t.fecha_final,'0000-00-00'), t.created)) AS fecha
+         FROM tickets t JOIN customers c ON c.id = t.cid
+        WHERE c.usu_estado = ? AND t.status = 'Resuelto'
+          AND t.detalle IN (${TRABAJOS_QUE_INSTALAN.map(() => '?').join(',')})
+          AND COALESCE(NULLIF(t.fecha_final,'0000-00-00'), t.created) >= ?
+        GROUP BY t.cid`,
+      [ESTADO_POR_INSTALAR_LEGACY, ...TRABAJOS_QUE_INSTALAN, desde],
+    ),
+  ]);
+
+  const porCid = new Map(); // cid del legacy → la activación MÁS RECIENTE de ese abonado
+  const anotar = (sub, fecha, code) => {
+    if (!sub?.legacyId || !fecha) return;
+    const prev = porCid.get(sub.legacyId);
+    if (!prev || fecha >= prev.fecha) porCid.set(sub.legacyId, { fecha, sub, code: code ?? prev?.code ?? null });
+  };
+  for (const o of ordenes) anotar(o.subscriber, o.resolvedAt, o.code);
+  for (const h of hist) anotar(h.subscriber, h.date, h.originTicketId);
+  // Los del legacy vienen con `cid`: hay que traducirlo a la ficha de aquí para poder
+  // nombrar al abonado en el plan y en el log.
+  const filasLegacy = delLegacy?.[0] ?? [];
+  if (filasLegacy.length) {
+    const subs = await prisma.subscriber.findMany({
+      where: { legacyId: { in: filasLegacy.map((f) => f.cid) } },
+      select: { id: true, abonado: true, legacyId: true },
+    });
+    const porLegacyId = new Map(subs.map((x) => [x.legacyId, x]));
+    for (const f of filasLegacy) anotar(porLegacyId.get(f.cid), new Date(f.fecha), f.codigo);
+  }
+
+  sum.activaciones = { candidatos: porCid.size, clientes: 0, aplicados: 0, omitidos: [] };
+  if (!porCid.size) return;
+  const omitir = (abonado, motivo) => {
+    if (sum.activaciones.omitidos.length < 50) sum.activaciones.omitidos.push({ abonado, motivo });
+  };
+
+  const cids = [...porCid.keys()];
+  const [rows] = await my.query(
+    `SELECT id, usu_estado, fecha_cambio FROM customers WHERE id IN (${cids.map(() => '?').join(',')})`, cids);
+
+  const plan = [];
+  for (const r of rows) {
+    const a = porCid.get(r.id);
+    if (!a) continue;
+    const estadoLegacy = norm(r.usu_estado);
+    // El candado: sólo el que allá sigue "por instalar". Todo lo demás es un estado que
+    // el legacy mueve por su cuenta y que no se pisa desde aquí.
+    if (estadoLegacy !== ESTADO_POR_INSTALAR_LEGACY) {
+      if (estadoLegacy !== 'Activo') omitir(a.sub.abonado, `en el legacy está ${estadoLegacy || '—'}`);
+      continue;
+    }
+    const cambioLegacy = r.fecha_cambio ? new Date(r.fecha_cambio) : null;
+    if (cambioLegacy && cambioLegacy > a.fecha) { omitir(a.sub.abonado, 'el legacy cambió el estado después de la instalación'); continue; }
+    plan.push({ cid: r.id, abonado: a.sub.abonado, anterior: r.usu_estado ?? '', fecha: a.fecha, code: a.code });
+  }
+
+  sum.activaciones.clientes = plan.length;
+  sum.activaciones.muestra = plan.slice(0, 5).map((p) => ({ abonado: p.abonado, orden: p.code }));
+  if (!plan.length) return;
+  if (!ACTIVACION_LIVE) {
+    log(`activación: ${plan.length} clientes `
+      + `${DRY ? 'en plan (seco)' : 'RETENIDOS (gate de activación cerrado)'}`
+      + ` → abonados ${plan.slice(0, 15).map((p) => p.abonado).join(',')}${plan.length > 15 ? '…' : ''}`);
+    return;
+  }
+  for (const p of plan) {
+    await updateRow(my, 'customers', 'id', p.cid, {
+      usu_estado: 'Activo', ultimo_estado: p.anterior, fecha_cambio: toDT(p.fecha),
+    });
+  }
+  sum.activaciones.aplicados = plan.length;
+  log(`activación: ${plan.length} clientes instalados puestos en Activo en el legacy`);
 }
 
 // ---------- main ----------
@@ -1520,18 +1765,66 @@ async function pushBorrados(my, sum) {
  *   · CAMBIOS → filas del legacy que este sistema tocó (`editedAt`). La ida ya se aparta
  *               de ellas por completo, así que empujarlas no puede entrar en bucle.
  *
- * Lo que NO se toca: las dimensiones (categorías, bodegas, proveedores). Una fila de
- * material que apunta a una bodega creada aquí no puede existir allá —el legacy no
- * conoce esa bodega— y se reporta en vez de inventarle un destino.
+ * De las dimensiones (categorías, bodegas, proveedores) sólo viaja UNA: el almacén de
+ * material de un técnico, y por lo que se explica en `pushAlmacenesDeTecnico`. El resto
+ * no se toca: una fila de material que apunta a una bodega creada aquí no puede existir
+ * allá —el legacy no conoce esa bodega— y se reporta en vez de inventarle un destino.
  */
+/**
+ * El almacén de material de un técnico, la única dimensión que sube.
+ *
+ * `product_warehouse.id_tecnico` es como el legacy ata el material a una persona, y de
+ * él dependen las dos puntas: aquí, la lista de "traspasar a técnico" (que se arma con
+ * las bodegas, no con los empleados); y allá, `Tickets.php`, que busca el almacén por
+ * `id_tecnico` para descontar lo que el técnico gastó al cerrar la orden. Allá el
+ * almacén lo crea alguien a mano y con los técnicos nuevos nadie lo hizo, así que lo
+ * crea la ida (`sync-legacy-vivo.js`, paso de empleados) y lo empuja este bloque.
+ *
+ * Va aquí y no en el otro script porque las escrituras al legacy viven en éste, y
+ * porque el `legacyId` que devuelve MySQL es lo que impide el duplicado: sin él, el día
+ * que alguien cree el almacén allá la ida lo bajaría como una bodega NUEVA y el técnico
+ * acabaría con dos.
+ *
+ * Sólo las de un técnico que EXISTA en el legacy (`Staff.legacyId`). Las de perfiles
+ * que sólo viven aquí —la bodega de prueba, un empleado dado de alta en nexus— no
+ * tienen a quién colgarse allá y se quedan.
+ */
+async function pushAlmacenesDeTecnico(my, res) {
+  const nuevas = await prisma.materialWarehouse.findMany({
+    where: { legacyId: null, technicianRef: { not: null } },
+    select: { id: true, title: true, extra: true, technicianRef: true },
+  });
+  if (!nuevas.length) return;
+  const fichas = await prisma.staff.findMany({
+    where: { legacyId: { not: null }, username: { not: null } },
+    select: { username: true },
+  });
+  const enElLegacy = new Set(fichas.map((f) => f.username.trim().toLowerCase()));
+  for (const w of nuevas) {
+    if (!enElLegacy.has(w.technicianRef.trim().toLowerCase())) { res.bodegasTecnico.sinTecnico.push(w.title); continue; }
+    res.bodegasTecnico.nuevas++;
+    if (!INVENTARIO_LIVE) continue;
+    const id = await insertRow(my, 'product_warehouse', { title: w.title, extra: w.extra, id_tecnico: w.technicianRef });
+    await prisma.materialWarehouse.update({ where: { id: w.id }, data: { legacyId: id } });
+    res.bodegasTecnico.insertadas++;
+    log(`inventario: almacén "${w.title}" creado en el legacy (product_warehouse ${id}, técnico ${w.technicianRef})`);
+  }
+}
+
 async function pushInventario(my, sum) {
   const hoy = toD(new Date());
   const res = {
+    bodegasTecnico: { nuevas: 0, insertadas: 0, sinTecnico: [] },
     material: { nuevos: 0, insertados: 0, cambios: 0, aplicados: 0, sinDimension: [], fueraDeCorte: 0 },
     equipos: { nuevos: 0, insertados: 0, cambios: 0, aplicados: 0, sinBodega: [], fueraDeCorte: 0 },
     ordenes: { nuevas: 0, insertadas: 0, cambios: 0, aplicados: 0, conflictosTid: [], items: 0, fueraDeCorte: 0 },
   };
   sum.inventario = res;
+
+  // --- 0) Almacenes de técnico (`product_warehouse`) ---------------------------
+  // Primero: el material que se le entregue cuelga de esta bodega, así que allá tiene
+  // que existir antes.
+  await pushAlmacenesDeTecnico(my, res);
 
   // --- 1) Material (`products`) ------------------------------------------------
   const matNuevos = await prisma.material.findMany({ where: { legacyId: null } });
@@ -2336,17 +2629,18 @@ async function main() {
     ok: true, mode: 'writeback', dry: DRY, target: `${MYSQL.host}/${MYSQL.database}`,
     modoLegacyActivo: MODE_A, updatesEnVivo: UPDATES_LIVE, ordenesEnVivo: TICKETS_LIVE, cajaEnVivo: CAJA_LIVE,
     altasEnVivo: ALTAS_LIVE, reconexionEnVivo: RECONEXION_LIVE, bajasEnVivo: BAJAS_LIVE,
+    activacionEnVivo: ACTIVACION_LIVE,
     inventarioEnVivo: INVENTARIO_LIVE, edicionesEnVivo: EDITS_LIVE, servicioEnVivo: SERVICIO_LIVE,
     borradosEnVivo: BORRADOS_LIVE,
     soloCaja: SOLO_CAJA, soloAperturas: SOLO_APERTURAS, soloReconexion: SOLO_RECONEXION,
     promosPortalEnVivo: PROMOS_LIVE,
     soloBorrados: SOLO_BORRADOS, soloOrdenes: SOLO_ORDENES, soloBajas: SOLO_BAJAS, soloPromos: SOLO_PROMOS,
-    soloEstadoServicio: SOLO_ESTADO_SERVICIO,
+    soloEstadoServicio: SOLO_ESTADO_SERVICIO, soloActivacion: SOLO_ACTIVACION,
   };
-  log(`writeback${SOLO_PROMOS ? ' (sólo promociones del portal)' : SOLO_APERTURAS ? ' (sólo aperturas)' : SOLO_BAJAS ? ' (sólo bajas)' : SOLO_ESTADO_SERVICIO ? ' (sólo estado de servicio)' : SOLO_RECONEXION ? ' (sólo reconexión)' : SOLO_ORDENES ? ' (sólo órdenes)' : SOLO_CAJA ? ' (sólo caja)' : ''} → ${sum.target} · ${DRY ? 'SECO (plan)' : 'EN VIVO'}`
+  log(`writeback${SOLO_PROMOS ? ' (sólo promociones del portal)' : SOLO_APERTURAS ? ' (sólo aperturas)' : SOLO_BAJAS ? ' (sólo bajas)' : SOLO_ESTADO_SERVICIO ? ' (sólo estado de servicio)' : SOLO_ACTIVACION ? ' (sólo activación)' : SOLO_RECONEXION ? ' (sólo reconexión)' : SOLO_ORDENES ? ' (sólo órdenes)' : SOLO_CAJA ? ' (sólo caja)' : ''} → ${sum.target} · ${DRY ? 'SECO (plan)' : 'EN VIVO'}`
     + ` · órdenes ${TICKETS_LIVE ? 'EN VIVO' : 'en plan'} · caja ${CAJA_LIVE ? 'EN VIVO' : 'en plan'}`
     + ` · altas ${ALTAS_LIVE ? 'EN VIVO' : 'en plan'} · reconexión ${RECONEXION_LIVE ? 'EN VIVO' : 'en plan'}`
-    + ` · bajas ${BAJAS_LIVE ? 'EN VIVO' : 'en plan'}`
+    + ` · bajas ${BAJAS_LIVE ? 'EN VIVO' : 'en plan'} · activación ${ACTIVACION_LIVE ? 'EN VIVO' : 'en plan'}`
     + ` · inventario ${INVENTARIO_LIVE ? 'EN VIVO' : 'en plan'} · ediciones ${EDITS_LIVE ? 'EN VIVO' : 'en plan'}`
     + ` · servicio ${SERVICIO_LIVE ? 'EN VIVO' : 'en plan'}`
     + ` · borrados ${BORRADOS_LIVE ? 'EN VIVO' : 'en plan'}`
@@ -2374,6 +2668,12 @@ async function main() {
     await pushEstadoServicio(my, sum);
   } else if (SOLO_ESTADO_SERVICIO) {
     await pushEstadoServicio(my, sum);
+  } else if (SOLO_ACTIVACION) {
+    // El historial va con ella: la fila de `estados` es la otra mitad de lo que el
+    // legacy escribe al cerrar una instalación, y sin ella allá queda el estado sin
+    // constancia de cuándo cambió.
+    await pushEstados(my, sum, st);
+    await pushActivaciones(my, sum);
   } else if (SOLO_ORDENES) {
     await pushTickets(my, sum);
     await pushTicketUpdates(my, sum);
@@ -2401,6 +2701,7 @@ async function main() {
     await pushComprobantes(my, sum);
     await pushEstados(my, sum, st);
     await pushReconexiones(my, sum);
+    await pushActivaciones(my, sum);
     await pushBajas(my, sum);
     await pushEstadoServicio(my, sum);
     await pushTickets(my, sum);
@@ -2412,7 +2713,7 @@ async function main() {
     await pushPromosPortal(my, sum);
   }
 
-  if (!DRY || CAJA_LIVE || TICKETS_LIVE || ALTAS_LIVE || RECONEXION_LIVE || BAJAS_LIVE) await saveState({ lastWritebackAt: new Date().toISOString() });
+  if (!DRY || CAJA_LIVE || TICKETS_LIVE || ALTAS_LIVE || RECONEXION_LIVE || BAJAS_LIVE || ACTIVACION_LIVE) await saveState({ lastWritebackAt: new Date().toISOString() });
   sum.ms = Date.now() - t0;
   console.log(JSON.stringify(sum));
   await my.end(); await prisma.$disconnect();

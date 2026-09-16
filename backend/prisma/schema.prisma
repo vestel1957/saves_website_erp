@@ -765,6 +765,8 @@ model User {
   waConvsResolved           WhatsappConversation[] @relation("WhatsappConvResolver")
   waMessagesSent            WhatsappMessage[]      @relation("WhatsappMessageSender")
   notifications             Notification[]
+  notaSolicitudesPedidas    NoteRequest[]          @relation("NoteRequestRequester")
+  notaSolicitudesAsignadas  NoteRequest[]          @relation("NoteRequestAssignee")
   // Cargos de los que es encargado (call center, bodega…): a dónde van los avisos.
   responsibilities          Responsibility[]
   /// Teléfono al que le llegan los CÓDIGOS DE FIRMA (E.164 sin '+'). Campo propio y
@@ -2971,8 +2973,8 @@ model Subscriber {
   services            SubscriberService[]
   statusHistory       SubscriberStatusHistory[]
   callLogs            CallLog[]
+  noteRequests        NoteRequest[]
   invoices            SubInvoice[]
-  recurringInvoices   RecurringInvoice[]
   projects            Project[]
   transactions        Transaction[]
   electronicInvoices  ElectronicInvoice[]
@@ -2993,6 +2995,7 @@ model Subscriber {
   contactos           SubscriberContact[]
   advances            CustomerAdvance[]
   pendingInstalls     PendingInstall[]
+  pendingOrders       PendingOrder[]
   verificaciones      ChatAccessVerification[]
   waSends             WhatsappSend[]
   /// Promociones que lo alcanzan por lista cerrada de clientes.
@@ -3569,6 +3572,38 @@ model CallLog {
   @@index([date])
 }
 
+/// Solicitud de nota crédito/débito levantada desde la pestaña Cobranza del cliente.
+///
+/// Emitir la nota es NOMINAL (`billing.notes.emit`, ver `billing/emisor-de-notas.ts`):
+/// quien atiende la llamada no puede, así que la PIDE y se la asigna a una de las
+/// personas autorizadas, a quien le suena la campanita. Pedirla no mueve cartera:
+/// la nota se aplica después por el camino de siempre (y queda enlazada al marcarla).
+/// No viaja al legacy.
+model NoteRequest {
+  id              String     @id @default(cuid())
+  subscriberId    String
+  subscriber      Subscriber @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+  type            String // CREDITO | DEBITO
+  /// Monto sugerido (opcional): lo decide quien emite.
+  amount          Decimal?   @db.Decimal(14, 2)
+  reason          String     @db.Text
+  status          String     @default("PENDIENTE") // PENDIENTE | APLICADA | RECHAZADA
+  requestedById   String?
+  requestedBy     User?      @relation("NoteRequestRequester", fields: [requestedById], references: [id], onDelete: SetNull)
+  requestedByName String
+  assignedToId    String
+  assignedTo      User       @relation("NoteRequestAssignee", fields: [assignedToId], references: [id])
+  /// Respuesta de quien la atiende (por qué se rechaza, o qué se aplicó).
+  response        String?    @db.Text
+  resolvedByName  String?
+  resolvedAt      DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  @@index([subscriberId, createdAt])
+  @@index([assignedToId, status])
+}
+
 /// Factura de suscriptor (legacy `invoices`). Dos ejes de estado: status (pago) y ron (servicio/cartera).
 model SubInvoice {
   id       String @id @default(cuid())
@@ -3633,6 +3668,19 @@ model SubInvoice {
 
   notes String? // notes
 
+  /// POR QUÉ se emitió esta factura: la clave de un motivo de `billing/motivos-factura.ts`
+  /// ('mensualidad', 'afiliacion', 'traslado', 'reconexion', 'venta', 'otro').
+  ///
+  /// `kind` dice el TIPO (fija o recurrente, el `tipo_factura` del legacy) y eso no
+  /// responde a por qué existe la factura: la afiliación, el traslado, la reconexión y
+  /// la venta de un equipo son las cuatro «Fija». Es columna de ESTE sistema —el legacy
+  /// no tiene dónde guardarla— y por eso es opcional: las 700.000 facturas importadas y
+  /// las que emite la corrida mensual no la traen.
+  ///
+  /// Hay un motivo que además dispara trabajo: el traslado abre su orden al pagarse
+  /// (ver `PendingOrder`).
+  purpose String?
+
   // Edición de la factura en ESTE sistema (el legacy también deja editarla:
   // `Invoices::editaction` borra los renglones y los reinserta). Marcar la edición
   // no es cosmético: el sync de ida compara la huella total/pamnt/status contra el
@@ -3683,6 +3731,7 @@ model SubInvoice {
   // Relaciones
   items              SubInvoiceItem[]
   pendingInstalls    PendingInstall[]
+  pendingOrder       PendingOrder?
   transactions       Transaction[]
   additionalServices AdditionalService[]
   receipts           PaymentReceipt[]
@@ -3702,6 +3751,11 @@ model SubInvoice {
   @@index([subscriberId, status]) // listado clientes filtro cuenta=debe/aldia (semi-join): 1043ms -> 2ms
   @@index([status, subscriberId]) // listado clientes filtro deuda (groupBy status): 2019ms -> 32ms
   @@index([status, dueDate]) // cartera vencida (status + vencimiento): 58ms -> ~2ms
+  // "La última factura recurrente de cada abonado", que es de donde salen el plan
+  // contratado, el estado por servicio y el cartel de la lista de órdenes
+  // (`common/servicios-del-abonado.ts`). Sin él, el DISTINCT ON de toda la base
+  // ordena 445.000 filas en disco: 2.0s -> 0.7s.
+  @@index([subscriberId, invoiceDate(sort: Desc), tid(sort: Desc)])
 }
 
 /// Ítem de factura (legacy `invoice_items`).
@@ -3770,6 +3824,56 @@ model PendingInstall {
   /// Técnico al que iba dirigida, si el alta lo dijo.
   assigned     String?
   scheduledFor DateTime? @db.Date
+
+  /// Orden creada al pagar (`Ticket.id`); null mientras siga esperando.
+  ticketId    String?
+  ticketCode  Int?
+  fulfilledAt DateTime?
+  /// Por qué no se pudo abrir la orden en el último intento (se reintenta en el barrido).
+  lastError   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([subscriberId])
+  @@index([fulfilledAt]) // barrido: sólo mira las que siguen pendientes
+}
+
+/// Orden de trabajo en espera de que se pague SU factura.
+///
+/// El hermano genérico de `PendingInstall`: allí es la instalación esperando a que se
+/// pague la afiliación; aquí es cualquier trabajo que se factura ANTES de hacerse y
+/// cuya orden nace sola cuando el cliente paga. Hoy lo usa el TRASLADO (2026-09-08,
+/// pedido por el usuario): la cajera factura el traslado con la dirección nueva
+/// dentro, el cliente paga en ventanilla y la orden se abre sin que nadie se acuerde
+/// de abrirla.
+///
+/// `type` es el `Ticket.type` que se va a abrir y `payload` lo que ese tipo necesita
+/// para nacer completo (en el traslado, el destino: las 12 casillas + zona). Se guarda
+/// aquí y no en la factura porque en el momento del pago ya no hay petición que lo
+/// traiga — el pago puede entrar por caja, por el cargue de Excel o por el legacy.
+///
+/// `fulfilledAt` es el candado de idempotencia, igual que en `PendingInstall`: el
+/// evento del recaudo y el barrido de los 5 minutos pueden ver el mismo pago, y sin él
+/// el cliente acabaría con dos órdenes.
+model PendingOrder {
+  id           String     @id @default(cuid())
+  subscriberId String
+  subscriber   Subscriber @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+  /// Factura cuyo pago dispara la orden.
+  invoiceId    String     @unique
+  invoice      SubInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  /// Motivo de la factura que la creó (`SubInvoice.purpose`).
+  motivo  String
+  /// El `Ticket.type` que se abre al pagarse.
+  type    String
+  /// Lo que ese tipo de orden necesita para nacer (en el traslado, `moveTo`).
+  payload Json?
+  /// Resumen legible de lo que se va a hacer ("de Calle 10 # 5-20 a Carrera 7 # 11-2").
+  resumen String?
+  /// Observación que se le pone a la orden.
+  context String?
 
   /// Orden creada al pagar (`Ticket.id`); null mientras siga esperando.
   ticketId    String?
@@ -3928,55 +4032,6 @@ model CashClose {
   createdAt     DateTime @default(now())
 
   @@unique([cashAccountId, date])
-}
-
-/// Plantilla de factura recurrente ("Reciclaje de ventas", legacy `rec_invoices`).
-model RecurringInvoice {
-  id           String                 @id @default(cuid())
-  legacyId     Int?                   @unique
-  tid          Int                    @unique
-  subscriberId String
-  subscriber   Subscriber             @relation(fields: [subscriberId], references: [id])
-  invoiceDate  DateTime?              @db.Date
-  dueDate      DateTime?              @db.Date // próxima generación
-  subtotal     Decimal                @default(0) @db.Decimal(18, 2)
-  shipping     Decimal                @default(0) @db.Decimal(18, 2)
-  discount     Decimal                @default(0) @db.Decimal(18, 2)
-  tax          Decimal                @default(0) @db.Decimal(18, 2)
-  total        Decimal                @default(0) @db.Decimal(18, 2)
-  status       String? // legacy status (paid/due/...)
-  ron          String? // legacy ron ('Recurring')
-  term         Int? // billing_terms.id
-  rec          String? // periodicidad ('1 day', '1 month')
-  notes        String?
-  itemsCount   Int                    @default(0)
-  branchRef    String?
-  active       Boolean                @default(true)
-  items        RecurringInvoiceItem[]
-  createdAt    DateTime               @default(now())
-  updatedAt    DateTime               @updatedAt
-
-  @@index([subscriberId])
-}
-
-/// Ítem de plantilla recurrente (legacy `rec_invoice_items`).
-model RecurringInvoiceItem {
-  id            String           @id @default(cuid())
-  legacyId      Int?             @unique
-  invoiceId     String
-  invoice       RecurringInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  productId     Int?
-  productName   String?
-  description   String?
-  qty           Int              @default(0)
-  price         Decimal          @default(0) @db.Decimal(18, 2)
-  taxRate       Decimal          @default(0) @db.Decimal(9, 2)
-  subtotal      Decimal          @default(0) @db.Decimal(18, 2)
-  taxTotal      Decimal          @default(0) @db.Decimal(18, 2)
-  discountTotal Decimal          @default(0) @db.Decimal(18, 2)
-  createdAt     DateTime         @default(now())
-
-  @@index([invoiceId])
 }
 
 /// Apertura de caja diaria por cuenta (base inicial). Complementa CashClose.
@@ -4220,37 +4275,37 @@ model StaffArea {
 
 /// Empleado / usuario del sistema (legacy `employee_profile` 1:1 con `aauth_users`).
 model Staff {
-  id         String     @id @default(cuid())
-  legacyId   Int?       @unique // employee_profile.id = aauth_users.id
-  name       String
-  docNumber  String? // dto
-  username   String? // aauth_users.username
-  email      String? // aauth_users.email
-  role       Int? // aauth_users.roleid (2..5)
-  entryDate  DateTime?  @db.Date // ingreso
-  rh         String? // grupo sanguíneo
-  eps        String? // salud
-  pension    String? // pensiones
-  address    String?
-  city       String?
-  region     String?
-  country    String?
-  areaId     String?
-  area       StaffArea? @relation(fields: [areaId], references: [id])
-  areaLegacy Int?
-  phone      String?
-  phoneAlt   String? // phonealt
-  picture    String?
-  sign       String?
-  banned     Boolean    @default(false)
-  lastLogin  DateTime?
-  sedeAccede String? // CSV de sedes
+  id          String     @id @default(cuid())
+  legacyId    Int?       @unique // employee_profile.id = aauth_users.id
+  name        String
+  docNumber   String? // dto
+  username    String? // aauth_users.username
+  email       String? // aauth_users.email
+  role        Int? // aauth_users.roleid (2..5)
+  entryDate   DateTime?  @db.Date // ingreso
+  rh          String? // grupo sanguíneo
+  eps         String? // salud
+  pension     String? // pensiones
+  address     String?
+  city        String?
+  region      String?
+  country     String?
+  areaId      String?
+  area        StaffArea? @relation(fields: [areaId], references: [id])
+  areaLegacy  Int?
+  phone       String?
+  phoneAlt    String? // phonealt
+  picture     String?
+  sign        String?
+  banned      Boolean    @default(false)
+  lastLogin   DateTime?
+  sedeAccede  String? // CSV de sedes
   /// Excepción al turno obligatorio del técnico: ve y abre TODA su agenda del día en
   /// vez de una visita a la vez (2026-09-02, a pedido del usuario, para Oscar
   /// Rodríguez Fonseca). Ver `src/support/turno.ts`.
-  agendaLibre Boolean  @default(false)
-  createdAt  DateTime   @default(now())
-  updatedAt  DateTime   @updatedAt
+  agendaLibre Boolean    @default(false)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
 
   /// Órdenes de servicio asignadas a este funcionario (base del tablero de rendimiento).
   tickets Ticket[] @relation("StaffTickets")
@@ -4320,27 +4375,6 @@ model StaffDocument {
 /// Los criterios se combinan con Y (AND) entre dimensiones y con O (OR) dentro de
 /// cada una: "estado Activo + sede Yopal" = activos DE Yopal. Una dimensión vacía
 /// no filtra. Con `allSubscribers` la promo alcanza a todos y se ignoran los demás.
-/// ¿A qué FACTURAS del cliente alcanza el descuento automático de ventanilla?
-///
-/// El descuento se concede AL COBRAR (`promotions/descuento-al-cobrar.ts`) y hasta
-/// el 2026-09-02 sólo sabía rebajar la mensualidad del mes en curso: la regla del
-/// pronto pago, escrita a mano dentro del módulo. Con eso, una campaña de
-/// RECUPERACIÓN DE CARTERA no descontaba nunca —lo que un cliente de cartera debe
-/// es, por definición, de meses anteriores— y en ventanilla no aparecía nada.
-enum PromotionInvoiceScope {
-  /// Sólo la MENSUALIDAD del mes en curso (`kind = RECURRENTE` con fecha de este
-  /// mes). Es el pronto pago: premia pagar el servicio del mes a tiempo, no la mora
-  /// ni los cargos sueltos (traslado, reconexión, instalación).
-  MENSUALIDAD_DEL_MES
-  /// Toda MENSUALIDAD que el cliente deba: la del mes y las atrasadas. Los cargos
-  /// sueltos se cobran completos. Es la campaña de recuperación de cartera —lo que
-  /// se perdona es el servicio no pagado, no un traslado facturado esta mañana—.
-  MENSUALIDADES_PENDIENTES
-  /// CUALQUIER factura pendiente, sea mensualidad o cargo. Perdona también el
-  /// traslado, la reconexión y la instalación: hay que pedirlo a propósito.
-  CUALQUIER_PENDIENTE
-}
-
 model Promotion {
   id             String   @id @default(cuid())
   name           String // pro_nombre
@@ -4356,10 +4390,35 @@ model Promotion {
   endDate        DateTime @db.Date // f_final
   active         Boolean  @default(true)
 
-  /// A qué FACTURAS alcanza el descuento automático de ventanilla (ver
-  /// `PromotionInvoiceScope`). El botón manual de `/facturacion/[id]` no lo mira:
-  /// ahí hay alguien decidiendo factura por factura.
-  invoiceScope   PromotionInvoiceScope @default(MENSUALIDAD_DEL_MES)
+  // ── ¿A qué FACTURAS alcanza? ───────────────────────────────────────────────
+  /// TIPO de factura que rebaja: `RECURRENTE` = la mensualidad del servicio,
+  /// `FIJA` = los cargos sueltos (traslado, reconexión, instalación, afiliación).
+  /// Las dos juntas rebajan todo. Vacío se lee como `[RECURRENTE]`.
+  ///
+  /// Son dos cosas distintas y hasta el 2026-09-10 no se podían pedir por separado:
+  /// el enum `PromotionInvoiceScope` mezclaba el TIPO con la ANTIGÜEDAD, así que no
+  /// había forma de armar una campaña que rebajara SÓLO los cargos —"instalación a
+  /// mitad de precio"—: cualquier opción que alcanzara un cargo alcanzaba también
+  /// la mensualidad.
+  invoiceKinds InvoiceKind[] @default([RECURRENTE])
+
+  /// Sólo las facturas del MES EN CURSO (por `invoiceDate`). Es lo que separa el
+  /// PRONTO PAGO —premia pagar el servicio del mes a tiempo, no la mora— de una
+  /// campaña de RECUPERACIÓN DE CARTERA, que existe justamente para rebajar lo
+  /// atrasado. Con `false` alcanza también lo vencido.
+  ///
+  /// Vale para los dos caminos: el descuento automático de ventanilla
+  /// (`promotions/descuento-al-cobrar.ts`) y el botón manual de `/facturacion/[id]`
+  /// —el alcance es de la campaña, no de quién la aplica—.
+  onlyCurrentMonth Boolean @default(true)
+
+  /// Facturas elegidas A MANO (`SubInvoice.id`). Si trae alguna, la promoción rebaja
+  /// EXACTAMENTE esas y nada más: manda sobre `invoiceKinds` y `onlyCurrentMonth`.
+  /// Sólo se permite cuando el público es UN cliente en concreto —con un grupo,
+  /// "estas facturas" no significa nada—. Nació (2026-09-10) porque la regla de
+  /// antigüedad es de todo o nada: al cliente que debe cinco no había forma de
+  /// rebajarle tres.
+  invoiceIds String[]
 
   // ── ¿A qué clientes alcanza? ────────────────────────────────────────────────
   /// Alcanza a TODOS los clientes (ignora los demás criterios). Es explícito a
@@ -4419,19 +4478,20 @@ model Promotion {
 /// El nombre es único: volver a guardar con el mismo nombre actualiza la plantilla
 /// en vez de acumular copias.
 model PromotionTemplate {
-  id             String   @id @default(cuid())
-  name           String   @unique
-  description    String?
+  id               String        @id @default(cuid())
+  name             String        @unique
+  description      String?
   /// Mismo juego de valores que `Promotion.discountFormat`.
-  discountFormat String   @default("%")
-  percentage     Int      @default(0)
-  flatAmount     Decimal? @db.Decimal(18, 2)
-  startDate      DateTime @db.Date
-  endDate        DateTime @db.Date
-  /// A qué facturas alcanza (mismo juego que `Promotion.invoiceScope`). Va en la
-  /// plantilla porque es parte de la FORMA de la campaña: una de cartera que vuelva
+  discountFormat   String        @default("%")
+  percentage       Int           @default(0)
+  flatAmount       Decimal?      @db.Decimal(18, 2)
+  startDate        DateTime      @db.Date
+  endDate          DateTime      @db.Date
+  /// A qué facturas alcanza (mismo juego de campos que en `Promotion`). Van en la
+  /// plantilla porque son parte de la FORMA de la campaña: una de cartera que vuelva
   /// como "sólo la mensualidad del mes" no descontaría nada, sin decir por qué.
-  invoiceScope   PromotionInvoiceScope @default(MENSUALIDAD_DEL_MES)
+  invoiceKinds     InvoiceKind[] @default([RECURRENTE])
+  onlyCurrentMonth Boolean       @default(true)
 
   createdBy String? // nombre/email del superusuario que la guardó
   createdAt DateTime @default(now())
@@ -4498,25 +4558,26 @@ model PromotionApplication {
 
 /// Proyecto (legacy `projects`).
 model Project {
-  id               String      @id @default(cuid())
-  legacyId         Int?        @unique
+  id               String            @id @default(cuid())
+  legacyId         Int?              @unique
   code             String? // p_id
   name             String
-  status           String      @default("Pending") // Waiting/Pending/Progress/Finished/Terminated
-  priority         String      @default("Medium") // Low/Medium/High/Urgent
-  progress         Int         @default(0)
+  status           String            @default("Pending") // Waiting/Pending/Progress/Finished/Terminated
+  priority         String            @default("Medium") // Low/Medium/High/Urgent
+  progress         Int               @default(0)
   subscriberId     String?
-  subscriber       Subscriber? @relation(fields: [subscriberId], references: [id]) // cid
+  subscriber       Subscriber?       @relation(fields: [subscriberId], references: [id]) // cid
   subscriberLegacy Int?
-  startDate        DateTime?   @db.Date // sdate
-  endDate          DateTime?   @db.Date // edate
+  startDate        DateTime?         @db.Date // sdate
+  endDate          DateTime?         @db.Date // edate
   tag              String?
   phase            String?
   note             String?
-  worth            Decimal     @default(0) @db.Decimal(18, 2) // presupuesto
+  worth            Decimal           @default(0) @db.Decimal(18, 2) // presupuesto
   milestones       Milestone[]
-  createdAt        DateTime    @default(now())
-  updatedAt        DateTime    @updatedAt
+  materials        ProjectMaterial[]
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
 
   @@index([subscriberId])
   @@index([status])
@@ -4535,6 +4596,31 @@ model Milestone {
   color     String?
 
   @@index([projectId])
+}
+
+/// Material cargado a un proyecto. Descuenta `Material.qty` igual que el consumo
+/// de una orden (ver TicketMaterial): el proyecto también gasta del almacén, y sin
+/// esto el cable que se va en una obra no salía de ninguna bodega.
+///
+/// Guarda copia del nombre, la bodega y el precio del momento porque el catálogo
+/// se edita y el proyecto tiene que poder decir a cuánto se le cargó.
+model ProjectMaterial {
+  id            String    @id @default(cuid())
+  projectId     String
+  project       Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  materialId    String?
+  material      Material? @relation(fields: [materialId], references: [id])
+  materialName  String // snapshot del nombre
+  warehouseId   String? // bodega de la que se descontó
+  warehouseName String?
+  qty           Int       @default(1)
+  price         Decimal   @default(0) @db.Decimal(18, 2) // precio unitario al momento del cargo
+  employeeName  String? // quién lo registró
+  note          String?
+  createdAt     DateTime  @default(now())
+
+  @@index([projectId])
+  @@index([materialId])
 }
 
 // ===== Grupo "valores" (Stock): Inventario, Órdenes, Devoluciones =====
@@ -4643,6 +4729,7 @@ model Material {
   returnItems     StockReturnItem[]
   actaItems       MaterialActaItem[]
   ticketConsumed  TicketMaterial[]
+  projectConsumed ProjectMaterial[]
   createdAt       DateTime           @default(now())
   updatedAt       DateTime           @updatedAt
   // Lo movió nexus (consumo del técnico, traspaso, devolución, recepción de orden).
@@ -4657,42 +4744,42 @@ model Material {
 
 /// Acta de traspaso de material entre bodegas (legacy `acta_transferencias`).
 model MaterialActa {
-  id                  String             @id @default(cuid())
-  legacyId            Int?               @unique
-  date                DateTime
-  fromWarehouseLegacy Int?
-  toWarehouseLegacy   Int?
-  fromWarehouseId     String? // flujo nuevo: bodega origen (dos pasos)
-  toWarehouseId       String? // flujo nuevo: bodega destino; su presencia marca acta con lógica en-tránsito
-  fromWarehouseName   String?
-  toWarehouseName     String?
-  observations        String?
-  userId              Int?
-  createdByName       String?
-  assignedToId        String? // flujo nuevo: usuario designado para recibir en destino
-  assignedToName      String?
+  id                   String             @id @default(cuid())
+  legacyId             Int?               @unique
+  date                 DateTime
+  fromWarehouseLegacy  Int?
+  toWarehouseLegacy    Int?
+  fromWarehouseId      String? // flujo nuevo: bodega origen (dos pasos)
+  toWarehouseId        String? // flujo nuevo: bodega destino; su presencia marca acta con lógica en-tránsito
+  fromWarehouseName    String?
+  toWarehouseName      String?
+  observations         String?
+  userId               Int?
+  createdByName        String?
+  assignedToId         String? // flujo nuevo: usuario designado para recibir en destino
+  assignedToName       String?
   /// Sede cuya CAJERA firma el recibido, cuando quien recibe no es una persona
   /// concreta sino "la cajera de turno de esa sede" (devolución de un técnico a la
   /// bodega principal de su sede). Va en lugar de `assignedToId`: cualquiera de las
   /// cajeras de esa sede puede firmarla, como en las transferencias de equipos.
   assignedBranchLegacy Int?
-  status              String             @default("Emitida") // Emitida / En tránsito / Recibida
-  receivedBy          Int?
-  receivedByName      String?
-  receivedAt          DateTime?
+  status               String             @default("Emitida") // Emitida / En tránsito / Recibida
+  receivedBy           Int?
+  receivedByName       String?
+  receivedAt           DateTime?
   /// Quien recibió, del stack nuevo (`receivedBy` es el id legacy).
-  receivedById        String?
+  receivedById         String?
   /// Rastro de la firma de recepción: a qué WhatsApp salió el código, o si fue en
   /// modo simulación. Lo arma `SignatureOtpService.rastro()` (propósito
   /// `material.receive`); el código en sí vive en `SignatureOtp`, no aquí.
-  receivedSignature   String?
+  receivedSignature    String?
   /// Cuándo y a qué número se le mandó el acta en PDF al designado (envío
   /// automático al emitir). null = no se pudo mandar (sin celular o WhatsApp caído).
-  notifiedAt          DateTime?
-  notifiedTo          String?
-  itemsCount          Int                @default(0)
-  items               MaterialActaItem[]
-  createdAt           DateTime           @default(now())
+  notifiedAt           DateTime?
+  notifiedTo           String?
+  itemsCount           Int                @default(0)
+  items                MaterialActaItem[]
+  createdAt            DateTime           @default(now())
 }
 
 /// Línea de acta de traspaso (legacy `items_acta_transferencias`).
@@ -4738,6 +4825,14 @@ model SupplyOrder {
   retentionType   String?
   retention       Decimal            @default(0) @db.Decimal(18, 2)
   kind            String             @default("compra") // compra | servicio
+  /// Datos de la consignación: a qué cuenta se le paga al proveedor. Se copian del
+  /// proveedor al crear la orden y quedan fijos en ella, para que cambiar la cuenta
+  /// del proveedor después no reescriba a dónde se pagó una orden vieja.
+  payBank         String?
+  payAccountType  String?
+  payAccount      String?
+  payHolder       String?
+  payHolderDoc    String?
   items           SupplyOrderItem[]
   // Flujo de aprobación (legacy: eid/aid/a2id). Solo órdenes de la app (legacyId null)
   // exigen aprobación para pagar/recibir; las migradas quedan como estaban.
@@ -4889,6 +4984,11 @@ model PaymentOrder {
   status        String     @default("PENDING") // PENDING | APPROVED | DECLINED | VOIDED | ERROR
   gatewayTxId   String? // transaction.id de la pasarela
   appliedAt     DateTime? // cuándo se aplicó a cartera (idempotencia)
+  /// Quién imputó la plata: NEXUS (este sistema, desde el 2026-09-10) o LEGACY (hasta
+  /// entonces, y todo el histórico). No se puede deducir del movimiento: el writeback
+  /// ADOPTA el gemelo del legacy y le estampa su `legacyId`, así que un recaudo nacido
+  /// aquí acaba pareciendo traído de allá. Ver `docs/portal-pagos.md`.
+  appliedBy     String? // NEXUS | LEGACY
   transactionId String? // SubTransaction (recaudo) generada al aplicar
   rawInit       Json? // datos de checkout generados
   rawWebhook    Json? // último evento recibido
@@ -4990,7 +5090,20 @@ model SiigoAccount {
   paymentCredIt        Int? // id medio de pago crédito
   paymentCash          Int? // id medio de pago efectivo
   contactEmail         String?
-  costCenterByBranch   Json? // {branchLegacyId: costCenterId}
+  costCenterByBranch   Json? // {branchLegacyId: costCenterId}  (Yopal 69, Villanueva 167, Monterrey 165)
+  // Vendedor/cobrador con el que se CREA el tercero en Siigo (`related_users`). Va aparte
+  // de `sellerId` porque el legacy usaba uno distinto al de la factura (allá 282, hoy
+  // inactivo en Siigo). Si está vacío se usa `sellerId`.
+  customerSellerId     Int?
+  // Ciudad DIAN del tercero por sede: {branchLegacyId: {state_code, city_code}}. El legacy
+  // lo ramificaba con ifs por `customers.gid` (Villanueva 85440, Monterrey 85162,
+  // Mocoa 86/86001) sobre un default de Yopal (85/85001).
+  cityByBranch         Json?
+  // ¿Se manda el documento a la DIAN al crearlo (`stamp.send`)? Sin esto Siigo lo deja en
+  // BORRADOR y nunca se timbra ni hay CUFE — es lo que hace el legacy, que deja el envío
+  // para que contabilidad lo apruebe a mano en Siigo. Aquí va encendido: el botón dice
+  // "emitir ante la DIAN" y eso es lo que debe pasar.
+  autoStamp            Boolean @default(true)
   active               Boolean @default(true)
 
   electronicInvoices ElectronicInvoice[]
@@ -5391,7 +5504,7 @@ model Equipment {
   /// legacy; sin esta marca, una devolución o una asignación hecha aquí duraría
   /// hasta la siguiente pasada. Con ella el equipo queda de este lado: del legacy
   /// sólo entran los que nadie ha tocado aquí. Mismo blindaje que `Ticket.editedAt`.
-  editedAt  DateTime?
+  editedAt         DateTime?
   /// Orden de trabajo para la que este equipo quedó RESERVADO al abrirla (2026-09-03):
   /// el sistema aparta una unidad de la bodega de la sede y la deja a nombre del
   /// cliente con `status: 'Reservado'`, para que al autenticar la ONU sea "el equipo
@@ -5403,7 +5516,7 @@ model Equipment {
   /// equipos que Nexus acumuló mientras estuvo cerrado —hay unidades de prueba ahí—. Las
   /// filas que ya existían se sellaron con 2020-01-01 al crear la columna, que es lo que
   /// las deja fuera de cualquier corte razonable.
-  createdAt DateTime  @default(now())
+  createdAt        DateTime  @default(now())
 
   transferItems EquipmentTransferItem[]
 
@@ -5683,22 +5796,22 @@ model Ticket {
   /// `createdById`: es un registro histórico y no debe estorbar el día que se borre
   /// un plan del catálogo. null = la orden no es de megas (o nació sin decirlas: las
   /// del legacy y las que abre el chatbot con el plan dictado por WhatsApp).
-  planToId       String?
+  planToId      String?
   /// Copia del nombre y las megas del plan destino. El catálogo se renombra y se
   /// repreciona; sin la copia, una orden de hace un año no dice a cuánto se subió.
-  planToName     String?
-  planToMegas    Int?
+  planToName    String?
+  planToMegas   Int?
   /// De cuánto venía: el plan de internet que tenía al abrirse la orden. Es la otra
   /// mitad de la frase "de 200 a 400 Megas" y lo que permite comprobar después si el
   /// cambio se aplicó de verdad.
-  planFromName   String?
-  planFromMegas  Int?
+  planFromName  String?
+  planFromMegas Int?
   /// Cuándo se le cambió el plan en la ficha. Se aplica AL ABRIR la orden —misma
   /// decisión que la dirección del traslado—: el precio y el perfil quedan al día
   /// desde ese momento y el técnico ya encuentra la velocidad correcta cuando pulsa
   /// "aplicar velocidad" contra la OLT (que lee el plan VIGENTE del abonado).
   /// null = se registró el plan pero el cambio no llegó a aplicarse.
-  planAppliedAt  DateTime?
+  planAppliedAt DateTime?
 
   // --- Cargo de la orden (2026-09-01, ver billing/cargos-orden.ts) ---
   // El traslado no es el único trabajo que se cobra al abrirlo: 'AgregarInternet'
@@ -5791,11 +5904,11 @@ model TicketThread {
   /// apellido—. Es una instantánea del nombre a propósito: quién documentó una
   /// orden de hace un año no cambia porque hoy se corrija la ficha.
   /// `null` = lo escribió de verdad el sistema (un proceso automático).
-  authorName   String?
+  authorName String?
   /// `User.id` de quien lo escribió, cuando fue una persona con cuenta. Sin FK, por
   /// lo mismo que `Ticket.createdById`: el hilo lo llenan también el bot y los
   /// procesos, que no son cuentas.
-  authorId     String?
+  authorId   String?
 
   @@index([ticketCode])
   @@index([subscriberId])
@@ -5887,9 +6000,92 @@ model TodoTask {
   /// `Ticket.createdBySource`).
   createdBySource String?
 
+  /// Adjuntos de la tarea (la planilla de Excel, el PDF, la foto del pendiente).
+  files TodoTaskFile[]
+
+  /// El SEGUIMIENTO de la tarea: qué se hizo, cuándo y quién lo escribió.
+  notes TodoTaskNote[]
+
   @@index([status])
   @@index([orderId])
   @@index([rid, tdate]) // tareas por proyecto + orden
+}
+
+/// Un renglón del SEGUIMIENTO de una tarea: lo que se hizo, cuándo y quién lo
+/// escribió. Es a la tarea lo que `TicketThread` es a una orden de servicio, y se
+/// documenta igual: un texto, una etiqueta de avance y —si hubo que probarlo— una
+/// foto con la ubicación desde donde se tomó.
+///
+/// La tarea traía sólo `description` (lo que hay que hacer) y adjuntos sueltos: lo
+/// que pasó con ella no se guardaba en ninguna parte. Quien la retomaba tres días
+/// después no tenía cómo saber si alguien la había intentado ya.
+///
+/// Va en tabla aparte y no en el `todolist` del legacy a propósito: allá no existe
+/// —la tarea no viaja en el sync, ni de ida ni de vuelta (ver `tarea-creada-por`)—,
+/// así que documentar aquí no le pisa nada al sistema anterior.
+model TodoTaskNote {
+  id     String   @id @default(cuid())
+  taskId String
+  task   TodoTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  /// Lo documentado. `null` cuando el renglón es sólo una foto.
+  message String?
+  /// En qué quedó, de la lista corta de avances (`Avance`, `Bloqueada`, `A la
+  /// espera de un tercero`…). Columna propia y no un prefijo dentro del mensaje
+  /// como en la orden: ahí lo obligaba el formato heredado (`solucion/ texto`),
+  /// aquí no hay legacy al que parecerse.
+  stage   String?
+  /// Lo escribió un proceso y no una persona: el cambio de estado, de responsable
+  /// o de fecha que el sistema anota solo. Se pinta distinto para que la bitácora
+  /// automática no se confunda con lo que alguien se sentó a escribir.
+  auto    Boolean @default(false)
+
+  /// Nombre de quien lo escribió, congelado al escribirlo (misma razón que en
+  /// `TicketThread.authorName`: corregir hoy una ficha no reescribe quién
+  /// documentó una tarea del año pasado). `null` = lo escribió el sistema.
+  authorName String?
+  /// Su `User.id`, cuando fue una persona con cuenta. Sin FK: el bot y los procesos
+  /// también escriben aquí y no son cuentas.
+  authorId   String?
+  /// El `eid` del legacy de quien escribe, cuando tiene ficha de empleado. 0 = no
+  /// la tiene (o lo escribió el sistema); el nombre de arriba manda igual.
+  employeeId Int     @default(0)
+
+  /// Foto de evidencia: nombre en disco (uuid.ext) dentro de `uploads/tasks/<taskId>/`.
+  attach     String?
+  /// Su nombre original, para descargarla con algo legible.
+  attachName String?
+  /// Dónde estaba quien la subió (si el dispositivo lo dio). Texto, como en
+  /// `TicketThread`: es una coordenada de bitácora, no algo con lo que se calcula.
+  geoLat     String?
+  geoLng     String?
+
+  createdAt DateTime @default(now())
+
+  @@index([taskId, createdAt])
+}
+
+/// Adjunto de una tarea (planilla de Excel, cotización, foto de lo pendiente).
+/// El binario vive en disco (`uploads/tasks/<taskId>/`); aquí solo la metadata,
+/// igual que en `SupplyOrderFile` y `SubscriberFile`.
+///
+/// El borrado va en cascada porque la tarea es el único dueño del adjunto: sin
+/// ella el fichero no se puede alcanzar por ninguna pantalla. El binario en disco
+/// lo borra el controlador cuando se quita el adjunto uno a uno; al borrar la
+/// tarea entera queda el fichero huérfano en `uploads/`, que es lo mismo que ya
+/// hacen los demás módulos (no se pierde nada, sólo ocupa).
+model TodoTaskFile {
+  id             String   @id @default(cuid())
+  taskId         String
+  task           TodoTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  originalName   String
+  storedName     String
+  mimeType       String
+  size           Int
+  uploadedByName String?
+  createdAt      DateTime @default(now())
+
+  @@index([taskId])
 }
 
 /// Archivos adjuntos de un suscriptor (documentos, contratos, imágenes).

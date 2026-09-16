@@ -15,6 +15,7 @@ import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import type { CashAccount } from "@/lib/cobranzas";
 import { mensajeDeError } from "@/lib/errores";
+import { useValidacion, requerido, numero } from "@/lib/useValidacion";
 
 type Category = { id: string; name: string };
 
@@ -31,7 +32,15 @@ function CajaModal({ caja, onClose, onDone }: { caja: CashAccount | "new" | null
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  const v = useValidacion(
+    { holder, fixedFund },
+    { holder: requerido("El nombre de la caja es obligatorio."), fixedFund: numero({ min: 0 }) },
+  );
+
   useEffect(() => {
+    // Al reabrir el modal se olvida lo ya marcado: si no, la caja nueva se
+    // estrena con el error de la edición anterior todavía en rojo.
+    v.limpiar();
     if (caja && caja !== "new") {
       setHolder(caja.name ?? ""); setAccountNumber(caja.accountNumber ?? ""); setCode(caja.code ?? "");
       setFixedFund(String(caja.fixedFund ?? 200000));
@@ -40,11 +49,12 @@ function CajaModal({ caja, onClose, onDone }: { caja: CashAccount | "new" | null
       setHolder(""); setAccountNumber(""); setCode(""); setPhone(""); setAddress("");
       setFixedFund("200000"); setErr(null);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [caja]);
 
   async function submit() {
     setErr(null);
-    if (!holder.trim()) { setErr("El nombre de la caja es obligatorio."); return; }
+    if (!v.revisar()) return;
     setSaving(true);
     try {
       const body = {
@@ -64,7 +74,7 @@ function CajaModal({ caja, onClose, onDone }: { caja: CashAccount | "new" | null
   return (
     <Modal open={!!caja} onClose={onClose} title={editing ? "Editar caja" : "Nueva caja / banco"} maxWidth="max-w-lg">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <div className="sm:col-span-2"><Field label="Nombre de la caja" required><Input value={holder} onChange={(e) => setHolder(e.target.value)} placeholder="Ej: Caja principal Yopal" autoFocus /></Field></div>
+        <div className="sm:col-span-2"><Field label="Nombre de la caja" required error={v.error("holder")}><Input value={holder} onChange={(e) => setHolder(e.target.value)} placeholder="Ej: Caja principal Yopal" autoFocus {...v.campo("holder")} /></Field></div>
         <Field label="N.º de cuenta" hint="Si es un banco"><Input value={accountNumber} onChange={(e) => setAccountNumber(e.target.value)} /></Field>
         <Field label="Código"><Input value={code} onChange={(e) => setCode(e.target.value)} /></Field>
         <Field label="Teléfono"><Input value={phone} onChange={(e) => setPhone(e.target.value)} /></Field>
@@ -73,8 +83,9 @@ function CajaModal({ caja, onClose, onDone }: { caja: CashAccount | "new" | null
           <Field
             label="Base de apertura (fondo fijo)"
             hint="Con cuánto arranca esta caja. Es lo que se registra cuando la cajera pulsa «Abrir caja» (más el arrastre del cierre anterior): ella no la teclea. Nunca sale del cajón y no entra en el excedente del arqueo."
+            error={v.error("fixedFund")}
           >
-            <Input type="number" min={0} value={fixedFund} onChange={(e) => setFixedFund(e.target.value)} />
+            <Input type="number" min={0} value={fixedFund} onChange={(e) => setFixedFund(e.target.value)} {...v.campo("fixedFund")} />
           </Field>
         </div>
       </div>

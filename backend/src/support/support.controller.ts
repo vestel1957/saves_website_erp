@@ -10,10 +10,11 @@ import * as ExcelJS from 'exceljs';
 import { SupportService } from './support.service';
 import { AgendaService, type FiltrosAgenda } from './agenda.service';
 import { catalogoDeOrdenes, MOTIVOS_RETIRO } from './order-types';
+import { ETIQUETA_MIX } from '../common/servicios-del-abonado';
 import { GeofenceService } from './geofence.service';
 import {
   SupportWriteService, CreateTicketDto, UpdateTicketDto, UpdateStatusDto, AssignDto, PriorityDto, SignatureDto, ThreadDto, AttachDto,
-  AssignEquipmentDto, ConsumeMaterialsDto,
+  AssignEquipmentDto, ConsumeMaterialsDto, UbicarEquipoDto,
 } from './support-write.service';
 import { OnuProvisionService } from './onu-provision.service';
 import { OrderScoreService } from './order-score.service';
@@ -24,6 +25,7 @@ import { PerformanceService } from '../reports/performance.service';
 import { serviceOrderPdf } from '../common/pdf/pdf-docs';
 import { APP_PERMISSIONS } from '../auth/permissions.catalog';
 import { AuthUser } from '../auth/current-user.decorator';
+import { respuestaMaterial } from '../common/material-stock';
 import { enviarAdjuntoSeguro, mimeAceptado, nombreEnDisco, MIMES_IMAGEN } from '../common/uploads';
 
 /** ONU que el técnico eligió del autofind para autenticar en esta orden. */
@@ -191,11 +193,41 @@ export class SupportController {
     return this.agenda.calendario(user, q.desde, q.hasta, SupportController.filtrosAgenda(q));
   }
   /** Lee los filtros del tablero de la query, tal como los manda la pantalla. */
+  /**
+   * La celda "Equipo a llevar": el código de la unidad apartada, o el aviso de que
+   * la visita pide equipo y no hay ninguno.
+   *
+   * Vacía cuando la orden no necesita equipo, que son la mayoría: llenar 300 celdas
+   * con un "no aplica" es esconder las 12 que sí lo piden.
+   */
+  private static equipoDeFila(o: { equipo?: { equipo: { code: number; serial: string | null; bodega: string | null } | null } | null }): string {
+    if (!o.equipo) return '';
+    const e = o.equipo.equipo;
+    if (!e) return 'Sin asignar — sáquelo de la bodega';
+    return [`Equipo ${e.code}`, e.serial ? `S/N ${e.serial}` : null, e.bodega].filter(Boolean).join(' · ');
+  }
+
+  /**
+   * Ajuste de texto en las columnas largas de un Excel.
+   *
+   * Las observaciones vienen en varios renglones —`textoPlano` conserva los saltos
+   * del editor del legacy— y una celda sin `wrapText` enseña sólo el primero: el
+   * resto queda escondido detrás de la celda de al lado, que es exactamente cómo se
+   * lee "el Excel no trae las observaciones" aunque el dato esté ahí.
+   */
+  private static ajustaTexto(ws: ExcelJS.Worksheet, claves: string[]) {
+    for (const clave of claves) {
+      const col = ws.getColumn(clave);
+      if (col) col.alignment = { wrapText: true, vertical: 'top' };
+    }
+  }
+
   private static filtrosAgenda(q: Record<string, string>): FiltrosAgenda {
     return {
       q: q.q,
       clase: q.clase,
       tipo: q.tipo,
+      servicio: q.servicio,
       prioridad: q.prioridad,
       estado: q.estado,
       noAtendidas: q.noAtendidas === '1' || q.noAtendidas === 'true',
@@ -242,6 +274,14 @@ export class SupportController {
       { header: 'Espera (días)', key: 'espera', width: 12 },
       { header: 'Clase', key: 'subject', width: 12 },
       { header: 'Detalle', key: 'type', width: 24 },
+      // Qué tiene contratado el cliente, en su propia columna: es por lo que se
+      // separa el trabajo en la calle. Mismo criterio que el Excel del listado.
+      { header: 'Servicio', key: 'servicioTexto', width: 15 },
+      // Qué caja hay que llevarse (2026-09-04). Este archivo es el papel con el que
+      // se sale a la calle: si la visita es una instalación o un cambio de equipo y
+      // el técnico llega sin la ONU, el viaje se pierde entero. Trae el código de la
+      // unidad ya apartada, o el aviso de que no hay ninguna y hay que sacarla.
+      { header: 'Equipo a llevar', key: 'equipo', width: 30 },
       // A partir de aquí, el cliente: es lo que hace útil el papel en la calle.
       { header: 'Cliente', key: 'cliente', width: 30 },
       { header: 'Abonado', key: 'abonado', width: 10 },
@@ -265,6 +305,7 @@ export class SupportController {
     ];
     ws.getRow(1).font = { bold: true };
     ws.views = [{ state: 'frozen', ySplit: 1 }];
+    SupportController.ajustaTexto(ws, ['problema', 'observacion', 'noAtendida']);
     // Las fechas llegan como `Date` (esto no pasa por JSON): `String(fecha)` daría
     // 'Wed Aug 26' en la celda, que ni se ordena ni se lee.
     const soloFecha = (v: unknown): string =>
@@ -273,6 +314,8 @@ export class SupportController {
       dia, tecnico: o.tecnico ?? '', puesto: o.puesto ?? o.seq ?? '', code: o.code ?? '',
       status: o.status, priority: o.priority ?? '', espera: o.espera ?? '',
       subject: o.subject ?? '', type: o.type ?? '',
+      servicioTexto: o.servicio ? ETIQUETA_MIX[o.servicio as keyof typeof ETIQUETA_MIX] : '',
+      equipo: SupportController.equipoDeFila(o),
       cliente: o.cliente ?? '', abonado: o.abonado ?? '', cedula: o.cedula ?? '',
       telefono: o.telefono ?? '', telefono2: o.telefono2 ?? '',
       // La referencia se pega DETRÁS de la dirección en vez de en una columna
@@ -304,6 +347,22 @@ export class SupportController {
    */
   miAgenda(user: AuthUser, fecha?: string) {
     return this.agenda.miAgenda(user, fecha);
+  }
+
+  /**
+   * "Mi calendario": el mes o la semana del técnico logueado, sólo sus visitas.
+   * Sin parámetros de alcance — quién es lo dice la sesión, igual que su agenda.
+   */
+  miCalendario(user: AuthUser, desde?: string, hasta?: string) {
+    return this.agenda.miCalendario(user, desde, hasta);
+  }
+
+  /**
+   * "Mi historial": lo que el técnico logueado YA hizo, agrupado por día de trabajo.
+   * Sin parámetros de alcance — quién es lo dice la sesión, igual que su agenda.
+   */
+  miHistorial(user: AuthUser, desde?: string, hasta?: string) {
+    return this.agenda.miHistorial(user, desde, hasta);
   }
 
   /**
@@ -379,8 +438,13 @@ export class SupportController {
    *   'AgregarInternet') o la clave corta del cargo. Sin `tipo` devuelve TODOS los
    *   cargos, que es lo que pide el formulario al abrirse para no tener que
    *   preguntar de nuevo cada vez que se cambia el detalle.
+   * @param subscriberId  el cliente al que se le va a abrir la orden. Con él (y con
+   *   `tipo`) la respuesta trae además `yaFacturadas`: las facturas suyas que YA
+   *   cobran este trabajo y no tienen orden detrás, para que quien abre la orden vea
+   *   que el cliente ya pagó y no le emita la segunda de 30.000. Ver
+   *   `CargoOrdenService.facturasYaCobradas`.
    */
-  async cargoDeOrden(tipo?: string) {
+  async cargoDeOrden(tipo?: string, subscriberId?: string, user?: AuthUser) {
     const pedido = tipo?.trim()
       ? [cargoDeTipoDeOrden(tipo) ?? cargoPorClave(tipo)].filter((c) => c !== null)
       : CARGOS_POR_ORDEN;
@@ -403,7 +467,14 @@ export class SupportController {
     // Con `tipo` se responde el cargo suelto (o null si ese tipo no cobra nada) y
     // sin él la lista: dos formas, pero la de la lista es la que evita una consulta
     // por cada detalle que se prueba en el desplegable.
-    return tipo?.trim() ? (cargos[0] ?? null) : cargos;
+    if (!tipo?.trim()) return cargos;
+    const cargo = pedido[0] ?? null;
+    if (!cargo || !cargos[0]) return null;
+    // Las facturas que ya cobran este trabajo sólo tienen sentido con un cliente
+    // delante: el formulario las pide en cuanto lo elige.
+    if (!subscriberId?.trim()) return cargos[0];
+    const yaFacturadas = await this.cargoOrden.facturasYaCobradas(cargo, subscriberId.trim(), user);
+    return { ...cargos[0], yaFacturadas };
   }
 
   // ── Puntaje de las órdenes (2026-08-04) ───────────────────────────────────
@@ -440,6 +511,17 @@ export class SupportController {
     return this.write.updateStatus(id, dto, user, req?.ip ?? req?.socket?.remoteAddress ?? null);
   }
   assign(id: string, dto: AssignDto, user: AuthUser) { return this.write.assign(id, dto, user); }
+  /**
+   * Activa la IP remota del cliente de esta orden: la reparte el sistema y la escribe
+   * en su `/ppp/secret`. Es la salida del candado del cierre (`ip-remota.policy.ts`).
+   *
+   * Sin permiso de red aposta, con el mismo alcance que cerrar la orden: cerrar ya
+   * dispara el corte o la reconexión en el router (la cascada del cierre), así que
+   * pedir aquí un permiso que no se pide allí sólo dejaría al técnico frente a un
+   * candado que no puede abrir desde donde se lo encuentra.
+   */
+  activarIpRemota(id: string, user: AuthUser) { return this.write.activarIpRemota(id, user); }
+
   /** Corregir el trabajo de una orden ya abierta (clase, detalle, falla, fecha…). */
   updateTicket(id: string, dto: UpdateTicketDto, user: AuthUser) { return this.write.updateTicket(id, dto, user); }
   setPriority(id: string, dto: PriorityDto) { return this.write.setPriority(id, dto); }
@@ -451,11 +533,34 @@ export class SupportController {
     return enviarAdjuntoSeguro(res, file, `firma-${id}.png`);
   }
   thread(id: string, dto: ThreadDto, user: AuthUser) { return this.write.addThread(id, dto, user); }
+  /** Borrar un renglón del seguimiento: sólo superusuario (SYSTEM_ADMIN en la ruta). */
+  deleteThread(threadId: string, user: AuthUser) { return this.write.deleteThread(threadId, user); }
 
   // --- Equipo y material de la orden ---
-  availableEquipment(search?: string) { return this.write.availableEquipment(search); }
-  searchMaterials(user: AuthUser, search?: string) { return this.write.searchMaterials(user, search); }
+  /**
+   * Stock que se le puede entregar a alguien. Con `subscriberId` incluye además las
+   * unidades ya apartadas para ESE cliente, que son las que hay que darle (ver el
+   * servicio): sin él, el equipo que la orden reservó no salía en el selector.
+   */
+  availableEquipment(search?: string, subscriberId?: string) { return this.write.availableEquipment(search, subscriberId); }
+  /**
+   * Cajas NAP y sus puertos para el modal de entrega de equipos. Viven aquí y no en
+   * Red porque quien entrega la caja es la cajera, que no entra al módulo Red.
+   */
+  napsParaEquipo(search?: string, subscriberId?: string) { return this.write.napsParaEquipo(search, subscriberId); }
+  puertosDeNap(id: string, subscriberId?: string) { return this.write.puertosDeNap(id, subscriberId); }
+  materialWarehouses(user: AuthUser, search?: string) { return this.write.materialWarehouses(user, search); }
+  /** Sin `page` responde el array de antes: el móvil que no ha recargado (ver `respuestaMaterial`). */
+  async searchMaterials(user: AuthUser, search?: string, warehouseId?: string, categoryId?: string, page?: string, pageSize?: string) {
+    return respuestaMaterial(await this.write.searchMaterials(user, { search, warehouseId, categoryId, page, pageSize }), page);
+  }
   assignEquipment(id: string, dto: AssignEquipmentDto, user: AuthUser) { return this.write.assignEquipment(id, dto, user); }
+  /** Los mismos equipos, entregados desde la ficha del cliente y no desde una orden. */
+  assignEquipmentToSubscriber(id: string, dto: AssignEquipmentDto, user: AuthUser) { return this.write.assignEquipmentToSubscriber(id, dto, user); }
+  /** Cambiar la caja NAP y el puerto de un equipo ya instalado; la VLAN la pone la OLT. */
+  ubicarEquipo(id: string, equipmentId: string, dto: UbicarEquipoDto, user: AuthUser) { return this.write.ubicarEquipo(id, equipmentId, dto, user); }
+  /** La VLAN del service-port de la ONU del cliente, leída en vivo de la OLT. */
+  vlanOltDeAbonado(id: string, user: AuthUser, refresh?: string) { return this.write.vlanOltDeAbonado(id, user, refresh === '1'); }
   consumeMaterials(id: string, dto: ConsumeMaterialsDto, user: AuthUser) { return this.write.consumeMaterials(id, dto, user); }
 
   // --- ONU de la orden (autenticar contra la OLT desde la instalación) ---
@@ -503,8 +608,8 @@ export class SupportController {
     return enviarAdjuntoSeguro(res, join(SUPPORT_ROOT, a.storedName), a.storedName);
   }
 
-  tickets(search?: string, status?: string, type?: string, tec?: string, priority?: string, sede?: string, subscriberId?: string, from?: string, to?: string, all?: string, page?: string, pageSize?: string, sortBy?: string, sortDir?: string, user?: AuthUser) {
-    return this.support.tickets({ search, status, type, tec, priority, sede, subscriberId, from, to, all, page: Number(page), pageSize: Number(pageSize), sortBy, sortDir }, user);
+  tickets(search?: string, status?: string, type?: string, servicio?: string, tec?: string, priority?: string, sede?: string, subscriberId?: string, from?: string, to?: string, all?: string, page?: string, pageSize?: string, sortBy?: string, sortDir?: string, user?: AuthUser) {
+    return this.support.tickets({ search, status, type, servicio, tec, priority, sede, subscriberId, from, to, all, page: Number(page), pageSize: Number(pageSize), sortBy, sortDir }, user);
   }
 
   /**
@@ -513,12 +618,12 @@ export class SupportController {
    */
   async ticketsXlsx(
     res: Response,
-    search?: string, status?: string, type?: string,
+    search?: string, status?: string, type?: string, servicio?: string,
     tec?: string, priority?: string, sede?: string,
     from?: string, to?: string, all?: string,
     user?: AuthUser,
   ) {
-    const rows = await this.support.exportRows({ search, status, type, tec, priority, sede, from, to, all }, user);
+    const rows = await this.support.exportRows({ search, status, type, servicio, tec, priority, sede, from, to, all }, user);
     const wb = new ExcelJS.Workbook();
     wb.creator = 'Vestel';
     const ws = wb.addWorksheet('Órdenes de soporte');
@@ -527,6 +632,13 @@ export class SupportController {
       { header: 'Creada', key: 'created', width: 12 },
       { header: 'Clase', key: 'subject', width: 12 },
       { header: 'Detalle', key: 'type', width: 24 },
+      // QUÉ TIENE CONTRATADO EL CLIENTE (solo TV, solo internet, combo), escrito
+      // aparte del detalle: es por lo que se separa el trabajo —la TV se toca en el
+      // CPE o en el puerto CATV de la OLT y el internet en el Mikrotik— y en el
+      // papel no se puede filtrar por el cartel de la pantalla. Vacío en las órdenes
+      // que no van de un servicio ('Instalacion') y en los clientes de los que no
+      // consta el plan.
+      { header: 'Servicio', key: 'servicioTexto', width: 15 },
       { header: 'Prioridad', key: 'priority', width: 11 },
       // Los días que lleva abierta. Estaba en la pantalla ("Espera") y era lo único
       // suyo que no bajaba al Excel: sin esto, el papel no distingue la que entró
@@ -548,13 +660,26 @@ export class SupportController {
       // Quién la mandó, al lado de quién la hizo: es la columna con la que se
       // audita de dónde salió el trabajo (vacía en las heredadas sin autor).
       { header: 'Generada por', key: 'generadaPor', width: 22 },
-      { header: 'Descripción', key: 'description', width: 40 },
+      // Dos columnas y no una "Descripción" (2026-09-07, a pedido del usuario: el
+      // Excel llegaba «sin las observaciones de las órdenes»). Son los dos campos
+      // que enseña la ficha, y la única que casi siempre viene llena es la segunda:
+      // en 2026, 1.349 órdenes de 49.248 tienen `problem` y 47.622 tienen `section`.
+      // Mismas dos columnas que el Excel de la agenda, para que los dos archivos se
+      // lean igual.
+      { header: 'Falla reportada', key: 'problema', width: 28 },
+      { header: 'Observaciones', key: 'observacion', width: 44 },
       { header: 'Cerrada', key: 'finalDate', width: 12 },
     ];
     ws.getRow(1).font = { bold: true };
+    ws.views = [{ state: 'frozen', ySplit: 1 }];
+    // La observación viene en renglones (`textoPlano` conserva los saltos del
+    // editor del legacy): sin ajuste de texto, Excel enseña sólo el primero y el
+    // resto queda escondido detrás de la celda de al lado.
+    SupportController.ajustaTexto(ws, ['problema', 'observacion']);
     for (const r of rows) {
       ws.addRow({
         ...r,
+        servicioTexto: r.servicio ? ETIQUETA_MIX[r.servicio] : '',
         // La referencia va pegada detrás de la dirección, igual que en el Excel de
         // la agenda: hay abonados sin casillas de dirección cuya única seña es ésa.
         direccion: [r.direccion, r.referencia].filter(Boolean).join(' · '),

@@ -1,12 +1,13 @@
 import { Logger } from '../core/logger';
 import { PrismaService } from '../prisma/prisma.service';
+import { esReinstalacion } from './order-types';
 
 /**
  * EquipoReservaService — la unidad que se aparta de la bodega AL ABRIR la orden.
  *
  * La regla la puso el usuario (2026-09-03): cuando nace una orden de instalación,
- * cambio de equipo, migración, agregar internet o traslado, el sistema mira si el
- * cliente tiene equipo y le deja uno de los disponibles de la bodega de su sede.
+ * cambio de equipo, migración o agregar internet, el sistema mira si el cliente
+ * tiene equipo y le deja uno de los disponibles de la bodega de su sede.
  * El objetivo es que, cuando el técnico vaya a autenticar la ONU, sea "el equipo
  * que el cliente tiene asignado" —la única regla del automático que no depende de
  * la hora ni del ruido del autofind (ver `OnuProvisionService.decidirAutomatico`).
@@ -31,8 +32,27 @@ import { PrismaService } from '../prisma/prisma.service';
  * Las órdenes que nacen en el legacy no pasan por aquí (no disparan el evento).
  */
 
-/** Tipos de orden que apartan equipo al abrirse (fragmentos, como `modoDeOrden`). */
-const TIPOS_CON_RESERVA = ['instalac', 'cambio de equipo', 'migraci', 'agregarinternet', 'agregar internet', 'traslado'];
+/**
+ * Tipos de orden que apartan equipo al abrirse (fragmentos, como `modoDeOrden`).
+ *
+ * NINGÚN traslado entra aquí (2026-09-04, dicho por el usuario). Un traslado no
+ * estrena aparato: el cliente se lleva SU ONU a la casa nueva y lo que hay que
+ * hacer con ella es desautenticarla de donde estaba y volverla a autenticar donde
+ * toca ahora —ver `OnuProvisionService.liberarAltaAnterior`—, no sacar una caja del
+ * estante. Apartarle una unidad restaba stock de la bodega para nada y, desde que
+ * el aviso se pinta en la ficha y en el agendamiento, mandaba al técnico a recoger
+ * un equipo que no iba a instalar. Eso valía ya para el 'Traslado interno De Equipos
+ * Red en cliente final' (mover el equipo de sitio dentro de la misma vivienda) y
+ * ahora vale igual para el traslado de domicilio.
+ *
+ * LA REINSTALACIÓN TAMPOCO (2026-09-08, dicho por el usuario). Entraba de rebote
+ * por el fragmento 'instalac' —descontarla es lo único que hace `esReinstalacion`
+ * aquí— y es el mismo caso del traslado: el aparato ya está en casa del cliente,
+ * no se estrena ninguno. Apartarle una unidad restaba stock de la bodega para nada
+ * y el aviso de "hay que llevar equipo" de la ficha y del agendamiento (que sale de
+ * `equiposDeOrdenes`, abajo) mandaba al técnico a buscar una caja de más.
+ */
+const TIPOS_CON_RESERVA = ['instalac', 'cambio de equipo', 'migraci', 'agregarinternet', 'agregar internet'];
 
 /** Estado con el que la unidad queda a nombre del cliente mientras no se confirme. */
 export const ESTADO_RESERVADO = 'Reservado';
@@ -47,7 +67,9 @@ export const ESTADO_POR_REVISAR = 'Por revisar';
 /** ¿Una orden de este tipo aparta equipo al abrirse? */
 export function tipoConReserva(type: string | null | undefined): boolean {
   const t = (type ?? '').toLowerCase();
-  return !!t.trim() && TIPOS_CON_RESERVA.some((k) => t.includes(k));
+  if (!t.trim()) return false;
+  if (esReinstalacion(t)) return false;
+  return TIPOS_CON_RESERVA.some((k) => t.includes(k));
 }
 
 /**
@@ -64,10 +86,25 @@ const SN_UTIL = /^((4[1-9A-F]|5[0-9A]|3[0-9]){4}[0-9A-F]{8}|[A-Z]{4}[0-9A-F]{8})
 const SN_UTIL_SQL = '^((4[1-9A-F]|5[0-9A]|3[0-9]){4}[0-9A-F]{8}|[A-Z]{4}[0-9A-F]{8})$';
 const norma = (s: string | null | undefined) => String(s ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
+/** ¿Este serial del inventario tiene pinta de ONU? (la regla de `SN_UTIL`, en una función) */
+export const esSerialDeOnu = (serial: string | null | undefined): boolean => SN_UTIL.test(norma(serial));
+
+/**
+ * En un CAMBIO DE EQUIPO el aparato que el cliente ya tiene es justo el que se
+ * retira: ahí sí hay que sacar una caja nueva del estante, y el equipo viejo no
+ * puede anunciarse como "el que se lleva". En todos los demás tipos manda lo que
+ * el cliente ya tiene a su nombre (ver `equipoDelCliente`).
+ */
+const esCambioDeEquipo = (type: string | null | undefined) => /cambio de equipo/i.test(type ?? '');
+
 export class EquipoReservaService {
   private readonly logger = new Logger(EquipoReservaService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    /** Opcional: sin él la ONU vieja de un cambio de equipo vuelve a bodega pero sigue dada de alta en la OLT. */
+    private readonly onuAlDevolver?: import('../network/onu-al-devolver.service').OnuAlDevolverService,
+  ) {}
 
   /**
    * Aparta una unidad para la orden recién abierta. Idempotente: si la orden ya
@@ -80,7 +117,7 @@ export class EquipoReservaService {
         where: { id: ticketId },
         select: {
           id: true, code: true, type: true, status: true, subscriberId: true,
-          subscriber: { select: { id: true, branch: { select: { name: true, legacyId: true } } } },
+          subscriber: { select: { id: true, legacyId: true, branch: { select: { name: true, legacyId: true } } } },
         },
       });
       if (!t) return { hecho: false, motivo: 'La orden no existe.' };
@@ -98,6 +135,22 @@ export class EquipoReservaService {
         return { hecho: false, motivo: 'La orden ya tiene equipo reservado.', equipo: { code: yaReservado.code, serial: yaReservado.serial, bodega: yaReservado.warehouse?.name ?? null } };
       }
 
+      // EL CLIENTE YA TIENE EQUIPO (2026-09-04, dicho por el usuario tras verlo en la
+      // ficha de LEONORY AGUILAR): apartarle otra caja anunciaba en la ficha y en el
+      // agendamiento una unidad distinta de la que el cliente tiene a su nombre —y la
+      // autenticación, que siempre prefiere "el equipo del abonado"
+      // (`OnuProvisionService.decidirAutomatico`), iba a montar la suya. Dos avisos que
+      // se contradicen mandan al técnico con la caja equivocada y, de paso, restan del
+      // stock una unidad que nadie va a instalar.
+      const suyo = await equipoDelCliente(this.prisma, t.subscriberId);
+      if (suyo && !esCambioDeEquipo(t.type)) {
+        return {
+          hecho: false,
+          motivo: `El cliente ya tiene el equipo ${suyo.code} a su nombre: es ese el que se instala.`,
+          equipo: { code: suyo.code, serial: suyo.serial, bodega: suyo.warehouse?.name ?? null },
+        };
+      }
+
       const unidad = await this.elegirDeBodega(sede);
       if (!unidad) {
         await this.anotar(t.code, t.subscriberId,
@@ -111,6 +164,13 @@ export class EquipoReservaService {
         where: { id: unidad.id, subscriberId: null, reservedTicketId: null },
         data: {
           subscriberId: t.subscriberId,
+          // El MISMO dato, escrito como lo escribe el legacy (`equipos.asignado` = el
+          // id del cliente allá). No es redundante: el writeback manda `assignedRaw` a
+          // `asignado` y luego suelta el blindaje `editedAt`, así que reservar sin esto
+          // empujaba un `asignado = 0` al legacy y la siguiente pasada de la ida volvía
+          // a dejar el equipo sin dueño — la reserva se deshacía sola en 15 minutos.
+          // Los 5.832 equipos asignados de la base llevan exactamente esta convención.
+          assignedRaw: t.subscriber.legacyId == null ? undefined : String(t.subscriber.legacyId),
           reservedTicketId: t.id,
           status: ESTADO_RESERVADO,
           returnedAt: null,
@@ -186,7 +246,10 @@ export class EquipoReservaService {
       const t = await this.prisma.ticket.findUnique({ where: { id: ticketId }, select: { code: true, subscriberId: true } });
       const { count } = await this.prisma.equipment.updateMany({
         where: { id: { in: reservados.map((r) => r.id) } },
-        data: { subscriberId: null, reservedTicketId: null, status: 'Disponible', editedAt: new Date() },
+        // `assignedRaw` se limpia con `subscriberId`: es el mismo dato en la otra base
+        // y dejarlo puesto haría que el writeback siguiera diciendo allá que el equipo
+        // es de un cliente que ya no lo tiene.
+        data: { subscriberId: null, assignedRaw: null, reservedTicketId: null, status: 'Disponible', editedAt: new Date() },
       });
       await this.anotar(t?.code ?? null, t?.subscriberId ?? null,
         `Reserva liberada: el equipo ${reservados.map((r) => r.code).join(', ')} vuelve a la bodega porque la orden se `
@@ -196,6 +259,53 @@ export class EquipoReservaService {
     } catch (e) {
       this.logger.error(`No se pudo liberar la reserva de la orden ${ticketId}: ${(e as Error).message}`);
       return 0;
+    }
+  }
+
+  /**
+   * Al cliente ya se le ENTREGÓ su caja: las que las órdenes abiertas le tenían
+   * apartadas y no son esa vuelven al estante (2026-09-04).
+   *
+   * Sin esto, entregar un equipo desde la ficha dejaba viva la reserva anterior: el
+   * cliente figuraba con dos unidades a su nombre, el aviso de "esta visita sale con
+   * equipo" nombraba una y la autenticación montaba la otra, y una caja que nadie
+   * iba a instalar seguía descontada del stock hasta que la orden se cerrara.
+   *
+   * Nunca lanza: la entrega ya está hecha cuando se llama, y el inventario
+   * descuadrado es un problema menor que perder la asignación.
+   */
+  async liberarSobrantesDeCliente(subscriberId: string, conservarIds: string[]): Promise<number[]> {
+    try {
+      const abiertas = await this.prisma.ticket.findMany({
+        where: { subscriberId, status: { in: ['PENDIENTE', 'REALIZANDO'] } },
+        select: { id: true, code: true },
+      });
+      if (!abiertas.length) return [];
+      const sobrantes = await this.prisma.equipment.findMany({
+        where: {
+          reservedTicketId: { in: abiertas.map((t) => t.id) },
+          status: ESTADO_RESERVADO,
+          ...(conservarIds.length ? { id: { notIn: conservarIds } } : {}),
+        },
+        select: { id: true, code: true, reservedTicketId: true },
+      });
+      if (!sobrantes.length) return [];
+      await this.prisma.equipment.updateMany({
+        where: { id: { in: sobrantes.map((s) => s.id) } },
+        data: { subscriberId: null, assignedRaw: null, reservedTicketId: null, status: 'Disponible', editedAt: new Date() },
+      });
+      const codigos = sobrantes.map((s) => s.code);
+      for (const t of abiertas) {
+        const suyos = sobrantes.filter((s) => s.reservedTicketId === t.id).map((s) => s.code);
+        if (suyos.length) {
+          await this.anotar(t.code, subscriberId,
+            `El equipo ${suyos.join(', ')} que esta orden tenía apartado vuelve a la bodega: al cliente se le entregó otro.`);
+        }
+      }
+      return codigos;
+    } catch (e) {
+      this.logger.warn(`No se pudieron liberar las reservas sobrantes del cliente ${subscriberId}: ${(e as Error).message}`);
+      return [];
     }
   }
 
@@ -226,7 +336,7 @@ export class EquipoReservaService {
       if (sobrantes.length) {
         await this.prisma.equipment.updateMany({
           where: { id: { in: sobrantes.map((s) => s.id) } },
-          data: { subscriberId: null, reservedTicketId: null, status: 'Disponible', editedAt: new Date() },
+          data: { subscriberId: null, assignedRaw: null, reservedTicketId: null, status: 'Disponible', editedAt: new Date() },
         });
         out.liberados = sobrantes.map((s) => s.code);
         await this.anotar(x.ticketCode, x.subscriberId,
@@ -268,6 +378,12 @@ export class EquipoReservaService {
         },
       });
       out.devuelto = vieja.code;
+      // La nueva ya está autenticada: la vieja sale también de la OLT, o el cliente se
+      // queda con dos altas (2026-09-15, orden 506243). En segundo plano.
+      void this.onuAlDevolver?.desautenticar({
+        serial: vieja.serial, code: vieja.code, subscriberId: x.subscriberId,
+        motivo: `Retirada en cambio de equipo · orden #${x.ticketCode ?? '—'}`, ticketCode: x.ticketCode,
+      });
       await this.anotar(x.ticketCode, x.subscriberId,
         `ONU anterior ${vieja.code} (S/N ${vieja.serial}) devuelta a la bodega ${bodega?.name ?? '—'} como "${ESTADO_POR_REVISAR}".`);
       return out;
@@ -296,4 +412,150 @@ export class EquipoReservaService {
       .create({ data: { ticketCode, message, subscriberId, employeeId: 0, date: new Date() } })
       .catch(() => undefined);
   }
+}
+
+// ---------------------------------------------------------------------------
+// EL AVISO: "para esta visita hay que llevar equipo"
+// ---------------------------------------------------------------------------
+
+/**
+ * Lo que hay que LLEVAR a una orden, para las pantallas que la anuncian.
+ *
+ * La reserva ya existía (arriba) pero solo se veía abriendo la orden: quien
+ * reparte el día o quien atiende al cliente en la ventanilla no tenía por dónde
+ * enterarse de que esa visita sale con una caja del estante. Este es el dato con
+ * el que la ficha del abonado y el agendamiento lo dicen en voz alta.
+ *
+ * `equipo` en `null` NO es "no hace falta equipo": la lista solo trae las órdenes
+ * que SÍ lo piden (`tipoConReserva`), así que un null es "hay que llevar uno y no
+ * hay ninguno apartado" — el caso de las órdenes que nacieron en el legacy, que no
+ * pasan por la reserva, y el de la sede que se quedó sin unidades disponibles. Ese
+ * aviso es el más útil de los dos: es el que obliga a sacar el equipo a mano.
+ */
+export type EquipoDeOrden = {
+  equipo: {
+    id: string; code: number; serial: string | null; bodega: string | null;
+    /**
+     * De dónde sale esta unidad, porque no se dice igual:
+     *  - `reserva`: se apartó del estante AL ABRIR la orden y hay que entregarla.
+     *  - `asignado`: ya figura a nombre del cliente (se la entregaron antes, o viene
+     *    así del legacy). No hay nada que sacar de la bodega: es ESA la que se
+     *    instala y la que la autenticación va a reconocer como suya.
+     */
+    origen: 'reserva' | 'asignado';
+  } | null;
+};
+
+/**
+ * El equipo que YA es del cliente: la unidad a su nombre con serial de ONU.
+ *
+ * Es la misma regla que manda al autenticar (`decidirAutomatico`, punto 1: "el
+ * equipo que ya figura a nombre del cliente"), y por eso manda también en el aviso:
+ * si el inventario dice que la caja del cliente es la 311772, anunciar la 311781
+ * porque la reserva la eligió antes es mandar al técnico con la caja equivocada.
+ *
+ * Con varias a su nombre gana la de código MÁS ALTO —la que entró más tarde—, que
+ * es la que se le entregó en la última visita. Se ignoran las que no tienen serial
+ * de ONU: un decodificador de TV a su nombre no es el equipo de una instalación.
+ */
+export async function equipoDelCliente(prisma: PrismaService, subscriberId: string) {
+  const filas = await prisma.equipment.findMany({
+    where: { subscriberId },
+    select: { id: true, code: true, serial: true, status: true, reservedTicketId: true, warehouse: { select: { name: true } } },
+    orderBy: { code: 'desc' },
+  });
+  return filas.filter((e) => esSerialDeOnu(e.serial)).sort(PRIMERO_LO_ENTREGADO)[0] ?? null;
+}
+
+/**
+ * Entre los equipos de un mismo cliente manda el ENTREGADO sobre el reservado y,
+ * dentro de eso, el de código más alto. Un cliente puede tener las dos cosas a la
+ * vez: la caja que se le entregó en la ventanilla y otra que una orden había
+ * apartado antes. La entregada es la que está en su casa; la reservada sigue
+ * siendo una apuesta sobre qué caja se llevará el técnico.
+ */
+const PRIMERO_LO_ENTREGADO = (a: { status: string | null; code: number }, b: { status: string | null; code: number }) =>
+  (a.status === ESTADO_RESERVADO ? 1 : 0) - (b.status === ESTADO_RESERVADO ? 1 : 0) || b.code - a.code;
+
+/** Estados en los que la orden todavía se va a atender (y por tanto hay que llevar la caja). */
+const ABIERTAS = ['PENDIENTE', 'REALIZANDO'];
+
+/**
+ * Qué equipo lleva cada una de estas órdenes, en UNA consulta.
+ *
+ * Va en lote y no de una en una porque quien lo pide pinta 200 tarjetas de golpe
+ * (el tablero del agendamiento) o la ficha entera de un abonado: una consulta por
+ * orden serían 200 idas a la base para pintar una lista.
+ *
+ * Solo entran las órdenes ABIERTAS: al cerrarse o anularse la reserva vuelve a la
+ * bodega (`liberarPorCierre`), así que una cerrada aparecería como "hay que llevar
+ * equipo y no hay ninguno apartado" — que es exactamente lo contrario de lo que
+ * pasó. Sin `status` (quien llame no lo tenga a mano) se da por abierta.
+ */
+export async function equiposDeOrdenes(
+  prisma: PrismaService,
+  ordenes: { id: string; type: string | null; status?: string | null; subscriberId?: string | null }[],
+): Promise<Map<string, EquipoDeOrden>> {
+  const piden = ordenes.filter((o) => tipoConReserva(o.type) && (o.status == null || ABIERTAS.includes(o.status)));
+  const out = new Map<string, EquipoDeOrden>(piden.map((o) => [o.id, { equipo: null }]));
+  if (!out.size) return out;
+
+  // 1. Lo apartado para cada orden.
+  const filas = await prisma.equipment.findMany({
+    where: { reservedTicketId: { in: [...out.keys()] } },
+    select: { id: true, code: true, serial: true, reservedTicketId: true, warehouse: { select: { name: true } } },
+    // Con dos apartadas a la misma orden (no debería, pero el inventario ya ha
+    // sorprendido antes) manda la de código más bajo: da igual cuál, pero que sea
+    // siempre la misma — un aviso que cambia de equipo entre dos recargas no se cree.
+    orderBy: { code: 'asc' },
+  });
+  const reservas = new Map<string, (typeof filas)[number]>();
+  for (const e of filas) if (e.reservedTicketId && !reservas.has(e.reservedTicketId)) reservas.set(e.reservedTicketId, e);
+
+  // 2. Lo que el cliente YA tiene a su nombre, que es lo que manda salvo en un
+  //    cambio de equipo (ver `equipoDelCliente`). Quien llama no siempre trae el
+  //    cliente a mano —la campanita del técnico llega con un ticketId pelado—, así
+  //    que se completa con una consulta para todo el lote y no una por orden.
+  const dueño = new Map<string, string | null>();
+  for (const o of piden) if (o.subscriberId !== undefined) dueño.set(o.id, o.subscriberId);
+  const faltan = piden.filter((o) => !dueño.has(o.id)).map((o) => o.id);
+  if (faltan.length) {
+    const t = await prisma.ticket.findMany({ where: { id: { in: faltan } }, select: { id: true, subscriberId: true } });
+    for (const x of t) dueño.set(x.id, x.subscriberId);
+  }
+  const clientes = [...new Set(piden.filter((o) => !esCambioDeEquipo(o.type)).map((o) => dueño.get(o.id)).filter((v): v is string => !!v))];
+  const suyos = new Map<string, { id: string; code: number; serial: string | null; reservedTicketId: string | null; bodega: string | null }>();
+  if (clientes.length) {
+    const eq = await prisma.equipment.findMany({
+      where: { subscriberId: { in: clientes } },
+      select: { id: true, code: true, serial: true, status: true, subscriberId: true, reservedTicketId: true, warehouse: { select: { name: true } } },
+    });
+    // Mismo criterio que `equipoDelCliente` (lo entregado antes que lo apartado, y
+    // dentro de eso lo más nuevo): el aviso y la autenticación tienen que nombrar la
+    // misma caja o no sirven de nada.
+    for (const e of eq.filter((x) => esSerialDeOnu(x.serial)).sort(PRIMERO_LO_ENTREGADO)) {
+      if (!e.subscriberId || suyos.has(e.subscriberId)) continue;
+      suyos.set(e.subscriberId, { id: e.id, code: e.code, serial: e.serial, reservedTicketId: e.reservedTicketId, bodega: e.warehouse?.name ?? null });
+    }
+  }
+
+  for (const o of piden) {
+    const sub = dueño.get(o.id) ?? null;
+    const suyo = esCambioDeEquipo(o.type) || !sub ? null : suyos.get(sub);
+    if (suyo) {
+      // Si además es la que se apartó para esta orden, es el caso redondo y se
+      // dice como reserva ("entréguesela"); si es otra, el aviso pasa a ser "el
+      // equipo de este cliente es ese".
+      out.set(o.id, {
+        equipo: {
+          id: suyo.id, code: suyo.code, serial: suyo.serial, bodega: suyo.bodega,
+          origen: suyo.reservedTicketId === o.id ? 'reserva' : 'asignado',
+        },
+      });
+      continue;
+    }
+    const r = reservas.get(o.id);
+    if (r) out.set(o.id, { equipo: { id: r.id, code: r.code, serial: r.serial, bodega: r.warehouse?.name ?? null, origen: 'reserva' } });
+  }
+  return out;
 }

@@ -1,6 +1,6 @@
 import {
   IsOptional, IsString, MaxLength, MinLength, IsDateString, ValidateIf, IsEmail, IsIn, IsObject, IsInt,
-  IsArray, IsBoolean, IsNumber, Min, ArrayMaxSize,
+  IsArray, IsBoolean, IsNumber, Min, Max, ArrayMaxSize,
 } from 'class-validator';
 
 /** Agregar una nota/observación al cliente. */
@@ -185,6 +185,28 @@ export class UpdateSubscriberDto {
 
   @IsOptional() @IsString() @MaxLength(40)
   ipRemote?: string;
+
+  @IsOptional() @IsString() @MaxLength(40)
+  ipLocal?: string;
+
+  @IsOptional() @IsString() @MaxLength(40)
+  macEquipo?: string;
+
+  @IsOptional() @IsString() @MaxLength(40)
+  macOnt?: string;
+
+  /** Comentario del secret (`customers.comentario`): barrio, abonado, VLAN y tecnología. */
+  @IsOptional() @IsString() @MaxLength(200)
+  netComment?: string;
+
+  /**
+   * VLAN por la que navega el abonado. No es una columna: se escribe DENTRO de
+   * `netComment` (ver common/net-comment.ts), que es el único sitio donde el legacy
+   * la deja apuntada. Acepta null a propósito —quitarle la VLAN a una ficha mal
+   * capturada es una corrección legítima— y 0/4095 quedan fuera por reservadas.
+   */
+  @IsOptional() @ValidateIf((_o, v) => v !== null) @IsInt() @Min(1) @Max(4094)
+  vlan?: number | null;
 
   @IsOptional() @IsIn(INSTALL_TECHS as unknown as string[])
   installTech?: string;

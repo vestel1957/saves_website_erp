@@ -1,4 +1,4 @@
-import { vlanDeComentario } from './net-comment';
+import { conVlanEnComentario, vlanDeComentario } from './net-comment';
 
 describe('vlanDeComentario', () => {
   it('lee la VLAN de la receta del legacy', () => {
@@ -26,5 +26,31 @@ describe('vlanDeComentario', () => {
     expect(vlanDeComentario('X 1 VLAN 4095')).toBeNull();
     expect(vlanDeComentario(null)).toBeNull();
     expect(vlanDeComentario('')).toBeNull();
+  });
+});
+
+describe('conVlanEnComentario', () => {
+  it('cambia el número en su sitio y respeta el resto del texto', () => {
+    expect(conVlanEnComentario('MIRADOR 54519 VLAN 200 FTTH', 340)).toBe('MIRADOR 54519 VLAN 340 FTTH');
+    expect(conVlanEnComentario('PALMARES 57514  vlan 430 ftth', 80)).toBe('PALMARES 57514  vlan 80 ftth');
+    expect(conVlanEnComentario('Ciudad Jardin 3096 VLAN FTTH 310', 311)).toBe('Ciudad Jardin 3096 VLAN FTTH 311');
+  });
+
+  it('la añade donde la pone la receta del legacy: antes de la tecnología', () => {
+    expect(conVlanEnComentario('ALGARROBO 57509 EPON', 290)).toBe('ALGARROBO 57509 VLAN 290 EPON');
+    expect(conVlanEnComentario('EL OASIS 57506', 290)).toBe('EL OASIS 57506 VLAN 290');
+    expect(conVlanEnComentario(null, 290)).toBe('VLAN 290');
+  });
+
+  it('quitarla no deja ni la palabra ni el hueco', () => {
+    expect(conVlanEnComentario('MIRADOR 54519 VLAN 200 FTTH', null)).toBe('MIRADOR 54519 FTTH');
+    expect(conVlanEnComentario('VLAN 200', null)).toBeNull();
+    expect(conVlanEnComentario(null, null)).toBeNull();
+  });
+
+  it('lo que escribe se vuelve a leer igual', () => {
+    for (const c of ['MIRADOR 54519 VLAN 200 FTTH', 'ALGARROBO 57509 EPON', 'EL OASIS 57506', null]) {
+      expect(vlanDeComentario(conVlanEnComentario(c, 777))).toBe(777);
+    }
   });
 });

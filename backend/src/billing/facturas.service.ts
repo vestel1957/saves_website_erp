@@ -13,11 +13,14 @@ import type { SubscribersService } from '../subscribers/subscribers.service';
 import { num, round2 } from '../common/money';
 import { aplicarAnticipos } from './anticipos';
 import { aplicarNotaEnTx } from './nota-en-tx';
+import { exigirEmisorDeNotas } from './emisor-de-notas';
 import { copHistorial, movimientoDeAuditoria, movimientoDeNota, type Movimiento } from './historial-factura';
 import { nextTid, TID_SEQ } from '../common/tid';
 import { subName } from '../common/subscriber-name';
 import { exigirSedeSuscriptor, sedesDe } from '../common/sede-scope';
 import { planDeUltimaFactura } from './plan-facturable';
+import { motivoPorClave, type MotivoFactura } from './motivos-factura';
+import { armarTraslado, type TrasladoArmado } from '../common/traslado';
 
 
 function dateOnly(s?: string): Date {
@@ -202,8 +205,20 @@ export class FacturasService {
     // sede: sin esto, el alcance por sede que respetan el listado y el detalle se
     // puenteaba escribiendo otro `subscriberId` en el cuerpo.
     await exigirSedeSuscriptor(this.prisma, user, dto.subscriberId);
-    const subscriber = await this.prisma.subscriber.findUnique({ where: { id: dto.subscriberId }, select: { id: true, branchId: true, eInvoice: true, status: true } });
+    const subscriber = await this.prisma.subscriber.findUnique({
+      where: { id: dto.subscriberId },
+      // `nomenclature`/`addressLine` sólo hacen falta para el traslado: son de dónde
+      // sale el cliente, y sin ellas no se puede decir "de X a Y" ni comprobar que la
+      // dirección nueva no es la que ya tiene.
+      select: { id: true, branchId: true, eInvoice: true, status: true, nomenclature: true, addressLine: true, neighborhood: true },
+    });
     if (!subscriber) throw new NotFoundException('Cliente no encontrado');
+
+    // POR QUÉ se factura, y lo que ese motivo arrastre. El traslado es el único que
+    // hoy pide algo más (a dónde se muda) y el único que deja trabajo programado: su
+    // orden nace cuando la factura se pague.
+    const motivo = this.resolverMotivo(dto.purpose);
+    const traslado = this.trasladoDeLaFactura(dto, motivo, subscriber);
 
     const { rows, subtotal, tax, total } = this.computeTotals(dto.items);
     const invoiceDate = dateOnly(dto.invoiceDate);
@@ -226,7 +241,12 @@ export class FacturasService {
           // InvoiceRon → va null.
           ron: subscriber.status === 'INACTIVO' ? null : (subscriber.status as unknown as InvoiceRon),
           eInvoiceFlag: subscriber.eInvoice ? 'Crear Factura Electronica' : null,
-          itemsCount: rows.length, notes: dto.notes ?? null,
+          itemsCount: rows.length,
+          // La observación lleva el destino delante cuando es un traslado: es lo que
+          // se lee en la factura, en el PDF y —vía writeback— en el sistema viejo,
+          // donde no hay ninguna otra casilla donde quepa la dirección nueva.
+          notes: [traslado?.notaObservacion, dto.notes?.trim() || null].filter(Boolean).join(' ') || null,
+          purpose: motivo?.clave ?? null,
           items: {
             create: rows.map((r) => ({
               // El concepto (`productName`) es lo que leen los reportes de ventas; si la
@@ -243,6 +263,22 @@ export class FacturasService {
       // factura en el mismo commit. Cubre la factura que se emite a mano (ventanilla,
       // plantilla recurrente) además de la del día 1.
       const anticipo = await aplicarAnticipos(tx, subscriber.id, { fecha: invoiceDate });
+      // EL TRABAJO QUEDA PROGRAMADO, no hecho: la orden nace cuando la factura se
+      // pague (`OrdenAlPagarService`). Va en la misma transacción que la factura —una
+      // factura de traslado sin su fila en espera es una factura que nadie va a
+      // convertir en visita— y el `invoiceId` único es el candado contra la orden
+      // duplicada.
+      if (motivo?.abreOrden) {
+        await tx.pendingOrder.create({
+          data: {
+            subscriberId: subscriber.id, invoiceId: inv.id,
+            motivo: motivo.clave, type: motivo.abreOrden,
+            payload: traslado ? (traslado.destino as Prisma.InputJsonValue) : undefined,
+            resumen: traslado ? `De ${traslado.direccionVieja ?? 'dirección sin registrar'} a ${traslado.direccionNueva}` : null,
+            context: traslado ? traslado.notaObservacion : null,
+          },
+        });
+      }
       return { id: inv.id, tid: inv.tid, total, subtotal, tax, anticipo: anticipo.total };
     });
     // Contabilización automática (DR cartera, CR ingreso + IVA). Idempotente; no rompe el flujo.
@@ -250,7 +286,56 @@ export class FacturasService {
       sourceId: result.id, date: invoiceDate, number: result.tid,
       subtotal: result.subtotal, tax: result.tax, createdBy: user?.name ?? user?.email ?? null,
     });
-    return result;
+    return {
+      ...result,
+      motivo: motivo ? { clave: motivo.clave, etiqueta: motivo.etiqueta } : null,
+      // Lo que hay que DECIRLE a quien la emitió: esta factura no es solo un cobro,
+      // lleva un trabajo detrás que arranca cuando el cliente pague.
+      ordenAlPagar: motivo?.abreOrden
+        ? {
+            tipo: motivo.abreOrden,
+            traslado: traslado ? { desde: traslado.direccionVieja, hasta: traslado.direccionNueva } : null,
+            mensaje: traslado
+              ? `Al pagarse esta factura se abre la orden de traslado a ${traslado.direccionNueva} y la ficha del cliente queda con esa dirección.`
+              : `Al pagarse esta factura se abre sola la orden de ${motivo.etiqueta.toLowerCase()}.`,
+          }
+        : null,
+    };
+  }
+
+  /**
+   * El MOTIVO de la factura, comprobado contra el catálogo.
+   *
+   * Se rechaza el desconocido en vez de guardarlo tal cual: `purpose` no es una nota
+   * libre —de él cuelga el trabajo que se abre al pagar—, y una clave con una errata
+   * ('trasladó', 'Traslado ') sería una factura de traslado que nunca abre su orden.
+   */
+  private resolverMotivo(purpose?: string): MotivoFactura | null {
+    if (!purpose?.trim()) return null;
+    const motivo = motivoPorClave(purpose);
+    if (!motivo) throw new BadRequestException(`Motivo de factura desconocido: «${purpose}».`);
+    return motivo;
+  }
+
+  /**
+   * A dónde se muda el cliente, cuando el motivo es un traslado.
+   *
+   * La dirección es OBLIGATORIA en ese motivo: la orden que nace al pagar es la que
+   * manda al técnico a la casa nueva, y el día del pago ya no hay nadie delante a
+   * quien preguntarle a dónde iba. Y sólo se lee en ese motivo — un `moveTo` colgado
+   * de una factura de mensualidad se ignora a propósito, como el `graceDays` fuera de
+   * la reconexión por días: un dato que nadie va a aplicar no se guarda.
+   */
+  private trasladoDeLaFactura(
+    dto: CreateInvoiceDto,
+    motivo: MotivoFactura | null,
+    sub: { nomenclature: unknown; addressLine: string | null; neighborhood: string | null },
+  ): TrasladoArmado | null {
+    if (!motivo?.pideDestino) return null;
+    if (!dto.moveTo) {
+      throw new BadRequestException('Una factura de traslado necesita la dirección nueva del cliente.');
+    }
+    return armarTraslado(dto.moveTo, sub);
   }
 
   /**
@@ -516,10 +601,31 @@ export class FacturasService {
     // servicio, no un servicio en sí. Sin esta distinción, un abonado con solo la
     // fila de puntos se daba por resuelto y se quedaba sin su TV/internet.
     const planDe = <T extends { kind: string }>(s: { services: T[] }) => s.services.filter((x) => x.kind !== 'PUNTOS');
-    const sinServicio = subs
-      .filter((s) => !planDe(s).length && !alreadyBilled.has(s.id))
+    /**
+     * El respaldo COMPLETA lo que falta, no se activa sólo cuando no hay nada.
+     *
+     * Era todo o nada —"si tiene alguna fila, se cree la ficha entera"— y eso deja
+     * de facturar servicios en cuanto un abonado queda a medio registrar. Pasó el
+     * 07-09-2026: a una cliente con televisión (sin fila, derivada de su factura)
+     * se le montó internet con una orden de 'AgregarInternet'; al nacerle la fila de
+     * INTERNET, el respaldo se apagó entero y su televisión iba a desaparecer de la
+     * corrida de octubre sin que nadie se enterara — la ficha ya no la enseñaba.
+     *
+     * Se pregunta por quien no tiene TODOS los servicios que sus facturas dicen que
+     * tiene, y del resultado se toman sólo los `kind` que le faltan: la fila
+     * registrada siempre manda sobre lo derivado.
+     */
+    // El respaldo sólo sabe deducir INTERNET y TV (son los dos que el legacy escribe
+    // en la cabecera de la factura), así que se pregunta por quien no tiene esos dos
+    // registrados. El STREAMING no entra: nace siempre como fila propia.
+    const leFalta = (s: { services: { kind: string }[] }) => {
+      const suyos = new Set(planDe(s).map((x) => x.kind));
+      return !suyos.has('INTERNET') || !suyos.has('TV');
+    };
+    const necesitaRespaldo = subs
+      .filter((s) => leFalta(s) && !alreadyBilled.has(s.id))
       .map((s) => s.id);
-    const planFactura = await this.planDeUltimaFactura(sinServicio, monthStart, asIfUnbilled ? monthStart : undefined);
+    const planFactura = await this.planDeUltimaFactura(necesitaRespaldo, monthStart, asIfUnbilled ? monthStart : undefined);
 
     // ¿Quién trae saldo a favor sin imputar? Una sola consulta para todo el lote: son
     // ~5.000 abonados y preguntarlo uno a uno metía otros 5.000 viajes a la BD en la
@@ -555,10 +661,24 @@ export class FacturasService {
       // Adicional" no es un Plan del catálogo.
       const conPlan = planDe(s);
       const puntos = s.services.filter((x) => x.kind === 'PUNTOS');
-      const base = conPlan.length ? conPlan : (planFactura.get(s.id) ?? []);
+      // Lo registrado + lo que le falte, derivado de sus facturas. El `kind` que ya
+      // tiene fila NO se toca: si alguien le corrigió el plan en la ficha, esa es la
+      // verdad, y la factura vieja no puede volver a imponer la suya.
+      const suyos = new Set<string>(conPlan.map((x) => x.kind as string));
+      // Uno por servicio y nada más. El respaldo puede devolver el mismo plan dos
+      // veces cuando el catálogo lo tiene duplicado con distinta caja ('10MegasF' y
+      // '10megasF' son dos filas de `Plan`): sin este filtro al abonado 1185 se le
+      // facturaba el internet dos veces. Gana el primero, que es el más reciente
+      // (`planDeUltimaFactura` ordena por fecha de factura descendente).
+      const derivados = (planFactura.get(s.id) ?? []).filter((d) => {
+        if (suyos.has(d.kind)) return false;
+        suyos.add(d.kind);
+        return true;
+      });
+      const base = [...conPlan, ...derivados];
       const servicios: { kind: string; planName: string | null; price: Prisma.Decimal | number | null; taxRate: Prisma.Decimal | number | null; qty?: number }[] =
         [...base, ...puntos];
-      const deUltimaFactura = !conPlan.length && base.length > 0;
+      const deUltimaFactura = derivados.length > 0;
       if (!servicios.length) { skip(s.id, 'NO_SERVICES'); continue; }
 
       // ¿Mes de promoción gratis? → no se factura; se descuenta el contador una vez/mes.
@@ -846,7 +966,9 @@ export class FacturasService {
     const routers: unknown[] = [];
     for (const [valor, kind] of [[dto.internet, 'INTERNET'], [dto.tv, 'TV']] as const) {
       if (valor === undefined) continue;
-      if (valor === 'no') { await this.subscribers.removeService(inv.subscriberId, kind, user); continue; }
+      // `snapshotLegacy: false`: aquí el snapshot de la factura que dicta lo escribe el
+      // paso 2 de abajo, con los tres servicios de una vez.
+      if (valor === 'no') { await this.subscribers.removeService(inv.subscriberId, kind, user, { snapshotLegacy: false }); continue; }
       // `allowInactive`: aquí no se vende, se corrige. El plan que la factura ya cobra
       // suele ser uno de los ocultos del catálogo (ver `changePlan`).
       const r = await this.subscribers.changePlan(inv.subscriberId, valor, user, { pushRouter, allowInactive: true });
@@ -954,6 +1076,7 @@ export class FacturasService {
 
   /** Nota crédito/débito: ajusta la factura vía un ítem (pid=0) y recalcula totales/estado. */
   async createNote(invoiceId: string, dto: CreateNoteDto, user: AuthUser) {
+    exigirEmisorDeNotas(user);
     const amount = round2(dto.amount);
     if (!(amount > 0)) throw new BadRequestException('El monto debe ser mayor a cero');
 
@@ -979,6 +1102,7 @@ export class FacturasService {
    * que ninguna, porque nadie sabe dónde se quedó.
    */
   async createNotes(dto: CreateNotesBulkDto, user: AuthUser) {
+    exigirEmisorDeNotas(user);
     const items = dto.items ?? [];
     if (!items.length) throw new BadRequestException('Elige al menos una factura.');
 

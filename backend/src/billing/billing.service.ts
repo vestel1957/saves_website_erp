@@ -7,6 +7,7 @@ import { MailService } from '../common/mail/mail.service';
 import { invoicePdfBuffer } from './billing-pdf';
 import { ReciboRolloData } from '../common/pdf/recibo-rollo';
 import { conceptoFactura } from '../common/concepto-factura';
+import { etiquetaDeMotivo } from './motivos-factura';
 import { terminoDePago } from '../common/terminos-pago';
 import { num } from '../common/money';
 import { sedesDe, whereSedePorSuscriptor, exigirSedeSuscriptor } from '../common/sede-scope';
@@ -178,8 +179,17 @@ export class BillingService {
       where.status = { in: ['DUE', 'PARTIAL'] as any };
       where.dueDate = { lt: new Date() };
     }
-    // Por defecto AÑO ACTUAL (aplica también al buscar; usar all=1 para histórico completo).
-    const period = scopeDate(params.from, params.to, params.all);
+    // Por defecto AÑO ACTUAL, por velocidad: hay 456.000 facturas y 9 de cada 10 son
+    // de años anteriores.
+    //
+    // Pero BUSCAR es otra cosa: quien escribe un número de factura, un documento o un
+    // nombre está pidiendo esa factura, no "esa factura de este año", y la ventana del
+    // año la hacía desaparecer sin decir nada —la #318921 (ago-2024) existía importada
+    // y el listado contestaba "No se encontraron facturas"—. Así que una búsqueda
+    // barre TODO el histórico salvo que se acote a mano con desde/hasta. Se puede: el
+    // número de factura tiene índice único y el peor caso (por nombre) son 70 ms.
+    const buscandoEnTodo = !!search && !params.from && !params.to;
+    const period = scopeDate(params.from, params.to, params.all || (buscandoEnTodo ? '1' : undefined));
     if (period) where.invoiceDate = period;
     if (search) {
       const asNum = Number(search);
@@ -219,10 +229,19 @@ export class BillingService {
         date: i.invoiceDate, dueDate: i.dueDate,
         total: num(i.total), paid: num(i.paidAmount), balance: num(i.total) - num(i.paidAmount),
         status: i.status, ron: i.ron, kind: i.kind,
+        // Por qué se emitió, cuando se dijo (las importadas y las de la corrida no lo
+        // traen): en el listado es lo que distingue un traslado de una venta de
+        // equipo sin tener que abrir la factura.
+        purpose: i.purpose, purposeLabel: etiquetaDeMotivo(i.purpose),
         service: [i.serviceCombo, i.serviceTv].filter((x) => x && x !== 'no').join(' · ') || null,
         eInvoiceFlag: i.eInvoiceFlag, // 'Crear Factura Electronica' | 'Factura Electronica Creada' | null
       })),
       sum: { total: sumTotal, balance: sumTotal - sumPaid },
+      // Qué ventana de fechas se aplicó DE VERDAD. Sin esto la pantalla no puede
+      // distinguir "no existe" de "no existe en este año", que es justo lo que
+      // confundía al buscar una factura vieja.
+      scope: !period ? 'historico' : params.from || params.to ? 'rango' : 'anio',
+      scopeYear: period && !(params.from || params.to) ? currentYear() : null,
       total, page, pageSize, pages: Math.ceil(total / pageSize),
     };
   }
@@ -238,6 +257,9 @@ export class BillingService {
         items: { orderBy: { id: 'asc' } },
         transactions: { orderBy: { date: 'desc' } },
         electronicInvoices: { orderBy: { date: 'desc' }, take: 5 },
+        // El trabajo que esta factura tiene detrás, si lo tiene: la orden que nace
+        // cuando se pague (hoy, el traslado). Ver `PendingOrder`.
+        pendingOrder: true,
       },
     });
     if (!i) throw new NotFoundException('Factura no encontrada');
@@ -252,6 +274,30 @@ export class BillingService {
       // abría vacía y al guardar la borraba: el que corregía un valor se llevaba por
       // delante la nota que había dejado otro.
       notes: i.notes,
+      /**
+       * POR QUÉ se emitió. `kind` dice el TIPO (fija/recurrente) y no el motivo:
+       * afiliación, traslado, reconexión y venta de equipo son las cuatro «Fija».
+       * Las facturas anteriores al 2026-09-08 —y las de la corrida mensual— no lo
+       * traen, así que puede venir null.
+       */
+      purpose: i.purpose,
+      purposeLabel: etiquetaDeMotivo(i.purpose),
+      /**
+       * El trabajo que arranca cuando esta factura se pague: qué orden, a dónde
+       * (el traslado lleva la dirección nueva) y si ya se abrió. Es lo que hay que
+       * ver en la factura para saber que cobrarla no es el final del asunto.
+       */
+      ordenAlPagar: i.pendingOrder
+        ? {
+            tipo: i.pendingOrder.type,
+            motivo: etiquetaDeMotivo(i.pendingOrder.motivo),
+            resumen: i.pendingOrder.resumen,
+            ticketId: i.pendingOrder.ticketId,
+            ticketCode: i.pendingOrder.ticketCode,
+            abierta: !!i.pendingOrder.ticketId,
+            error: i.pendingOrder.lastError,
+          }
+        : null,
       period: periodoFacturado(i.kind, i.invoiceDate),
       service: { combo: i.serviceCombo, tv: i.serviceTv, puntos: i.puntos, estadoCombo: i.estadoCombo, estadoTv: i.estadoTv },
       eInvoiceFlag: i.eInvoiceFlag,
@@ -305,9 +351,11 @@ export class BillingService {
     const pendientes = inv.subscriber
       ? await this.prisma.subInvoice.findMany({
           where: { subscriberId: inv.subscriber.id, status: { in: ['DUE', 'PARTIAL'] } },
+          // Los `items` viajan sólo para reconocer la afiliación, que es el único
+          // renglón que no se rotula por mes (ver `conceptoFactura`).
           select: {
-            id: true, tid: true, kind: true, invoiceDate: true, total: true, paidAmount: true,
-            items: { select: { productName: true }, take: 1, orderBy: { createdAt: 'asc' } },
+            id: true, tid: true, invoiceDate: true, total: true, paidAmount: true,
+            items: { select: { productName: true } },
           },
           orderBy: { invoiceDate: 'asc' },
         })
@@ -324,10 +372,24 @@ export class BillingService {
         }))?.legacyId ?? null
       : null;
 
+    // La fecha del papel es el día en que se PAGÓ la factura, no el de su emisión: es
+    // el comprobante que se lleva el cliente. Se toma el último pago vigente (los
+    // `payments` vienen por fecha descendente); si aún no tiene ninguno, hoy en
+    // Colombia. `Transaction.date` es una columna `date` (medianoche UTC), igual que
+    // la del recibo, así que `fechaSolo` la formatea sin correrla un día.
+    const hoy = new Date(
+      `${new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' })}T00:00:00Z`,
+    );
+    const ultimoPago = inv.payments.find((p) => p.status !== 'ANULADA' && p.amount > 0);
+    const fechaPago = ultimoPago ? new Date(ultimoPago.date) : hoy;
+    // La hora del membrete sólo tiene sentido si el pago es de hoy; la transacción no
+    // guarda la suya, y estampar la de ahora junto a una fecha pasada sería inventarla.
+    const esHoy = fechaPago.getTime() === hoy.getTime();
+
     return {
       number: String(inv.tid),
-      date: inv.date,
-      createdAt: new Date(),
+      date: fechaPago,
+      createdAt: esHoy ? new Date() : null,
       branch: inv.branchRef ?? inv.subscriber?.branch ?? null,
       cashier: null,
       cashierRole: null,
@@ -342,15 +404,19 @@ export class BillingService {
             codigo,
           }
         : null,
-      // Los ítems de la factura tal cual (el `foreach ($lista_items)` del legacy).
-      items: inv.items.map((it) => ({
+      // UN renglón por factura: el mes que se está pagando y su total. El legacy
+      // desglosaba aquí los ítems (`foreach ($lista_items)`), y eso ponía el PLAN en
+      // el papel del cliente —"100 Megas F-S", "Television", "Punto adicional"—; el
+      // recibo no discrimina servicios (ver `conceptoFactura`), salvo la afiliación,
+      // que se nombra por lo que es. El desglose sigue saliendo en la factura en hoja.
+      items: [{
         tid: inv.tid,
-        concept: [it.product, it.description].filter(Boolean).join(' — ') || 'Ítem',
-        // Base (qty×price, SIN IVA en las dos convenciones) + su IVA. `subtotal`
-        // no sirve: en los ítems traídos del legacy ya trae el IVA dentro y el
-        // renglón salía inflado un 19% contra el total del recibo.
-        amount: it.qty * it.price + it.taxTotal - it.discountTotal,
-      })),
+        concept: conceptoFactura({
+          tid: inv.tid, invoiceDate: inv.date,
+          items: inv.items.map((it) => ({ productName: it.product })),
+        }),
+        amount: inv.total,
+      }],
       // Las demás pendientes, que el legacy imprime en negrita cursiva debajo.
       pending: pendientes
         .filter((i) => i.id !== inv.id)

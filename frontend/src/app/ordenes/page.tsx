@@ -12,6 +12,7 @@ import { Pagination } from "@/components/ui/Pagination";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { OrdersFilterButton, EMPTY_FILTERS, countActiveFilters, type OrderFilters } from "@/components/orders/OrdersFilterButton";
 import { useAuth } from "@/context/AuthProvider";
+import { PERM } from "@/lib/auth";
 import { cop } from "@/lib/subscribers";
 import { useRequest } from "@/lib/useRequest";
 import { useOrden } from "@/lib/useOrden";
@@ -24,7 +25,14 @@ function statusTone(status: string): "default" | "success" | "error" | "warning"
 }
 
 export default function OrdenesPage() {
-  const { loading: authLoading, authFetch } = useAuth();
+  const { loading: authLoading, authFetch, can, isSuperadmin } = useAuth();
+  // La CAJERA entra a compras sólo a mirar y a poner el papel (2026-09-08): abre la
+  // orden para subirle la factura del proveedor o el comprobante del pago. ORDENAR la
+  // compra no es suyo, así que no se le pinta «Nueva orden» — y el middleware le cierra
+  // /ordenes/nueva y la API el POST, esto sólo evita el botón que muere en un 403.
+  const soloAdjunta =
+    !isSuperadmin && can(PERM.AREA_CAJA) &&
+    !can(PERM.AREA_ADMINISTRACION) && !can(PERM.AREA_CONTABILIDAD) && !can(PERM.AREA_GERENCIA);
 
   const [kind, setKind] = useState<"compra" | "servicio">("compra");
   const [search, setSearch] = useState("");
@@ -81,9 +89,11 @@ export default function OrdenesPage() {
           <Link href="/ordenes/historial">
             <Button variant="secondary"><Icon name="clock" size={15} /> Historial</Button>
           </Link>
-          <Link href="/ordenes/nueva">
-            <Button variant="primary"><Icon name="plus" size={15} /> Nueva orden</Button>
-          </Link>
+          {!soloAdjunta && (
+            <Link href="/ordenes/nueva">
+              <Button variant="primary"><Icon name="plus" size={15} /> Nueva orden</Button>
+            </Link>
+          )}
         </div>
       </div>
 

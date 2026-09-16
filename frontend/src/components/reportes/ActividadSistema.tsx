@@ -61,7 +61,14 @@ export function ActividadSistema({ data }: { data: any }) {
             <span className={r.usuario === "Sistema (automático)" ? "text-text-tertiary italic" : "font-medium text-text-primary"}>{r.usuario}</span>
           ) },
           { key: "m", header: "Módulo", render: (r: any) => <span className="rounded bg-surface-2 px-1.5 py-0.5 text-[11px] text-text-secondary">{r.modulo}</span> },
-          { key: "o", header: "Operación", render: (r: any) => <span className="font-mono text-[11px] text-text-secondary">{r.operacion}</span> },
+          // La frase primero y la ruta debajo: la operación cruda dice a qué
+          // endpoint se llamó, no qué hizo la persona.
+          { key: "o", header: "Qué hizo", render: (r: any) => (
+            <div className="min-w-[220px]">
+              <div className="text-text-primary">{r.descripcion ?? r.operacion}</div>
+              <div className="font-mono text-[11px] text-text-tertiary">{r.operacion}</div>
+            </div>
+          ) },
           { key: "ip", header: "IP", render: (r: any) => <span className="font-mono text-[11px] text-text-tertiary">{r.ip ?? "—"}</span> },
         ]} />
       </ChartCard>

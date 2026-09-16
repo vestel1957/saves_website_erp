@@ -47,6 +47,23 @@ export const TAREAS: TareaProgramada[] = [
     ejecutar: () => cronService.scheduledGeoPurge(),
   },
   {
+    nombre: 'secrets-al-dia',
+    // Diaria 04:30 — pone el /ppp/secret de cada abonado de acuerdo con su ficha
+    // (comentario con la VLAN, IP local, IP remota que falte). Es lo que evita que
+    // el desfase con el legacy se vaya acumulando hasta que alguien lo note en un
+    // cliente suelto. No reinicia sesiones ni toca clave, usuario ni perfil.
+    expresion: '30 4 * * *',
+    ejecutar: () => cronService.scheduledSecretsAlDia(),
+  },
+  {
+    nombre: 'cortes-deshechos',
+    // Diaria 07:00 — antes de que abra la oficina. Avisa a Cartera de los cortados por
+    // mora que un router volvió a dejar navegando sin pago ni reconexión (el 01-09-2026
+    // pasó con 23 a la vez y nadie lo supo en dos semanas). Sólo lee los routers.
+    expresion: '0 7 * * *',
+    ejecutar: () => cronService.scheduledCortesDeshechos(),
+  },
+  {
     nombre: 'exchange-rate',
     expresion: '0 04 * * *', // era CronExpression.EVERY_DAY_AT_4AM
     ejecutar: () => cronService.scheduledExchangeRate(),

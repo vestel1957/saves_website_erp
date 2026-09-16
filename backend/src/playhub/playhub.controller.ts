@@ -1,4 +1,5 @@
 import { IsString, MinLength } from 'class-validator';
+import { AuthUser } from '../auth/current-user.decorator';
 import { PlayhubService } from './playhub.service';
 
 export class ProductDto {
@@ -19,35 +20,35 @@ export class PlayhubController {
   }
 
   /** Suscripciones en vivo del cliente (consulta a PlayHub). */
-  live(id: string) {
-    return this.playhub.liveSubscriptions(id);
+  live(user: AuthUser, id: string) {
+    return this.playhub.liveSubscriptions(user, id);
   }
 
   /** Suscripciones locales del cliente (tabla incremental). */
-  local(id: string) {
-    return this.playhub.localSubscriptions(id);
+  local(user: AuthUser, id: string) {
+    return this.playhub.localSubscriptions(user, id);
   }
 
-  subscribe(id: string, dto: ProductDto) {
-    return this.playhub.subscribe(id, dto.productId);
+  subscribe(user: AuthUser, id: string, dto: ProductDto) {
+    return this.playhub.subscribe(user, id, dto.productId);
   }
 
-  unsubscribe(id: string, dto: ProductDto) {
-    return this.playhub.unsubscribe(id, dto.productId);
+  unsubscribe(user: AuthUser, id: string, dto: ProductDto) {
+    return this.playhub.unsubscribe(user, id, dto.productId);
   }
 
-  syncCustomer(id: string) {
-    return this.playhub.syncCustomer(id);
+  syncCustomer(user: AuthUser, id: string) {
+    return this.playhub.syncCustomer(user, id);
   }
 
   /** Refresca la tabla local del cliente contra sus suscripciones en vivo. */
-  syncLocal(id: string) {
-    return this.playhub.syncSubscriber(id);
+  syncLocal(user: AuthUser, id: string) {
+    return this.playhub.syncSubscriber(user, id);
   }
 
   /** Elegibilidad del cliente (regla del mínimo de Megas, `PLAYHUB_MIN_MEGAS`). */
-  eligibility(id: string) {
-    return this.playhub.eligibility(id);
+  eligibility(user: AuthUser, id: string) {
+    return this.playhub.eligibility(user, id);
   }
 
   /**

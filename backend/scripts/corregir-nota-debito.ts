@@ -153,7 +153,7 @@ async function main() {
       const cols = Object.keys(fila);
       const [res]: any = await my.execute(
         `INSERT INTO \`invoice_items\` (${cols.map((c) => `\`${c}\``).join(',')}) VALUES (${cols.map(() => '?').join(',')})`,
-        cols.map((c) => fila[c] ?? null),
+        cols.map((c) => (fila[c] ?? null) as string | number | null),
       );
       await prisma.subInvoiceItem.update({ where: { id: it.id }, data: { legacyId: res.insertId } });
     }
@@ -162,7 +162,7 @@ async function main() {
     const cols = ['subtotal', 'tax', 'total', 'items'];
     await my.execute(
       `UPDATE \`invoices\` SET ${cols.map((c) => `\`${c}\`=?`).join(',')} WHERE \`id\`=?`,
-      [...cols.map((c) => full[c] ?? null), inv.legacyId],
+      [...cols.map((c) => (full[c] ?? null) as string | number | null), inv.legacyId],
     );
     await my.commit();
     console.log(`legacy: factura ${inv.legacyId} reescrita (${frescos.length} renglones, total ${pesos(total)}).`);

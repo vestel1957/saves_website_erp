@@ -74,6 +74,46 @@ export interface BajaAplicadaEvent {
 }
 
 /**
+ * El cierre de una orden DEVOLVIÓ el servicio (reconexión o activación).
+ *
+ * La cuarta cara de la misma moneda que `BAJA_APLICADA_EVENT` y
+ * `ACTIVACION_APLICADA_EVENT`, y la que faltaba. El corte vive en dos sitios que la ida
+ * del sync vuelve a traer cada 15 minutos —`customers.usu_estado` y el
+ * `invoices.estado_tv`/`estado_combo` de la factura vigente—, así que una reconexión
+ * hecha aquí que no llegue al legacy antes de esa pasada se DESHACE sola: el cliente
+ * navegando y las dos pantallas diciendo "Cortado". Le pasó a la orden #505799 el
+ * 09-09-2026.
+ *
+ * El camino del PAGO ya tenía el suyo (`RECONEXION_APLICADA_EVENT` en red); el del
+ * cierre de orden —la otra puerta por la que vuelve un servicio, la del técnico que lo
+ * restablece en sitio— no tenía ninguno.
+ */
+export const RECONEXION_APLICADA_ORDEN_EVENT = 'support.reconexion.aplicada';
+
+export interface ReconexionAplicadaOrdenEvent {
+  subscriberId: string;
+  /** Orden que lo provocó, para el rastro. */
+  code: number | null;
+}
+
+/**
+ * El cierre de una orden ACTIVÓ a un abonado que estaba por instalar.
+ *
+ * La tercera cara de la misma moneda que `RECONEXION_APLICADA_EVENT` y
+ * `BAJA_APLICADA_EVENT`, y por el mismo motivo: `customers.usu_estado` lo manda el
+ * legacy en la ida (cada 15 min), así que la activación que no llegue allá antes se
+ * DESHACE sola y el cliente recién instalado —navegando ya— vuelve a salir 'INSTALAR'
+ * en las dos pantallas. Le pasó a nueve abonados entre el 02 y el 05-09-2026.
+ */
+export const ACTIVACION_APLICADA_EVENT = 'support.activacion.aplicada';
+
+export interface ActivacionAplicadaEvent {
+  subscriberId: string;
+  /** Orden que lo provocó, para el rastro. */
+  code: number | null;
+}
+
+/**
  * Se ANULÓ una orden. Existe para deshacer lo que se apartó al abrirla: el equipo
  * reservado en bodega vuelve a estar disponible (ver `EquipoReservaService`).
  */
@@ -83,4 +123,19 @@ export interface TicketAnuladaEvent {
   ticketId: string;
   code: number | null;
   subscriberId: string | null;
+}
+
+/**
+ * A una orden se le QUITÓ el técnico (se desasignó sin darle otro dueño).
+ *
+ * Existe para lo contrario que `TICKET_ASIGNADO_EVENT`: retirar de la campanita del
+ * técnico el aviso de un trabajo que ya no es suyo. La reasignación no lo necesita
+ * —el aviso del nuevo dueño ya barre el del anterior—, pero desasignar no emitía
+ * nada y dejaba al técnico con la orden colgada en la campanita para siempre.
+ */
+export const TICKET_DESASIGNADO_EVENT = 'support.ticket.desasignado';
+
+export interface TicketDesasignadoEvent {
+  ticketId: string;
+  code: number | null;
 }

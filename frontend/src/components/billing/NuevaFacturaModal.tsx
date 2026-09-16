@@ -10,10 +10,28 @@ import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { SubscriberPicker, type PickedSub } from "@/components/cobranzas/SubscriberPicker";
 import { ConceptoPicker } from "@/components/billing/ConceptoPicker";
+import { DireccionFields, DIRECCION_VACIA, NOM_KEYS, ZONA_KEYS, direccionArmada, type DireccionValor } from "@/components/subscribers/DireccionFields";
 import { cop } from "@/lib/subscribers";
 import { mensajeDeError } from "@/lib/errores";
 
 type Item = { productName?: string; productId?: number; description: string; qty: number; price: number; taxRate: number };
+
+/**
+ * POR QUÉ se factura. Lo sirve el backend (`/billing/motivos`) con el concepto y el
+ * precio de HOY de cada motivo: escribir aquí «Traslado 30.000» es garantizar que el
+ * día que suba de precio la pantalla siga diciendo lo viejo.
+ */
+type Motivo = {
+  clave: string;
+  etiqueta: string;
+  ayuda: string;
+  kind: Kind;
+  /** El tipo de orden que se abre sola al pagarse esta factura (null = ninguna). */
+  abreOrden: string | null;
+  /** Pide la dirección nueva del cliente (hoy, solo el traslado). */
+  pideDestino: boolean;
+  producto: { name: string; productId: number; price: number; taxRate: number } | null;
+};
 
 /**
  * Tipo de factura: el `tipo_factura` del legacy (select "Factura" de `newinvoice.php`).
@@ -60,8 +78,43 @@ export function NuevaFacturaModal({
   const [invoiceDate, setInvoiceDate] = useState(today());
   const [kind, setKind] = useState<Kind>("FIJA");
   const [notes, setNotes] = useState("");
+  /**
+   * El MOTIVO: por qué se emite esta factura. Arranca vacío a propósito —«Fija» no
+   * dice nada, y elegirlo es lo que permite ver después de qué era la factura— y hay
+   * uno que además dispara trabajo: el traslado abre su orden al pagarse.
+   */
+  const [motivo, setMotivo] = useState("");
+  const [motivos, setMotivos] = useState<Motivo[]>([]);
+  /**
+   * ¿El motivo lo eligió una persona? Mientras no, lo deduce el concepto de la línea
+   * (ver `elegirConcepto`). En cuanto alguien toca el desplegable —aunque sea para
+   * dejarlo en «Sin especificar»— el automático se calla y no vuelve a pisarlo.
+   */
+  const [motivoTocado, setMotivoTocado] = useState(false);
+  /**
+   * A dónde se muda el cliente, cuando la factura es de traslado. La ZONA se precarga
+   * con la que tiene hoy (mudarse de barrio es lo raro) y la vía se deja en blanco a
+   * propósito: es una dirección nueva, y arrancar con la vieja escrita es la forma de
+   * que alguien la deje igual sin darse cuenta.
+   */
+  const [dir, setDir] = useState<DireccionValor>(DIRECCION_VACIA);
+  /** La que tiene hoy, para enseñarla al lado y para no repetirla. */
+  const [dirActual, setDirActual] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  const motivoActual = useMemo(() => motivos.find((m) => m.clave === motivo) ?? null, [motivos, motivo]);
+  /** La factura de traslado es la que pide dirección y la que deja orden programada. */
+  const pideDestino = !!motivoActual?.pideDestino;
+  const direccionNueva = useMemo(() => (pideDestino ? direccionArmada(dir) : ""), [pideDestino, dir]);
+  /**
+   * La dirección escrita es la que el cliente ya tiene. NO frena la factura (decisión del
+   * usuario, 2026-09-08: «puede que vaya para el segundo piso»); solo se dice, por si de
+   * verdad fue un error de dedo, y se recuerda dónde se escribe el piso para que la ficha
+   * quede distinguiendo los dos sitios.
+   */
+  const mismaDireccion =
+    !!dirActual && !!direccionNueva && direccionNueva.toLowerCase() === dirActual.toLowerCase();
 
   // Reset al cerrar para que la próxima apertura arranque limpia.
   useEffect(() => {
@@ -71,9 +124,101 @@ export function NuevaFacturaModal({
     setInvoiceDate(today());
     setKind("FIJA");
     setNotes("");
+    setMotivo("");
+    setMotivoTocado(false);
+    setDir(DIRECCION_VACIA);
+    setDirActual(null);
     setSaving(false);
     setErr(null);
   }, [open, fixedSub]);
+
+  // Los motivos y su precio de hoy, una vez al abrir.
+  useEffect(() => {
+    if (!open) return;
+    void authFetch("/billing/motivos")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setMotivos(Array.isArray(d) ? (d as Motivo[]) : []))
+      .catch(() => {});
+  }, [open, authFetch]);
+
+  // La zona y la dirección de hoy, solo cuando hace falta: es una consulta más y la
+  // mayoría de las facturas no son traslados.
+  useEffect(() => {
+    if (!pideDestino || !sub) return;
+    let vivo = true;
+    void authFetch(`/subscribers/${sub.id}/form`)
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then((d) => {
+        if (!vivo) return;
+        const nom = (d.nomenclature ?? {}) as Record<string, unknown>;
+        const str = (v: unknown) => (v == null ? "" : String(v));
+        setDir((p) => ({ ...p, ...Object.fromEntries(ZONA_KEYS.map((k) => [k, str(d[k])])) }));
+        setDirActual(direccionArmada({
+          ...Object.fromEntries(NOM_KEYS.map((k) => [k, str(nom[k])])),
+          addressLine: str(d.addressLine),
+        }) || null);
+      })
+      .catch(() => {});
+    return () => { vivo = false; };
+  }, [pideDestino, sub, authFetch]);
+
+  /**
+   * Elegir el motivo pone el tipo de factura que le corresponde y propone su
+   * concepto: la cajera que va a cobrar un traslado no tiene que buscar «Traslado» a
+   * mano en el catálogo (ni acabar cobrando otra cosa parecida). Solo se pisa la
+   * línea si está vacía o si la había puesto otro motivo: lo escrito a conciencia no
+   * se toca.
+   */
+  function elegirMotivo(clave: string) {
+    setMotivo(clave);
+    setMotivoTocado(true);
+    const m = motivos.find((x) => x.clave === clave);
+    if (!m) return;
+    setKind(m.kind);
+    if (!m.producto) return;
+    setItems((prev) => {
+      const sueltos = prev.filter((it) => it.description.trim());
+      const propuestos = new Set(motivos.map((x) => x.producto?.name).filter(Boolean) as string[]);
+      const propia = sueltos.length === 1 && propuestos.has(sueltos[0].description.trim());
+      if (sueltos.length && !propia) return prev;
+      return [{
+        description: m.producto!.name, productName: m.producto!.name, productId: m.producto!.productId,
+        qty: 1, price: m.producto!.price, taxRate: m.producto!.taxRate,
+      }];
+    });
+  }
+
+  /**
+   * EL CAMINO INVERSO: elegir el concepto «Traslado» elige el motivo Traslado.
+   *
+   * `elegirMotivo` (arriba) va de motivo a concepto, pero en la ventanilla se piensa
+   * al revés —"le cobro el traslado"— y se busca «Traslado» en el catálogo de la
+   * línea sin mirar el desplegable de la derecha. Esa factura salía sin motivo: sin
+   * la casilla de la dirección nueva y, sobre todo, sin abrir la orden de traslado al
+   * pagarse, que es justo lo que se quería. Ahora el concepto lo deduce.
+   *
+   * Solo mientras nadie haya tocado el desplegable a mano, y NUNCA toca los ítems: el
+   * concepto ya lo acaba de elegir la persona, faltaba el rótulo.
+   */
+  function elegirConcepto(i: number, p: { name: string; productId: number; price: number; taxRate: number }) {
+    setItem(i, { description: p.name, productName: p.name, productId: p.productId, price: p.price, taxRate: p.taxRate });
+    if (motivoTocado || motivo) return;
+    const m = motivos.find((x) => x.producto?.productId === p.productId);
+    if (!m) return;
+    setMotivo(m.clave);
+    setKind(m.kind);
+  }
+
+  /**
+   * La línea cobra algo que tiene motivo propio y la factura salió sin él: pasa
+   * cuando alguien vacía el desplegable a conciencia. No se bloquea —hay casos
+   * legítimos, como refacturar un traslado ya hecho—, pero se dice qué se pierde.
+   */
+  const motivoDeLaLinea = useMemo(() => {
+    if (motivo) return null;
+    const ids = new Set(items.map((it) => it.productId).filter((v): v is number => v != null));
+    return motivos.find((m) => m.producto && ids.has(m.producto.productId) && (m.pideDestino || m.abreOrden)) ?? null;
+  }, [items, motivo, motivos]);
 
   const totals = useMemo(() => {
     let subtotal = 0, tax = 0;
@@ -109,15 +254,34 @@ export function NuevaFacturaModal({
       setErr("Elige cada concepto del catálogo: el precio y el IVA los pone el producto.");
       return;
     }
+    // El traslado necesita saber a dónde va el cliente: de esta dirección sale la
+    // orden que se abre al pagarse la factura, y el día del pago ya no hay nadie
+    // delante a quien preguntarle.
+    if (pideDestino && !direccionNueva) {
+      setErr("Escribe la dirección a la que se muda el cliente."); return;
+    }
     setSaving(true);
     try {
       const res = await authFetch(`/billing/invoices`, {
         method: "POST",
-        body: JSON.stringify({ subscriberId: sub.id, invoiceDate, kind, notes: notes || undefined, items: clean }),
+        body: JSON.stringify({
+          subscriberId: sub.id, invoiceDate, kind, notes: notes || undefined, items: clean,
+          purpose: motivo || undefined,
+          moveTo: pideDestino
+            ? {
+                nomenclature: Object.fromEntries(NOM_KEYS.map((k) => [k, dir[k] || null])),
+                ...Object.fromEntries(ZONA_KEYS.filter((k) => dir[k]).map((k) => [k, dir[k]])),
+                ...(dir.addressLine ? { addressLine: dir.addressLine } : {}),
+              }
+            : undefined,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "No se pudo crear la factura");
       toast(`Factura #${data.tid} creada · ${cop(data.total)}`);
+      // Y si la factura lleva trabajo detrás, se dice: cobrarla no es el final del
+      // asunto — al pagarse nace la orden y la ficha del cliente se muda con ella.
+      if (data?.ordenAlPagar?.mensaje) toast(data.ordenAlPagar.mensaje, "info");
       onDone?.();
       router.push(`/facturacion/${data.id}`);
     } catch (e) { setErr(mensajeDeError(e)); setSaving(false); }
@@ -169,7 +333,7 @@ export function NuevaFacturaModal({
                       // Elegir del catálogo trae el precio y el IVA vigentes. Escribir a
                       // mano solo sirve para buscar: la línea queda sin producto y sin
                       // precio, porque ese par ya no se digita.
-                      onPick={(p) => setItem(i, { description: p.name, productName: p.name, productId: p.productId, price: p.price, taxRate: p.taxRate })}
+                      onPick={(p) => elegirConcepto(i, p)}
                       onText={(t) => setItem(i, { description: t, productName: undefined, productId: undefined, price: 0, taxRate: 0 })}
                     />
                     <Input type="number" min={0} className="text-right" value={it.qty} onChange={(e) => setItem(i, { qty: Number(e.target.value) })} />
@@ -190,6 +354,39 @@ export function NuevaFacturaModal({
               <Icon name="plus" size={14} /> Agregar ítem
             </button>
           </div>
+
+          {/* TRASLADO: a dónde se muda. La ficha del cliente NO se toca ahora — se
+              muda cuando pague, que es cuando nace la orden. Una dirección cambiada
+              por una factura que después se anula dejaría al cliente viviendo en una
+              casa a la que no se mudó. */}
+          {pideDestino && (
+            <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <span className="text-[13px] font-bold text-text-primary">Nueva dirección del cliente</span>
+                <span className="inline-flex items-center gap-1 text-[12px] text-text-secondary">
+                  <Icon name="clipboard-list" size={13} className="text-text-tertiary" />
+                  Al pagarse esta factura se abre sola la orden de traslado
+                </span>
+              </div>
+              {dirActual && (
+                <p className="mb-2 text-[12px] text-text-tertiary">
+                  Hoy vive en <span className="text-text-secondary">{dirActual}</span>. La ficha queda con la dirección nueva cuando pague.
+                </p>
+              )}
+              {!sub && <p className="mb-2 text-[12px] text-text-tertiary">Elige primero el cliente para traer su zona.</p>}
+              <DireccionFields value={dir} onChange={(patch) => setDir((p) => ({ ...p, ...patch }))} comercial={false} />
+              <p className="mt-2 text-[12px] text-text-secondary">
+                Se muda a: <b className="text-text-primary">{direccionNueva || "— escribe la vía y su número —"}</b>
+              </p>
+              {mismaDireccion && (
+                <p className="mt-1 text-[12px] text-text-tertiary">
+                  Es la misma dirección que ya tiene. La factura se emite igual —mudarse dentro del mismo
+                  inmueble es un traslado—; si cambia de piso o de apartamento, dilo en «Torre / piso»
+                  o «Apto / casa» y la ficha lo recoge.
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Resumen */}
@@ -197,6 +394,24 @@ export function NuevaFacturaModal({
           <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
             <div className="mb-2 text-[13px] font-bold text-text-primary">Datos</div>
             <div className="flex flex-col gap-2">
+              {/* POR QUÉ se factura. Va ARRIBA del tipo porque es lo que de verdad se
+                  elige: el tipo (fija/recurrente) lo pone solo el motivo. */}
+              <Field label="Motivo de la factura" hint={motivoActual?.ayuda ?? "Para qué se le cobra. Queda escrito en la factura."}>
+                <Select value={motivo} onChange={(e) => elegirMotivo(e.target.value)}>
+                  <option value="">— Sin especificar —</option>
+                  {motivos.map((m) => <option key={m.clave} value={m.clave}>{m.etiqueta}</option>)}
+                </Select>
+              </Field>
+              {motivoDeLaLinea && (
+                <p className="rounded-lg bg-warning-surface px-2.5 py-2 text-[12px] text-warning-text">
+                  Esta factura cobra «{motivoDeLaLinea.producto?.name}» y va sin motivo: no
+                  {motivoDeLaLinea.pideDestino ? " pedirá la dirección nueva ni" : ""} abrirá sola la
+                  orden de {motivoDeLaLinea.abreOrden?.toLowerCase() ?? "trabajo"} al pagarse.{" "}
+                  <button type="button" onClick={() => elegirMotivo(motivoDeLaLinea.clave)} className="font-semibold underline">
+                    Marcarla como {motivoDeLaLinea.etiqueta.toLowerCase()}
+                  </button>
+                </p>
+              )}
               <Field label="Tipo de factura" hint={KINDS.find((k) => k.value === kind)?.hint}>
                 <Select value={kind} onChange={(e) => setKind(e.target.value as Kind)}>
                   {KINDS.map((k) => <option key={k.value} value={k.value}>{k.label}</option>)}

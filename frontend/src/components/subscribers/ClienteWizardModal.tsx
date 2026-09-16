@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Modal } from "@/components/Modal";
 import { Button } from "@/components/ui/Button";
-import { Input, Select, Field } from "@/components/ui/Field";
+import { Input, Select, Textarea, Field } from "@/components/ui/Field";
 import { Icon } from "@/components/Icon";
 import { Badge } from "@/components/ui/Badge";
 import { Segmented } from "@/components/ui/Segmented";
@@ -15,12 +15,8 @@ import { type Bundle, type Plan, type ServiceKind, SERVICE_KIND_LABEL } from "@/
 // Las casillas de la dirección (y sus catálogos encadenados) viven aparte: las
 // comparte con la orden de traslado, que captura a dónde se muda el cliente.
 import { DireccionFields, NOM_KEYS, direccionArmada } from "@/components/subscribers/DireccionFields";
+import { CUSTOMER_TYPES, DOC_TYPES, SUSCRIPCIONES, ESTRATOS, INSTALL_TECHS } from "@/lib/subscribers";
 
-/* Catálogos de valores fijos (tomados literal del legacy customers/edit.php) */
-const CUSTOMER_TYPES = ["Natural", "Juridico", "Gubernamental", "Militar"];
-const DOC_TYPES = ["CC", "CE", "NIT", "PAS", "PPT"];
-const SUSCRIPCIONES = ["Residencial", "Corporativo", "Dedicado"];
-const ESTRATOS = ["Estrato 1", "Estrato 2", "Estrato 3", "Estrato 4", "Estrato 5", "Estrato 6", "Estrato 7", "Estrato 8"];
 type Branch = { id: string; name: string };
 
 /**
@@ -32,9 +28,6 @@ type Branch = { id: string; name: string };
  * así que se eligen del catálogo, no se escriben a mano.
  */
 type Afiliacion = { id: string; name: string; price: number; taxRate: number };
-
-/** Tecnologías de instalación (enum InstallTech del backend). */
-const INSTALL_TECHS = ["GPON", "EPON", "EOC", "RADIO", "FIBRA"];
 
 /**
  * Espejo de `backend/src/subscribers/conexion-alta.ts`.
@@ -73,6 +66,7 @@ const EMPTY: Record<string, any> = {
   departmentRef: "", cityRef: "", localityRef: "", neighborhood: "", addressLine: "",
   clausula: "", gpsLat: "", gpsLng: "", branchId: "",
   pppUsername: "", pppPassword: "", pppProfile: "", ipRemote: "", installTech: "",
+  ipLocal: "", macEquipo: "", macOnt: "", netComment: "", vlan: "", vlanCargada: "",
   // Alta completa: qué se hace además de guardar la ficha. Por defecto TODO,
   // que es lo que se espera de un alta (y lo que no pasaba antes).
   provision: true, firstInvoice: true, installOrder: true, installCharge: "",
@@ -130,7 +124,7 @@ export function ClienteWizardModal({
   /** Lo que hizo el alta, para contarlo en vez de cerrar y dejarlo a la fe. */
   const [alta, setAlta] = useState<ResultadoAlta | null>(null);
 
-  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setF((p) => ({ ...p, [k]: e.target.value }));
+  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => setF((p) => ({ ...p, [k]: e.target.value }));
 
   /**
    * Chequeo de duplicados contra el servidor. Documento y dirección sólo AVISAN (igual que
@@ -203,6 +197,12 @@ export function ClienteWizardModal({
             clausula: str(d.clausula), gpsLat: str(d.gpsLat), gpsLng: str(d.gpsLng), branchId: str(d.branchId),
             pppUsername: str(d.pppUsername), pppPassword: str(d.pppPassword), pppProfile: str(d.pppProfile),
             ipRemote: str(d.ipRemote), installTech: str(d.installTech),
+            ipLocal: str(d.ipLocal), macEquipo: str(d.macEquipo), macOnt: str(d.macOnt),
+            // `vlanCargada` guarda la VLAN tal como vino para saber si se TOCÓ. Sin eso
+            // habría que mandarla en cada guardado, y reescribir el comentario a ciegas
+            // estropea los que no siguen la receta ("VILLA LUCIA 3362 VLAN -- FTTH"
+            // perdería el "VLAN --" sin que nadie lo hubiera pedido).
+            netComment: str(d.netComment), vlan: str(d.vlan), vlanCargada: str(d.vlan),
             ...Object.fromEntries(NOM_KEYS.map((k) => [k, str(nom[k])])),
           });
         })
@@ -319,6 +319,17 @@ export function ClienteWizardModal({
             pppUsername: f.pppUsername || undefined, pppPassword: f.pppPassword || undefined,
             pppProfile: f.pppProfile || undefined, ipRemote: f.ipRemote || undefined,
             installTech: f.installTech || undefined,
+            // Éstos SÍ viajan vacíos: son datos que el legacy trajo mal capturados
+            // (una MAC de otro equipo, un comentario con la VLAN de otro barrio) y
+            // borrarlos es una corrección tan válida como cambiarlos. En el backend
+            // "" se guarda como null (ver PROFILE_STR_FIELDS).
+            ipLocal: f.ipLocal, macEquipo: f.macEquipo, macOnt: f.macOnt,
+            netComment: f.netComment,
+            // La VLAN sólo si se tocó: va dentro del comentario, y reescribirlo
+            // cuando nadie lo pidió cambia texto que no es nuestro.
+            ...(String(f.vlan) !== String(f.vlanCargada)
+              ? { vlan: f.vlan === "" ? null : Number(f.vlan) }
+              : {}),
           }
         : { pppProfile: f.pppProfile || undefined }),
       // Alta completa (sólo al crear: en una edición estos pasos ya pasaron o se
@@ -353,7 +364,21 @@ export function ClienteWizardModal({
         throw new Error(Array.isArray(m?.message) ? m.message[0] : m?.message ?? "No se pudo guardar");
       }
       const out = await res.json().catch(() => ({}));
-      toast(mode === "edit" ? "Cliente actualizado" : `Cliente creado (abonado ${out.abonado ?? ""})`);
+      // Al editar, el servidor lleva los datos de conexión al Mikrotik (comentario,
+      // IP remota, perfil, usuario/clave; las MAC no van al router). Si eso falló hay
+      // que decirlo: la ficha quedó guardada pero el abonado sigue como estaba en la red.
+      const router = out.router as { ok: boolean; dryRun: boolean; message?: string } | undefined;
+      if (router && !router.ok) {
+        toast(router.message ?? "Los datos se guardaron, pero no llegaron al router", "alert-circle");
+      } else {
+        toast(
+          mode === "edit"
+            ? router
+              ? `Cliente actualizado · ${router.dryRun ? "router en simulación" : "sincronizado con el Mikrotik"}`
+              : "Cliente actualizado"
+            : `Cliente creado (abonado ${out.abonado ?? ""})`,
+        );
+      }
       onDone(out.id ?? subscriberId);
       // En el alta NO se cierra: el alta son cuatro pasos (plan, router, factura,
       // orden) y alguno puede haber fallado —el router típicamente—. Cerrar de
@@ -644,7 +669,47 @@ export function ClienteWizardModal({
                     {INSTALL_TECHS.map((t) => <option key={t} value={t}>{t}</option>)}
                   </Select>
                 </Field>
+                <Field label="IP local" hint="La del concentrador; en blanco si el router la pone.">
+                  <Input value={f.ipLocal} onChange={set("ipLocal")} placeholder="—" />
+                </Field>
+                {/* Las dos MAC de la ficha. La del CPE la escribe sola la asignación de
+                    equipo, pero en los abonados viejos del legacy vino a mano y a veces
+                    es la de otro equipo; la de la ONT casi nunca llegó. */}
+                <Field label="MAC equipo" hint="La pone la asignación de equipo; aquí se corrige.">
+                  <Input value={f.macEquipo} onChange={set("macEquipo")} placeholder="AA:BB:CC:DD:EE:FF" />
+                </Field>
+                <Field label="MAC ONT">
+                  <Input value={f.macOnt} onChange={set("macOnt")} placeholder="AA:BB:CC:DD:EE:FF" />
+                </Field>
+                <Field label="VLAN" hint="1 a 4094. Se guarda dentro del comentario.">
+                  <Input
+                    type="number"
+                    min={1}
+                    max={4094}
+                    value={f.vlan}
+                    onChange={set("vlan")}
+                    placeholder="sin VLAN"
+                  />
+                </Field>
               </div>
+              {/* El comentario del secret, tal como lo escribe el legacy: barrio, número
+                  de abonado, VLAN y tecnología ("MIRADOR 54519 VLAN 200 FTTH"). Se deja
+                  editar entero porque lo escribió una persona y a veces dice más que la
+                  receta; la casilla VLAN de arriba sólo cambia el número dentro. */}
+              <Field label="Comentario de red" hint="Barrio, nº de abonado, VLAN y tecnología.">
+                <Textarea
+                  rows={2}
+                  value={f.netComment}
+                  onChange={set("netComment")}
+                  placeholder="MIRADOR 54519 VLAN 200 FTTH"
+                />
+              </Field>
+              {/* Que quede dicho: esto corrige el DATO, no la red. La VLAN por la que
+                  navega de verdad la fija el service-port de la OLT. */}
+              <p className="mt-1 text-[12px] text-text-tertiary">
+                Cambiar la VLAN aquí corrige la ficha (y el legacy), no la configuración de
+                la OLT: para mover la VLAN de verdad hay que tocar el service-port.
+              </p>
               {checkingPpp && <p className="mt-2 text-[12px] text-text-tertiary">Verificando disponibilidad…</p>}
               {!checkingPpp && dup.pppUsername && (
                 <div className={`mt-2 rounded-lg px-3 py-2 text-[12px] ${
@@ -696,6 +761,14 @@ export function ClienteWizardModal({
             <Rev k="Tecnología" v={mode === "create" ? ETIQUETA_FTTH : f.installTech} />
             <Rev k="Perfil" v={perfilDelPlan || f.pppProfile} />
             <Rev k="IP remota" v={mode === "create" ? "automática" : f.ipRemote} />
+            {mode === "edit" && (
+              <>
+                <Rev k="MAC equipo" v={f.macEquipo} />
+                <Rev k="MAC ONT" v={f.macOnt} />
+                <Rev k="VLAN" v={f.vlan} />
+                <Rev k="Comentario de red" v={f.netComment} />
+              </>
+            )}
             {mode === "create" && (
               <>
                 <Rev k="Plan(es)" v={planesElegidos.map((p) => p.name).join(" + ")} />

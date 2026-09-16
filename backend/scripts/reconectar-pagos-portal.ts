@@ -54,6 +54,9 @@ async function main() {
 
   // 2. Quiénes son. Se listan ANTES de tocar nada: es lo que hay que poder revisar.
   const seco = await onlinePaymentsService.reconectar({ dias: DIAS, dryRun: true, limite: 5000 });
+  if (seco.anterioresAlCorte) {
+    console.log(`${seco.anterioresAlCorte} pago(s) anteriores al último corte del abonado: no reconectan.\n`);
+  }
   if (!seco.candidatos) {
     console.log('No hay pagos del portal pendientes de reconexión en esa ventana.\n');
     return;

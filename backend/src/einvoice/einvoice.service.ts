@@ -321,6 +321,7 @@ export class EinvoiceService {
     apiBaseUrl: string; authUrl: string; subscriptionKey: string | null; documentId: number | null;
     creditNoteDocumentId: number | null;
     sellerId: number | null; ivaTaxId: number | null; paymentCash: number | null; paymentCredIt: number | null;
+    customerSellerId: number | null; costCenterByBranch: unknown; cityByBranch: unknown; autoStamp: boolean;
     contactEmail: string | null; active: boolean; token: string | null; tokenExpires: Date | null;
   }) {
     const required: [number | null, string][] = [
@@ -335,6 +336,8 @@ export class EinvoiceService {
       documentId: a.documentId, creditNoteDocumentId: a.creditNoteDocumentId,
       sellerId: a.sellerId, ivaTaxId: a.ivaTaxId,
       paymentCash: a.paymentCash, paymentCredit: a.paymentCredIt, contactEmail: a.contactEmail,
+      customerSellerId: a.customerSellerId, autoStamp: a.autoStamp,
+      costCenterByBranch: a.costCenterByBranch ?? null, cityByBranch: a.cityByBranch ?? null,
       active: a.active, hasAccessKey: !!a.accessKey, hasToken: !!a.token, tokenExpires: a.tokenExpires,
       ready: missing.length === 0, missing,
     };
@@ -367,6 +370,8 @@ export class EinvoiceService {
     if (dto.ivaTaxId !== undefined) data.ivaTaxId = dto.ivaTaxId;
     if (dto.paymentCash !== undefined) data.paymentCash = dto.paymentCash;
     if (dto.paymentCredit !== undefined) data.paymentCredIt = dto.paymentCredit;
+    if (dto.customerSellerId !== undefined) data.customerSellerId = dto.customerSellerId;
+    if (dto.autoStamp !== undefined) data.autoStamp = dto.autoStamp;
     const updated = await this.prisma.siigoAccount.update({ where: { id }, data });
     return this.serializeAccount(updated);
   }

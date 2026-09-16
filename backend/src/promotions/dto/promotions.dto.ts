@@ -1,4 +1,5 @@
 import {
+  ArrayNotEmpty,
   IsArray,
   IsBoolean,
   IsDateString,
@@ -25,16 +26,14 @@ export const SUBSCRIBER_STATUSES = [
 export type SubscriberStatusName = (typeof SUBSCRIBER_STATUSES)[number];
 
 /**
- * A qué FACTURAS del cliente alcanza el descuento automático de ventanilla (espejo
- * del enum Prisma `PromotionInvoiceScope`). `MENSUALIDAD_DEL_MES` es el pronto pago;
- * `MENSUALIDADES_PENDIENTES`, la campaña de recuperación de cartera; y
- * `CUALQUIER_PENDIENTE` rebaja además los cargos sueltos. Ver
+ * TIPO de factura que una promoción rebaja (subconjunto del enum Prisma
+ * `InvoiceKind`): `RECURRENTE` es la mensualidad del servicio y `FIJA` los cargos
+ * sueltos —traslado, reconexión, instalación, afiliación—. Las notas crédito y débito
+ * no son facturas que se cobren, así que no se ofrecen. Ver
  * `promotions/descuento-al-cobrar.ts`.
  */
-export const INVOICE_SCOPES = [
-  'MENSUALIDAD_DEL_MES', 'MENSUALIDADES_PENDIENTES', 'CUALQUIER_PENDIENTE',
-] as const;
-export type InvoiceScopeName = (typeof INVOICE_SCOPES)[number];
+export const INVOICE_KINDS = ['RECURRENTE', 'FIJA'] as const;
+export type InvoiceKindName = (typeof INVOICE_KINDS)[number];
 
 /**
  * Público de una promoción: A QUÉ CLIENTES alcanza. Las dimensiones se combinan
@@ -98,12 +97,27 @@ export class CreatePromotionDto extends PromotionAudienceDto {
   active?: boolean;
 
   /**
-   * A qué facturas del cliente alcanza el descuento AUTOMÁTICO de ventanilla. Por
-   * omisión, sólo la mensualidad del mes en curso (pronto pago): una campaña que
-   * rebaje la mora se pide a propósito.
+   * TIPO de factura que rebaja: la mensualidad (`RECURRENTE`), los cargos sueltos
+   * (`FIJA`) o las dos. Por omisión sólo la mensualidad: que una campaña perdone
+   * también un traslado facturado esta mañana se pide a propósito.
    */
-  @IsOptional() @IsIn(INVOICE_SCOPES)
-  invoiceScope?: InvoiceScopeName;
+  @IsOptional() @IsArray() @ArrayNotEmpty() @IsIn(INVOICE_KINDS, { each: true })
+  invoiceKinds?: InvoiceKindName[];
+
+  /**
+   * Limitar el descuento a las facturas del MES EN CURSO. Por omisión sí (pronto
+   * pago); ponerlo en `false` es la campaña de recuperación de cartera, que rebaja
+   * también lo atrasado.
+   */
+  @IsOptional() @IsBoolean()
+  onlyCurrentMonth?: boolean;
+
+  /**
+   * Facturas elegidas a mano (`SubInvoice.id`). Sólo con UN cliente de público; si
+   * trae alguna, se rebajan exactamente esas (manda sobre el tipo y la antigüedad).
+   */
+  @IsOptional() @IsArray() @IsString({ each: true })
+  invoiceIds?: string[];
 
   /**
    * Publicar la promoción en el PORTAL DE PAGOS EN LÍNEA (vestel.com.co/crm). Sólo
@@ -157,12 +171,24 @@ export class UpdatePromotionDto extends PromotionAudienceDto {
   active?: boolean;
 
   /**
-   * A qué facturas del cliente alcanza el descuento AUTOMÁTICO de ventanilla. Por
-   * omisión, sólo la mensualidad del mes en curso (pronto pago): una campaña que
-   * rebaje la mora se pide a propósito.
+   * TIPO de factura que rebaja: la mensualidad (`RECURRENTE`), los cargos sueltos
+   * (`FIJA`) o las dos. Por omisión sólo la mensualidad: que una campaña perdone
+   * también un traslado facturado esta mañana se pide a propósito.
    */
-  @IsOptional() @IsIn(INVOICE_SCOPES)
-  invoiceScope?: InvoiceScopeName;
+  @IsOptional() @IsArray() @ArrayNotEmpty() @IsIn(INVOICE_KINDS, { each: true })
+  invoiceKinds?: InvoiceKindName[];
+
+  /**
+   * Limitar el descuento a las facturas del MES EN CURSO. Por omisión sí (pronto
+   * pago); ponerlo en `false` es la campaña de recuperación de cartera, que rebaja
+   * también lo atrasado.
+   */
+  @IsOptional() @IsBoolean()
+  onlyCurrentMonth?: boolean;
+
+  /** Facturas elegidas a mano (ver `CreatePromotionDto.invoiceIds`). `[]` las suelta. */
+  @IsOptional() @IsArray() @IsString({ each: true })
+  invoiceIds?: string[];
 
   /**
    * El PORTAL DE PAGOS cobra ya con el descuento puesto: la rebaja se concede por

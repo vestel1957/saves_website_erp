@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Icon } from "@/components/Icon";
 import { Badge } from "@/components/ui/Badge";
 import { TecChip } from "@/components/soporte/TecChip";
+import { ChipServicio } from "@/components/soporte/ChipServicio";
 import {
   type TicketRow,
   TICKET_STATUS_LABEL, TICKET_STATUS_TONE, TICKET_PRIORITY_TONE,
@@ -47,7 +48,10 @@ export function TarjetaOrden({
       {/* Qué es y cómo está: las dos preguntas que se hacen primero, en el
           renglón que se lee primero. */}
       <div className="flex items-start justify-between gap-2">
-        <span className="min-w-0 text-[14px] font-semibold leading-snug text-text-primary">{r.type}</span>
+        <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+          <span className="text-[14px] font-semibold leading-snug text-text-primary">{r.type}</span>
+          <ChipServicio servicio={r.servicio} />
+        </span>
         <span className="shrink-0">
           <Badge label={TICKET_STATUS_LABEL[r.status] ?? r.status} tone={TICKET_STATUS_TONE[r.status] ?? "default"} />
         </span>

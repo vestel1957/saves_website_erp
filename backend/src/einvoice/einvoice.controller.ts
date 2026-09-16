@@ -19,13 +19,14 @@ export class EinvoiceController {
 
   stats() { return this.einvoice.stats(); }
   mode() { return { live: this.emit.isLive, mode: this.emit.isLive ? 'LIVE' : 'DRY_RUN' }; }
-  /** Emite (o simula) la e-factura DIAN de una SubInvoice. */
-  emitInvoice(invoiceId: string, user: AuthUser) {
-    return this.emit.emit(invoiceId, user);
+  /** Emite (o simula) la e-factura DIAN de una SubInvoice. `forzar` salta el freno de
+   * "este abonado ya tiene timbre este mes" (segundo documento legítimo del mes). */
+  emitInvoice(invoiceId: string, forzar: string | undefined, user: AuthUser) {
+    return this.emit.emit(invoiceId, user, forzar === '1' || forzar === 'true');
   }
-  /** Emite (o simula) en lote las facturas pendientes por timbrar de una sede. */
-  emitBranch(branchId: string, user: AuthUser) {
-    return this.emit.emitBranch(branchId, user);
+  /** Emite (o simula) en lote las facturas de un mes pendientes por timbrar de una sede. */
+  emitBranch(branchId: string, mes: string | undefined, user: AuthUser) {
+    return this.emit.emitBranch(branchId, user, mes);
   }
   /** Reintenta una e-factura en ERROR (reemite su factura). */
   retry(id: string, user: AuthUser) {

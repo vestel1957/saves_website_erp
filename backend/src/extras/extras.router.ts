@@ -8,7 +8,7 @@
  * Endpoints: 6
  */
 import { crearRouter, manejar } from '../core/http/ruta';
-import { autenticar, exigirArea } from '../core/auth/instancias';
+import { autenticar, exigirArea, usuarioDe } from '../core/auth/instancias';
 import { ficheroDe, subirUno } from '../core/http/uploads';
 import { ExtrasController, DOC_ROOT, EXT_DOCUMENTO } from './extras.controller';
 import { extrasService } from '../core/contenedor';
@@ -20,6 +20,7 @@ import { randomUUID } from 'node:crypto';
 import type { Response } from 'express';
 import { ExtrasService } from './extras.service';
 import { extensionDeAdjunto } from '../common/uploads';
+import { variosDeQuery } from '../common/filtros-query';
 
 /** Instancia única del controlador. Las dependencias salen del contenedor. */
 const extras = new ExtrasController(extrasService);
@@ -78,5 +79,5 @@ extrasRouter.get(
   '/playhub',
   autenticar,
   exigirArea('sistemas', 'administracion'),
-  manejar((req) => extras.playhub(req.query.search as string, req.query.page as string, req.query.pageSize as string, req.query.sortBy as string, req.query.sortDir as string)),
+  manejar((req) => extras.playhub(usuarioDe(req), req.query.search as string, req.query.page as string, req.query.pageSize as string, req.query.sortBy as string, req.query.sortDir as string, req.query.estado as string, req.query.megas as string, req.query.nivel as string, req.query.sede as string)),
 );

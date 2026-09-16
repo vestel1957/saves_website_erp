@@ -5,7 +5,7 @@
  * controlador. Cablea HTTP -> método: extrae los argumentos de `req` y llama.
  * La lógica sigue viviendo en TreasuryController, que ya no lleva decoradores.
  *
- * Endpoints: 42
+ * Endpoints: 43
  */
 import { crearRouter, manejar } from '../core/http/ruta';
 import { validar, validarQuery } from '../core/http/validar';
@@ -19,6 +19,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { extname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Response } from 'express';
+import * as ExcelJS from 'exceljs';
 import { TreasuryService } from './treasury.service';
 import { cashClosePdf, receiptPdf } from '../common/pdf/pdf-docs';
 import { reciboRolloPdf } from '../common/pdf/recibo-rollo';
@@ -284,6 +285,13 @@ treasuryRouter.get(
   autenticar,
   exigirArea('contabilidad', 'administracion', 'caja'),
   manejar((req) => treasury.list(validarQuery(ListTxQueryDto, req.query), usuarioDe(req))),
+);
+
+treasuryRouter.get(
+  '/transactions/export.xlsx',
+  autenticar,
+  exigirArea('contabilidad', 'administracion', 'caja'),
+  manejar((req, res) => treasury.exportXlsx(validarQuery(ListTxQueryDto, req.query), res, usuarioDe(req))),
 );
 
 treasuryRouter.get(

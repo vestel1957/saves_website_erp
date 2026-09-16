@@ -14,6 +14,7 @@ export const OPEN_COMMAND_EVENT = "nexus:command-palette";
 type SubHit = {
   id: string;
   abonado: number;
+  legacyId: number | null;
   name: string;
   docType: string | null;
   docNumber: string | null;
@@ -351,6 +352,7 @@ export function CommandPalette() {
                         <span className="truncate text-[13px] font-medium text-text-primary">{entry.sub.name}</span>
                         <span className="truncate text-[11px] text-text-tertiary">
                           Abonado {entry.sub.abonado}
+                          {entry.sub.legacyId != null && ` · ID ${entry.sub.legacyId}`}
                           {entry.sub.docNumber && ` · ${entry.sub.docType ?? ""} ${entry.sub.docNumber}`}
                           {entry.sub.phone && ` · ${entry.sub.phone}`}
                         </span>

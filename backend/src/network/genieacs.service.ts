@@ -1,3 +1,4 @@
+import { filtrarCortables, fraseProtegidos } from '../common/corte.policy';
 import { BadRequestException, NotFoundException } from '../core/http/errores';
 import { Logger } from '../core/logger';
 import { Prisma } from '@prisma/client';
@@ -7,6 +8,9 @@ import { GenieacsNbi, NbiDevice, NbiError, nbiHttpMessage } from './genieacs/gen
 import { elegirRedes, planWifi, validarClave, validarSsid } from './genieacs/wifi-targets';
 import { OltService } from './olt.service';
 import { encryptSecret, decryptSecret, isEncrypted } from '../common/secret-box';
+import { eventos } from '../core/eventos';
+import { ESTADO_SERVICIO_EVENT, type EstadoServicioEvent } from '../subscribers/subscribers.events';
+import type { OrdenesAutomaticasService } from '../support/ordenes-automaticas.service';
 
 /**
  * GenieacsService — integración con GenieACS (ACS TR-069) vía su NBI (API REST).
@@ -123,6 +127,11 @@ export class GenieacsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly olt: OltService,
+    /**
+     * Opcional: sin él el corte masivo de TV sigue funcionando, sólo que no queda la
+     * orden de servicio que lo respalda (ver `registrarCorteDeTv`).
+     */
+    private readonly ordenes?: OrdenesAutomaticasService,
   ) {}
 
   get isLive(): boolean {
@@ -566,9 +575,36 @@ export class GenieacsService {
    *  - Sin equipo identificable → se reporta, no se inventa nada.
    * Cada vía respeta su propio gate LIVE y deja su propia auditoría.
    */
-  async tvBatchBySubscribers(subscriberIds: string[], enable: boolean, user?: AuthUser) {
-    const ids = [...new Set((subscriberIds || []).filter(Boolean))];
+  /**
+   * Corte / alta de TV por abonado, resolviendo TR-069 u OLT para cada uno.
+   *
+   * `opts.candadoDeuda` lo encienden SÓLO los dos caminos de la pantalla masiva (por
+   * filtro y por selección): con él, antes de tocar un equipo se caen del lote los que
+   * no arrastran ninguna factura vencida y los que tienen compromiso vigente (ver
+   * `corte.policy.ts`). Apagado por defecto a propósito: por aquí pasa también el
+   * cierre de una orden de "Corte Television" ya abierta, que es trabajo mandado por
+   * una persona y no se discute.
+   */
+  async tvBatchBySubscribers(
+    subscriberIds: string[],
+    enable: boolean,
+    user?: AuthUser,
+    opts: { candadoDeuda?: boolean } = {},
+  ) {
+    let ids = [...new Set((subscriberIds || []).filter(Boolean))];
     if (!ids.length) throw new BadRequestException('No se indicaron clientes.');
+    let protegidos = { compromiso: 0, sinVencer: 0 };
+    // Sólo al CORTAR: devolver la TV no necesita candado ninguno.
+    if (opts.candadoDeuda && !enable) {
+      const filtrado = await filtrarCortables(this.prisma, ids);
+      protegidos = filtrado.protegidos;
+      if (!filtrado.ids.length) {
+        throw new BadRequestException(
+          `No se cortó la TV a nadie: los ${ids.length} del lote están protegidos (${fraseProtegidos(protegidos)}).`,
+        );
+      }
+      ids = filtrado.ids;
+    }
 
     const subs = await this.prisma.subscriber.findMany({
       where: { id: { in: ids } },
@@ -645,27 +681,144 @@ export class GenieacsService {
       }
     }
 
-    // La foto por servicio en BD sigue a los equipos. Sin esto el corte de TV no
-    // deja rastro en la ficha del abonado (que no cambia de estado: se le corta la
-    // TV, no el internet) y la reconexión automática al pagar no tendría cómo saber
-    // que a ese cliente hay que devolverle la señal. En dry-run no se marca nada:
-    // no se tocó ningún equipo.
-    const aplicados = results.filter((r) => r.ok && r.via && !r.dryRun).map((r) => r.subscriberId);
-    if (aplicados.length) {
+    /**
+     * A quién se le da el trabajo por hecho, que NO es lo mismo en los dos sentidos:
+     *
+     * · ALTA: sólo a quien el equipo confirmó. Es la lección de la orden que se cerró
+     *   con el cliente mirando una pantalla en negro: si el CPE no contestó, la señal
+     *   no volvió y darla por buena deja al abonado pagando por nada.
+     * · CORTE: a TODOS los que se pidieron. El TR-069 no llega ni a una cuarta parte
+     *   del parque —muchos equipos ni siquiera están conectados—, así que quien corta
+     *   va y lo corta por su cuenta y esto es lo que viene a dejar dicho. Marcarlo sólo
+     *   a los que contestaron dejaba la ficha diciendo "al aire" al cliente que se
+     *   quedó sin televisión, y con ella la reconexión al pagar: nadie le devolvía la
+     *   señal porque para el sistema nunca la había perdido.
+     *
+     * Los del dry-run quedan fuera en los dos casos: ahí no se cortó nada ni se pidió
+     * cortar de verdad, es una prueba.
+     */
+    const marcados = results
+      .filter((r) => !r.dryRun && encontrados.has(r.subscriberId) && (enable ? r.ok && r.via : true))
+      .map((r) => r.subscriberId);
+    if (marcados.length) {
       await this.prisma.subscriberService
         .updateMany({
-          where: { subscriberId: { in: aplicados }, kind: { in: ['TV', 'PUNTOS'] } },
+          where: { subscriberId: { in: marcados }, kind: { in: ['TV', 'PUNTOS'] } },
           data: { status: enable ? 'ACTIVO' : 'CORTADO' },
         })
         .catch((e) => this.logger.warn(`No se pudo marcar el estado del servicio de TV: ${e.message}`));
     }
+    // El corte hecho a mano se anota como lo que es —en la factura, que es de donde lo
+    // lee la ficha— y deja su orden ya cerrada.
+    const ordenesCerradas = !enable && marcados.length ? await this.registrarCorteDeTv(marcados, results, user) : 0;
 
     const done = results.filter((r) => r.ok && r.via).length;
     const failed = results.filter((r) => !r.ok && r.via).length;
     const sinEquipo = results.filter((r) => !r.via).length;
     const dryRun = results.some((r) => r.dryRun);
     this.logger.log(`TV MASIVO por abonado (${enable ? 'ALTA' : 'CORTE'}): ${ids.length} pedidos → TR069=${acsTargets.length} OLT=${oltTargets.length} sinEquipo=${sinEquipo} · ok=${done} fallidos=${failed}${dryRun ? ' (dry-run)' : ''}`);
-    return { ok: failed === 0, dryRun, total: ids.length, done, failed, sinEquipo, results };
+    // `ok` significa "se hizo lo que se pidió", no "no explotó nada". Un lote en el que
+    // los 16 abonados salieron sin equipo identificado devolvía ok:true (porque `failed`
+    // solo cuenta los que TENÍAN vía y fallaron), y la pantalla lo pintaba de verde
+    // habiendo cortado cero televisores.
+    // `ordenes` es cuántas quedaron registradas y cerradas: la pantalla lo dice, porque
+    // en un lote donde la red no pudo con ninguno es lo ÚNICO que quedó del trabajo.
+    return {
+      ok: failed === 0 && sinEquipo === 0 && done > 0, dryRun, total: ids.length,
+      done, failed, sinEquipo, ordenes: ordenesCerradas, results,
+      // A cuántos NO se les tocó la TV y por qué (ver `corte.policy.ts`).
+      protegidos, compromisosProtegidos: protegidos.compromiso,
+    };
+  }
+
+  /**
+   * Deja escrito el corte de TV: en la FACTURA (de donde lo lee la ficha) y en una
+   * ORDEN de servicio que nace y se cierra en el mismo acto.
+   *
+   * Por qué hace falta. La palanca de red alcanza a una minoría del parque, así que
+   * el corte de televisión se termina haciendo A MANO. Hasta ahora eso no dejaba
+   * rastro de ninguna clase: el lote contestaba "16 sin equipo", el cliente se quedaba
+   * sin señal y en el sistema no había ni orden, ni estado, ni nada que contara que
+   * alguien había ido a cortarle. La orden es la constancia —la misma que la cajera
+   * del legacy abría y cerraba a mano— y sin ella el trabajo no existe para nadie: ni
+   * en la ficha, ni en los informes de campo, ni en el legacy, que es donde se
+   * consulta el historial del abonado.
+   *
+   * Nacen RESUELTAS: no hay visita que repartir, el trabajo ya está hecho. Y si el
+   * abonado ya tenía abierta su "Corte Television" —la del corte masivo anterior que
+   * esperaba técnico—, se cierra ESA en vez de abrir otra.
+   *
+   * `serviceStatusAt` es lo que hace que el corte SOBREVIVA: sin esa marca la ida del
+   * legacy devuelve el valor viejo a los 15 minutos y el corte se deshace solo (ver
+   * `SubInvoice.serviceStatusAt` y `pushEstadoServicio` en el writeback).
+   *
+   * NUNCA lanza: el corte contra los equipos ya está hecho y su resultado es lo que
+   * quien llama está esperando; que la constancia falle no puede tumbarlo.
+   */
+  private async registrarCorteDeTv(
+    ids: string[],
+    results: Array<{ subscriberId: string; via: 'TR069' | 'OLT' | null; ok: boolean; detail: string }>,
+    user?: AuthUser,
+  ): Promise<number> {
+    const quien = user?.name || user?.email || null;
+    try {
+      /**
+       * La factura VIGENTE de cada uno, en una sola consulta. `DISTINCT ON` y no el
+       * `distinct` de Prisma: aquél trae TODAS las facturas y las descarta en memoria
+       * (es lo que tumbó la corrida de facturación de agosto).
+       *
+       * Se salta las ANULADAS por lo mismo que la ficha —las fantasma del legacy
+       * decidían el corte de 11 abonados— y sólo se anota en la que NOMBRA televisión:
+       * a quien no la tiene facturada no se le inventa una TV cortada.
+       */
+      const vigentes = await this.prisma.$queryRaw<{ id: string; subscriberId: string; serviceTv: string | null }[]>`
+        SELECT DISTINCT ON (i."subscriberId") i.id, i."subscriberId", i."serviceTv"
+          FROM "SubInvoice" i
+         WHERE i."subscriberId" = ANY(${ids}::text[])
+           AND i.kind = 'RECURRENTE'
+           AND i.status <> 'CANCELED'
+         ORDER BY i."subscriberId", i."invoiceDate" DESC NULLS LAST, i.tid DESC`;
+      const conTv = vigentes.filter((f) => {
+        const t = (f.serviceTv ?? '').trim().toLowerCase();
+        return !!t && t !== 'no' && t !== '-';
+      });
+      if (conTv.length) {
+        await this.prisma.subInvoice.updateMany({
+          where: { id: { in: conTv.map((f) => f.id) } },
+          data: { estadoTv: 'CORTADO', serviceStatusAt: new Date(), serviceStatusBy: quien },
+        });
+        // Al legacy EN EL ACTO, una sola vez para todo el lote: el empuje se agrupa
+        // 2 segundos y sale una única pasada.
+        eventos.emit(ESTADO_SERVICIO_EVENT, {
+          subscriberId: conTv[0].subscriberId, servicio: 'TV', estado: 'CORTADO',
+        } satisfies EstadoServicioEvent);
+      }
+    } catch (e) {
+      this.logger.warn(`No se pudo anotar el corte de TV en la factura: ${(e as Error).message}`);
+    }
+
+    if (!this.ordenes) return 0;
+    const detalles = new Map(results.map((r) => [r.subscriberId, r]));
+    let abiertas = 0;
+    for (const id of ids) {
+      const r = detalles.get(id);
+      // Cómo se hizo, en la propia orden: es lo primero que pregunta quien la mire y no
+      // vea rastro de los equipos.
+      const comoSeHizo = r?.ok && r.via
+        ? `Aplicado por ${r.via === 'TR069' ? 'TR-069' : 'la OLT'}.`
+        : 'Hecho manualmente: la red no pudo aplicarlo.';
+      const orden = await this.ordenes.registrarResuelta({
+        subscriberId: id,
+        type: 'Corte Television',
+        subject: 'servicio',
+        problem: 'Corte de televisión.',
+        section: [comoSeHizo, r?.detail || null, quien ? `Lo registró ${quien}.` : null].filter(Boolean).join(' '),
+        autor: quien || 'Sistema',
+      });
+      if (orden) abiertas++;
+    }
+    this.logger.log(`Corte de TV: ${abiertas}/${ids.length} órdenes registradas y cerradas.`);
+    return abiertas;
   }
 
   // ------------------------------------------------------------------ //

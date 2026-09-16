@@ -64,4 +64,8 @@ export class UpdateSiigoAccountDto {
   @NullableInt() ivaTaxId?: number | null;
   @NullableInt() paymentCash?: number | null;
   @NullableInt() paymentCredit?: number | null;
+  /** Vendedor/cobrador con el que se crea el tercero en Siigo (`related_users`). */
+  @NullableInt() customerSellerId?: number | null;
+  /** ¿Mandar el documento a la DIAN al crearlo? Apagado, Siigo lo deja en borrador. */
+  @IsOptional() @IsBoolean() autoStamp?: boolean;
 }

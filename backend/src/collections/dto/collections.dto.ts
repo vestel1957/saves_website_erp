@@ -1,4 +1,4 @@
-import { IsOptional, IsString, MinLength } from 'class-validator';
+import { IsIn, IsNumber, IsOptional, IsString, Min, MinLength } from 'class-validator';
 import { ACUERDO_DE_PAGO } from '../llamada-catalogo';
 
 /**
@@ -17,4 +17,20 @@ export class CreateCallDto {
   @IsOptional() @IsString() time?: string; // hra (HH:mm)
   @IsOptional() @IsString() dueDate?: string; // fecha_vence (requerido si es Acuerdo de Pago)
   @IsOptional() @IsString() notes?: string;
+}
+
+/** Pedir una nota crédito/débito para el cliente y asignársela a quien la emite. */
+export class CreateNoteRequestDto {
+  @IsString() subscriberId!: string;
+  @IsIn(['CREDITO', 'DEBITO']) type!: 'CREDITO' | 'DEBITO';
+  /** Monto sugerido; lo decide quien emite. */
+  @IsOptional() @IsNumber() @Min(0) amount?: number;
+  @IsString() @MinLength(5) reason!: string;
+  @IsString() assignedToId!: string;
+}
+
+/** Cerrar una solicitud: se aplicó la nota o no procede. */
+export class ResolveNoteRequestDto {
+  @IsIn(['APLICADA', 'RECHAZADA']) status!: 'APLICADA' | 'RECHAZADA';
+  @IsOptional() @IsString() response?: string;
 }

@@ -14,7 +14,16 @@ const control =
   "w-full rounded-lg border border-border-default bg-surface px-3 py-2 text-[13px] text-text-primary shadow-sm outline-none transition-colors placeholder:text-text-tertiary hover:border-border-strong focus:border-border-focus focus:ring-2 focus:ring-brand/25";
 
 export function Input({ className = "", ...props }: InputHTMLAttributes<HTMLInputElement>) {
-  return <input className={`${control} ${className}`} {...props} />;
+  // Un `type="number"` ENFOCADO suma o resta con la rueda del ratón (paso 1). En el
+  // modal de recaudo —monto autoenfocado arriba y el resto del formulario más abajo—
+  // bastaba con desplazarse por encima del campo para cobrar un peso de menos: el
+  // recaudo entraba por 76.999 de 77.000 y la factura quedaba PARTIAL debiendo $1.
+  // Al desplazar se suelta el foco: la página sigue bajando y el valor no se mueve.
+  const onWheel: InputHTMLAttributes<HTMLInputElement>["onWheel"] =
+    props.type === "number"
+      ? (e) => { e.currentTarget.blur(); props.onWheel?.(e); }
+      : props.onWheel;
+  return <input className={`${control} ${className}`} {...props} onWheel={onWheel} />;
 }
 
 export function Select({ className = "", ...props }: SelectHTMLAttributes<HTMLSelectElement>) {

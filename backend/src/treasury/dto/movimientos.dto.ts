@@ -1,4 +1,4 @@
-import { IsIn, IsInt, IsNumber, IsOptional, IsString, Min } from 'class-validator';
+import { IsIn, IsInt, IsNumber, IsOptional, IsString, Matches, Min } from 'class-validator';
 
 /**
  * Filtros del listado de movimientos de caja (`GET /treasury/transactions`).
@@ -31,6 +31,18 @@ export class ListTxQueryDto {
 
   @IsOptional() @IsString()
   to?: string;
+
+  /**
+   * Hora del REGISTRO (`createdAt`, "HH:MM" en hora de Colombia). `date` es sólo el
+   * día contable y no tiene hora: con estas dos el periodo pasa a ser una ventana de
+   * `from horaDesde` a `to horaHasta` ("el 14 de 8:00 a 12:00"). Sin una de las dos,
+   * ese extremo es el día entero.
+   */
+  @IsOptional() @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
+  horaDesde?: string;
+
+  @IsOptional() @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
+  horaHasta?: string;
 
   /** `all=1` levanta el periodo por defecto y consulta el histórico completo. */
   @IsOptional() @IsString()

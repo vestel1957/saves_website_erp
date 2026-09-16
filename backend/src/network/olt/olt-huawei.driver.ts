@@ -475,7 +475,19 @@ export class OltHuawei extends OltDriver {
     // tentador emparejarlos con la VLAN, pero las ONTs que realmente sirven
     // usan otro (42/SmartOLT_G): elegir por el nombre deja la ONU en
     // "Config state: failed". Se muestrean unas pocas y gana la mayoría.
-    const idsOnt = this.parseOntInfo(await this.sendCommand(`display ont info ${frame} ${slot} ${port} all`))
+    const listado = this.parseOntInfo(await this.sendCommand(`display ont info ${frame} ${slot} ${port} all`));
+    // El detalle de cada ONT es un comando más, así que se muestrean pocas: lo
+    // que decide el resultado es CUÁLES. Antes se cogían las cuatro primeras por
+    // ont-id y en esta planta eso salía casi siempre en blanco —en 0/1/10 las 47
+    // ONTs están en `config: failed` menos tres, y ninguna de ellas era de las
+    // cuatro primeras—, así que la orden no podía autenticar en un puerto lleno.
+    // Se ordena por lo que sirve: primero las que están en `config: normal`, y
+    // dentro de eso las que están online.
+    const rango = (o: any) =>
+      (/normal/i.test(String(o.config_state ?? '')) ? 0 : 2)
+      + (/online/i.test(String(o.run_state ?? '')) ? 0 : 1);
+    const idsOnt = [...listado]
+      .sort((a, b) => rango(a) - rango(b))
       .map((o: any) => o.ont_id)
       .filter(Boolean)
       .slice(0, 4);
@@ -486,6 +498,8 @@ export class OltHuawei extends OltDriver {
     // es el que usan las ONTs que funcionan de verdad (genérico/13). Se decide
     // por lo que YA funciona en el puerto, no por el nombre.
     const votosSpOk = new Map<string, number>();
+    /** Todos los srv-profile vistos, estén como estén: el último recurso. */
+    const votosSp = new Map<string, number>();
     const srvVistos = new Map<string, string>();
     for (const oid of idsOnt) {
       const det = this.parseKvBlock(await this.sendCommand(`display ont info ${frame} ${slot} ${port} ${oid}`));
@@ -496,7 +510,8 @@ export class OltHuawei extends OltDriver {
       if (lp) sumar(votosLp, lp);
       if (sp) {
         srvVistos.set(sp, spName);
-        if (configOk) sumar(votosSpOk, sp); // solo perfiles que dan config normal
+        sumar(votosSp, sp);
+        if (configOk) sumar(votosSpOk, sp); // preferimos los que dan config normal
       }
     }
     const lineprofile = top(votosLp);
@@ -505,10 +520,17 @@ export class OltHuawei extends OltDriver {
     // en este mismo puerto (las que de verdad tienen servicio). Es la definición
     // literal de "clonar lo que funciona": no se adivina por modelo ni por
     // "genérico" — se copia el perfil de una ONU que ya navega ahí al lado.
-    const srvprofile = top(votosSpOk);
+    // …y si en el puerto no hay NI UNA en `config: normal` (pasa: la planta vieja
+    // está llena de ONTs "failed/mismatch" que sin embargo dan servicio), se cae
+    // al perfil mayoritario del puerto. Autenticar con el perfil que usan las
+    // vecinas es peor que con uno normal, pero infinitamente mejor que no poder
+    // autenticar: el resultado se verifica después y se avisa si queda failed.
+    const srvprofile = top(votosSpOk) ?? top(votosSp);
 
     return {
       basadoEn: filas,
+      /** Cuántas de las ONTs muestreadas estaban en `config: normal`. */
+      muestraNormal: [...votosSpOk.values()].reduce((a, b) => a + b, 0),
       vlan,
       user_vlan: vlan,
       gemport: top(votos.gem),
@@ -565,6 +587,11 @@ export class OltHuawei extends OltDriver {
   async getOntDetail(frame: number, slot: number, port: number, ontid: number): Promise<any | false> {
     const f = Number(frame) || 0, s = Number(slot), p = Number(port), id = Number(ontid);
     const out = await this.sendCommand(`display ont info ${f} ${s} ${p} ${id}`);
+    // "Failure: The ONT does not exist": en esa posición ya no hay ONU (la movieron
+    // de puerto o la borraron). Antes se parseaba como un bloque con la clave
+    // "failure" y la ficha lo contaba como "la OLT no devolvió lecturas".
+    const fallo = out.match(/^\s*Failure:\s*(.+?)\s*$/im);
+    if (fallo) { this.error = fallo[1]; return false; }
     const info = this.parseKvBlock(out);
     if (!Object.keys(info).length) { this.error = 'No se pudo leer el detalle de la ONT.'; return false; }
     return info;
@@ -576,6 +603,8 @@ export class OltHuawei extends OltDriver {
     await this.sendCommand(`interface gpon ${f}/${s}`);
     const opt = await this.sendCommand(`display ont optical-info ${p} ${id}`);
     await this.sendCommand('quit');
+    const fallo = opt.match(/^\s*Failure:\s*(.+?)\s*$/im);
+    if (fallo) { this.error = fallo[1]; return false; }
     // Para UNA ONU el MA5800 responde un bloque clave:valor ("Rx optical
     // power(dBm) : -18.50"), no la fila tabular del "... all". Se lee el bloque
     // y se conserva la fila como respaldo por si otro firmware la usa.

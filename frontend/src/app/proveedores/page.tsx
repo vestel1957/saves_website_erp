@@ -17,6 +17,7 @@ import { cop } from "@/lib/format";
 import { useRequest } from "@/lib/useRequest";
 import { useOrden } from "@/lib/useOrden";
 import { mensajeDeError } from "@/lib/errores";
+import { useValidacion, requerido, email, telefono, documento } from "@/lib/useValidacion";
 
 /**
  * Categorías del directorio. "Terceros" (3) se añadió el 2026-08-10: no compra ni
@@ -72,8 +73,18 @@ export default function ProveedoresPage() {
 
   useEffect(() => { setPage(1); }, [tab, search, pageSize, orden.clave]);
 
+  const v = useValidacion(
+    { name: form.name, nit: form.nit, phone: form.phone, email: form.email },
+    {
+      name: requerido("El nombre o la razón social es obligatorio."),
+      nit: documento(),
+      phone: telefono(),
+      email: email(),
+    },
+  );
+
   const submit = async () => {
-    if (!form.name.trim()) { toast("El nombre es obligatorio", "alert-triangle"); return; }
+    if (!v.revisar()) return;
     setSaving(true);
     try {
       const body: any = {
@@ -100,6 +111,7 @@ export default function ProveedoresPage() {
   };
 
   function editSupplier(r: any) {
+    v.limpiar();
     setEditingId(r.id);
     setForm({
       name: r.name ?? "", category: String(r.category ?? 1), nit: r.nit ?? "", phone: r.phone ?? "",
@@ -157,7 +169,7 @@ export default function ProveedoresPage() {
         actions={
           // Nace en la categoría de la pestaña donde se está: quien está en
           // Terceros va a crear un tercero, no un proveedor de productos.
-          <Button variant="primary" onClick={() => { setForm({ ...EMPTY_FORM, category: String(tab) }); setOpen(true); }}>
+          <Button variant="primary" onClick={() => { v.limpiar(); setForm({ ...EMPTY_FORM, category: String(tab) }); setOpen(true); }}>
             <Icon name="plus" size={15} /> {tab === 3 ? "Nuevo tercero" : "Nuevo proveedor"}
           </Button>
         }
@@ -204,8 +216,8 @@ export default function ProveedoresPage() {
       <Modal open={open} onClose={() => { setOpen(false); setEditingId(null); }} title={editingId ? "Editar proveedor" : "Nuevo proveedor"}>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="sm:col-span-2">
-            <Field label="Nombre" required>
-              <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Razón social o nombre" />
+            <Field label="Nombre" required error={v.error("name")}>
+              <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Razón social o nombre" {...v.campo("name")} />
             </Field>
           </div>
           <Field label="Categoría">
@@ -215,14 +227,14 @@ export default function ProveedoresPage() {
               <option value="3">Terceros</option>
             </Select>
           </Field>
-          <Field label="NIT">
-            <Input value={form.nit} onChange={(e) => setForm({ ...form, nit: e.target.value })} />
+          <Field label="NIT" error={v.error("nit")}>
+            <Input value={form.nit} onChange={(e) => setForm({ ...form, nit: e.target.value })} {...v.campo("nit")} />
           </Field>
-          <Field label="Teléfono">
-            <Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+          <Field label="Teléfono" error={v.error("phone")}>
+            <Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} {...v.campo("phone")} />
           </Field>
-          <Field label="Email">
-            <Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+          <Field label="Email" error={v.error("email")}>
+            <Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} {...v.campo("email")} />
           </Field>
           <Field label="Dirección">
             <Input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} />

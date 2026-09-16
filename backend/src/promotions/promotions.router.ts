@@ -5,7 +5,7 @@
  * controlador. Cablea HTTP -> método: extrae los argumentos de `req` y llama.
  * La lógica sigue viviendo en PromotionsController, que ya no lleva decoradores.
  *
- * Endpoints: 10
+ * Endpoints: 11
  */
 import { crearRouter, manejar } from '../core/http/ruta';
 import { validar } from '../core/http/validar';
@@ -58,6 +58,13 @@ promotionsRouter.get(
   autenticar,
   exigirPermisos(APP_PERMISSIONS.SYSTEM_ADMIN),
   manejar((req) => promotions.history(req.query.promotionId as string)),
+);
+
+promotionsRouter.get(
+  '/pending-invoices',
+  autenticar,
+  exigirPermisos(APP_PERMISSIONS.SYSTEM_ADMIN),
+  manejar((req) => promotions.pendingInvoices(req.query.subscriberId as string)),
 );
 
 promotionsRouter.get(

@@ -77,9 +77,19 @@ export type Veredicto =
   | { accion: 'permitir'; motivo: 'dentro-de-rango'; distanciaM: number }
   /** Fuera de rango: en modo observar se deja pasar, pero marcado. */
   | { accion: 'permitir-marcado'; distanciaM: number; radioM: number }
-  /** Fuera de rango y hay que justificar (o ya se justificó). */
-  | { accion: 'exigir-justificacion'; distanciaM: number; radioM: number }
-  | { accion: 'permitir-justificado'; distanciaM: number; radioM: number }
+  /**
+   * Fuera de rango en modo `exigir`: NO se cierra. Sin portillo (2026-09-10, por
+   * decisión del usuario reafirmada: «no dejar que cierren las órdenes si no están en
+   * la ubicación del cliente»). Antes se podía cerrar escribiendo un motivo de 10
+   * caracteres, y eso convertía la cerca en un trámite: 47 de los 113 cierres de
+   * campo del mes salieron fuera de rango y ninguno se quedó sin cerrar.
+   *
+   * La válvula ya no es del técnico, es de quien responde por él: gerencia,
+   * administración y superusuario están exentos y pueden cerrarla. Y si la dirección
+   * del cliente está mal guardada —la causa más común, mediana 1.197 m del punto del
+   * legacy—, lo que hay que arreglar es esa coordenada, no el cierre.
+   */
+  | { accion: 'exigir-presencia'; distanciaM: number; radioM: number }
   /** Falta la ubicación del que cierra y la cerca la exige. */
   | { accion: 'exigir-ubicacion'; motivo: string };
 
@@ -93,8 +103,6 @@ export type EntradaCerca = {
   cliente: { lat: number; lng: number } | null;
   /** Posición reportada por quien cierra, si la mandó. */
   tecnico: { lat: number; lng: number; accuracyM?: number | null } | null;
-  /** Motivo escrito para cerrar fuera de rango. */
-  justificacion?: string | null;
 };
 
 /**
@@ -107,6 +115,10 @@ export type EntradaCerca = {
  * `accuracy: 999999` para desactivar la cerca desde el cliente.
  */
 const MARGEN_MAX_M = 250;
+
+/** Lo que se le dice a quien intenta cerrar una visita sin mandar dónde está. */
+const SIN_UBICACION =
+  'Para cerrar esta orden hay que compartir la ubicación. Activa el GPS y acepta el permiso del navegador.';
 
 export function margenPorPrecision(accuracyM: number | null | undefined): number {
   if (accuracyM == null || !Number.isFinite(accuracyM) || accuracyM <= 0) return 0;
@@ -125,16 +137,21 @@ export function evaluarCierre(e: EntradaCerca): Veredicto {
   // bloquear (que enseñaría a NO capturar nunca el GPS, para no quedar atado),
   // el propio cierre lo georreferencia. La cerca se aprieta sola con el uso.
   if (!e.cliente) {
-    return e.tecnico ? { accion: 'permitir-y-georreferenciar' } : { accion: 'permitir', motivo: 'sin-datos' };
+    if (e.tecnico) return { accion: 'permitir-y-georreferenciar' };
+    // Lo que SÍ se exige siempre en modo `exigir` es la COORDENADA DEL QUE CIERRA
+    // (2026-09-10, del requerimiento: «exigir el registro de las coordenadas de
+    // ubicación»). Que el cliente no tenga punto guardado ya no es una puerta: sin
+    // el del técnico no hay nada que comparar HOY ni nada que guardar para mañana,
+    // y era el hueco por el que un cierre sin GPS pasaba entero — precisamente en
+    // los abonados peor georreferenciados, que son el 75% del parque.
+    return e.modo === 'exigir'
+      ? { accion: 'exigir-ubicacion', motivo: SIN_UBICACION }
+      : { accion: 'permitir', motivo: 'sin-datos' };
   }
 
   if (!e.tecnico) {
     if (e.modo === 'observar') return { accion: 'permitir', motivo: 'sin-ubicacion-observando' };
-    return {
-      accion: 'exigir-ubicacion',
-      motivo:
-        'Para cerrar esta orden hay que compartir la ubicación. Activa el GPS y acepta el permiso del navegador.',
-    };
+    return { accion: 'exigir-ubicacion', motivo: SIN_UBICACION };
   }
 
   const distancia = distMeters(e.tecnico.lat, e.tecnico.lng, e.cliente.lat, e.cliente.lng);
@@ -146,8 +163,6 @@ export function evaluarCierre(e: EntradaCerca): Veredicto {
   if (e.modo === 'observar') {
     return { accion: 'permitir-marcado', distanciaM: distancia, radioM: e.radioM };
   }
-  if (e.justificacion && e.justificacion.trim().length >= 10) {
-    return { accion: 'permitir-justificado', distanciaM: distancia, radioM: e.radioM };
-  }
-  return { accion: 'exigir-justificacion', distanciaM: distancia, radioM: e.radioM };
+  // Y en `exigir`, fuera es fuera: no hay motivo que valga (ver `exigir-presencia`).
+  return { accion: 'exigir-presencia', distanciaM: distancia, radioM: e.radioM };
 }

@@ -324,6 +324,7 @@ export class ChatbotDocsService {
       tid: d.tid, kind: d.kind, status: d.status, date: d.date, dueDate: d.dueDate,
       branchRef: d.branchRef, categoryRef: undefined, notes: d.notes,
       supplier: d.supplier ? { name: d.supplier.name, nit: d.supplier.nit, phone: d.supplier.phone } : null,
+      consignment: d.consignment ?? null,
       items: (d.items ?? []).map((it: any) => ({ ...it, product: it.product ?? '—' })),
       noteLines: (d.noteLines ?? []).map((n: any) => ({ ...n, type: n.type ?? 'Nota' })),
       subtotal: d.subtotal, tax: d.tax, total: d.total, paid: d.paid, balance: d.balance,

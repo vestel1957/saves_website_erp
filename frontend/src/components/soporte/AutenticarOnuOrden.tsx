@@ -28,19 +28,46 @@ import { mensajeDeError } from "@/lib/errores";
  * Tipos de orden donde este bloque tiene sentido (espejo de `modoDeOrden` en el
  * backend — si cambia uno hay que cambiar el otro).
  *
+ * Son los CINCO trabajos que dejan al cliente conectado —Instalación, Traslado,
+ * Migración, Cambio de equipo y AgregarInternet, que va por el predicado de
+ * abajo— más «Subir megas». La REINSTALACIÓN queda fuera desde el 2026-09-08 (lo
+ * pidió el usuario): el equipo ya está puesto y ya está de alta en la OLT, así que
+ * el bloque entero no se pinta. Calza con 'instalac', de modo que hay que
+ * descontarla a mano, igual que en el backend (`esReinstalacion`). En el backend la lista de los
+ * cinco vive una sola vez, en `FRAGMENTOS_TRABAJO_DE_CONEXION`
+ * (`support/order-types.ts`), y de ella dependen también las reglas de estado al
+ * cerrar la orden.
+ *
  * «Subir megas» está en las dos listas a propósito: normalmente solo hay que
  * aplicarle la velocidad a la ONU que el cliente ya tiene, pero si el equipo
  * viejo no da el plan nuevo el técnico monta otro y hay que autenticarlo. Esas
  * órdenes salen en modo `AMBOS` y enseñan las dos acciones.
  */
-const TIPOS_AUTENTICAR = ["instalac", "traslado", "cambio de equipo", "reinstalac", "migraci", "subir megas"];
+const TIPOS_AUTENTICAR = ["instalac", "traslado", "cambio de equipo", "migraci", "subir megas"];
+
+/** Sin tildes y por fragmento: en la base conviven 'Reinstalación' y 'Reinstalacion'. */
+const esReinstalacion = (t: string) =>
+  t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").includes("reinstalac");
 const TIPOS_VELOCIDAD = ["subir megas", "bajar megas", "cambio de plan"];
+
+/**
+ * 'AgregarInternet' se compara ENTERO y no por fragmento: el nombre real del
+ * detalle va sin espacio y no casa con ninguna de las palabras de arriba, así
+ * que el bloque no salía en esas órdenes. Sale en modo `AMBOS` porque las dos
+ * cosas son posibles: la ONU de la televisión ya está puesta y solo falta
+ * aplicarle la velocidad del plan nuevo, o el técnico monta un equipo y hay que
+ * autenticarlo (ver `modoDeOrden` en el backend, que es quien manda).
+ */
+const esAgregarInternet = (t: string) => t.trim() === "agregarinternet";
 
 type Modo = "AUTENTICAR" | "VELOCIDAD" | "AMBOS" | null;
 
 export function modoDeOrden(type: string | null | undefined): Modo {
   const t = (type ?? "").toLowerCase();
   if (!t.trim()) return null;
+  // Va antes que nada: 'reinstalac' contiene 'instalac' y entraría por ahí.
+  if (esReinstalacion(t)) return null;
+  if (esAgregarInternet(t)) return "AMBOS";
   // Cada lista se evalúa entera: «Cambio de equipo» y «Cambio de plan» empiezan
   // igual y con un `else if` una taparía a la otra.
   const autentica = TIPOS_AUTENTICAR.some((k) => t.includes(k));
@@ -92,9 +119,27 @@ type Auto = {
   motivo: string;
 };
 type Estado = {
+  /**
+   * Por dónde se le da servicio a este abonado. `MIKROTIK` = tecnología sin OLT
+   * (hoy EPON): no hay ONU que autenticar, lo que se aplica es el perfil PPP de
+   * su plan en el `/ppp/secret`. El servidor manda los mismos campos en las dos
+   * vías —`candidatos`, `auto` y demás vienen vacíos— así que esto es lo único
+   * que hay que mirar para saber qué cara pintar.
+   */
+  via: "OLT" | "MIKROTIK";
   modo: Modo;
   live: boolean;
   olt: { id: string; name: string } | null;
+  /** Vía Mikrotik: el router elegido por sede+tecnología y el perfil que se aplicará. */
+  mikrotik?: { id: string; name: string; host: string; tech: string } | null;
+  /**
+   * El abonado estrena internet y todavía no tiene usuario PPPoE: al autenticar
+   * se le crean solos sus datos de red (usuario, clave y `/ppp/secret` con el
+   * perfil de su plan). Se avisa ANTES para que nadie salga a crearlo a mano.
+   */
+  altaMikrotikPendiente?: boolean;
+  perfil?: string | null;
+  pppUsername?: string | null;
   /**
    * `derivado` = el plan no está registrado en la ficha; sale de lo que se le viene
    * facturando. `estado: "DE_LA_ORDEN"` = es el plan DESTINO que porta la orden de
@@ -105,6 +150,20 @@ type Estado = {
   bloqueo: { code: string; message: string } | null;
   candidatos: Candidato[];
   auto: Auto | null;
+  /**
+   * El equipo que el inventario ya da por de este cliente —asignado, o apartado
+   * al abrir la orden— y qué dice la OLT de él. `anunciandose` es lo único que
+   * significa "listo para autenticar": el papel no enciende la fibra.
+   */
+  /** ONUs vinculadas al abonado en el inventario de la OLT (más de una = cambio de equipo a medias). */
+  onusDelCliente?: { sn: string; frame: number; slot: number; port: number; ontId: number; runState: string | null; olt: { name: string } | null }[];
+  equipoAsignado: {
+    code: number; serial: string | null; status: string | null; bodega: string | null;
+    reservado: boolean; anunciandose: boolean; sn: string | null; haceMin: number | null;
+    impedimento: string | null; autenticada: boolean;
+    /** Dónde la tiene dada de alta la OLT (leído en vivo por su serial). */
+    autenticadaEn?: { fsp: string; ontId: number; descripcion: string; runState: string } | null;
+  } | null;
   onuActual: { sn: string | null; frame: number | null; slot: number | null; port: number | null; ontId: number | null; runState: string | null } | null;
 };
 type Resultado = {
@@ -112,6 +171,10 @@ type Resultado = {
   commands?: string[];
   /** La ONU ya estaba dada de alta y se adoptó en vez de volver a autenticarla. */
   adoptada?: boolean;
+  /** Subir megas: la ONU se desautenticó y se volvió a autenticar con el plan nuevo. */
+  reautenticada?: boolean;
+  /** Subir megas fallido: si se pudo dejar la ONU como estaba. */
+  restaurada?: boolean | null;
   cambios?: string[];
   avisos?: string[];
   antes?: { traffic_in: string; traffic_out: string };
@@ -119,8 +182,22 @@ type Resultado = {
   equipo?: { code: number; serialCorregido: boolean; bodega: string | null } | null;
   /** La ONU la eligió el sistema: de dónde salió y qué quedó pendiente. */
   auto?: { origen: string | null; deStock: boolean; aviso: string | null } | null;
+  /**
+   * El alta del abonado en la Mikrotik que se hizo antes de autenticar. La ONU le
+   * da enlace; esto es lo que le da internet. null = esta orden no lo toca.
+   */
+  altaMikrotik?: {
+    ok: boolean; creado: boolean; usuarioCreado: boolean; dryRun: boolean;
+    pppUsername: string | null; perfil: string | null; router: string | null; mensaje: string;
+  } | null;
+  /** Vía Mikrotik: qué se escribió, en qué router y con qué perfil. */
+  steps?: string[];
+  perfil?: string | null;
+  mikrotik?: { name: string; host: string } | null;
   /** Lo que se cuadró en el inventario: reservas devueltas a bodega y ONU vieja retirada. */
   conciliacion?: { liberados: number[]; devuelto: number | null } | null;
+  /** Traslado: de dónde se desautenticó la ONU antes de darla de alta en el puerto nuevo. */
+  liberacion?: { borrado: boolean; dryRun: boolean; anterior: string | null; tambienEn: string[]; avisos: string[] } | null;
   verificacion?: {
     run_state: string | null; config_state: string | null; match_state: string | null;
     servicePorts: string[]; avisos: string[]; nota?: string | null;
@@ -134,6 +211,80 @@ function desdeHace(min: number | null | undefined): string | null {
   if (min < 60) return `hace ${min} min`;
   if (min < 60 * 24) return `hace ${Math.round(min / 60)} h`;
   return `hace ${Math.round(min / (60 * 24))} días`;
+}
+
+/**
+ * "El cliente ya tiene equipo, ¿por qué me pide elegir?" y "¿ya está listo para
+ * autenticar?" — las dos se contestan con lo mismo: qué caja es la suya y si la
+ * OLT la está viendo.
+ *
+ * El inventario dice de quién es un aparato; solo la OLT sabe cuál está colgado
+ * del puerto de esa casa. Por eso "asignado" no es "listo": mientras el equipo no
+ * se anuncie en el autofind no hay nada que autenticar, y el automático manda a
+ * elegir a mano sin que se viera el motivo de verdad.
+ */
+function EquipoDelCliente({ e, onUsar }: { e: NonNullable<Estado["equipoAsignado"]>; onUsar: (sn: string) => void }) {
+  const nombre = (
+    <>
+      <span className="font-mono font-semibold text-text-primary">{e.serial || e.sn || "sin serial"}</span>
+      {" · código "}<span className="font-semibold text-text-primary">{e.code}</span>
+      {e.bodega ? ` · bodega ${e.bodega}` : ""}
+    </>
+  );
+  const titulo = e.reservado ? "Equipo apartado para esta orden" : "Equipo asignado al cliente";
+
+  // Listo: la OLT lo ve y nada impide montarlo. Es el caso en que el automático
+  // lo elige solo, así que aquí solo se confirma en una línea.
+  if (e.anunciandose && !e.impedimento) {
+    return (
+      <div className="rounded-lg border border-success/40 bg-success-soft px-3 py-2 text-[12.5px] leading-relaxed text-text-secondary">
+        <Icon name="check" size={13} className="mr-1 inline text-success-text" />
+        {titulo}: {nombre}. La OLT ya lo está viendo{desdeHace(e.haceMin) ? ` (apareció ${desdeHace(e.haceMin)})` : ""}:
+        <b> listo para autenticar</b>.
+      </div>
+    );
+  }
+  // Dada de alta en la OLT pero sin que el sistema lo supiera (alta de SmartOLT o
+  // del cliente anterior). No sale en el autofind por eso, no por la fibra: se dice
+  // dónde está y se ofrece adoptarla para este cliente sin volver a darla de alta.
+  if (e.autenticadaEn) {
+    const a = e.autenticadaEn;
+    return (
+      <div className="rounded-lg border border-warning bg-warning-soft px-3 py-2 text-[12.5px] leading-relaxed text-text-secondary">
+        <Icon name="alert-triangle" size={13} className="mr-1 inline text-warning-text" />
+        {titulo}: {nombre}. <b>Ya está autenticado en la OLT</b> en el puerto {a.fsp} · ONT {a.ontId}
+        {a.descripcion ? <> con el nombre «<span className="font-mono">{a.descripcion}</span>»</> : null}
+        {a.runState ? ` (${a.runState})` : ""}, por eso no aparece en la lista de espera.
+        {e.sn && (
+          <button type="button" className="ml-1 font-semibold text-brand hover:underline" onClick={() => onUsar(e.sn!)}>
+            Usarlo en este cliente
+          </button>
+        )}
+        <span className="mt-1 block text-text-tertiary">
+          Se aprovecha el alta que ya tiene: se le pone el nombre y la velocidad de este cliente sin desconectarlo.
+        </span>
+      </div>
+    );
+  }
+  // Ya tiene alta: no sale en el autofind y eso es lo normal, no un problema.
+  if (e.autenticada) {
+    return (
+      <p className="text-[11.5px] text-text-tertiary">
+        <Icon name="info" size={13} className="mr-1 inline" />
+        {titulo}: {nombre}. Ya está autenticado en la OLT, por eso no aparece en la lista de espera.
+      </p>
+    );
+  }
+  return (
+    <div className="rounded-lg border border-warning bg-warning-soft px-3 py-2 text-[12.5px] leading-relaxed text-text-secondary">
+      <Icon name="alert-triangle" size={13} className="mr-1 inline text-warning-text" />
+      {titulo}: {nombre}.{" "}
+      <b>La OLT todavía no lo ve</b>, así que no está listo para autenticar: compruebe que está conectado
+      a la fibra y encendido, y refresque. Si el técnico montó otro equipo, elíjalo abajo — al autenticarlo,
+      este vuelve solo a la bodega.
+      {e.impedimento && <span className="mt-1 block text-error-text">{e.impedimento}</span>}
+    </div>
+  );
 }
 
 function etiquetaCandidato(c: Candidato): string {
@@ -183,6 +334,10 @@ export function AutenticarOnuOrden({
 }) {
   const { authFetch } = useAuth();
   const modo = modoDeOrden(tipo);
+  /** Cambia el texto del bloque: aquí la ONU de la TV puede estar ya autenticada. */
+  const porAgregarInternet = esAgregarInternet((tipo ?? "").toLowerCase());
+  /** «Subir megas»: aplicar la velocidad es desautenticar y volver a autenticar la ONU. */
+  const subeMegas = /megas/i.test(tipo ?? "") && /subir/i.test(tipo ?? "");
   // Cada consulta es una sesión SSH real contra la OLT. En una orden abierta
   // vale la pena (el técnico está a punto de autenticar); en una ya cerrada —y
   // hay miles en el histórico— sería interrogar el equipo cada vez que alguien
@@ -193,6 +348,13 @@ export function AutenticarOnuOrden({
   const [sn, setSn] = useState("");
   const [busy, setBusy] = useState(false);
   const [res, setRes] = useState<Resultado | null>(null);
+  /**
+   * Por qué no se pudo autenticar. Va en un recuadro fijo, no en un aviso que se
+   * va solo: estos mensajes explican qué falta (perfiles del puerto, ONU que ya
+   * no se anuncia, equipo de otro cliente) y el técnico necesita releerlos —con
+   * el toast la pantalla se quedaba igual y parecía que el botón no hacía nada.
+   */
+  const [error, setError] = useState<string | null>(null);
   /** Serial escrito a mano: la ONU no está en el autofind porque YA está autenticada. */
   const [manual, setManual] = useState(false);
   /** El técnico ha pedido elegir él la ONU, teniendo el sistema una elegida. */
@@ -238,6 +400,7 @@ export function AutenticarOnuOrden({
   async function ejecutar(url: string, body?: unknown) {
     setBusy(true);
     setRes(null);
+    setError(null);
     try {
       const r = await authFetch(url, { method: "POST", body: JSON.stringify(body ?? {}) });
       const d = await r.json();
@@ -248,16 +411,26 @@ export function AutenticarOnuOrden({
         onDone?.();
         void cargar();
       } else {
-        toast(d.error || "La OLT rechazó la operación", "alert-triangle");
+        // El equipo que rechaza es la OLT o la Mikrotik según la vía del abonado:
+        // el mensaje va sin nombrarlo, y el detalle real lo trae `d.error`.
+        toast(d.error || "El equipo rechazó la operación", "alert-triangle");
       }
     } catch (e) {
-      toast(mensajeDeError(e), "alert-triangle");
+      const msg = mensajeDeError(e);
+      setError(msg);
+      toast(msg, "alert-triangle");
     } finally {
       setBusy(false);
     }
   }
 
   const vel = est?.velocidad;
+  /**
+   * Abonado sin OLT (EPON): el bloque entero cambia de cara. No hay autofind, ni
+   * desplegable, ni equipo que elegir — solo el perfil de su plan y el router al
+   * que se le va a escribir.
+   */
+  const viaMk = est?.via === "MIKROTIK";
   const elegida = est?.candidatos.find((c) => c.sn === sn) ?? null;
   /**
    * La OLT no ve ninguna ONU esperando. El motivo más común en esta planta no es
@@ -293,25 +466,37 @@ export function AutenticarOnuOrden({
     <div className="mb-3 rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-[13px] font-bold text-text-primary">
-          <Icon name="radio-tower" size={15} className="text-brand" />
-          {modo === "AMBOS" ? "ONU del abonado" : modo === "AUTENTICAR" ? "Autenticación de la ONU" : "Velocidad de la ONU"}
+          <Icon name={viaMk ? "gauge" : "radio-tower"} size={15} className="text-brand" />
+          {viaMk
+            ? "Plan del abonado en la Mikrotik"
+            : modo === "AMBOS" ? "ONU del abonado" : modo === "AUTENTICAR" ? "Autenticación de la ONU" : "Velocidad de la ONU"}
         </div>
         <div className="flex items-center gap-2">
           {est && !est.live && <Badge label="DRY-RUN" tone="info" />}
           <Button variant="secondary" size="sm" disabled={cargando || busy} onClick={() => void cargar()}>
-            <Icon name="refresh-cw" size={13} /> {cargando ? "Consultando…" : est ? "Refrescar" : "Consultar la OLT"}
+            <Icon name="refresh-cw" size={13} /> {cargando ? "Consultando…" : est ? "Refrescar" : "Consultar"}
           </Button>
         </div>
       </div>
 
-      {cargando && !est && <p className="text-[12px] text-text-tertiary">Consultando la OLT por SSH… (unos segundos)</p>}
+      {cargando && !est && <p className="text-[12px] text-text-tertiary">Consultando… (unos segundos)</p>}
       {!cargando && !est && !abierta && (
         <p className="text-[12px] text-text-tertiary">
-          Esta orden ya está cerrada. Pulse <b>Consultar la OLT</b> si necesita revisar o rehacer la autenticación.
+          Esta orden ya está cerrada. Pulse <b>Consultar</b> si necesita revisar o rehacer la autenticación.
         </p>
       )}
 
-      {est && (
+      {est && viaMk && (
+        <BloqueMikrotik
+          est={est}
+          busy={busy}
+          res={res}
+          error={error}
+          onAplicar={() => void ejecutar(`/support/tickets/${ticketId}/onu/autenticar`)}
+        />
+      )}
+
+      {est && !viaMk && (
         <>
           {/* Qué se va a aplicar: OLT, plan y velocidad. Sin números de índice a la vista. */}
           <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12.5px] text-text-secondary">
@@ -378,6 +563,25 @@ export function AutenticarOnuOrden({
                   {est.bloqueo!.message} Si el equipo <b>ya estaba autenticado</b> (instalación anterior o
                   dada de alta desde SmartOLT), escriba abajo el serial de su etiqueta: se aprovecha el alta
                   que ya tiene y solo se le ajusta lo que le falte.
+                </div>
+              )}
+
+              {/* La caja que el papel dice que es suya, y si la OLT la ve.
+                  Sin esto, un cliente CON equipo asignado veía "elija a mano" sin
+                  enterarse de que su equipo no era ninguna de las que suenan, y
+                  no había forma de saber si ya se podía autenticar o no. */}
+              {est.equipoAsignado && (
+                <EquipoDelCliente
+                  e={est.equipoAsignado}
+                  onUsar={(s) => { setAMano(true); setManual(true); setSn(s); setEquipmentId(""); }}
+                />
+              )}
+              {(est.onusDelCliente?.length ?? 0) > 1 && (
+                <div className="rounded-lg border border-warning bg-warning-soft px-3 py-2 text-[12.5px] leading-relaxed text-text-secondary">
+                  <Icon name="alert-triangle" size={13} className="mr-1 inline text-warning-text" />
+                  <b>El cliente tiene {est.onusDelCliente!.length} ONUs autenticadas a su nombre:</b>{" "}
+                  {est.onusDelCliente!.map((o) => `${o.sn} en ${o.olt?.name ?? "OLT"} ${o.frame}/${o.slot}/${o.port} ONT ${o.ontId} (${o.runState ?? "—"})`).join(" · ")}.
+                  {" "}Si una es el equipo retirado, hay que eliminarla en Red › OLT: autenticar la nueva no la borra.
                 </div>
               )}
 
@@ -512,6 +716,16 @@ export function AutenticarOnuOrden({
                 </div>
               )}
               </>)}
+              {/* La otra mitad del trabajo, dicha antes de hacerla: autenticar la
+                  ONU le da ENLACE, pero quien le da internet es su secret en la
+                  Mikrotik, y este cliente todavía no lo tiene. */}
+              {est.altaMikrotikPendiente && (
+                <p className="rounded-lg border border-border-subtle bg-surface-2 px-3 py-1.5 text-[11.5px] text-text-secondary">
+                  <Icon name="info" size={13} className="mr-1 inline text-text-tertiary" />
+                  Este abonado todavía no tiene datos de conexión en la Mikrotik. Al autenticar se le crean
+                  solos —usuario, clave y su secret con el perfil del plan—: no hace falta ir a crearlos a mano.
+                </p>
+              )}
               {est.onuActual?.sn && (
                 <p className="rounded-lg bg-surface-2 px-3 py-1.5 text-[11.5px] text-text-tertiary">
                   Ojo: este abonado ya tiene la ONU <span className="font-mono">{est.onuActual.sn}</span> vinculada
@@ -545,7 +759,20 @@ export function AutenticarOnuOrden({
             <div className={`flex flex-col gap-2${modo === "AMBOS" ? " mt-3 border-t border-border-subtle pt-3" : ""}`}>
               {modo === "AMBOS" && (
                 <p className="text-[12px] font-semibold text-text-secondary">
-                  ¿Sigue con la misma ONU? Solo hay que aplicarle la velocidad del plan nuevo:
+                  {porAgregarInternet
+                    /* El cliente venía con televisión sola: su ONU ya está dada de
+                       alta y lo único que falta es ponerle la velocidad del plan
+                       de internet que acaba de contratar. */
+                    ? "¿El equipo ya está autenticado (tenía televisión)? Solo hay que aplicarle la velocidad del plan de internet:"
+                    : subeMegas
+                      ? "¿Sigue con la misma ONU? Se desautentica y se vuelve a autenticar con las megas del plan nuevo:"
+                      : "¿Sigue con la misma ONU? Solo hay que aplicarle la velocidad del plan nuevo:"}
+                </p>
+              )}
+              {subeMegas && (
+                <p className="text-[11.5px] text-text-tertiary">
+                  <Icon name="info" size={13} className="mr-1 inline" />
+                  Queda en el mismo puerto y con la misma configuración; el cliente pierde la conexión unos segundos mientras se vuelve a autenticar.
                 </p>
               )}
               <p className="text-[12.5px] text-text-secondary">
@@ -562,14 +789,25 @@ export function AutenticarOnuOrden({
                   onClick={() => void ejecutar(`/support/tickets/${ticketId}/onu/velocidad`)}
                 >
                   <Icon name="gauge" size={15} className="mr-1" />
-                  {busy ? "Aplicando…"
+                  {busy ? (subeMegas ? "Re-autenticando…" : "Aplicando…")
                     : !est.onuActual?.sn ? "Sin ONU vinculada"
-                    : est.live ? "Aplicar velocidad del plan" : "Generar plan (dry-run)"}
+                    : !est.live ? "Generar plan (dry-run)"
+                    : subeMegas ? "Re-autenticar con el plan nuevo" : "Aplicar velocidad del plan"}
                 </Button>
               </div>
             </div>
             )}
           </>)}
+
+          {error && (
+            <div className="mt-3 flex items-start gap-2 rounded-lg border border-error-subtle bg-error-soft p-3 text-[12px] text-text-primary">
+              <Icon name="alert-triangle" size={14} className="mt-0.5 shrink-0 text-error-text" />
+              <div>
+                <div className="font-semibold">No se pudo autenticar</div>
+                <p className="mt-0.5 text-text-secondary">{error}</p>
+              </div>
+            </div>
+          )}
 
           {res && <ResultadoOnu res={res} />}
         </>
@@ -585,7 +823,9 @@ export function AutenticarOnuOrden({
  */
 function ResultadoOnu({ res }: { res: Resultado }) {
   const v = res.verificacion;
-  const problema = !res.ok || !!v?.avisos?.length;
+  // Que el abonado quede sin su alta en la Mikrotik es un problema aunque la ONU
+  // haya quedado perfecta: tiene enlace y no navega.
+  const problema = !res.ok || !!v?.avisos?.length || res.altaMikrotik?.ok === false;
   return (
     <div className={`mt-3 rounded-lg border p-3 text-[12px] ${problema ? "border-warning bg-warning-soft" : "border-success-text/30 bg-success-soft"}`}>
       <div className="flex items-center gap-1.5 font-semibold text-text-primary">
@@ -603,10 +843,29 @@ function ResultadoOnu({ res }: { res: Resultado }) {
           {!!res.cambios?.length && <> Se ajustó: {res.cambios.join(" · ")}.</>}
         </div>
       )}
+      {res.reautenticada && (
+        <div className="mt-1 text-text-secondary">
+          La ONU se <b>desautenticó y se volvió a autenticar</b> con la velocidad del plan nuevo, en el mismo puerto.
+        </div>
+      )}
+      {!res.ok && res.restaurada === true && (
+        <div className="mt-1 text-text-secondary">Se dejó la ONU como estaba, con la velocidad anterior.</div>
+      )}
+      {!res.ok && res.restaurada === false && (
+        <div className="mt-1 font-semibold text-error-text">La ONU quedó sin alta en la OLT: autentíquela desde Red › OLT.</div>
+      )}
       {!!res.avisos?.length && (
         <ul className="mt-1.5 list-disc space-y-0.5 pl-4 text-text-secondary">
           {res.avisos.map((a, i) => <li key={`aviso-${i}`}>{a}</li>)}
         </ul>
+      )}
+      {/* Lo que hace que el cliente NAVEGUE, no solo que la fibra enlace. Se
+          enseña siempre que la orden lo tocó: en verde si quedó, en ámbar si no
+          —una ONU online sin secret es un cliente que llama mañana—. */}
+      {res.altaMikrotik && (
+        <div className={`mt-1 ${res.altaMikrotik.ok ? "text-text-secondary" : "text-warning-text"}`}>
+          <b>Mikrotik:</b> {res.altaMikrotik.mensaje}
+        </div>
       )}
       {res.equipo && (
         <div className="mt-1 text-text-secondary">
@@ -620,6 +879,21 @@ function ResultadoOnu({ res }: { res: Resultado }) {
           cargarle el equipo a mano. */}
       {res.auto?.aviso && (
         <div className="mt-1 text-warning-text">{res.auto.aviso}</div>
+      )}
+      {/* Traslado: la ONU es la misma de siempre, lo que cambió es el puerto. Se
+          dice de dónde se quitó, que es la mitad del trabajo que nadie ve. */}
+      {res.liberacion?.anterior && (
+        <div className="mt-1 text-text-secondary">
+          {res.liberacion.borrado
+            ? <>Se desautenticó la ONU de su puerto anterior <b>{res.liberacion.anterior}</b> para volver a darla de alta aquí.</>
+            : <span className="text-warning-text">No se pudo desautenticar la ONU de su puerto anterior {res.liberacion.anterior}.</span>}
+          {!!res.liberacion.tambienEn?.length && ` También se quitó el alta que quedaba en ${res.liberacion.tambienEn.join(", ")}.`}
+        </div>
+      )}
+      {!!res.liberacion?.avisos?.length && (
+        <ul className="mt-1 list-disc space-y-0.5 pl-4 text-warning-text">
+          {res.liberacion.avisos.map((a, i) => <li key={`lib-${i}`}>{a}</li>)}
+        </ul>
       )}
       {!!res.conciliacion?.liberados?.length && (
         <div className="mt-1 text-text-secondary">
@@ -653,5 +927,108 @@ function ResultadoOnu({ res }: { res: Resultado }) {
         <pre className="mt-2 overflow-x-auto whitespace-pre-wrap rounded bg-black/80 p-2 font-mono text-[11px] text-green-300">{res.commands.join("\n")}</pre>
       )}
     </div>
+  );
+}
+
+/**
+ * El bloque de un abonado SIN OLT (hoy, EPON).
+ *
+ * Aquí no hay nada que elegir: el plan dice qué perfil PPP le toca y la sede más
+ * su tecnología dicen a qué Mikrotik se escribe. El técnico solo confirma. Es la
+ * misma escritura que el botón de la ficha del cliente, así que no hay dos formas
+ * de cambiarle la velocidad a nadie.
+ *
+ * Se avisa de que se le cae la sesión: el perfil no lo toma el enlace hasta que
+ * el PPPoE vuelve a levantar, y el técnico suele estar en la casa mirando.
+ */
+function BloqueMikrotik({
+  est, busy, res, error, onAplicar,
+}: {
+  est: Estado;
+  busy: boolean;
+  res: Resultado | null;
+  error: string | null;
+  onAplicar: () => void;
+}) {
+  return (
+    <>
+      <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12.5px] text-text-secondary">
+        <span>
+          <b className="text-text-primary">Plan:</b> {est.plan?.name ?? "—"}
+          {est.plan?.megas != null && ` · ${est.plan.megas} Megas`}
+        </span>
+        {est.plan?.estado === "DE_LA_ORDEN" && (
+          <span className="inline-flex items-center gap-1 text-text-tertiary" title="El abonado pasa a este plan cuando se cierre la orden">
+            <Icon name="info" size={13} />
+            el plan que pide la orden
+          </span>
+        )}
+        {est.plan?.derivado && (
+          <span className="inline-flex items-center gap-1 text-warning-text" title="Este abonado no tiene el servicio registrado en su ficha">
+            <Icon name="alert-triangle" size={13} />
+            leído de sus facturas
+          </span>
+        )}
+        {est.perfil && (
+          <span>
+            <b className="text-text-primary">Perfil:</b> <span className="font-mono">{est.perfil}</span>
+          </span>
+        )}
+        {est.mikrotik && (
+          <span title={est.mikrotik.host}>
+            <b className="text-text-primary">Mikrotik:</b> {est.mikrotik.name}
+          </span>
+        )}
+      </div>
+
+      {est.bloqueo ? (
+        <div className="rounded-lg border border-warning bg-warning-soft px-3 py-2 text-[12.5px] leading-relaxed text-text-secondary">
+          <Icon name="alert-triangle" size={13} className="mr-1 inline text-warning-text" />
+          {est.bloqueo.message}
+          {est.bloqueo.code === "SIN_PERFIL" && (
+            <Link href="/configuracion/planes" className="ml-1 font-semibold text-brand hover:underline">
+              Abrir Planes
+            </Link>
+          )}
+        </div>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {/* Por qué este bloque no pide ninguna ONU: es la duda que trae el
+              técnico acostumbrado a las órdenes de fibra. */}
+          <p className="rounded-lg border border-brand/40 bg-brand-soft px-3 py-2 text-[12.5px] leading-relaxed text-text-secondary">
+            <Icon name="info" size={13} className="mr-1 inline text-brand" />
+            Este abonado es <b>EPON</b>: no pasa por la OLT, así que no hay ONU que autenticar.
+            Lo que le da la velocidad es el perfil de su plan en la Mikrotik. Al aplicarlo se le
+            reinicia la sesión y <b>se le cae el internet unos segundos</b>.
+          </p>
+          <div>
+            <Button size="sm" disabled={busy} onClick={onAplicar}>
+              <Icon name="gauge" size={13} /> {busy ? "Aplicando…" : `Aplicar ${est.perfil} en ${est.mikrotik?.name ?? "la Mikrotik"}`}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div className="mt-2 rounded-lg border border-warning bg-warning-soft px-3 py-2 text-[12.5px] leading-relaxed text-text-secondary">
+          <Icon name="alert-triangle" size={13} className="mr-1 inline text-warning-text" />
+          {error}
+        </div>
+      )}
+
+      {res && (
+        <div className={`mt-3 rounded-lg border p-3 text-[12px] ${res.ok ? "border-success-text/30 bg-success-soft" : "border-warning bg-warning-soft"}`}>
+          <div className="flex items-center gap-1.5 font-semibold text-text-primary">
+            <Icon name={res.ok ? "check" : "alert-triangle"} size={14} className={res.ok ? "text-success-text" : "text-warning-text"} />
+            {res.ok ? (res.message ?? "Listo") : (res.error ?? "No se pudo aplicar")}
+          </div>
+          {!!res.steps?.length && (
+            <ul className="mt-1.5 list-disc space-y-0.5 pl-4 text-text-secondary">
+              {res.steps.map((s, i) => <li key={`paso-${i}`}>{s}</li>)}
+            </ul>
+          )}
+        </div>
+      )}
+    </>
   );
 }

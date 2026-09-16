@@ -17,8 +17,6 @@ const kv = (doc: PDFKit.PDFDocument, l: string, v: string) => B.kv(doc, l.replac
 // ---------------------------------------------------------------------------
 const fmtLargo = (d: Date | string | null) =>
   d ? new Date(d).toLocaleDateString('es-CO', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' }) : '—';
-const fmtHoraCorta = (d: Date | string | null) =>
-  d ? new Date(d).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', hour12: false }) : '—';
 
 type Bucket = { cantidad: number; monto: number };
 
@@ -66,6 +64,8 @@ export type CashCloseData = {
   movimientos: {
     date: Date | string; note: string | null; payer: string; category: string;
     method: string | null; type: string; amount: number; firma: number;
+    /** Consecutivo del legacy: por él se busca el movimiento para anularlo. */
+    codigo?: number | null;
   }[];
 };
 
@@ -265,8 +265,12 @@ export function cashClosePdf(res: Response, d: CashCloseData) {
     // Sin columna de saldo acumulado: al agrupar por concepto las filas dejan de ir en
     // orden cronológico, y un saldo que va y viene según el grupo no es un saldo. Lo que
     // sí dice algo es el subtotal de cada grupo, que va en su título.
+    // Va el CÓDIGO donde antes iba la hora. La hora no decía nada: `Transaction.date`
+    // es una columna `date` (sin hora), así que todas las filas imprimían el mismo
+    // 00:00. El código, en cambio, es por donde se busca el movimiento en /tesoreria
+    // cuando hay que anular un pago con el cierre en la mano.
     const cols: B.Col[] = [
-      { label: 'Hora', x: B.M + 6, w: 42 },
+      { label: 'Código', x: B.M + 6, w: 42 },
       { label: 'Quién', x: 90, w: 165 },
       { label: 'Concepto / nota', x: 258, w: 140 },
       { label: 'Medio', x: 400, w: 75 },
@@ -285,7 +289,7 @@ export function cashClosePdf(res: Response, d: CashCloseData) {
       filas.forEach((m, i) => {
         if (doc.y > 745) { B.newPage(doc); B.thead(doc, cols); }
         B.trow(doc, cols, [
-          { t: fmtHoraCorta(m.date), color: GRAY },
+          { t: m.codigo != null ? String(m.codigo) : '—', color: GRAY },
           m.payer || '—',
           m.note || m.category || '—',
           m.method || '—',
@@ -689,6 +693,8 @@ export type PurchaseOrderPdfData = {
   categoryRef?: string | null;
   notes: string | null;
   supplier: { name: string; nit: string | null; phone: string | null } | null;
+  /** Datos de la consignación: a qué cuenta se le paga al proveedor. */
+  consignment?: { bank: string | null; accountType: string | null; account: string | null; holder: string | null; holderDoc: string | null } | null;
   items: { product: string; qty: number; price: number; taxRate: number; subtotal: number; taxTotal: number }[];
   noteLines: { type: string; description: string | null; amount: number }[];
   subtotal: number; tax: number; total: number; paid: number; balance: number;
@@ -718,6 +724,16 @@ export function purchaseOrderPdf(res: Response, d: PurchaseOrderPdfData) {
     B.kv(doc, 'Nombre', d.supplier.name);
     if (d.supplier.nit) B.kv(doc, 'NIT', d.supplier.nit);
     if (d.supplier.phone) B.kv(doc, 'Teléfono', d.supplier.phone);
+  }
+
+  const c = d.consignment;
+  if (c && (c.account || c.bank)) {
+    B.section(doc, 'Datos de la consignación');
+    B.kv(doc, 'Banco', c.bank ?? '—');
+    B.kv(doc, 'Tipo de cuenta', c.accountType ?? '—');
+    B.kv(doc, 'N° de cuenta', c.account ?? '—');
+    if (c.holder) B.kv(doc, 'Titular', c.holder);
+    if (c.holderDoc) B.kv(doc, 'NIT / C.C. titular', c.holderDoc);
   }
 
   B.section(doc, 'Ítems');

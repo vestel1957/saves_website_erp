@@ -39,7 +39,8 @@ type Modo = "tecnico" | "bodega" | "devolucion";
 type Bodega = {
   id: string; title: string; extra: string | null;
   isTechnician: boolean; technicianName: string | null; technicianRetired: boolean;
-  managerId: string | null; managerName: string | null; materials: number;
+  managerId: string | null; managerName: string | null;
+  branchLegacy: number | null; branchName: string | null; materials: number;
 };
 
 type Tecnico = {
@@ -64,12 +65,19 @@ type Contexto = {
   mySedeNames: string[];
   warehouses: Bodega[];
   originWarehouses: Bodega[];
+  /** Origen y destino de "entre bodegas" (a la cajera, sólo los de su sede). */
+  warehouseOrigins: Bodega[];
+  warehouseTargets: Bodega[];
   technicians: Tecnico[];
   retiredTechnicians: number;
   retiredMaterials: number;
 };
 
 type Material = { id: string; name: string; code: string | null; qty: number; price: number };
+
+/** Tope de páginas al traer el material de una bodega (100 por página).
+ *  La bodega más cargada tiene ~520 materiales; 20 páginas dejan margen. */
+const MAX_PAGINAS_MATERIAL = 20;
 
 export default function NuevoTraspasoPage() {
   const router = useRouter();
@@ -108,15 +116,26 @@ export default function NuevoTraspasoPage() {
     })();
   }, [authLoading, authFetch]);
 
-  const loadMaterials = useCallback(async (whId: string) => {
+  const loadMaterials = useCallback(async (whId: string, enModo: Modo) => {
     if (!whId || !ctx) { setMaterials([]); setSelected({}); return; }
     setLoadingMaterials(true);
     try {
-      const qs = new URLSearchParams({ warehouseId: whId, pageSize: "100" });
-      // A la cajera sólo se le ofrece consumible; el backend lo exige igual al emitir.
-      if (ctx.onlyConsumable) qs.set("onlyConsumable", "1");
-      const d = await (await authFetch(`/inventory/materials?${qs}`)).json();
-      setMaterials(d?.items ?? []);
+      // La bodega entera, no su primera página: el filtro de abajo es de cliente y
+      // sólo puede buscar sobre lo que se trajo. Con una sola página de 100 el
+      // material nº 137 de Almacén Yopal (279 en total) no existía para esta
+      // pantalla —ni listado ni buscándolo—, y el total del pie tampoco lo veía.
+      // El backend topa `pageSize` en 100, así que se pide de a páginas.
+      const items: Material[] = [];
+      for (let page = 1; page <= MAX_PAGINAS_MATERIAL; page++) {
+        const qs = new URLSearchParams({ warehouseId: whId, page: String(page), pageSize: "100" });
+        // A la cajera sólo se le ofrece consumible al ENTREGARLE a un técnico; entre
+        // bodegas de su sede mueve cualquiera. El backend lo exige igual al emitir.
+        if (ctx.onlyConsumable && enModo === "tecnico") qs.set("onlyConsumable", "1");
+        const d = await (await authFetch(`/inventory/materials?${qs}`)).json();
+        items.push(...(d?.items ?? []));
+        if (!d?.pages || page >= d.pages) break;
+      }
+      setMaterials(items);
       setSelected({});
     } finally {
       setLoadingMaterials(false);
@@ -125,9 +144,16 @@ export default function NuevoTraspasoPage() {
 
   // El material de su bodega se carga solo (el selector de origen no se le pinta).
   useEffect(() => {
-    if (ctx?.canReturnMode && ctx.returnFrom) void loadMaterials(ctx.returnFrom.id);
+    if (ctx?.canReturnMode && ctx.returnFrom) void loadMaterials(ctx.returnFrom.id, "devolucion");
     // `loadMaterials` depende de `ctx`: se dispara justo cuando llega el contexto.
   }, [ctx, loadMaterials]);
+
+  // Bodegas ofrecidas como origen en cada modo; quién puede sacar de dónde lo
+  // decide el backend (a la cajera, las de su sede) y lo revalida al emitir.
+  const origenesDe = useCallback(
+    (m: Modo) => (!ctx ? [] : m === "tecnico" ? ctx.originWarehouses : ctx.warehouseOrigins),
+    [ctx],
+  );
 
   // Cambiar de modo invalida el destino (son listas distintas) pero conserva el
   // origen y lo ya marcado: es normal dudar entre entregarlo o moverlo de bodega.
@@ -139,14 +165,25 @@ export default function NuevoTraspasoPage() {
     if (m === "devolucion" && ctx?.returnFrom) {
       setFromWarehouseId(ctx.returnFrom.id);
       if (ctx.returnTargets?.length === 1) setToWarehouseId(ctx.returnTargets[0].id);
-      void loadMaterials(ctx.returnFrom.id);
+      void loadMaterials(ctx.returnFrom.id, m);
+      return;
+    }
+    // La cajera no tiene los mismos orígenes en los dos modos (los almacenes de sus
+    // técnicos sólo sirven para recoger) ni el mismo material (consumible sólo al
+    // entregar): si el origen ya no vale se suelta, y si vale se recarga su material.
+    if (!origenesDe(m).some((w) => w.id === fromWarehouseId)) {
+      setFromWarehouseId("");
+      setMaterials([]);
+      setSelected({});
+    } else if (ctx?.onlyConsumable) {
+      void loadMaterials(fromWarehouseId, m);
     }
   };
 
   const onFromChange = (v: string) => {
     setFromWarehouseId(v);
     setMatFilter("");
-    void loadMaterials(v);
+    void loadMaterials(v, modo);
   };
 
   const toggle = (m: Material, checked: boolean) => {
@@ -166,12 +203,9 @@ export default function NuevoTraspasoPage() {
     setSelected((s) => ({ ...s, [m.id]: val === "" ? "" : String(n) }));
   };
 
-  // Bodegas ofrecidas como origen; quién puede sacar de dónde lo decide el backend
-  // (a la cajera sólo le llegan las generales) y lo revalida al emitir.
-  const origenes = useMemo(
-    () => (!ctx ? [] : modo === "tecnico" ? ctx.originWarehouses : ctx.warehouses),
-    [ctx, modo],
-  );
+  const origenes = useMemo(() => origenesDe(modo), [origenesDe, modo]);
+  // Material consumible sólo cuando la cajera le entrega a un técnico.
+  const soloConsumible = Boolean(ctx?.onlyConsumable) && modo === "tecnico";
 
   // El técnico elegido, o la bodega destino: de ahí sale quién firma la recepción.
   const tecnicoElegido = useMemo(
@@ -200,8 +234,14 @@ export default function NuevoTraspasoPage() {
       };
     }
     if (modo === "tecnico") return tecnicoElegido ? { nombre: tecnicoElegido.name, rol: "Técnico" } : null;
-    return bodegaDestino?.managerName ? { nombre: bodegaDestino.managerName, rol: "Encargado de la bodega" } : null;
-  }, [modo, tecnicoElegido, bodegaDestino, destinoDevolucion]);
+    if (bodegaDestino?.managerName) return { nombre: bodegaDestino.managerName, rol: "Encargado de la bodega" };
+    // La cajera moviendo a una bodega de su sede sin encargado: la firma cualquier
+    // cajera de esa sede (lo decide `resolveTransfer`; aquí sólo se anuncia).
+    if (ctx?.restricted && bodegaDestino?.branchName) {
+      return { nombre: `Cajera de ${bodegaDestino.branchName}`, rol: "La firma cualquier cajera de esa sede" };
+    }
+    return null;
+  }, [ctx, modo, tecnicoElegido, bodegaDestino, destinoDevolucion]);
 
   // Los almacenes de técnico se llaman “Almacen Omar” o “Depurados”: sin el nombre
   // de su dueño no hay forma de dar con el técnico del que se quiere sacar material.
@@ -280,7 +320,7 @@ export default function NuevoTraspasoPage() {
 
   const tabs = [
     ...(ctx.canTechnicianMode ? [{ key: "tecnico" as Modo, label: "A técnico", icon: "user", count: ctx.technicians.length }] : []),
-    ...(ctx.canWarehouseMode ? [{ key: "bodega" as Modo, label: "Entre bodegas", icon: "warehouse", count: ctx.warehouses.length }] : []),
+    ...(ctx.canWarehouseMode ? [{ key: "bodega" as Modo, label: "Entre bodegas", icon: "warehouse", count: ctx.warehouseTargets.length }] : []),
     ...(ctx.canReturnMode ? [{ key: "devolucion" as Modo, label: "Devolver material", icon: "package-x" }] : []),
   ];
   const destinos = ctx.returnTargets ?? [];
@@ -298,20 +338,23 @@ export default function NuevoTraspasoPage() {
         showBack
       />
 
-      {/* Con un solo modo disponible (caja, técnico) la tira sobra: se dice en texto. */}
-      {tabs.length > 1
-        ? <TabStrip tabs={tabs} active={modo} onChange={cambiarModo} className="mb-4" />
-        : modo === "devolucion" ? (
-          <p className="mb-4 flex flex-wrap items-center gap-1.5 rounded-lg bg-surface-2 px-3 py-2 text-[12px] text-text-secondary">
-            <Icon name="info" size={14} className="text-text-tertiary" />
-            <span>Devuelves lo que te sobró de <strong>{ctx.returnFrom?.title ?? "tu bodega"}</strong>; lo recibe y firma la cajera de tu sede.</span>
-          </p>
-        ) : (
-          <p className="mb-4 flex flex-wrap items-center gap-1.5 rounded-lg bg-surface-2 px-3 py-2 text-[12px] text-text-secondary">
-            <Icon name="info" size={14} className="text-text-tertiary" />
-            Entregas material <strong>consumible</strong> a los técnicos de {ctx.mySedeNames.length ? <strong>{ctx.mySedeNames.join(", ")}</strong> : "tu sede"}.
-          </p>
-        )}
+      {/* Con un solo modo disponible (técnico) la tira sobra: se dice en texto. */}
+      {tabs.length > 1 && <TabStrip tabs={tabs} active={modo} onChange={cambiarModo} className="mb-4" />}
+      {modo === "devolucion" ? (
+        <p className="mb-4 flex flex-wrap items-center gap-1.5 rounded-lg bg-surface-2 px-3 py-2 text-[12px] text-text-secondary">
+          <Icon name="info" size={14} className="text-text-tertiary" />
+          <span>Devuelves lo que te sobró de <strong>{ctx.returnFrom?.title ?? "tu bodega"}</strong>; lo recibe y firma la cajera de tu sede.</span>
+        </p>
+      ) : ctx.restricted ? (
+        // La cajera: qué le toca en cada modo, para que el límite no parezca un fallo.
+        <p className="mb-4 flex flex-wrap items-center gap-1.5 rounded-lg bg-surface-2 px-3 py-2 text-[12px] text-text-secondary">
+          <Icon name="info" size={14} className="text-text-tertiary" />
+          {modo === "tecnico"
+            ? <>Entregas material <strong>consumible</strong> a los técnicos de</>
+            : <>Mueves material entre las bodegas de</>}{" "}
+          {ctx.mySedeNames.length ? <strong>{ctx.mySedeNames.join(", ")}</strong> : "tu sede"}.
+        </p>
+      ) : null}
 
       {/* Sin bodega, sin sede o sin bodega principal no hay devolución posible: se
           dice con el porqué y a quién pedírselo, en vez de un selector vacío. */}
@@ -368,9 +411,9 @@ export default function NuevoTraspasoPage() {
                 </Select>
               </Field>
             ) : (
-              <Field label="Entra a la bodega" required>
+              <Field label="Entra a la bodega" required hint={ctx.restricted ? "Bodegas de tu sede" : undefined}>
                 <Select value={toWarehouseId} onChange={(e) => setToWarehouseId(e.target.value)}>
-                  {opcionesBodega(ctx.warehouses, fromWarehouseId)}
+                  {opcionesBodega(ctx.warehouseTargets, fromWarehouseId)}
                 </Select>
               </Field>
             )}
@@ -400,7 +443,7 @@ export default function NuevoTraspasoPage() {
           <div>
             <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
               <span className="text-[11px] font-semibold text-text-tertiary">
-                Material{ctx.onlyConsumable && " consumible"}
+                Material{soloConsumible && " consumible"}
               </span>
               {fromWarehouseId && materials.length > 0 && (
                 <div className="relative w-full max-w-[240px] sm:w-56">
@@ -419,7 +462,7 @@ export default function NuevoTraspasoPage() {
               </div>
             ) : materials.length === 0 ? (
               <div className="rounded-xl border border-dashed border-border-subtle bg-surface p-6 text-center text-[13px] text-text-tertiary">
-                {ctx.onlyConsumable ? "Esta bodega no tiene material consumible disponible." : "La bodega no tiene material disponible."}
+                {soloConsumible ? "Esta bodega no tiene material consumible disponible." : "La bodega no tiene material disponible."}
               </div>
             ) : (
               <div className="max-h-[420px] overflow-auto rounded-xl border border-border-subtle">

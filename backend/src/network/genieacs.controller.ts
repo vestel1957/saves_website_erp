@@ -70,8 +70,10 @@ export class GenieacsController {
   install(serverId?: string, user?: AuthUser) { return this.acs.installProvision(serverId, user); }
 
   // --- Corte de TV masivo POR ABONADO (resuelve TR-069 u OLT por cada uno) ---
+  // Con candado: es el botón "cortar la TV de los que marqué" de la pantalla masiva,
+  // así que se le aplica la misma regla que al corte por filtro (`corte.policy.ts`).
   tvCutSubs(dto: BatchDto, user: AuthUser) {
-    return this.acs.tvBatchBySubscribers(dto.ids, false, user);
+    return this.acs.tvBatchBySubscribers(dto.ids, false, user, { candadoDeuda: true });
   }
   tvRestoreSubs(dto: BatchDto, user: AuthUser) {
     return this.acs.tvBatchBySubscribers(dto.ids, true, user);

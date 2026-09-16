@@ -1,4 +1,6 @@
-import { ProjectsService, CreateProjectDto, MilestoneDto, UpdateProjectDto } from './projects.service';
+import { ProjectsService, CreateProjectDto, MilestoneDto, ProjectMaterialsDto, UpdateProjectDto } from './projects.service';
+import { AuthUser } from '../auth/current-user.decorator';
+import { respuestaMaterial } from '../common/material-stock';
 
 /** Proyectos (migrado de saves-vestel). */
 export class ProjectsController {
@@ -15,4 +17,12 @@ export class ProjectsController {
   addMilestone(id: string, dto: MilestoneDto) { return this.projects.createMilestone(id, dto); }
   updateMilestone(mid: string, dto: MilestoneDto) { return this.projects.updateMilestone(mid, dto); }
   deleteMilestone(mid: string) { return this.projects.deleteMilestone(mid); }
+
+  materialWarehouses(user: AuthUser, search?: string) { return this.projects.materialWarehouses(user, search); }
+  /** Sin `page` responde el array de antes: el navegador que no ha recargado (ver `respuestaMaterial`). */
+  async searchMaterials(user: AuthUser, search?: string, warehouseId?: string, categoryId?: string, page?: string, pageSize?: string) {
+    return respuestaMaterial(await this.projects.searchMaterials(user, { search, warehouseId, categoryId, page, pageSize }), page);
+  }
+  addMaterials(id: string, dto: ProjectMaterialsDto, user: AuthUser) { return this.projects.addMaterials(id, dto, user); }
+  deleteMaterial(mid: string) { return this.projects.deleteMaterial(mid); }
 }

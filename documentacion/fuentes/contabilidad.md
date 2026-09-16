@@ -204,37 +204,6 @@ Al final de cada fila hay botones de acción: ver/imprimir PDF, enviar por Whats
 
 ---
 
-## Ventas recurrentes
-
-**Dónde:** menú **Facturación → Recurrente** (ruta `/facturacion/recurrente`).
-
-**Para qué sirve:** guardar **plantillas** de facturas que se repiten (por ejemplo, la mensualidad de un cliente). Con la plantilla lista, el sistema puede generar la factura del periodo sin volver a armarla desde cero.
-
-**Qué vas a ver:** cuatro indicadores arriba (plantillas totales, activas, inactivas y el valor recurrente total) y la lista de plantillas:
-
-| Columna | Qué significa |
-| --- | --- |
-| N° | Número de la plantilla |
-| Cliente | Abonado al que se le factura |
-| Periodicidad | Cada cuánto se repite |
-| Total | Valor de cada factura generada |
-| Estado | Activa o inactiva |
-
-**Paso a paso — crear una plantilla:**
-
-1. Pulsa **Nueva plantilla**.
-2. Completa el cliente y los datos de la factura recurrente en la ventana que se abre.
-3. Guarda. La plantilla aparecerá en la lista.
-
-**Paso a paso — generar la factura o eliminar la plantilla:**
-
-1. Para crear la factura de esa plantilla ahora, pulsa **Generar** en la fila; el sistema crea la factura y muestra su número y total.
-2. Para quitar una plantilla, pulsa **Eliminar** y confirma.
-
-> La facturación recurrente del mes se puede lanzar de forma automática (el día 1 de cada mes) o de forma manual con el botón **Generar** de cada plantilla. El botón **Generación automática**, en la pantalla de Facturación, lleva a la configuración de esas automatizaciones.
-
----
-
 # Contabilidad
 
 ## Resumen contable

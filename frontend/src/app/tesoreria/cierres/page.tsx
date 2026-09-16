@@ -156,6 +156,7 @@ function ArqueoDeMiCaja() {
                 fecha={fecha}
                 excedente={d.efectivo}
                 proximoDiaHabil={d.proximoDiaHabil}
+                sinActividad={d.sinActividad}
                 onCerrado={() => void cargar()}
               />
             </div>
@@ -351,6 +352,7 @@ function CierresAdmin() {
             fecha={fecha}
             excedente={a.excedente}
             proximoDiaHabil={a.proximoDiaHabil}
+            sinActividad={a.sinActividad}
             onCerrado={() => setRecarga((n) => n + 1)}
           />
         )}

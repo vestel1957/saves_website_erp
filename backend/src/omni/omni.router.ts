@@ -5,7 +5,7 @@
  * controlador. Cablea HTTP -> método: extrae los argumentos de `req` y llama.
  * La lógica sigue viviendo en OmniController, que ya no lleva decoradores.
  *
- * Endpoints: 11
+ * Endpoints: 12
  */
 import { crearRouter, manejar } from '../core/http/ruta';
 import { validar } from '../core/http/validar';
@@ -30,6 +30,13 @@ omniRouter.post(
   autenticar,
   exigirArea('contabilidad', 'administracion', 'caja'),
   manejar((req) => omni.createEvent(validar(EventDto, req.body), usuarioDe(req))),
+);
+
+omniRouter.get(
+  '/events/calendar',
+  autenticar,
+  exigirArea('contabilidad', 'administracion', 'caja'),
+  manejar((req) => omni.eventsCalendar(req.query.from as string, req.query.to as string, req.query.search as string, req.query.priority as string, req.query.assignedBy as string)),
 );
 
 omniRouter.get(

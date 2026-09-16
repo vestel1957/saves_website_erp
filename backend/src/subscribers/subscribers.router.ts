@@ -5,7 +5,7 @@
  * controlador. Cablea HTTP -> método: extrae los argumentos de `req` y llama.
  * La lógica sigue viviendo en SubscribersController, que ya no lleva decoradores.
  *
- * Endpoints: 50
+ * Endpoints: 51
  */
 import { crearRouter, manejar } from '../core/http/ruta';
 import { validar } from '../core/http/validar';
@@ -185,6 +185,13 @@ subscribersRouter.get(
   autenticar,
   exigirArea('administracion', 'contabilidad', 'tecnicos', 'caja'),
   manejar((req, res) => subscribers.anexoPdfEndpoint(req.params.id, res, usuarioDe(req))),
+);
+
+subscribersRouter.post(
+  '/:id/bundle',
+  autenticar,
+  exigirArea('administracion', 'contabilidad', 'tecnicos', 'caja'),
+  manejar((req) => subscribers.applyBundle(req.params.id, validar(ApplyBundleDto, req.body), usuarioDe(req))),
 );
 
 subscribersRouter.post(

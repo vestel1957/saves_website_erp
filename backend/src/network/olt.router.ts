@@ -5,7 +5,7 @@
  * controlador. Cablea HTTP -> método: extrae los argumentos de `req` y llama.
  * La lógica sigue viviendo en OltController, que ya no lleva decoradores.
  *
- * Endpoints: 37
+ * Endpoints: 38
  */
 import { crearRouter, manejar } from '../core/http/ruta';
 import { validar } from '../core/http/validar';
@@ -21,6 +21,14 @@ import { APP_PERMISSIONS } from '../auth/permissions.catalog';
 const olt = new OltController(oltService, oltPlanProfileService);
 
 export const oltRouter = crearRouter();
+oltRouter.get(
+  '/olt/abonado/:id/optica',
+  autenticar,
+  exigirArea('tecnicos', 'administracion'),
+  moduloRed,
+  manejar((req) => olt.opticaAbonado(req.params.id, req.query.refresh as string)),
+);
+
 oltRouter.post(
   '/olt/auto-link',
   autenticar,

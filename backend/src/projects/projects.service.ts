@@ -1,9 +1,11 @@
-import { NotFoundException } from '../core/http/errores';
+import { BadRequestException, NotFoundException } from '../core/http/errores';
 import { Type } from 'class-transformer';
-import { IsIn, IsInt, IsNumber, IsOptional, IsString, Min, MinLength } from 'class-validator';
+import { IsArray, IsIn, IsInt, IsNumber, IsOptional, IsString, Min, MinLength, ValidateNested } from 'class-validator';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuthUser } from '../auth/current-user.decorator';
 import { orden } from '../common/pagination-params';
+import { bodegasConMaterial, buscarMaterialConStock, FiltroMaterial } from '../common/material-stock';
 import { num } from '../common/money';
 
 function subName(s: { firstName: string | null; lastName1: string | null; companyName: string | null; fullName: string | null } | null): string | null {
@@ -31,6 +33,18 @@ export class MilestoneDto {
   @IsOptional() @IsString() endDate?: string;
   @IsOptional() @IsString() detail?: string;
   @IsOptional() @IsString() color?: string;
+}
+
+/** Un ítem de material que se carga al proyecto. */
+export class ProjectMaterialItemDto {
+  @IsString() @MinLength(1) materialId!: string;
+  @Type(() => Number) @IsInt() @Min(1) qty!: number;
+}
+/** Material cargado al proyecto (descuenta stock). */
+export class ProjectMaterialsDto {
+  @IsArray() @ValidateNested({ each: true }) @Type(() => ProjectMaterialItemDto)
+  items!: ProjectMaterialItemDto[];
+  @IsOptional() @IsString() note?: string;
 }
 
 const dOnly = (s?: string) => (s ? new Date(s) : null);
@@ -86,7 +100,11 @@ export class ProjectsService {
   async detail(id: string) {
     const pr = await this.prisma.project.findUnique({
       where: { id },
-      include: { subscriber: { select: SUB }, milestones: { orderBy: { startDate: 'asc' } } },
+      include: {
+        subscriber: { select: SUB },
+        milestones: { orderBy: { startDate: 'asc' } },
+        materials: { orderBy: { createdAt: 'desc' } },
+      },
     });
     if (!pr) throw new NotFoundException('Proyecto no encontrado');
     // Tareas: TodoTask con related=1 y rid=legacyId
@@ -106,6 +124,13 @@ export class ProjectsService {
       startDate: pr.startDate, endDate: pr.endDate, tag: pr.tag, phase: pr.phase, note: pr.note, worth: num(pr.worth),
       subscriber: pr.subscriber ? { id: pr.subscriber.id, name: subName(pr.subscriber), abonado: pr.subscriber.abonado } : null,
       milestones: pr.milestones.map((m) => ({ id: m.id, name: m.name, startDate: m.startDate, endDate: m.endDate, detail: m.detail, color: m.color })),
+      materials: pr.materials.map((m) => ({
+        id: m.id, materialId: m.materialId, name: m.materialName, qty: m.qty,
+        price: num(m.price), total: num(m.price) * m.qty,
+        warehouse: m.warehouseName, employee: m.employeeName, note: m.note, createdAt: m.createdAt,
+      })),
+      /** Lo gastado en material, para contrastarlo contra `worth` (el presupuesto). */
+      materialTotal: pr.materials.reduce((s, m) => s + num(m.price) * m.qty, 0),
       tasks: tasks.map((t) => ({
         id: t.id, name: t.name, status: t.status, start: t.start, dueDate: t.dueDate,
         priority: t.priority, description: t.description,
@@ -153,5 +178,74 @@ export class ProjectsService {
   async deleteMilestone(id: string) {
     await this.prisma.milestone.delete({ where: { id } });
     return { id, deleted: true };
+  }
+
+  // --- Material del proyecto ---
+
+  /** Bodegas con material, para entrar por el estante (mismo selector que soporte). */
+  materialWarehouses(user: AuthUser, search?: string) {
+    return bodegasConMaterial(this.prisma, user, search);
+  }
+
+  /** Materiales con stock para el selector del modal (mismo buscador que soporte). */
+  searchMaterials(user: AuthUser, filtro: FiltroMaterial) {
+    return buscarMaterialConStock(this.prisma, user, filtro);
+  }
+
+  /**
+   * Carga material al proyecto y descuenta stock (`Material.qty`), igual que el
+   * consumo de una orden. Transaccional: o entra la lista entera o no entra nada,
+   * porque una obra que se lleva cinco cosas es un acto y no cinco.
+   */
+  async addMaterials(projectId: string, dto: ProjectMaterialsDto, user: AuthUser) {
+    const pr = await this.prisma.project.findUnique({ where: { id: projectId }, select: { id: true } });
+    if (!pr) throw new NotFoundException('Proyecto no encontrado');
+    if (!dto.items?.length) throw new BadRequestException('Agrega al menos un material');
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const out: { name: string; qty: number }[] = [];
+      for (const it of dto.items) {
+        const m = await tx.material.findUnique({
+          where: { id: it.materialId },
+          select: { id: true, name: true, price: true, qty: true, warehouseId: true, warehouse: { select: { title: true } } },
+        });
+        if (!m) throw new NotFoundException('Material no encontrado');
+        if (m.qty < it.qty) throw new BadRequestException(`Stock insuficiente de "${m.name}" (disponible ${m.qty})`);
+        // `editedAt` es el blindaje contra el sync: sin él la próxima pasada del
+        // legacy devuelve `products.qty` a como estaba y el gasto se evapora.
+        await tx.material.update({ where: { id: m.id }, data: { qty: { decrement: it.qty }, editedAt: new Date() } });
+        await tx.projectMaterial.create({
+          data: {
+            projectId, materialId: m.id, materialName: m.name, qty: it.qty, price: m.price,
+            warehouseId: m.warehouseId, warehouseName: m.warehouse?.title ?? null,
+            employeeName: user.name || user.email, note: dto.note?.trim() || null,
+          },
+        });
+        out.push({ name: m.name, qty: it.qty });
+      }
+      return out;
+    });
+    return { ok: true, items: created };
+  }
+
+  /**
+   * Quita un cargo de material del proyecto y DEVUELVE las unidades a su bodega.
+   * Es la única forma de corregir un dedo sin que el stock quede descuadrado: si
+   * el material ya no existe en el catálogo, la línea se borra igual y no hay a
+   * dónde devolver.
+   */
+  async deleteMaterial(id: string) {
+    const linea = await this.prisma.projectMaterial.findUnique({ where: { id } });
+    if (!linea) throw new NotFoundException('Cargo de material no encontrado');
+    await this.prisma.$transaction(async (tx) => {
+      if (linea.materialId) {
+        await tx.material.updateMany({
+          where: { id: linea.materialId },
+          data: { qty: { increment: linea.qty }, editedAt: new Date() },
+        });
+      }
+      await tx.projectMaterial.delete({ where: { id } });
+    });
+    return { id, deleted: true, devuelto: linea.materialId ? linea.qty : 0 };
   }
 }

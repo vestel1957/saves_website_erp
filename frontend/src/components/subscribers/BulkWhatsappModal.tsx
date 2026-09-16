@@ -149,7 +149,7 @@ export function BulkWhatsappModal({
                 <p className="mt-1.5 text-[11px] text-text-tertiary">
                   Los campos entre «comillas» se reemplazan por los datos reales de cada cliente al enviar. El envío
                   queda con reporte de entregas en{" "}
-                  <Link href="/configuracion/whatsapp/masivo" className="text-brand hover:underline">Envío masivo</Link>.
+                  <Link href="/whatsapp/masivo" className="text-brand hover:underline">Mensajes masivos</Link>.
                 </p>
               </div>
             )}

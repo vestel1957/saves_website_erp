@@ -3,6 +3,7 @@ import {
   ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsDateString, IsIn, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength, ValidateNested,
 } from 'class-validator';
 import { RETENTION_TYPES, type RetentionLabel } from '../retenciones';
+import { TrasladoDto } from '../../common/traslado';
 
 export class InvoiceItemDto {
   @IsOptional() @IsString()
@@ -52,6 +53,31 @@ export class CreateInvoiceDto {
 
   @IsOptional() @IsString()
   notes?: string;
+
+  /**
+   * POR QUÉ se factura: la clave de un motivo de `billing/motivos-factura.ts`
+   * ('mensualidad', 'afiliacion', 'traslado', 'reconexion', 'venta', 'otro').
+   *
+   * `kind` dice el TIPO y no el motivo: afiliación, traslado, reconexión y venta de
+   * equipo son las cuatro «Fija», y desde fuera solo se distinguen adivinando por el
+   * renglón. Es opcional para no romper lo que ya factura sin decirlo (la corrida
+   * mensual, el cargo de una orden, el chatbot).
+   */
+  @IsOptional() @IsString() @MaxLength(40)
+  purpose?: string;
+
+  /**
+   * La dirección NUEVA del cliente, cuando se factura un TRASLADO. Va aquí y no en
+   * una orden porque el orden de las cosas es el que pidió el usuario (2026-09-08):
+   * primero se cobra el traslado —con el destino escrito en la misma factura— y la
+   * ORDEN de traslado nace sola cuando esa factura queda pagada.
+   *
+   * La ficha del cliente NO se toca al facturar: se muda cuando paga y se abre la
+   * orden. Una dirección cambiada por una factura que después se anula dejaría al
+   * cliente viviendo en una casa a la que no se mudó.
+   */
+  @IsOptional() @ValidateNested() @Type(() => TrasladoDto)
+  moveTo?: TrasladoDto;
 
   @IsArray() @ValidateNested({ each: true }) @Type(() => InvoiceItemDto)
   items!: InvoiceItemDto[];

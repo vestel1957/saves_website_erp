@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Icon } from "@/components/Icon";
+import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 
 /**
@@ -46,6 +47,8 @@ type Pinta = {
   icono: string;
   titulo: string;
   detalle?: string;
+  /** Lo que se puede hacer AQUÍ para arreglarlo, sin abrir el panel del router. */
+  arreglo?: { etiqueta: string; enCurso: string; ruta: string };
 };
 
 const TONOS: Record<Pinta["tono"], { caja: string; punto: string }> = {
@@ -88,6 +91,9 @@ function leer(e: Estado): Pinta {
       icono: "user-plus",
       titulo: "Sin navegar · no existe en el router",
       detalle: "El usuario PPPoE no está creado en el Mikrotik. Hay que darlo de alta.",
+      // Decir el problema y no dejar arreglarlo obligaba a abrir el panel del
+      // router y buscar el botón ahí: es el mismo alta, a un clic de distancia.
+      arreglo: { etiqueta: "Dar de alta", enCurso: "Dando de alta…", ruta: "provision" },
     };
   }
   if (l.secretDisabled) {
@@ -135,6 +141,7 @@ export function EstadoConexion({
   const { authFetch } = useAuth();
   const [estado, setEstado] = useState<Estado | null>(null);
   const [cargando, setCargando] = useState(false);
+  const [arreglando, setArreglando] = useState(false);
   const [oculto, setOculto] = useState(false);
   const [sello, setSello] = useState<string | null>(null);
   const vivo = useRef(true);
@@ -175,6 +182,29 @@ export function EstadoConexion({
     void consultar();
   }, [consultar]);
 
+  /**
+   * Arreglar lo que dice el semáforo, sin salir de la ficha. Termine bien o mal,
+   * se vuelve a preguntar al router: el color que quede es la respuesta, no el
+   * mensaje del servidor.
+   */
+  const arreglar = useCallback(
+    async (ruta: string) => {
+      setArreglando(true);
+      try {
+        const res = await authFetch(`/network/subscribers/${subscriberId}/${ruta}`, { method: "POST" });
+        const data = (await res.json().catch(() => null)) as { ok?: boolean; message?: string } | null;
+        if (!vivo.current) return;
+        toast(res.ok && data?.ok ? (data.message ?? "Listo") : (data?.message ?? "No se pudo dar de alta"), res.ok && data?.ok ? "check" : "x");
+      } catch (e) {
+        if (vivo.current) toast((e as Error).message, "x");
+      } finally {
+        if (vivo.current) setArreglando(false);
+        await consultar();
+      }
+    },
+    [authFetch, subscriberId, consultar],
+  );
+
   if (oculto) return null;
 
   // Sin usuario PPPoE no hay conexión que mirar: se dice y no se consulta nada.
@@ -204,6 +234,8 @@ export function EstadoConexion({
       sello={sello}
       onRefrescar={consultar}
       cargando={cargando}
+      onArreglar={pinta.arreglo ? () => void arreglar(pinta.arreglo!.ruta) : undefined}
+      arreglando={arreglando}
     />
   );
 }
@@ -217,6 +249,8 @@ function Franja({
   onRefrescar,
   cargando,
   pulso,
+  onArreglar,
+  arreglando,
 }: {
   pinta: Pinta;
   ip?: string;
@@ -225,6 +259,8 @@ function Franja({
   onRefrescar?: () => void;
   cargando?: boolean;
   pulso?: boolean;
+  onArreglar?: () => void;
+  arreglando?: boolean;
 }) {
   const t = TONOS[pinta.tono];
   return (
@@ -250,6 +286,17 @@ function Franja({
         )}
       </div>
       {pinta.detalle && <p className="mt-1 text-[11px] leading-snug opacity-90">{pinta.detalle}</p>}
+      {pinta.arreglo && onArreglar && (
+        <button
+          type="button"
+          onClick={onArreglar}
+          disabled={arreglando || cargando}
+          className="tap mt-1.5 inline-flex items-center gap-1.5 rounded-md border border-current px-2 py-1 text-[11px] font-semibold opacity-90 transition-opacity hover:opacity-100 disabled:opacity-40"
+        >
+          <Icon name={arreglando ? "loader" : "user-plus"} size={13} className={arreglando ? "animate-spin" : undefined} />
+          {arreglando ? pinta.arreglo.enCurso : pinta.arreglo.etiqueta}
+        </button>
+      )}
       {(ip || router) && (
         <p className="mt-1 flex flex-wrap gap-x-3 text-[11px] opacity-80">
           {ip && <span className="font-mono">IP {ip}</span>}

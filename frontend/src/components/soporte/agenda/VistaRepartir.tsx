@@ -11,6 +11,8 @@ import { Select } from "@/components/ui/Field";
 import { useAuth } from "@/context/AuthProvider";
 import { mensajeDeError, objetoJson } from "@/lib/errores";
 import { TICKET_PRIORITY_TONE } from "@/lib/support";
+import { ChipServicio } from "@/components/soporte/ChipServicio";
+import { AvisoEquipo } from "@/components/soporte/AvisoEquipo";
 import {
   BarraFiltros, BotonExcel, TONO_BADGE, diaCorto, diaLargo, diasEsperando, hayFiltros, queryAgenda, sumarDias,
   type Filtros, type Tablero, type Tarjeta,
@@ -266,7 +268,16 @@ export function VistaRepartir({ fecha, setFecha, filtros, setFiltros }: VistaPro
                 )}
               </span>
               <span className="block text-[12.5px] font-semibold leading-snug text-text-primary" title={t.type}>{t.type}</span>
-              <span className="block text-[11px] capitalize text-text-tertiary">{t.subject}</span>
+              <span className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[11px] capitalize text-text-tertiary">{t.subject}</span>
+                {/* Qué tiene contratado el cliente, sin abrir la orden: al abonado de
+                    solo televisión no se le toca el Mikrotik. */}
+                <ChipServicio servicio={t.servicio} />
+              </span>
+              {/* La visita sale con una caja del estante: se dice aquí, pegado al tipo
+                  de orden, porque es parte de en qué consiste el trabajo — y quien
+                  reparte tiene que saberlo antes de elegir técnico y día. */}
+              {t.equipo && <AvisoEquipo equipo={t.equipo} className="mt-1" />}
             </span>
           </span>
         ),

@@ -7,6 +7,7 @@ import {
   exigirSedeSuscriptor,
   exigirSedeDestino,
   esCajeraPura,
+  alcanzanSede,
 } from './sede-scope';
 
 /**
@@ -177,5 +178,52 @@ describe('exigirSedeSuscriptor', () => {
     // existe o no, que es justo lo que un atacante quiere saber.
     const prisma = prismaCon([2], null);
     await expect(exigirSedeSuscriptor(prisma, usuario(), 'no-existe')).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * El reverso de `sedesDe`: de una lista de personas, quiénes responden por una sede.
+ * Es lo que hace que el aviso de una orden de Mocoa no le suene a la cajera de
+ * Villavicencio (queja del usuario, 2026-09-04). Lo que se defiende aquí es que al
+ * acotar no se apague nada de quien SÍ tiene que enterarse: superusuario y quien no
+ * tiene sedes marcadas siguen recibiéndolo todo.
+ */
+describe('alcanzanSede', () => {
+  const rol = (...permisos: string[]) => ({
+    role: { permissions: permisos.map((key) => ({ permission: { key } })) },
+  });
+  const prismaCon = (filas: any[]) =>
+    ({ user: { findMany: jest.fn().mockResolvedValue(filas) } }) as never;
+
+  it('sin sede en el aviso no acota a nadie', async () => {
+    const prisma = prismaCon([]);
+    await expect(alcanzanSede(prisma, ['a', 'b'], null)).resolves.toEqual(['a', 'b']);
+  });
+
+  it('deja fuera a quien está acotado a OTRA sede', async () => {
+    const prisma = prismaCon([
+      { id: 'mocoa', sedesAccede: [7], cajaLegacyId: null, roles: [rol('area.caja')] },
+      { id: 'villavo', sedesAccede: [3], cajaLegacyId: null, roles: [rol('area.caja')] },
+    ]);
+    await expect(alcanzanSede(prisma, ['mocoa', 'villavo'], 3)).resolves.toEqual(['villavo']);
+  });
+
+  it('sin sedes marcadas = todas las sedes (la semántica del fichero)', async () => {
+    const prisma = prismaCon([
+      { id: 'admin', sedesAccede: [], cajaLegacyId: null, roles: [rol('area.administracion')] },
+    ]);
+    await expect(alcanzanSede(prisma, ['admin'], 3)).resolves.toEqual(['admin']);
+  });
+
+  it('el superusuario lo recibe todo, aunque tenga una sede marcada', async () => {
+    const prisma = prismaCon([
+      { id: 'su', sedesAccede: [7], cajaLegacyId: null, roles: [rol('system.admin')] },
+    ]);
+    await expect(alcanzanSede(prisma, ['su'], 3)).resolves.toEqual(['su']);
+  });
+
+  it('si no se puede comprobar, avisa de más antes que callar', async () => {
+    const prisma = { user: { findMany: jest.fn().mockRejectedValue(new Error('BD caída')) } } as never;
+    await expect(alcanzanSede(prisma, ['a'], 3)).resolves.toEqual(['a']);
   });
 });

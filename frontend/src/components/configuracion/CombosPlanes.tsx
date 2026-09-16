@@ -365,7 +365,7 @@ export function CombosPlanes() {
                         ))}
                       </Select>
                       <Input
-                        type="number"
+                        type="text"
                         min={0}
                         disabled={!linea}
                         value={linea?.price ?? ""}

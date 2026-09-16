@@ -10,17 +10,20 @@ import { Input } from "@/components/ui/Field";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { useAuth } from "@/context/AuthProvider";
+import { EditarEquipoModal, puedeEditarEquipos, type EquipoEditable } from "@/components/red/EditarEquipoModal";
 
 type Warehouse = { id: string; name: string; description?: string | null; equipment?: number };
 type EquipItem = {
   id: string; code: number; mac: string | null; serial: string | null; brand: string | null;
-  status: string | null; warehouse: string | null; client: string | null; subscriberId: string | null; genieacs: boolean;
+  status: string | null; observation?: string | null; warehouse: string | null; client: string | null; subscriberId: string | null; genieacs: boolean;
 };
 type EquipResp = { items: EquipItem[]; total: number; page: number; pageSize: number; pages: number };
 
 export default function BodegaDetallePage() {
   const { id } = useParams<{ id: string }>();
-  const { loading: authLoading, authFetch } = useAuth();
+  const { loading: authLoading, authFetch, user } = useAuth();
+  const [editando, setEditando] = useState<EquipoEditable | null>(null);
+  const editable = puedeEditarEquipos(user);
   const [wh, setWh] = useState<Warehouse | null>(null);
   const [equipos, setEquipos] = useState<EquipResp | null>(null);
   const [search, setSearch] = useState("");
@@ -56,6 +59,7 @@ export default function BodegaDetallePage() {
   return (
     <div className="flex flex-col gap-4">
       <PageHeading icon="warehouse" title={wh ? `Bodega: ${wh.name}` : "Bodega"} subtitle={wh?.description || "Equipos almacenados en esta sede"} />
+      <EditarEquipoModal equipo={editando} onClose={() => setEditando(null)} onSaved={() => void loadEquipos(search)} />
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="inline-flex items-center gap-2 rounded-xl border border-border-subtle bg-surface px-4 py-2 text-[13px]">
@@ -92,6 +96,12 @@ export default function BodegaDetallePage() {
           { key: "status", header: "Estado", render: (r: EquipItem) => (
               <Badge label={r.status ?? "—"} tone={r.status === "Disponible" ? "success" : r.status === "Asignado" || r.status === "Instalado" ? "info" : "default"} />
             ) },
+          ...(editable ? [{ key: "edit", header: "", align: "right" as const, render: (r: EquipItem) => (
+              <button onClick={() => setEditando(r)} title="Editar equipo"
+                className="inline-flex items-center gap-1 rounded-lg border border-border-default px-2.5 py-1.5 text-[12px] font-semibold text-text-secondary transition-colors hover:bg-surface-2">
+                <Icon name="pencil" size={13} /> Editar
+              </button>
+            ) }] : []),
         ]}
       />
       {equipos.total > equipos.items.length && (

@@ -11,6 +11,7 @@ import { useAuth } from "@/context/AuthProvider";
 import { useSidebar } from "@/context/SidebarProvider";
 import { useNotifications } from "@/context/NotificationsProvider";
 import { PERM } from "@/lib/auth";
+import { esTecnico } from "@/lib/support";
 
 /** Alerta de inventario tal como la entrega el backend (/inventory/alerts). */
 type InvAlert = {
@@ -49,6 +50,12 @@ export function TopNav() {
   const crumb = findCrumb(pathname);
   const { collapsed, toggle, isMobile, openMobile } = useSidebar();
   const { user, can, authFetch } = useAuth();
+
+  // El buscador global (⌘K) no es del técnico de campo: busca en TODO el
+  // espacio de trabajo —clientes, facturas, órdenes de cualquiera— y su perfil
+  // está acotado a lo suyo. Se le quita el mando; el candado de verdad está en
+  // el backend (`/search/ai` y el listado de `/subscribers` le responden 403).
+  const sinBuscador = esTecnico(user);
 
   const canSeeAlerts = can(PERM.INV_STOCK_READ);
   const [alerts, setAlerts] = useState<InvAlert[]>([]);
@@ -135,6 +142,7 @@ export function TopNav() {
       <div className="flex-1" />
 
       {/* búsqueda global → abre la paleta de comandos (versión completa en ≥lg) */}
+      {!sinBuscador && (
       <button
         onClick={() => fire(OPEN_COMMAND_EVENT)}
         className="hidden h-9 w-[260px] items-center gap-2 rounded-lg border border-border-subtle bg-canvas px-3 text-left transition-colors hover:border-border-default lg:flex xl:w-[340px]"
@@ -147,8 +155,10 @@ export function TopNav() {
           ⌘K
         </kbd>
       </button>
+      )}
 
       {/* búsqueda compacta (icono) en móvil/tablet */}
+      {!sinBuscador && (
       <button
         onClick={() => fire(OPEN_COMMAND_EVENT)}
         aria-label="Buscar"
@@ -157,6 +167,7 @@ export function TopNav() {
       >
         <Icon name="search" size={16} />
       </button>
+      )}
 
       {/* El selector de color primario NO va aquí: se elige en Preferencias
           (/perfil?tab=preferencias). Es un ajuste que se toca una vez, no algo
@@ -257,7 +268,7 @@ export function TopNav() {
           en los dos sitios era la misma cosa dos veces. */}
 
       {/* overlays montados una vez con el navbar */}
-      <CommandPalette />
+      {!sinBuscador && <CommandPalette />}
     </header>
   );
 }

@@ -88,14 +88,14 @@ einvoiceRouter.post(
   '/emit/:invoiceId',
   autenticar,
   exigirArea('contabilidad'),
-  manejar((req) => einvoice.emitInvoice(req.params.invoiceId, usuarioDe(req))),
+  manejar((req) => einvoice.emitInvoice(req.params.invoiceId, req.query.forzar as string, usuarioDe(req))),
 );
 
 einvoiceRouter.post(
   '/emit-branch/:branchId',
   autenticar,
   exigirArea('contabilidad'),
-  manejar((req) => einvoice.emitBranch(req.params.branchId, usuarioDe(req))),
+  manejar((req) => einvoice.emitBranch(req.params.branchId, req.query.mes as string, usuarioDe(req))),
 );
 
 einvoiceRouter.get(

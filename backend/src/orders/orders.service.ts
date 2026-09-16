@@ -3,24 +3,37 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { orden } from '../common/pagination-params';
 import { AuthUser } from '../auth/current-user.decorator';
-import { AddNoteDto, CategoryNameDto, CreateOrderDto, CreateSupplierDto, OrderItemDto, PayOrderDto, ReceiveOrderDto, UpdateOrderDto } from './dto/orders.dto';
+import { AddNoteDto, CategoryNameDto, ConsignacionDto, CreateOrderDto, CreateSupplierDto, OrderItemDto, PayOrderDto, ReceiveOrderDto, UpdateOrderDto } from './dto/orders.dto';
 import { num, round2 } from '../common/money';
 import { nextTid, TID_SEQ } from '../common/tid';
 import { ResponsibilityNotifierService } from '../responsibilities/responsibility-notifier.service';
 import { SignatureOtpService } from '../common/signature/signature-otp.service';
 import { anotarBorradoLegacy } from '../common/legacy-deletion';
 import { comprobanteDe } from '../treasury/comprobante-legacy';
+import { SUPERADMIN_PERMISSION } from '../auth/permissions.catalog';
 
 const dateOnly = (s?: string) => { const d = s ? new Date(s) : new Date(); return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())); };
 
 // Convención legacy: purchase_items.pid = 0 marca una NOTA (no un producto). Aquí materialLegacy=0.
 const NOTE_PID = 0;
+/** Columnas de `SupplyOrder` con los datos de la consignación (ver `ConsignacionDto`). */
+const CAMPOS_CONSIGNACION = ['payBank', 'payAccountType', 'payAccount', 'payHolder', 'payHolderDoc'] as const;
 const isNote = (it: { materialLegacy: number | null }) => it.materialLegacy === NOTE_PID;
 // Notas que restan del total (crédito y retención) vs. suman (débito). Ver Purchase::crear_nota.
 const noteSign = (type: string) => (type === 'Nota Debito' ? 1 : -1);
 
 // Estados terminales: ninguna acción de dinero/stock es válida sobre ellos.
 const TERMINAL = new Set(['cancelado', 'anulado', 'finalizado']);
+
+/**
+ * Todos los estados que puede llevar una orden — los del flujo de aquí y los que
+ * trae el legacy. Es la lista cerrada del cambio de estado a mano del superusuario:
+ * sin ella, un dedazo escribe un estado que no existe y la orden desaparece de los
+ * filtros del listado.
+ */
+export const ESTADOS_ORDEN = [
+  'pendiente', 'aprobado', 'abonado', 'recibido parcial', 'recibido', 'finalizado', 'cancelado', 'anulado',
+] as const;
 
 // Toda escritura de aquí sobre una orden sella `editedAt` (ver SupplyOrder.editedAt):
 // `purchase` se sincroniza desde el MySQL vivo del legacy, y sin el sello la pasada
@@ -256,37 +269,87 @@ export class OrdersService {
    * Edita una orden mientras esté PENDIENTE (después de aprobada, el contenido
    * que se firmó no se toca; lo variable se maneja con notas). Reemplaza los
    * ítems y recalcula totales conservando las notas/retenciones existentes.
+   *
+   * EXCEPCIÓN — superusuario: puede corregir una orden en CUALQUIER estado (también
+   * aprobada, recibida o finalizada). Es la salida de emergencia para el error de
+   * dedo que hoy obligaba a cancelar la orden y volver a crearla, con el consecutivo
+   * perdido por el camino. Al hacerlo:
+   *   · las firmas NO se reinician (lo firmado ya no coincide con el contenido, y
+   *     borrar al firmante dejaría una orden aprobada por nadie): se conservan y la
+   *     bitácora deja escrito que se editó después de firmada, con total antes→después;
+   *   · lo ya RECIBIDO se conserva por ítem (`receivedQty`), porque ese material ya
+   *     entró a bodega en `receive` y aquí no se vuelve a tocar el stock.
    */
   async update(id: string, dto: UpdateOrderDto, user: AuthUser) {
+    const esSuper = (user.permissions ?? []).includes(SUPERADMIN_PERMISSION);
     return this.prisma.$transaction(async (tx) => {
       const o = await tx.supplyOrder.findUnique({ where: { id }, include: { items: true } });
       if (!o) throw new NotFoundException('Orden no encontrada');
-      if (o.status !== 'pendiente') {
-        throw new BadRequestException('Solo se puede editar una orden pendiente. Una orden aprobada se ajusta con notas, o se cancela y se crea de nuevo.');
+      const fueraDePendiente = o.status !== 'pendiente';
+      if (fueraDePendiente && !esSuper) {
+        throw new BadRequestException('Solo se puede editar una orden pendiente. Una orden aprobada se ajusta con notas, o se cancela y se crea de nuevo (un superadministrador sí puede corregirla).');
       }
       const data: Prisma.SupplyOrderUpdateInput = {};
+      // Estado a mano: exclusivo del superusuario y sin efectos. Cambiarlo aquí NO
+      // mueve plata ni stock (para eso están approve/pay/receive/finalize); es para
+      // enderezar una orden que quedó en el estado equivocado.
+      const estadoNuevo = dto.status?.trim().toLowerCase();
+      const cambiaEstado = !!estadoNuevo && estadoNuevo !== o.status;
+      if (cambiaEstado) {
+        if (!esSuper) throw new ForbiddenException('Solo un superadministrador puede cambiar el estado de la orden a mano.');
+        if (!(ESTADOS_ORDEN as readonly string[]).includes(estadoNuevo!)) {
+          throw new BadRequestException(`Estado no válido. Los estados son: ${ESTADOS_ORDEN.join(', ')}.`);
+        }
+        data.status = estadoNuevo;
+      }
       if (dto.orderDate !== undefined) data.orderDate = dateOnly(dto.orderDate);
       if (dto.dueDate !== undefined) data.dueDate = dto.dueDate ? dateOnly(dto.dueDate) : null;
       if (dto.categoryRef !== undefined) data.categoryRef = dto.categoryRef?.trim() || null;
       if (dto.notes !== undefined) data.notes = dto.notes || null;
+      for (const k of CAMPOS_CONSIGNACION) {
+        if (dto[k] !== undefined) data[k] = dto[k]?.trim() || null;
+      }
 
+      let totalNuevo: number | null = null;
       if (dto.items) {
         if (!dto.items.length) throw new BadRequestException('La orden no puede quedar sin ítems');
         const { rows, subtotal, tax, total } = this.computeTotals(dto.items);
         // Las notas (pid=0) sobreviven a la edición: su suma firmada re-ajusta el total nuevo.
         const noteAdjust = round2(o.items.filter(isNote).reduce((s, n) => s + num(n.price), 0));
+        const tomarRecibido = this.recepcionQueSobrevive(o.items);
         await tx.supplyOrderItem.deleteMany({ where: { orderId: id, NOT: { materialLegacy: NOTE_PID } } });
         await tx.supplyOrderItem.createMany({
-          data: rows.map((r) => ({ orderId: id, materialId: r.materialId ?? null, product: r.product, qty: r.qty, price: r.price, taxRate: r.taxRate, subtotal: r.subtotal, taxTotal: r.taxTotal })),
+          data: rows.map((r) => ({ orderId: id, materialId: r.materialId ?? null, product: r.product, qty: r.qty, price: r.price, taxRate: r.taxRate, subtotal: r.subtotal, taxTotal: r.taxTotal, receivedQty: tomarRecibido(r) })),
         });
-        data.subtotal = subtotal; data.tax = tax; data.total = round2(total + noteAdjust); data.itemsCount = rows.length;
-        // Al editar, cualquier firma previa a medias (1ª de 2) queda invalidada.
-        data.approvedById = null; data.approvedByName = null; data.approvedAt = null;
-        data.approved2ById = null; data.approved2ByName = null; data.approved2At = null;
+        totalNuevo = round2(total + noteAdjust);
+        data.subtotal = subtotal; data.tax = tax; data.total = totalNuevo; data.itemsCount = rows.length;
+        // Al editar, cualquier firma previa a medias (1ª de 2) queda invalidada. Sobre una
+        // orden ya aprobada (solo llega aquí el superusuario) se conservan: ver cabecera.
+        if (!fueraDePendiente && (estadoNuevo ?? o.status) === 'pendiente') {
+          data.approvedById = null; data.approvedByName = null; data.approvedAt = null;
+          data.approved2ById = null; data.approved2ByName = null; data.approved2At = null;
+        }
       }
       data.editedAt = new Date();
       await tx.supplyOrder.update({ where: { id }, data });
-      await this.logEvent(tx, id, { action: 'EDITAR', detail: dto.items ? `Ítems reemplazados (${dto.items.length}); firmas reiniciadas.` : 'Cabecera actualizada.', user });
+      if (cambiaEstado) {
+        await this.logEvent(tx, id, {
+          action: 'ESTADO', fromStatus: o.status, toStatus: estadoNuevo,
+          detail: 'Estado cambiado a mano por un superusuario (no mueve dinero ni stock).', user,
+        });
+      }
+      // El EDITAR solo se escribe si cambió ALGO más que el estado: si no, la bitácora
+      // contaría dos veces el mismo movimiento ("Cabecera actualizada" vacía al lado).
+      const tocaCabecera = [dto.orderDate, dto.dueDate, dto.categoryRef, dto.notes, ...CAMPOS_CONSIGNACION.map((k) => dto[k])].some((v) => v !== undefined);
+      if (dto.items || tocaCabecera) {
+        const queCambio = dto.items
+          ? `Ítems reemplazados (${dto.items.length}); ${fueraDePendiente ? 'firmas y recepción conservadas' : 'firmas reiniciadas'}.`
+          : 'Cabecera actualizada.';
+        const porSuper = fueraDePendiente
+          ? ` Editada por superusuario estando «${o.status}»${totalNuevo !== null ? `: total ${num(o.total)} → ${totalNuevo}` : ''}.`
+          : '';
+        await this.logEvent(tx, id, { action: 'EDITAR', detail: queCambio + porSuper, user });
+      }
       const fresh = await tx.supplyOrder.findUnique({ where: { id }, select: { total: true } });
       return { ok: true, total: num(fresh?.total) };
     });
@@ -431,6 +494,13 @@ export class OrdersService {
       retentionType: o.retentionType, retention: num(o.retention),
       notes: o.notes, branchRef: o.branchRef, receivedAt: o.receivedAt,
       supplier: o.supplier ? { id: o.supplier.id, name: o.supplier.name, nit: o.supplier.nit, phone: o.supplier.phone, category: o.supplier.category } : null,
+      // A qué cuenta se paga. Las órdenes anteriores a estos campos (y las del legacy)
+      // no los tienen: esas muestran la cuenta que el proveedor tiene hoy.
+      consignment: CAMPOS_CONSIGNACION.some((k) => o[k])
+        ? { bank: o.payBank, accountType: o.payAccountType, account: o.payAccount, holder: o.payHolder, holderDoc: o.payHolderDoc, fromSupplier: false }
+        : o.supplier?.account || o.supplier?.bank
+          ? { bank: o.supplier.bank, accountType: o.supplier.accountType, account: o.supplier.account, holder: o.supplier.name, holderDoc: o.supplier.nit, fromSupplier: true }
+          : null,
       items: o.items.filter((it) => !isNote(it)).map((it) => ({ id: it.id, product: it.product, qty: it.qty, price: num(it.price), taxRate: num(it.taxRate), subtotal: num(it.subtotal), taxTotal: num(it.taxTotal), received: it.receivedQty, materialId: it.materialId })),
       // Notas y retenciones que ajustaron el total (pid=0). amount negativo = descuento/retención.
       noteLines: o.items.filter(isNote).map((it) => ({ id: it.id, type: it.product, description: it.description, amount: num(it.price) })),
@@ -625,6 +695,31 @@ export class OrdersService {
     return { ok: true };
   }
 
+  /**
+   * Reparte lo YA RECIBIDO entre los ítems nuevos de una edición. Se empareja por
+   * descripción (es lo único que devuelve el formulario de edición: los ítems se
+   * reemplazan enteros y no viajan sus ids) y nunca da más de lo que pide la línea
+   * nueva. Lo que no encuentra pareja se pierde como registro, pero el stock no se
+   * mueve: `receive` ya lo sumó a bodega y esta edición no lo toca.
+   */
+  private recepcionQueSobrevive(previos: { materialLegacy: number | null; product: string | null; receivedQty: number }[]) {
+    const clave = (p: string | null) => (p ?? '').trim().toLowerCase();
+    const saldo = new Map<string, number>();
+    for (const it of previos) {
+      if (isNote(it) || it.receivedQty <= 0) continue;
+      saldo.set(clave(it.product), (saldo.get(clave(it.product)) ?? 0) + it.receivedQty);
+    }
+    return (r: { product: string; qty: number }) => {
+      if (!saldo.size) return 0;
+      const k = clave(r.product);
+      const disponible = saldo.get(k) ?? 0;
+      if (disponible <= 0) return 0;
+      const usa = Math.min(disponible, r.qty);
+      saldo.set(k, disponible - usa);
+      return usa;
+    };
+  }
+
   private computeTotals(items: OrderItemDto[]) {
     const rows = items.map((it) => {
       const qty = Math.max(0, Math.round(it.qty)); const price = round2(it.price); const taxRate = round2(it.taxRate ?? 0);
@@ -638,20 +733,46 @@ export class OrdersService {
     return nextTid(tx, TID_SEQ.supplyOrder);
   }
 
+  /** Lo que llega del formulario manda; lo que no, sale de la cuenta del proveedor. */
+  private consignacionAlCrear(dto: ConsignacionDto, s: { name: string; nit: string | null; bank: string | null; accountType: string | null; account: string | null }) {
+    const de = (v: string | undefined, fallback: string | null) => (v !== undefined ? v.trim() || null : fallback?.trim() || null);
+    return {
+      payBank: de(dto.payBank, s.bank),
+      payAccountType: de(dto.payAccountType, s.accountType),
+      payAccount: de(dto.payAccount, s.account),
+      payHolder: de(dto.payHolder, s.name),
+      payHolderDoc: de(dto.payHolderDoc, s.nit),
+    };
+  }
+
   async create(dto: CreateOrderDto, user: AuthUser) {
     if (!dto.items?.length) throw new BadRequestException('La orden no tiene ítems');
     const supplier = await this.prisma.supplier.findUnique({ where: { id: dto.supplierId } });
     if (!supplier) throw new NotFoundException('Proveedor no encontrado');
     const { rows, subtotal, tax, total } = this.computeTotals(dto.items);
     const warehouse = dto.warehouseId ? await this.prisma.materialWarehouse.findUnique({ where: { id: dto.warehouseId } }) : null;
+    const consignacion = this.consignacionAlCrear(dto, supplier);
     const creada = await this.prisma.$transaction(async (tx) => {
       const tid = await this.nextTid(tx);
+      // El proveedor que no tenía cuenta registrada se queda con la de esta orden, para
+      // que la próxima ya salga llena. Sólo se llenan huecos: una cuenta que ya tenía
+      // no se pisa desde una orden.
+      if (!supplier.account?.trim() && consignacion.payAccount) {
+        await tx.supplier.update({
+          where: { id: supplier.id },
+          data: {
+            account: consignacion.payAccount,
+            bank: supplier.bank?.trim() ? undefined : consignacion.payBank,
+            accountType: supplier.accountType?.trim() ? undefined : consignacion.payAccountType,
+          },
+        });
+      }
       const o = await tx.supplyOrder.create({
         data: {
           tid, supplierId: supplier.id, supplierLegacy: supplier.legacyId ?? null,
           orderDate: dateOnly(dto.orderDate), dueDate: dto.dueDate ? dateOnly(dto.dueDate) : null,
           subtotal, tax, total, status: 'pendiente', kind: supplier.category === 2 ? 'servicio' : 'compra',
-          categoryRef: dto.categoryRef?.trim() || null,
+          categoryRef: dto.categoryRef?.trim() || null, ...consignacion,
           warehouseRef: warehouse?.legacyId ?? null, notes: dto.notes ?? null, itemsCount: rows.length,
           createdById: user?.id ?? null, createdByName: user?.name ?? user?.email ?? null,
           items: { create: rows.map((r) => ({ materialId: r.materialId ?? null, product: r.product, qty: r.qty, price: r.price, taxRate: r.taxRate, subtotal: r.subtotal, taxTotal: r.taxTotal })) },

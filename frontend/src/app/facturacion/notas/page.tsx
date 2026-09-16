@@ -24,7 +24,7 @@ const NuevaNotaModal = dynamic(() => import("@/components/billing/NuevaNotaModal
 type Autor = { id: number; name: string; count: number };
 
 export default function NotasPage() {
-  const { loading: authLoading, authFetch, sedeScoped } = useAuth();
+  const { loading: authLoading, authFetch, sedeScoped, puedeEmitirNotas } = useAuth();
   const [search, setSearch] = useState("");
   const [type, setType] = useState("");
   const [branchId, setBranchId] = useState("");
@@ -130,10 +130,22 @@ export default function NotasPage() {
         onSearch={setSearch}
         searchPlaceholder="Buscar por N° de factura, cliente o descripción…"
         actions={
-          <Button onClick={() => setOpenNew(true)} className="shrink-0 whitespace-nowrap">
-            <Icon name="plus" size={15} className="mr-1.5" />
-            Nueva nota
-          </Button>
+          // Emitir es NOMINAL (`puedeEmitirNotas`): la pantalla la sigue viendo
+          // contabilidad entera —consultar qué se le rebajó a quién es media
+          // auditoría—, pero el botón sólo lo tiene quien está autorizado.
+          puedeEmitirNotas ? (
+            <Button onClick={() => setOpenNew(true)} className="shrink-0 whitespace-nowrap">
+              <Icon name="plus" size={15} className="mr-1.5" />
+              Nueva nota
+            </Button>
+          ) : (
+            <span
+              title="Emitir notas crédito/débito está reservado a las personas autorizadas."
+              className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-border-default bg-surface-2 px-3 py-2 text-[12px] font-semibold text-text-tertiary"
+            >
+              <Icon name="lock" size={14} /> Solo consulta
+            </span>
+          )
         }
       >
         <Select value={type} onChange={(e) => setType(e.target.value)} className="w-auto shrink-0">
@@ -248,7 +260,7 @@ export default function NotasPage() {
         </>
       )}
 
-      {openNew && <NuevaNotaModal open={openNew} onClose={() => setOpenNew(false)} onDone={load} />}
+      {openNew && puedeEmitirNotas && <NuevaNotaModal open={openNew} onClose={() => setOpenNew(false)} onDone={load} />}
 
       <Modal open={!!detail} onClose={() => setDetail(null)} title="Detalle de la nota">
         {detail && (

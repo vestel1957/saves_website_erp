@@ -14,7 +14,8 @@ export class AuditController {
     pageSize?: string,
     sortBy?: string,
     sortDir?: string,
+    ruido?: string,
   ) {
-    return this.audit.list({ search, entity, userId, from, to, page: Number(page), pageSize: Number(pageSize), sortBy, sortDir });
+    return this.audit.list({ search, entity, userId, from, to, page: Number(page), pageSize: Number(pageSize), sortBy, sortDir, ruido });
   }
 }

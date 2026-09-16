@@ -14,7 +14,7 @@ export type VlanOpt = { id: string; vlan: number; detail: string };
 // La misma respuesta de /network/vlans, con lo que sólo mira la pantalla de administración.
 export type Vlan = VlanOpt & { olt: string | null; tray: number | null; oltPort: number | null; branchId: string | null; branch: string | null; naps: number };
 export type Onu = { id: string; olt: string | null; sn: string | null; slot: number | null; port: number | null; ontId: number | null; runState: string | null; rxPower: string | null; syncState: string; client: string | null; subscriberId: string | null; lastSync: string | null };
-export type Equip = { id: string; code: number; mac: string | null; serial: string | null; brand: string | null; status: string | null; warehouse: string | null; client: string | null; subscriberId: string | null; installType: string | null; genieacs: boolean; /** Día en que se recogió del cliente; null si nunca volvió de una devolución. */ returnedAt: string | null };
+export type Equip = { id: string; code: number; mac: string | null; serial: string | null; brand: string | null; status: string | null; observation?: string | null; warehouse: string | null; client: string | null; subscriberId: string | null; installType: string | null; genieacs: boolean; /** Día en que se recogió del cliente; null si nunca volvió de una devolución. */ returnedAt: string | null };
 export type Paged<T> = { items: T[]; total: number; page: number; pageSize: number; pages: number };
 
 // --- Corte / reconexión Mikrotik ---
@@ -54,4 +54,9 @@ export const MK_ACTION_LABEL: Record<string, string> = {
   STATUS: "Consulta estado",
   TEST: "Prueba de router",
   PROVISION: "Alta PPPoE",
+  PROFILE: "Cambio de perfil",
+  EDIT: "Edición de la ficha",
+  // El interruptor manual de la ficha: sólo la lista MOROSOS, nada más.
+  MOROSO_ON: "Desactivado (a morosos)",
+  MOROSO_OFF: "Activado (fuera de morosos)",
 };

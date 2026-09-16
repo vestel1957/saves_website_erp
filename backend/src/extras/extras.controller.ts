@@ -7,6 +7,8 @@ import type { Response } from 'express';
 import { ExtrasService } from './extras.service';
 // Lo usa el `fileFilter` de la subida, que vive en el router generado.
 import { extensionDeAdjunto } from '../common/uploads';
+import { variosDeQuery } from '../common/filtros-query';
+import { AuthUser } from '../auth/current-user.decorator';
 
 export const DOC_ROOT = join(process.cwd(), 'uploads', 'documents');
 /** Extensiones que admite el repositorio documental. */
@@ -20,8 +22,13 @@ export class ExtrasController {
   constructor(private readonly extras: ExtrasService) {}
 
   // --- PlayHub ---
-  playhub(search?: string, page?: string, pageSize?: string, sortBy?: string, sortDir?: string) {
-    return this.extras.playhub({ search, page: Number(page), pageSize: Number(pageSize), sortBy, sortDir });
+  playhub(user: AuthUser, search?: string, page?: string, pageSize?: string, sortBy?: string, sortDir?: string, estado?: string, megas?: string, nivel?: string, sede?: string) {
+    return this.extras.playhub(user, {
+      search, page: Number(page), pageSize: Number(pageSize), sortBy, sortDir, estado,
+      // Varios valores en el mismo parámetro, separados por comas, como el resto
+      // de listados (`?megas=300,600`).
+      megas: variosDeQuery(megas), nivel: variosDeQuery(nivel), sede: variosDeQuery(sede),
+    });
   }
 
   // --- Mensajería ---

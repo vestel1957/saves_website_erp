@@ -5,7 +5,7 @@
  * controlador. Cablea HTTP -> método: extrae los argumentos de `req` y llama.
  * La lógica sigue viviendo en CollectionsController, que ya no lleva decoradores.
  *
- * Endpoints: 7
+ * Endpoints: 11
  */
 import { crearRouter, manejar } from '../core/http/ruta';
 import { validar } from '../core/http/validar';
@@ -14,7 +14,7 @@ import { CollectionsController } from './collections.controller';
 import { collectionsService } from '../core/contenedor';
 import type { Response } from 'express';
 import { CollectionsService, AgreementFilter } from './collections.service';
-import { CreateCallDto } from './dto/collections.dto';
+import { CreateCallDto, CreateNoteRequestDto, ResolveNoteRequestDto } from './dto/collections.dto';
 
 /** Instancia única del controlador. Las dependencias salen del contenedor. */
 const collections = new CollectionsController(collectionsService);
@@ -48,6 +48,27 @@ collectionsRouter.get(
   manejar((req) => collections.catalog()),
 );
 
+collectionsRouter.post(
+  '/note-requests',
+  autenticar,
+  exigirArea('administracion', 'caja'),
+  manejar((req) => collections.createNoteRequest(validar(CreateNoteRequestDto, req.body), usuarioDe(req))),
+);
+
+collectionsRouter.get(
+  '/note-requests/assignees',
+  autenticar,
+  exigirArea('administracion', 'caja'),
+  manejar((req) => collections.noteRequestAssignees()),
+);
+
+collectionsRouter.patch(
+  '/note-requests/:id',
+  autenticar,
+  exigirArea('administracion', 'caja'),
+  manejar((req) => collections.resolveNoteRequest(req.params.id, validar(ResolveNoteRequestDto, req.body), usuarioDe(req))),
+);
+
 collectionsRouter.get(
   '/response-types',
   autenticar,
@@ -60,6 +81,13 @@ collectionsRouter.get(
   autenticar,
   exigirArea('administracion', 'caja'),
   manejar((req) => collections.bySubscriber(req.params.subscriberId)),
+);
+
+collectionsRouter.get(
+  '/subscriber/:subscriberId/note-requests',
+  autenticar,
+  exigirArea('administracion', 'caja'),
+  manejar((req) => collections.noteRequests(req.params.subscriberId)),
 );
 
 collectionsRouter.delete(

@@ -20,6 +20,7 @@ import {
   getTokenFromCookie,
   isSedeScoped,
   isSuperadmin,
+  puedeEmitirNotas,
   setTokenCookie,
   type AuthUser,
 } from "@/lib/auth";
@@ -35,6 +36,11 @@ type AuthContextValue = {
   sedeScoped: boolean;
   /** Returns true if the user holds (any of) the required permission(s). */
   can: (required?: string | string[]) => boolean;
+  /**
+   * Puede emitir notas crédito/débito. NO se resuelve con `can()`: es un permiso
+   * nominal que el superusuario no hereda (ver `lib/auth.ts`).
+   */
+  puedeEmitirNotas: boolean;
   login: (email: string, password: string) => Promise<AuthUser>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
@@ -178,6 +184,7 @@ export function AuthProvider({
       isSuperadmin: isSuperadmin(user),
       sedeScoped: isSedeScoped(user),
       can: (required) => can(user, required),
+      puedeEmitirNotas: puedeEmitirNotas(user),
       login,
       logout,
       refresh: loadFromCookie,

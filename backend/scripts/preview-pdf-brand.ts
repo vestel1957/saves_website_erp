@@ -56,6 +56,8 @@ serviceOrderPdf(salida('3-orden-servicio.pdf'), {
   code: '319534', type: 'servicio', subject: 'Reconexion Television',
   status: 'FINALIZADA', priority: 'Media',
   created: new Date(), finalDate: new Date(),
+  // La vista previa no es de una orden de megas; el acta lo omite.
+  megas: null,
   technician: 'Luiz Barrera',
   generadaPor: 'Sonia Marcela Rojas',
   traslado: null,

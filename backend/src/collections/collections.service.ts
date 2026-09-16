@@ -1,8 +1,11 @@
-import { BadRequestException, NotFoundException } from '../core/http/errores';
+import { BadRequestException, ForbiddenException, NotFoundException } from '../core/http/errores';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
-import { AGREEMENT_DETAIL, CreateCallDto } from './dto/collections.dto';
+import { AGREEMENT_DETAIL, CreateCallDto, CreateNoteRequestDto, ResolveNoteRequestDto } from './dto/collections.dto';
+import { APP_PERMISSIONS } from '../auth/permissions.catalog';
+import { puedeEmitirNotas } from '../billing/emisor-de-notas';
+import type { NotificationsService } from '../common/notifications/notifications.service';
 import {
   DETALLES_POR_RESPUESTA, RESPUESTAS_POR_TIPO, TIPOS_ATENCION, VENTA,
   esAcuerdo, esSolicitudDescuento, motivoInvalido, normalizarDetalle,
@@ -18,6 +21,24 @@ const iso = (d?: Date | null) => (d ? d.toISOString().slice(0, 10) : null);
 
 type SubSel = { fullName: string | null; docNumber: string | null; phone1: string | null; abonado: number; status: string | null; promiseExpiry: Date | null };
 const subName = (s?: { fullName: string | null } | null) => s?.fullName?.trim() || '—';
+
+const AVISO_SOLICITUD_NOTA = 'facturacion.solicitud_nota';
+const pesos = (n: number) => `$${n.toLocaleString('es-CO', { maximumFractionDigits: 2 })}`;
+
+type SolicitudConAsignado = Prisma.NoteRequestGetPayload<{ include: { assignedTo: { select: { id: true; name: true } } } }>;
+const filaSolicitud = (r: SolicitudConAsignado) => ({
+  id: r.id,
+  type: r.type,
+  amount: r.amount == null ? null : Number(r.amount),
+  reason: r.reason,
+  status: r.status,
+  requestedByName: r.requestedByName,
+  assignedTo: { id: r.assignedTo.id, name: r.assignedTo.name },
+  response: r.response,
+  resolvedByName: r.resolvedByName,
+  resolvedAt: r.resolvedAt,
+  createdAt: r.createdAt,
+});
 
 export interface AgreementFilter {
   responsible?: string;
@@ -39,6 +60,8 @@ export class CollectionsService {
     private readonly prisma: PrismaService,
     /** Opcional a propósito: sin él la llamada se registra igual, sólo no avisa. */
     private readonly porCargo?: ResponsibilityNotifierService,
+    /** La campanita de quien recibe una solicitud de nota. Opcional por lo mismo. */
+    private readonly avisos?: NotificationsService,
   ) {}
 
   /**
@@ -63,10 +86,132 @@ export class CollectionsService {
 
   /** Registra una llamada. Si es Acuerdo de Pago, fija el compromiso en el cliente
    *  (status COMPROMISO + promiseExpiry) → protege del corte masivo (ver cutByFilter). */
+  // ── Solicitudes de nota crédito/débito ─────────────────────────────────────
+  //
+  // Emitir la nota es nominal (`billing.notes.emit`): quien atiende la llamada no
+  // puede, así que la pide desde la pestaña Cobranza y se la asigna a una de las
+  // personas autorizadas. Pedirla no mueve un peso de cartera.
+
+  /**
+   * A quién se le puede asignar: las personas que HOY pueden emitir la nota. Sale
+   * del permiso y no de una lista escrita aquí, para que conceder o quitar el
+   * permiso con `scripts/autorizar-emisor-notas.ts` mueva también este desplegable.
+   * Sin atajo de superusuario, igual que `exigirEmisorDeNotas`.
+   */
+  async emisoresDeNotas() {
+    const clave = APP_PERMISSIONS.BILLING_NOTES_EMIT;
+    const filas = await this.prisma.user.findMany({
+      where: {
+        isActive: true,
+        OR: [
+          { permissionOverrides: { some: { effect: 'ALLOW', permission: { key: clave } } } },
+          { roles: { some: { role: { permissions: { some: { permission: { key: clave } } } } } } },
+        ],
+        NOT: { permissionOverrides: { some: { effect: 'DENY', permission: { key: clave } } } },
+      },
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true, email: true },
+    });
+    return filas.map((u) => ({ id: u.id, name: u.name?.trim() || u.email }));
+  }
+
+  /** Las solicitudes del cliente, abiertas primero. Trae el cliente para rellenar la nota. */
+  async solicitudesNota(subscriberId: string) {
+    const [sub, filas] = await Promise.all([
+      this.prisma.subscriber.findUnique({ where: { id: subscriberId }, select: { id: true, fullName: true, abonado: true } }),
+      this.prisma.noteRequest.findMany({
+        where: { subscriberId },
+        orderBy: { createdAt: 'desc' },
+        include: { assignedTo: { select: { id: true, name: true } } },
+      }),
+    ]);
+    if (!sub) throw new NotFoundException('Cliente no encontrado');
+    const items = filas.map(filaSolicitud);
+    items.sort((a, b) => Number(b.status === 'PENDIENTE') - Number(a.status === 'PENDIENTE'));
+    return { cliente: { id: sub.id, name: subName(sub), abonado: sub.abonado }, items };
+  }
+
+  async solicitarNota(dto: CreateNoteRequestDto, user: AuthUser) {
+    const sub = await this.prisma.subscriber.findUnique({
+      where: { id: dto.subscriberId },
+      select: { id: true, fullName: true, abonado: true },
+    });
+    if (!sub) throw new NotFoundException('Cliente no encontrado');
+    const reason = dto.reason.trim();
+    if (reason.length < 5) throw new BadRequestException('Escribe el motivo: por qué se pide la nota.');
+    // Se valida contra la lista viva y no sólo en el desplegable: asignarla a quien
+    // no puede emitirla la dejaría muerta en su campanita.
+    const destino = (await this.emisoresDeNotas()).find((e) => e.id === dto.assignedToId);
+    if (!destino) throw new BadRequestException('La persona elegida no está autorizada para emitir notas crédito/débito.');
+    const monto = dto.amount && dto.amount > 0 ? Math.round(dto.amount * 100) / 100 : null;
+
+    const creada = await this.prisma.noteRequest.create({
+      data: {
+        subscriberId: sub.id, type: dto.type, amount: monto, reason,
+        requestedById: user.id, requestedByName: user.name, assignedToId: destino.id,
+      },
+      include: { assignedTo: { select: { id: true, name: true } } },
+    });
+
+    const tipo = dto.type === 'CREDITO' ? 'crédito' : 'débito';
+    await this.avisos?.notify([destino.id], {
+      kind: AVISO_SOLICITUD_NOTA,
+      title: `Solicitud de nota ${tipo} · ${subName(sub)}`,
+      body: `${user.name} te pide una nota ${tipo}${monto ? ` por ${pesos(monto)}` : ''} para el abonado ${sub.abonado}: ${reason}`,
+      link: `/clientes/${sub.id}?tab=cobranza`,
+      groupKey: `solicitud-nota:${creada.id}`,
+    });
+    return filaSolicitud(creada);
+  }
+
+  /**
+   * Cerrarla: la nota se aplicó, o no procede. La cierra la persona asignada o
+   * cualquiera que pueda emitir notas (si Johana se incapacita, Luis la toma).
+   */
+  async resolverSolicitudNota(id: string, dto: ResolveNoteRequestDto, user: AuthUser) {
+    const sol = await this.prisma.noteRequest.findUnique({
+      where: { id },
+      include: { subscriber: { select: { id: true, fullName: true, abonado: true } } },
+    });
+    if (!sol) throw new NotFoundException('Solicitud no encontrada');
+    if (sol.status !== 'PENDIENTE') throw new BadRequestException('Esta solicitud ya se cerró.');
+    if (sol.assignedToId !== user.id && !puedeEmitirNotas(user)) {
+      throw new ForbiddenException('Sólo la persona asignada, o alguien autorizado para emitir notas, puede cerrar esta solicitud.');
+    }
+    const response = dto.response?.trim() || null;
+    if (dto.status === 'RECHAZADA' && (!response || response.length < 5)) {
+      throw new BadRequestException('Escribe por qué no procede la nota.');
+    }
+
+    const cerrada = await this.prisma.noteRequest.update({
+      where: { id },
+      data: { status: dto.status, response, resolvedByName: user.name, resolvedAt: new Date() },
+      include: { assignedTo: { select: { id: true, name: true } } },
+    });
+
+    // Ya no hay nada que hacer: el aviso sale de la campanita del asignado…
+    await this.avisos?.retirar(`solicitud-nota:${id}`, AVISO_SOLICITUD_NOTA);
+    // …y quien la pidió se entera, porque es quien le responde al cliente.
+    if (sol.requestedById && sol.requestedById !== user.id) {
+      const tipo = sol.type === 'CREDITO' ? 'crédito' : 'débito';
+      await this.avisos?.notify([sol.requestedById], {
+        kind: 'cobranza.solicitud_nota_cerrada',
+        title: `Nota ${tipo} ${dto.status === 'APLICADA' ? 'aplicada' : 'rechazada'} · ${subName(sol.subscriber)}`,
+        body: `${user.name}${response ? `: ${response}` : ''}`,
+        link: `/clientes/${sol.subscriberId}?tab=cobranza`,
+        groupKey: `solicitud-nota-cerrada:${id}`,
+      });
+    }
+    return filaSolicitud(cerrada);
+  }
+
   async create(dto: CreateCallDto, user?: AuthUser) {
     const sub = await this.prisma.subscriber.findUnique({
       where: { id: dto.subscriberId },
-      select: { id: true, fullName: true, docNumber: true, abonado: true },
+      // `branch` para dirigir el aviso de descuento a cartera DE SU SEDE, que es
+      // como lo repartía el legacy (`asignaciones.detalle = 'descuentos'`, una
+      // persona por sede) y no a las 17 que tienen el permiso.
+      select: { id: true, fullName: true, docNumber: true, abonado: true, branch: { select: { legacyId: true } } },
     });
     if (!sub) throw new NotFoundException('Cliente no encontrado');
     // La cascada del legacy se hace cumplir aquí y no sólo en el desplegable: es
@@ -104,7 +249,7 @@ export class CollectionsService {
 
   /** Avisa a cartera que un cliente pidió descuento (legacy: tarea 'descuentos'). */
   private async avisarDescuento(
-    sub: { id: string; fullName: string | null; docNumber: string | null; abonado: number },
+    sub: { id: string; fullName: string | null; docNumber: string | null; abonado: number; branch?: { legacyId: number | null } | null },
     notas?: string | null,
   ) {
     if (!this.porCargo) return;
@@ -115,6 +260,7 @@ export class CollectionsService {
       body: `Documento ${sub.docNumber ?? '—'} · abonado ${sub.abonado}${notas ? ` — ${notas}` : ''}`,
       link: `/clientes/${sub.id}`,
       groupKey: `descuento:${sub.id}`,
+      sede: sub.branch?.legacyId ?? null,
     });
   }
 

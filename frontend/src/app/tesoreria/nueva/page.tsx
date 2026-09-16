@@ -15,6 +15,7 @@ import { BeneficiarioPicker, type Beneficiario } from "@/components/cobranzas/Be
 import { mensajeDeError } from "@/lib/errores";
 import { useMiCaja } from "@/lib/useMiCaja";
 import { ACCEPT_IMAGEN_PDF } from "@/lib/adjuntos";
+import { useValidacion, requerido, monto, minimo, cuando } from "@/lib/useValidacion";
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -63,8 +64,10 @@ export default function NuevaTransaccionPage() {
   const [otroNombre, setOtroNombre] = useState("");
   // Al escribir uno nuevo se ofrece dejarlo en el directorio: la próxima vez ya
   // sale en la lista y el egreso queda ligado a él (estado de cuenta que cuadra).
-  // Darlo de alta es administrar el catálogo, y eso es de contabilidad: a quien
-  // no puede, el backend le devolvería un 403 que no tiene cómo resolver.
+  // La CAJERA también puede: es quien más egresos de ventanilla registra y sin
+  // esto el pago suelto se quedaba con el nombre a secas y el directorio nunca
+  // aprendía. Lo suyo entra siempre como TERCERO (el backend se lo fija); dar de
+  // alta un PROVEEDOR sigue siendo de contabilidad, en su pantalla.
   const [guardarOtro, setGuardarOtro] = useState(true);
   // NIT o cédula de ese tercero. OBLIGATORIO para dejarlo en el directorio: es lo
   // único que distingue de verdad a dos personas con el mismo nombre, y sin él el
@@ -72,7 +75,7 @@ export default function NuevaTransaccionPage() {
   // bloqueado: desmarca «guardarlo en el directorio» y el egreso se registra como
   // pago suelto, con el nombre escrito.
   const [otroDoc, setOtroDoc] = useState("");
-  const puedeGuardarEnDirectorio = can(["area.contabilidad", "area.administracion"]);
+  const puedeGuardarEnDirectorio = can(["area.contabilidad", "area.administracion", "area.caja"]);
   // Para no pisarle la categoría a quien ya la eligió a mano.
   const [catTocada, setCatTocada] = useState(false);
   const [date, setDate] = useState(today());
@@ -97,25 +100,46 @@ export default function NuevaTransaccionPage() {
   }, [accounts, cashAccountId, bloqueada]);
   useEffect(() => { if (categories.length && !category) setCategory(categories[0]); }, [categories, category]);
 
+  // Lo que antes se comprobaba de golpe al pulsar Guardar (y se avisaba con un
+  // renglón rojo al pie, lejos del campo) se comprueba ahora campo por campo: el
+  // aviso sale bajo el que falta, al salir de él o al intentar guardar.
+  //
+  // `type`, `destino` y `guardarOtro` viajan en los valores porque las reglas
+  // condicionales los leen: el cliente sólo es obligatorio en una devolución y el
+  // documento sólo si el tercero se va a guardar en el directorio.
+  const v = useValidacion(
+    { amount, category, sub, otroNombre, otroDoc, type, destino, guardarOtro, puedeGuardarEnDirectorio },
+    {
+      amount: [requerido("Escribe el monto."), monto("El monto debe ser mayor que cero.")],
+      // Sin categoría el movimiento quedaría fuera de los reportes, que agrupan por ella.
+      category: requerido("Elige una categoría: los reportes agrupan por ella."),
+      // Elegir "Cliente" y no decir cuál dejaría un egreso sin destinatario ninguno.
+      sub: cuando(
+        (f) => f.type === "Expense" && f.destino === "cliente",
+        requerido("Elige el cliente al que se le devuelve el dinero."),
+      ),
+      otroNombre: cuando(
+        (f) => f.type === "Expense" && f.destino === "otro",
+        requerido("Escribe a quién se le paga."),
+      ),
+      // Guardarlo en el directorio exige documento; el pago suelto (sin guardar) no.
+      otroDoc: [
+        cuando(
+          (f) => f.type === "Expense" && f.destino === "otro" && f.guardarOtro && f.puedeGuardarEnDirectorio,
+          requerido("Escribe el NIT o la cédula del tercero. Si no lo tienes, desmarca «guardarlo en el directorio»."),
+        ),
+        cuando(
+          (f) => f.type === "Expense" && f.destino === "otro" && f.guardarOtro && f.puedeGuardarEnDirectorio,
+          minimo(5, "El documento se ve incompleto: escribe el NIT o la cédula completos."),
+        ),
+      ],
+    },
+  );
+
   const submit = useCallback(async () => {
     setErr(null);
+    if (!v.revisar()) return;
     const amt = Number(amount) || 0;
-    if (amt <= 0) { setErr("Ingresa un monto mayor a cero."); return; }
-    // Sin categoría el movimiento quedaría fuera de los reportes, que agrupan por ella.
-    if (!category) { setErr("Selecciona una categoría."); return; }
-    // Elegir "Cliente" y no decir cuál dejaría un egreso sin destinatario ninguno.
-    if (type === "Expense" && destino === "cliente" && !sub) {
-      setErr("Elige el cliente al que se le devuelve el dinero."); return;
-    }
-    if (type === "Expense" && destino === "otro" && !otroNombre.trim()) {
-      setErr("Escribe a quién se le paga."); return;
-    }
-    // Guardarlo en el directorio exige documento; el pago suelto (sin guardar) no.
-    if (type === "Expense" && destino === "otro" && guardarOtro && puedeGuardarEnDirectorio
-        && otroDoc.trim().length < 5) {
-      setErr("Escribe el NIT o la cédula del tercero. Si no lo tienes, desmarca «guardarlo en el directorio».");
-      return;
-    }
     setSaving(true);
     try {
       const body: any = {
@@ -183,7 +207,7 @@ export default function NuevaTransaccionPage() {
     } finally {
       setSaving(false);
     }
-  }, [amount, category, method, date, cashAccountId, accounts, bank, sub, payerName, beneficiario, destino,
+  }, [v, amount, category, method, date, cashAccountId, accounts, bank, sub, payerName, beneficiario, destino,
       otroNombre, otroDoc, guardarOtro, puedeGuardarEnDirectorio, note, type, file, authFetch, router]);
 
   const esIngreso = type === "Income";
@@ -312,20 +336,24 @@ export default function NuevaTransaccionPage() {
                 </div>
                 <div className="sm:col-span-2">
                   {destino === "cliente" ? (
-                    <Field label="Cliente" required hint="A quién se le devuelve la plata. Queda en su historial; no le mueve la cartera ni le genera deuda.">
+                    <Field label="Cliente" required error={v.error("sub")} hint="A quién se le devuelve la plata. Queda en su historial; no le mueve la cartera ni le genera deuda.">
                       <SubscriberPicker value={sub} onChange={setSub} />
                     </Field>
                   ) : destino === "otro" ? (
+                    <>
                     <Field
                       label="Nombre de quien recibe"
                       required
+                      error={v.error("otroNombre")}
                       hint="Para el pago suelto a alguien que no está en el directorio."
                     >
                       <Input
                         value={otroNombre}
                         onChange={(e) => setOtroNombre(e.target.value)}
                         placeholder="Ej.: Ferretería La 20, Juan Pérez…"
+                        {...v.campo("otroNombre")}
                       />
+                    </Field>
                       {/* El documento sólo tiene dónde guardarse si el tercero
                           entra al directorio: el pago suelto no lo lleva (el
                           movimiento sólo guarda el nombre escrito). */}
@@ -339,7 +367,12 @@ export default function NuevaTransaccionPage() {
                             onChange={(e) => setOtroDoc(e.target.value)}
                             placeholder="Ej.: 900123456-7, 1098765432"
                             inputMode="text"
+                            aria-invalid={v.error("otroDoc") ? true : undefined}
+                            {...v.campo("otroDoc")}
                           />
+                          {v.error("otroDoc") && (
+                            <span className="mt-1 block text-[11px] text-error-text">{v.error("otroDoc")}</span>
+                          )}
                           <span className="mt-1 block text-[11px] text-text-tertiary">
                             Obligatorio para dejarlo en el directorio: es lo que evita tenerlo repetido. Si ya hay
                             alguien con ese documento, el egreso se le liga a él. ¿No lo tienes? Desmarca la casilla
@@ -365,7 +398,7 @@ export default function NuevaTransaccionPage() {
                           </span>
                         </label>
                       )}
-                    </Field>
+                    </>
                   ) : (
                     <Field label="Proveedor o tercero" hint="Se elige del directorio. Si no está, usa «No registrado».">
                       <BeneficiarioPicker value={beneficiario} onChange={setBeneficiario} />
@@ -375,15 +408,15 @@ export default function NuevaTransaccionPage() {
               </>
             )}
 
-            <Field label="Monto" required>
-              <Input type="number" min={0} value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" autoFocus />
+            <Field label="Monto" required error={v.error("amount")}>
+              <Input type="number" min={0} value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" autoFocus {...v.campo("amount")} />
             </Field>
             <Field label="Fecha" required>
               <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
             </Field>
 
-            <Field label="Categoría" required hint={categories.length ? undefined : "Se administran en Cajas y categorías"}>
-              <Select value={category} onChange={(e) => { setCategory(e.target.value); setCatTocada(true); }} disabled={!categories.length}>
+            <Field label="Categoría" required error={v.error("category")} hint={categories.length ? undefined : "Se administran en Cajas y categorías"}>
+              <Select value={category} onChange={(e) => { setCategory(e.target.value); setCatTocada(true); }} disabled={!categories.length} {...v.campo("category")}>
                 {!categories.length && <option value="">Cargando…</option>}
                 {categories.map((c) => <option key={c} value={c}>{c}</option>)}
               </Select>

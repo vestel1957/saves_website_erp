@@ -11,11 +11,15 @@ import { AuthUser } from '../auth/current-user.decorator';
 import { MetricsService } from '../reports/metrics.service';
 import { ResponsibilityNotifierService } from '../responsibilities/responsibility-notifier.service';
 import { OnlinePaymentsService } from '../online-payments/online-payments.service';
+import { PortalPagosService } from '../portal-pagos/portal-pagos.service';
 import { AltaClienteService } from '../subscribers/alta.service';
+import { OrdenAlPagarService } from '../billing/orden-al-pagar.service';
+import { MikrotikService } from '../network/mikrotik.service';
 import { inicioDelMes, whereExigible } from '../billing/factura-exigible';
 import { arrastrarAlDiaDeHoy } from '../support/agenda-arrastre';
 import { hoyEnColombia } from '../common/fecha-colombia';
 import { barrerDescuentosDelPortal, PORTAL_PRECONCEDER_LIVE } from '../promotions/descuento-portal';
+import { candidatosDeCorte, cortesDeshechos, ESTADOS_FUERA, TIPOS_CORTE, TIPOS_RECONEXION } from '../network/cortes-deshechos';
 
 const cop = (n: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(n || 0);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -65,6 +69,9 @@ export class CronService {
     private notifier: ResponsibilityNotifierService,
     private alta: AltaClienteService,
     private pagosEnLinea: OnlinePaymentsService,
+    private portalPagos: PortalPagosService,
+    private ordenAlPagar: OrdenAlPagarService,
+    private mikrotik: MikrotikService,
   ) {}
 
   get isEnabled() {
@@ -196,6 +203,155 @@ export class CronService {
   async scheduledGeoPurge() {
     if (!this.enabled) return this.logger.log('[geo-purge] omitido (CRONS_ENABLED != true)');
     await this.runGeoPurge({ manual: false });
+  }
+
+  /**
+   * Diaria 04:30 — la ficha y el `/ppp/secret` dicen lo mismo.
+   *
+   * Guardar un cliente ya concilia el suyo, pero eso obliga a que alguien abra la
+   * ficha: el desfase heredado del legacy sólo se iría arreglando cliente a cliente
+   * (2.209 secrets desfasados el 2026-09-08, casi todos el comentario con la VLAN).
+   * Esto lo cierra de una vez y evita que vuelva a acumularse.
+   *
+   * A las 04:30 porque es el hueco que dejan cartera (03:00), geo-purge (03:40) y la
+   * tasa (04:00), y porque a esa hora casi nadie está navegando: aunque el barrido no
+   * reinicia sesiones, escribe en los ocho routers de producción.
+   *
+   * Prudente por diseño (ver `conciliarSecretsEnLote`): rellena, no re-apunta; nunca
+   * vacía un comentario; y no toca usuario, clave ni perfil.
+   *
+   * También DA DE ALTA al abonado que no tiene secret —el alta de un cliente nuevo se
+   * cae de vez en cuando y nadie se entera hasta que llama diciendo que no navega—, y
+   * el que está cortado nace en MOROSOS para que crearlo no le regale el mes.
+   */
+  async scheduledSecretsAlDia() {
+    if (!this.enabled) return this.logger.log('[secrets-al-dia] omitido (CRONS_ENABLED != true)');
+    if (!this.mikrotik.isLive) return this.logger.log('[secrets-al-dia] omitido (Mikrotik en dry-run)');
+    await this.runSecretsAlDia({ manual: false });
+  }
+
+  /**
+   * El barrido en sí. `aplicar: false` deja el INFORME sin tocar los routers, que es
+   * como conviene mirarlo antes de una corrida grande.
+   */
+  async runSecretsAlDia(opts: { manual: boolean; user?: AuthUser; aplicar?: boolean }) {
+    const inicio = new Date();
+    try {
+      const r = await this.mikrotik.conciliarSecretsEnLote(
+        { aplicar: opts.aplicar !== false },
+        opts.user ?? this.systemUser(),
+      );
+      const detalle = `${r.message} (comentarios ${r.comentario}, IP local ${r.ipLocal}, IP remota ${r.ipRemota}`
+        + `; sin tocar: ${r.perfilDistinto} perfiles y ${r.ipOmitida + r.ipLocalOmitida} direcciones que ya tenía el router)`;
+      await this.prisma.cronRun.create({
+        data: {
+          // `count` es lo que hizo el barrido, y desde que da de alta también cuenta
+          // las altas: un día sin correcciones pero con 12 abonados provisionados no
+          // es una corrida vacía.
+          job: 'SECRETS_AL_DIA', ok: true, manual: opts.manual, count: r.corregidos + r.creados,
+          detail: detalle.slice(0, 1900), userName: opts.user?.name ?? 'Cron', finishedAt: new Date(),
+        },
+      });
+      this.logger.log(`[secrets-al-dia] ${detalle}`);
+      return { ok: true, ...r };
+    } catch (e) {
+      const msg = (e as Error).message;
+      await this.prisma.cronRun.create({
+        data: {
+          job: 'SECRETS_AL_DIA', ok: false, manual: opts.manual, count: 0,
+          detail: `ERROR: ${msg}`.slice(0, 1900), userName: opts.user?.name ?? 'Cron',
+          startedAt: inicio, finishedAt: new Date(),
+        },
+      }).catch(() => undefined);
+      this.logger.error(`[secrets-al-dia] ${msg}`);
+      throw e;
+    }
+  }
+
+  /** Diario 07:00 — clientes cortados por mora que un router volvió a dejar navegando. */
+  async scheduledCortesDeshechos() {
+    if (!this.enabled) return this.logger.log('[cortes-deshechos] omitido (CRONS_ENABLED != true)');
+    if (!this.mikrotik.isLive) return this.logger.log('[cortes-deshechos] omitido (Mikrotik en dry-run)');
+    await this.runCortesDeshechos({ manual: false });
+  }
+
+  /**
+   * Cruza las órdenes de corte (sin reconexión posterior y con deuda vencida) contra
+   * las listas de los routers y avisa al cargo `cartera` de quién navega igual. Solo
+   * lee: no corta ni reconecta a nadie. `avisar: false` deja el informe sin mandar el
+   * aviso, para probarlo.
+   */
+  async runCortesDeshechos(opts: { manual: boolean; user?: AuthUser; avisar?: boolean }) {
+    const inicio = new Date();
+    try {
+      const hoy = new Date(`${new Date().toLocaleDateString('en-CA', { timeZone: TZ })}T00:00:00Z`);
+      // 60 días: el corte por mora es mensual y un corte más viejo sin reconexión
+      // ya casi siempre es un retiro o una cartera que otro proceso atiende.
+      const desde = new Date(hoy.getTime() - 60 * 24 * 60 * 60 * 1000);
+      const cortes = await this.prisma.ticket.findMany({
+        where: {
+          type: { in: TIPOS_CORTE }, status: { not: 'ANULADA' }, created: { gte: desde },
+          subscriber: { legacyId: { not: null }, status: { notIn: [...ESTADOS_FUERA] as SubscriberStatus[] } },
+        },
+        select: { subscriberId: true, created: true, subscriber: { select: { abonado: true, legacyId: true, branch: { select: { legacyId: true } } } } },
+      });
+      const ids = [...new Set(cortes.map((c) => c.subscriberId!).filter(Boolean))];
+      const [reconexiones, facturas] = ids.length ? await Promise.all([
+        this.prisma.ticket.findMany({
+          where: { subscriberId: { in: ids }, type: { in: TIPOS_RECONEXION }, status: { not: 'ANULADA' }, created: { gte: desde } },
+          select: { subscriberId: true, created: true },
+        }),
+        this.prisma.subInvoice.findMany({
+          where: { subscriberId: { in: ids }, status: { in: ['DUE', 'PARTIAL'] }, dueDate: { lt: hoy } },
+          select: { subscriberId: true, total: true, paidAmount: true },
+        }),
+      ]) : [[], []];
+      const candidatos = candidatosDeCorte(
+        cortes.filter((c) => c.subscriberId && c.subscriber?.legacyId).map((c) => ({
+          subscriberId: c.subscriberId!, abonado: c.subscriber!.abonado, legacyId: c.subscriber!.legacyId!,
+          sede: c.subscriber!.branch?.legacyId ?? null, created: c.created,
+        })),
+        reconexiones.map((r) => ({ subscriberId: r.subscriberId!, created: r.created })),
+        facturas.map((f) => ({ subscriberId: f.subscriberId, pendiente: Number(f.total) - Number(f.paidAmount) })),
+      );
+
+      const { listas, errores } = candidatos.length ? await this.mikrotik.listasDeCorte() : { listas: [], errores: [] };
+      const deshechos = cortesDeshechos(candidatos, listas);
+      const lista = deshechos.map((x) => `${x.abonado} (${x.router}, debe ${cop(x.deudaVencida)})`);
+      const detalle = `${candidatos.length} siguen cortados por órdenes · ${deshechos.length} navegando igual`
+        + (lista.length ? `: ${lista.join(', ')}` : '')
+        + (errores.length ? ` · sin leer: ${errores.join('; ')}` : '');
+
+      if (deshechos.length && opts.avisar !== false) {
+        await this.notifier.notifyPost('cartera', {
+          kind: 'red.cortes-deshechos',
+          title: `${deshechos.length} cliente${deshechos.length === 1 ? '' : 's'} cortado${deshechos.length === 1 ? '' : 's'} por mora siguen navegando`,
+          body: `Tienen orden de corte sin reconexión y deuda vencida, pero el router los deja pasar (en ACTIVOS y fuera de MOROSOS). `
+            + `Hay que volver a cortarlos en el legacy: ${lista.slice(0, 25).join(', ')}${lista.length > 25 ? ` y ${lista.length - 25} más` : ''}.`,
+          link: '/configuracion/automatizaciones',
+          groupKey: `red.cortes-deshechos.${hoy.toISOString().slice(0, 10)}`,
+        });
+      }
+
+      await this.prisma.cronRun.create({
+        data: {
+          job: 'CORTES_DESHECHOS', ok: !errores.length, manual: opts.manual, count: deshechos.length,
+          detail: detalle.slice(0, 1900), userName: opts.user?.name ?? 'Cron', startedAt: inicio, finishedAt: new Date(),
+        },
+      });
+      this.logger.log(`[cortes-deshechos] ${detalle}`);
+      return { ok: true, candidatos: candidatos.length, deshechos, errores };
+    } catch (e) {
+      const msg = (e as Error).message;
+      await this.prisma.cronRun.create({
+        data: {
+          job: 'CORTES_DESHECHOS', ok: false, manual: opts.manual, count: 0,
+          detail: `ERROR: ${msg}`.slice(0, 1900), userName: opts.user?.name ?? 'Cron', startedAt: inicio, finishedAt: new Date(),
+        },
+      }).catch(() => undefined);
+      this.logger.error(`[cortes-deshechos] ${msg}`);
+      throw e;
+    }
   }
 
   /** Diario 04:00 — tasa de cambio (stub). */
@@ -383,16 +539,32 @@ export class CronService {
   /** Pasada del puente con el portal de pagos. Ver `scheduledPagosEnLinea`. */
   async runPagosEnLinea(opts: { manual: boolean; user?: AuthUser; dryRun?: boolean }) {
     try {
+      // Antes que nada, la red de seguridad del web service del portal: un pago que
+      // Wompi aprobó y cuya llamada se cayó (el aviso del portal no se reintenta) se
+      // aplica aquí. Va primero porque lo que rescate tiene que poder reconectar en
+      // esta misma pasada. Ver `PortalPagosService.recogerPagosCaidos`.
+      const rescate = this.portalPagos.habilitado
+        ? await this.portalPagos.recogerPagosCaidos({ dryRun: opts.dryRun })
+        : { revisadas: 0, aplicadas: 0, fallidas: 0, detalle: [] as string[] };
+      if (rescate.aplicadas || rescate.fallidas) {
+        this.logger.warn(
+          `[pagos-en-linea] rescate: ${rescate.aplicadas} pago(s) aplicados`
+          + (rescate.fallidas ? `, ${rescate.fallidas} sin poder aplicar` : '')
+          + ` · ${rescate.detalle.join(' · ')}`,
+        );
+      }
       const r = await this.pagosEnLinea.sincronizar({ dryRun: opts.dryRun });
       // Igual que el barrido de instalaciones: a 288 pasadas al día, anotar cada
       // pasada vacía enterraría el histórico de `CronRun` bajo filas sin noticia.
-      const huboAlgo = r.ingestadas > 0 || r.actualizadas > 0 || r.reconectados > 0;
+      const huboAlgo = r.ingestadas > 0 || r.actualizadas > 0 || r.reconectados > 0 || rescate.aplicadas > 0 || rescate.fallidas > 0;
       if (huboAlgo || opts.manual) {
         await this.prisma.cronRun.create({
           data: {
             job: 'PAGOS_EN_LINEA', ok: true, manual: opts.manual,
             userName: opts.user?.name ?? 'Cron', count: r.reconectados,
-            detail: r.detalle.slice(0, 1900), finishedAt: new Date(),
+            detail: (rescate.aplicadas || rescate.fallidas
+              ? `rescate ${rescate.aplicadas} ok/${rescate.fallidas} fallo · ` : '')
+              .concat(r.detalle).slice(0, 1900), finishedAt: new Date(),
           },
         });
       }
@@ -414,22 +586,28 @@ export class CronService {
   async runInstalacionesPagadas(opts: { manual: boolean; user?: AuthUser }) {
     try {
       const { creadas, adoptadas } = await this.alta.barrerInstalacionesPagadas();
+      // En la misma pasada, el resto de trabajos que se cobran por adelantado: hoy el
+      // TRASLADO, cuya orden nace al pagarse su factura (`PendingOrder`). Comparten
+      // barrido porque comparten motivo — recoger lo que se recaudó en el legacy, que
+      // llega por el sync sin emitir ningún evento aquí.
+      const { creadas: porFactura } = await this.ordenAlPagar.barrer();
       // Sólo se deja rastro cuando hubo algo que hacer: a 288 pasadas al día, anotar
       // cada barrido vacío enterraría el histórico de `CronRun` bajo filas sin noticia.
-      if (creadas > 0 || adoptadas > 0 || opts.manual) {
+      if (creadas > 0 || adoptadas > 0 || porFactura > 0 || opts.manual) {
         // Las ADOPTADAS son las que ya había abierto el sistema anterior (el pago por
         // el portal se aplica allá): no se abre una segunda, se sella contra la suya.
         const adoptadasTxt = adoptadas ? ` · ${adoptadas} ya existían y se adoptaron` : '';
+        const porFacturaTxt = porFactura ? ` · ${porFactura} orden(es) más abiertas por su factura pagada (traslados)` : '';
         await this.prisma.cronRun.create({
           data: {
             job: 'INSTALACIONES_PAGADAS', ok: true, manual: opts.manual,
-            userName: opts.user?.name ?? 'Cron', count: creadas,
-            detail: `${creadas} orden(es) de instalación abiertas tras el pago de la afiliación${adoptadasTxt}`,
+            userName: opts.user?.name ?? 'Cron', count: creadas + porFactura,
+            detail: `${creadas} orden(es) de instalación abiertas tras el pago de la afiliación${adoptadasTxt}${porFacturaTxt}`,
             finishedAt: new Date(),
           },
         });
       }
-      return { ok: true, creadas, adoptadas };
+      return { ok: true, creadas, adoptadas, porFactura };
     } catch (e) {
       const error = (e as Error).message;
       this.logger.error(`[instalaciones-pagadas] ${error}`);
@@ -827,6 +1005,13 @@ export class CronService {
         + ` · anulaciones +${res.anulaciones?.nuevas ?? 0}`
         + ` · órdenes +${res.tickets?.nuevas ?? 0}/~${res.tickets?.actualizadas ?? 0}`
         + ` · aperturas +${res.aperturas?.nuevas ?? 0}`
+        // Empleados: sólo cuando hay algo. Es un goteo (un alta por contratación), y
+        // repetirlo a cero en cada pasada alargaría la línea sin decir nada. El aviso
+        // de almacén dudoso SÍ tiene que verse: es trabajo que espera a una persona.
+        + (res.empleados?.nuevos ? ` · empleados +${res.empleados.nuevos}` : '')
+        + (res.empleados?.almacenes ? ` · almacenes +${res.empleados.almacenes}` : '')
+        + (res.empleados?.almacenesDudosos?.length
+          ? ` · ⚠️ ${res.empleados.almacenesDudosos.length} almacén(es) sin dueño por enlazar` : '')
         + ` · ${Math.round((res.ms ?? 0) / 1000)}s`
         + (res.invoices?.conflictosTid?.length ? ` · ⚠️ tid en conflicto: ${res.invoices.conflictosTid.join(',')}` : '');
       await this.prisma.cronRun.update({
@@ -1126,6 +1311,54 @@ export class CronService {
     }
   }
 
+  // ── Empuje INMEDIATO de la ACTIVACIÓN por instalación al legacy ───────────
+  //
+  // La tercera con la misma urgencia, y la que faltaba: al cerrar la instalación el
+  // abonado queda ACTIVO aquí, pero el legacy lo sigue teniendo en 'Instalar' y su ida
+  // devuelve ese estado cada 15 minutos. El técnico instalaba, cerraba, y el cliente
+  // reaparecía "por instalar" (9 abonados entre el 02 y el 05-09-2026).
+  private wbActivacionTimer: NodeJS.Timeout | null = null;
+  private wbActivacionRunning = false;
+  private wbActivacionPendiente = false;
+
+  /** Pide un empuje de activación al legacy. Agrupa ráfagas igual que el de bajas. */
+  empujarActivacionAlLegacy(): void {
+    if (this.wbActivacionTimer) return;
+    this.wbActivacionTimer = setTimeout(() => {
+      this.wbActivacionTimer = null;
+      void this.runLegacyWritebackActivacion();
+    }, 2000);
+  }
+
+  async runLegacyWritebackActivacion(): Promise<{ ok: boolean; error?: string }> {
+    const abierto = process.env.LEGACY_WRITEBACK_LIVE === 'true'
+      || process.env.LEGACY_WRITEBACK_ACTIVACION_LIVE === 'true';
+    if (!abierto) return { ok: true };
+    if (this.legacyWritebackRunning || this.wbActivacionRunning) { this.wbActivacionPendiente = true; return { ok: true }; }
+    this.wbActivacionRunning = true;
+    try {
+      const res = await this.execLegacyScript(['--solo=activacion'], 'writeback-legacy.js');
+      if (!res.ok) throw new Error(res.error || 'fallo sin detalle');
+      const n = res.activaciones?.aplicados ?? 0;
+      // Igual que las otras cortas: sólo deja rastro cuando movió algo.
+      if (n > 0) {
+        const detail = `clientes ${n} · ${Math.round((res.ms ?? 0) / 1000)}s`;
+        await this.prisma.cronRun.create({
+          data: { job: 'LEGACY_WRITEBACK_ACTIVACION', ok: true, manual: false, userName: 'Activación', count: n, detail, finishedAt: new Date() },
+        });
+        this.logger.log(`[legacy-writeback-activacion] ${detail}`);
+      }
+      return { ok: true };
+    } catch (e) {
+      const msg = (e as Error).message;
+      this.logger.error(`[legacy-writeback-activacion] ${msg}`);
+      return { ok: false, error: msg };
+    } finally {
+      this.wbActivacionRunning = false;
+      if (this.wbActivacionPendiente) { this.wbActivacionPendiente = false; this.empujarActivacionAlLegacy(); }
+    }
+  }
+
   // ── Empuje INMEDIATO del ESTADO DE UN SERVICIO al legacy ──────────────────
   //
   // Mismo motivo que la baja y la reconexión, un escalón más abajo: `estado_tv` y
@@ -1267,7 +1500,8 @@ export class CronService {
       const abierto = [res.ordenesEnVivo ? 'órdenes' : null, res.cajaEnVivo ? 'caja' : null,
         res.altasEnVivo ? 'altas' : null, res.inventarioEnVivo ? 'inventario' : null,
         res.bajasEnVivo ? 'bajas' : null,
-        res.edicionesEnVivo ? 'ediciones' : null].filter(Boolean);
+        res.edicionesEnVivo ? 'ediciones' : null,
+        res.servicioEnVivo ? 'servicio' : null].filter(Boolean);
       const modo = !res.dry ? '' : abierto.length ? `SECO salvo ${abierto.join(' y ')} · ` : 'SECO (plan) · ';
       const detail = `${modo}clientes +${res.customers?.insertados ?? 0}`
         + ` · facturas +${res.invoices?.insertadas ?? 0} · trans +${res.transactions?.insertadas ?? 0}`
@@ -1297,6 +1531,9 @@ export class CronService {
         + ` · inventario mat +${res.inventario?.material?.insertados ?? 0}/~${res.inventario?.material?.aplicados ?? 0}`
         + ` eq +${res.inventario?.equipos?.insertados ?? 0}/~${res.inventario?.equipos?.aplicados ?? 0}`
         + ` ord +${res.inventario?.ordenes?.insertadas ?? 0}/~${res.inventario?.ordenes?.aplicados ?? 0}`
+        // Almacenes de técnico: sólo cuando los hay. Es un goteo (uno por técnico
+        // nuevo), y nombrarlo siempre a cero llenaría de ruido una línea ya larga.
+        + (res.inventario?.bodegasTecnico?.insertadas ? ` almacenes +${res.inventario.bodegasTecnico.insertadas}` : '')
         + (res.inventario?.material?.sinDimension?.length
           ? ` (⚠️ ${res.inventario.material.sinDimension.length} sin bodega/categoría allá)` : '')
         + (res.inventario?.ordenes?.conflictosTid?.length
@@ -1340,7 +1577,7 @@ export class CronService {
   // Estado / historial
   // ------------------------------------------------------------------
   async status() {
-    const jobs = ['RECURRING_BILLING', 'CARTERA', 'GEO_PURGE', 'EXCHANGE_RATE', 'REMINDERS', 'WA_REMINDERS', 'LEGACY_SYNC', 'LEGACY_SYNC_CAJA', 'LEGACY_WRITEBACK', 'LEGACY_WRITEBACK_CAJA', 'LEGACY_WRITEBACK_ORDENES', 'CONCILIACION_CAJA', 'INSTALACIONES_PAGADAS', 'PAGOS_EN_LINEA', 'AGENDA_ARRASTRE'];
+    const jobs = ['RECURRING_BILLING', 'CARTERA', 'GEO_PURGE', 'EXCHANGE_RATE', 'REMINDERS', 'WA_REMINDERS', 'LEGACY_SYNC', 'LEGACY_SYNC_CAJA', 'LEGACY_WRITEBACK', 'LEGACY_WRITEBACK_CAJA', 'LEGACY_WRITEBACK_ORDENES', 'CONCILIACION_CAJA', 'INSTALACIONES_PAGADAS', 'PAGOS_EN_LINEA', 'AGENDA_ARRASTRE', 'CORTES_DESHECHOS'];
     const last: Record<string, any> = {};
     for (const j of jobs) {
       last[j] = await this.prisma.cronRun.findFirst({ where: { job: j }, orderBy: { startedAt: 'desc' } });
@@ -1361,6 +1598,7 @@ export class CronService {
         LEGACY_SYNC_CAJA: 'cada 20 segundos, sólo transacciones (para que la caja del legacy se vea al momento); anota sólo si trae algo',
         LEGACY_WRITEBACK_CAJA: 'al instante, disparado por cada cobro (pasada corta ~0,6 s); anota sólo si empuja algo',
         LEGACY_WRITEBACK_ORDENES: 'al instante, al crear o asignar una orden (el técnico la atiende desde el legacy); anota sólo si empuja algo',
+        CORTES_DESHECHOS: 'diario 07:00 — avisa a Cartera de los cortados por mora (sin reconexión y con deuda vencida) que un router deja navegando; sólo lee los routers',
         CONCILIACION_CAJA: 'diario 21:00 — cuadra nuestra caja contra la del legacy (7 días atrás) y avisa de los pagos que allá se borraron',
         PAGOS_EN_LINEA: 'cada 5 minutos — trae los pagos del portal en línea (vestel.com.co/crm) y reconecta internet y TV a quien pagó por ahí; anota sólo si trae o reconecta algo',
         INSTALACIONES_PAGADAS: 'cada 5 minutos — abre la orden de instalación de quien ya pagó su factura de afiliación (la de aquí nace al instante con el cobro; esto recoge lo pagado en el legacy); anota sólo si abre alguna',

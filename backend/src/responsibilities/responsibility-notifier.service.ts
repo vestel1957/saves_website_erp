@@ -4,6 +4,8 @@ import { NotificationsService } from '../common/notifications/notifications.serv
 import { INTERNAL_ALERT_EVENT, type InternalAlert } from '../common/whatsapp/whatsapp.types';
 import { ResponsibilitiesService } from './responsibilities.service';
 import { postDef } from './responsibilities.catalog';
+import { alcanzanSede } from '../common/sede-scope';
+import { PrismaService } from '../prisma/prisma.service';
 
 /** Lo mismo que pide la campanita, más el cargo al que va dirigido. */
 export interface NotifyPostInput {
@@ -12,6 +14,16 @@ export interface NotifyPostInput {
   body?: string | null;
   link?: string | null;
   groupKey?: string | null;
+  /**
+   * Sede del asunto (`Branch.legacyId`). Con ella el aviso sale sólo a quien
+   * responde por ESA sede; sin ella (null) sale a todos los del cargo, como siempre.
+   *
+   * Existe porque el respaldo por permiso es una lista larga y plana: los 24 que
+   * pueden abrir el tablero de agenda no reparten las mismas órdenes, reparten las
+   * de su sede. Ver `alcanzanSede`, que es quien decide y respeta que "sin sedes
+   * marcadas" signifique "todas".
+   */
+  sede?: number | null;
 }
 
 /** Base pública del ERP, para que el enlace del WhatsApp se pueda pulsar. */
@@ -35,6 +47,7 @@ export class ResponsibilityNotifierService {
     private readonly responsibilities: ResponsibilitiesService,
     private readonly notifications: NotificationsService,
     private readonly events: EmisorDeEventos,
+    private readonly prisma: PrismaService,
   ) {}
 
   /**
@@ -58,15 +71,28 @@ export class ResponsibilityNotifierService {
         return;
       }
 
-      await this.notifications.notify(
-        holders.map((h) => h.userId),
-        input,
-      );
+      // El aviso de una sede es de quien responde por esa sede. Se acota DESPUÉS de
+      // resolver el cargo —no antes— para que un titular nombrado a dedo siga
+      // recibiendo lo suyo aunque su cuenta no tenga sedes marcadas.
+      const dirigidos = await alcanzanSede(this.prisma, holders.map((h) => h.userId), input.sede);
+      if (!dirigidos.length) {
+        this.logger.warn(
+          `Nadie recibió "${input.title}": ninguno de los ${holders.length} del cargo ` +
+            `${postDef(post)?.label ?? post} llega a la sede ${input.sede}.`,
+        );
+        return;
+      }
+      await this.notifications.notify(dirigidos, input);
 
       if (fromFallback) return; // el respaldo nunca sale por WhatsApp (ver `resolve`)
 
+      const puede = new Set(dirigidos);
       const phones = [
-        ...new Set(holders.filter((h) => h.notifyWhatsapp && h.whatsappPhone).map((h) => h.whatsappPhone!)),
+        ...new Set(
+          holders
+            .filter((h) => puede.has(h.userId) && h.notifyWhatsapp && h.whatsappPhone)
+            .map((h) => h.whatsappPhone!),
+        ),
       ];
       if (!phones.length) return;
       if (this.silenciado(post, input)) return;

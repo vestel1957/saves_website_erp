@@ -89,6 +89,18 @@ export class SubscribersController {
     }
   }
 
+  /**
+   * El técnico de campo no busca clientes: el buscador global (⌘K) se le quitó de
+   * la barra (2026-09-10) y el listado que lo alimentaba se cierra aquí, o la
+   * puerta seguiría abierta por API como pasó con la edición de la ficha. Lo suyo
+   * llega por su orden, no por una búsqueda libre sobre los 20.000 abonados.
+   */
+  private sinBuscador(user: AuthUser | undefined, que: string) {
+    if (esTecnicoDeCampo(user)) {
+      throw new ForbiddenException(`No puedes ${que}: desde tu perfil llegas al cliente por tu orden de trabajo.`);
+    }
+  }
+
   stats() {
     return this.subscribers.stats();
   }
@@ -175,6 +187,12 @@ export class SubscribersController {
     return this.alta.alta(dto, user);
   }
 
+  /**
+   * Listado/buscador de clientes. CERRADO al técnico de campo (2026-09-10): es lo
+   * que alimentaba el buscador global (⌘K) —el que le acabamos de quitar de la
+   * barra—, y con él podía barrer la base entera de abonados. Su ficha por `:id`
+   * sigue abierta: al cliente llega desde su orden, que sí es suya.
+   */
   list(
     search?: string,
     status?: string,
@@ -191,6 +209,7 @@ export class SubscribersController {
     sortDir?: string,
     user?: AuthUser,
   ) {
+    this.sinBuscador(user, 'buscar en el listado de clientes');
     return this.subscribers.list({ search, status, branchId, page: Number(page), pageSize: Number(pageSize), withPlan, servicio, planId, tecnologia, cuenta, deuda, sortBy, sortDir }, user);
   }
 
@@ -213,6 +232,7 @@ export class SubscribersController {
     sortDir?: string,
     user?: AuthUser,
   ) {
+    this.sinBuscador(user, 'exportar el listado de clientes');
     const rows = await this.subscribers.exportRows(
       { search, status, branchId, servicio, planId, tecnologia, cuenta, deuda, sortBy, sortDir },
       user,
@@ -221,6 +241,10 @@ export class SubscribersController {
     wb.creator = 'Vestel';
     const ws = wb.addWorksheet('Clientes');
     ws.columns = [
+      // Nº de fila, la misma que se ve en la tabla de operaciones masivas. El archivo
+      // sale en el orden que pidió la cabecera (`sortBy`/`sortDir` viajan en la query),
+      // así que la fila 1 de aquí es la fila 1 de la pantalla.
+      { header: '#', key: 'n', width: 6 },
       { header: 'Abonado', key: 'abonado', width: 12 },
       { header: 'ID', key: 'legacyId', width: 10 },
       { header: 'Nombre', key: 'name', width: 34 },
@@ -232,10 +256,23 @@ export class SubscribersController {
       { header: 'Barrio', key: 'neighborhood', width: 20 },
       { header: 'Debe', key: 'debt', width: 14 },
       { header: 'Saldo a favor', key: 'balance', width: 14 },
+      // Conexión: lo que hace falta para ir a buscar al cliente en el router, que es
+      // para lo que se baja este Excel desde operaciones masivas. La IP remota está
+      // en el 86,6% de los ACTIVOS y en el 56,6% del total (los retirados y los de
+      // solo TV nunca la tuvieron), así que sale vacía para una parte: es el dato
+      // que hay, no un fallo del export.
+      //
+      // NO se saca `pppProfile` aunque esté a mano: son 8.262 vacíos y 7.940 con un
+      // literal '-' de 21.898, o sea ruido en 3 de cada 4 filas (y encima miente,
+      // ver [[perfil-ppp-ambiguo-radius]]). El plan de verdad está en los servicios
+      // contratados y pedirlo obliga a `withPlan`, que es otra consulta por tanda.
+      { header: 'Usuario PPPoE', key: 'pppUsername', width: 30 },
+      { header: 'IP remota', key: 'ipRemote', width: 16 },
     ];
     ws.getRow(1).font = { bold: true };
-    for (const r of rows) {
+    rows.forEach((r, i) => {
       ws.addRow({
+        n: i + 1,
         abonado: r.abonado ?? '',
         legacyId: r.legacyId ?? '',
         name: r.name ?? '',
@@ -247,8 +284,10 @@ export class SubscribersController {
         neighborhood: r.neighborhood ?? '',
         debt: r.debt ?? 0,
         balance: r.balance ?? 0,
+        pppUsername: r.pppUsername ?? '',
+        ipRemote: r.ipRemote ?? '',
       });
-    }
+    });
     ws.getColumn('debt').numFmt = '#,##0';
     ws.getColumn('balance').numFmt = '#,##0';
     const buffer = Buffer.from(await wb.xlsx.writeBuffer());
@@ -257,11 +296,18 @@ export class SubscribersController {
     res.send(buffer);
   }
 
-  detail(id: string, user: AuthUser) {
+  /**
+   * La ficha. El técnico que llega a un cliente que NO es de sus órdenes ya no se
+   * choca con un 403: recibe la ficha REDUCIDA —nombre, dirección y poco más— para
+   * poder dejarle la foto de la vivienda desde la puerta. Ver `fichaReducida`.
+   */
+  async detail(id: string, user: AuthUser) {
+    if (await this.subscribers.fichaLimitada(user, id)) return this.subscribers.fichaReducida(id, user);
     return this.subscribers.detail(id, user);
   }
 
-  editForm(id: string, user: AuthUser) {
+  async editForm(id: string, user: AuthUser) {
+    await this.subscribers.exigirSuCliente(user, id);
     return this.subscribers.editForm(id, user);
   }
 
@@ -286,7 +332,8 @@ export class SubscribersController {
   }
 
   /** Los planes que tiene contratados hoy, con sus megas (lectura ligera de la ficha). */
-  currentPlans(id: string, user: AuthUser) {
+  async currentPlans(id: string, user: AuthUser) {
+    await this.subscribers.exigirSuCliente(user, id);
     return this.subscribers.currentPlans(id, user);
   }
 
@@ -296,10 +343,13 @@ export class SubscribersController {
     return this.subscribers.changePlan(id, dto.planId, user);
   }
 
-  /** Cambiar varios planes a la vez (ej. Internet + TV) en una sola operación. */
+  /**
+   * Cambiar varios planes a la vez (ej. Internet + TV) en una sola operación, y/o
+   * quitarle un servicio (`remove`: la opción "No" — dejarlo sólo con internet).
+   */
   changePlans(id: string, dto: AssignPlansDto, user: AuthUser) {
     this.soloMira(user, 'cambiarle los planes al cliente');
-    return this.subscribers.changePlans(id, dto.planIds, user);
+    return this.subscribers.changePlans(id, dto.planIds ?? [], user, { remove: dto.remove });
   }
 
   /** Fijar cuántos puntos de TV adicionales tiene (0 = quitárselos). */
@@ -316,7 +366,16 @@ export class SubscribersController {
 
   // ── Archivos ────────────────────────────────────────────────────
 
-  listFiles(id: string, user: AuthUser) {
+  /**
+   * Los adjuntos de la ficha. En la ficha REDUCIDA (técnico de paso) sólo existen
+   * las fotos de la vivienda: la carta de retiro, la cédula o el soporte de pago no
+   * son asunto de quien pasa a fotografiar la casa.
+   */
+  async listFiles(id: string, user: AuthUser) {
+    if (await this.subscribers.fichaLimitada(user, id)) {
+      const fotos = await this.files.listFiles(id, user);
+      return fotos.filter((f) => f.kind === KIND_VIVIENDA);
+    }
     return this.files.listFiles(id, user);
   }
 
@@ -328,6 +387,7 @@ export class SubscribersController {
    */
   async upload(id: string, file: MulterFile, kind: string | undefined, user: AuthUser) {
     if (!file) throw new BadRequestException('No se recibió ningún archivo');
+    await this.subscribers.exigirSuCliente(user, id);
     // El archivo ya se escribió en disco; si el tipo no vale o el cliente no existe,
     // lo limpiamos (incluida la validación del tipo, que por eso va DENTRO del try).
     try {
@@ -345,6 +405,10 @@ export class SubscribersController {
    */
   async uploadHousePhoto(id: string, file: MulterFile, user: AuthUser) {
     if (!file) throw new BadRequestException('No se recibió ninguna foto');
+    // A PROPÓSITO sin `exigirSuCliente`: la foto de la casa se puede dejar en
+    // CUALQUIER cliente (2026-09-12). Es lo único que el técnico de paso puede
+    // escribir en una ficha que no es de sus órdenes, y la sede se sigue
+    // comprobando dentro de `addFile`.
     try {
       return await this.files.addFile(id, file, user?.name ?? user?.email, user, KIND_VIVIENDA);
     } catch (e) {
@@ -364,6 +428,7 @@ export class SubscribersController {
    */
   async uploadCartaRetiro(id: string, file: MulterFile, user: AuthUser) {
     if (!file) throw new BadRequestException('No se recibió ninguna carta');
+    await this.subscribers.exigirSuCliente(user, id);
     try {
       return await this.files.addFile(id, file, user?.name ?? user?.email, user, KIND_CARTA_RETIRO);
     } catch (e) {
@@ -373,7 +438,16 @@ export class SubscribersController {
   }
 
   async download(id: string, fileId: string, res: Response, user?: AuthUser) {
+    // En la ficha reducida sólo se baja la foto de la vivienda —que es como se
+    // PINTA, el endpoint va detrás del token—; el resto de adjuntos sigue cerrado.
+    const limitada = await this.subscribers.fichaLimitada(user, id);
+    if (!limitada) await this.subscribers.exigirSuCliente(user, id);
     const f = await this.files.fileMeta(id, fileId, user);
+    if (limitada && f.kind !== KIND_VIVIENDA) {
+      throw new ForbiddenException(
+        'Este archivo no corresponde a ninguna de tus órdenes: de este cliente sólo puedes ver la foto de la vivienda.',
+      );
+    }
     const abs = join(UPLOAD_ROOT, id, f.storedName);
     if (!existsSync(abs)) throw new NotFoundException('El archivo no está en el servidor');
     res.setHeader('Content-Type', f.mimeType || 'application/octet-stream');
@@ -384,6 +458,7 @@ export class SubscribersController {
   }
 
   async deleteFile(id: string, fileId: string, user?: AuthUser) {
+    await this.subscribers.exigirSuCliente(user, id);
     const storedName = await this.files.deleteFile(id, fileId, user);
     try { unlinkSync(join(UPLOAD_ROOT, id, storedName)); } catch { /* archivo ya no existe */ }
     return { ok: true };
@@ -391,11 +466,13 @@ export class SubscribersController {
 
   // ── Notas ────────────────────────────────────────────────────
 
-  addNote(id: string, dto: AddNoteDto, user: AuthUser) {
+  async addNote(id: string, dto: AddNoteDto, user: AuthUser) {
+    await this.subscribers.exigirSuCliente(user, id);
     return this.notes.addNote(id, dto.body, user?.name ?? user?.email, user);
   }
 
-  deleteNote(id: string, noteId: string, user: AuthUser) {
+  async deleteNote(id: string, noteId: string, user: AuthUser) {
+    await this.subscribers.exigirSuCliente(user, id);
     return this.notes.deleteNote(id, noteId, user);
   }
 
@@ -404,13 +481,15 @@ export class SubscribersController {
   // administración): el técnico de campo entrega el equipo, no lo da de baja del
   // cliente. Ver `SubscribersService.returnEquipment`.
 
-  returnEquipment(id: string, equipmentId: string, dto: ReturnEquipmentDto, user: AuthUser) {
+  async returnEquipment(id: string, equipmentId: string, dto: ReturnEquipmentDto, user: AuthUser) {
+    await this.subscribers.exigirSuCliente(user, id);
     return this.subscribers.returnEquipment(id, equipmentId, dto, user);
   }
 
   // ── Facturas ─────────────────────────────────────────────────
 
-  invoices(id: string, user: AuthUser) {
+  async invoices(id: string, user: AuthUser) {
+    await this.subscribers.exigirSuCliente(user, id);
     return this.subscribers.invoices(id, user);
   }
 
@@ -431,7 +510,8 @@ export class SubscribersController {
 
   // ── Estado de cuenta ─────────────────────────────────────────
 
-  statement(id: string, user: AuthUser) {
+  async statement(id: string, user: AuthUser) {
+    await this.subscribers.exigirSuCliente(user, id);
     return this.subscribers.statement(id, user);
   }
 
@@ -446,6 +526,7 @@ export class SubscribersController {
    * reclamarse. Ahora la ruta se cierra y dice qué falta.
    */
   async pazYSalvo(id: string, res: Response, user?: AuthUser) {
+    await this.subscribers.exigirSuCliente(user, id);
     const data = await this.subscribers.statement(id, user);
     if (!data.puedeEmitirPazYSalvo) {
       throw new BadRequestException(
@@ -460,7 +541,8 @@ export class SubscribersController {
   // ── Contrato ────────────────────────────────────────────────────
 
   /** Estado del contrato: permanencia vigente, firma y huella (para la ficha). */
-  contratoEstado(id: string, user?: AuthUser) {
+  async contratoEstado(id: string, user?: AuthUser) {
+    await this.subscribers.exigirSuCliente(user, id);
     return this.contracts.estado(id, user);
   }
 
@@ -470,6 +552,7 @@ export class SubscribersController {
    * `contract.pdf` con el que ya la abre la ficha del cliente.
    */
   async contractPdfEndpoint(id: string, res: Response, user?: AuthUser) {
+    await this.subscribers.exigirSuCliente(user, id);
     const data = await this.contracts.datosContratoLegacy(id, user);
     const pdf = await renderContratoLegacy('contrato', data);
     res.setHeader('Content-Type', 'application/pdf');
@@ -479,6 +562,7 @@ export class SubscribersController {
 
   /** ANEXO AL CONTRATO ÚNICO DE SERVICIOS FIJOS (el formato regulatorio CRC). */
   async anexoPdfEndpoint(id: string, res: Response, user?: AuthUser) {
+    await this.subscribers.exigirSuCliente(user, id);
     const data = await this.contracts.datosContratoLegacy(id, user);
     const pdf = await renderContratoLegacy('anexo', data);
     res.setHeader('Content-Type', 'application/pdf');
@@ -487,17 +571,20 @@ export class SubscribersController {
   }
 
   /** Firma capturada en el navegador (canvas → PNG base64). */
-  firma(id: string, dto: FirmaDto, user?: AuthUser) {
+  async firma(id: string, dto: FirmaDto, user?: AuthUser) {
+    await this.subscribers.exigirSuCliente(user, id);
     return this.contracts.guardarFirma(id, dto.dataUrl, user);
   }
 
-  borrarFirma(id: string, user?: AuthUser) {
+  async borrarFirma(id: string, user?: AuthUser) {
+    await this.subscribers.exigirSuCliente(user, id);
     return this.contracts.borrarFirma(id, user);
   }
 
   /** Huella: foto o escaneo del documento firmado. */
   async huella(id: string, file: MulterFile, user?: AuthUser) {
     if (!file) throw new BadRequestException('No se recibió ninguna imagen');
+    await this.subscribers.exigirSuCliente(user, id);
     try {
       return await this.contracts.guardarHuella(id, file.filename, user);
     } catch (e) {
@@ -506,24 +593,28 @@ export class SubscribersController {
     }
   }
 
-  borrarHuella(id: string, user?: AuthUser) {
+  async borrarHuella(id: string, user?: AuthUser) {
+    await this.subscribers.exigirSuCliente(user, id);
     return this.contracts.borrarHuella(id, user);
   }
 
   /** Imagen de la firma / huella para mostrarla en la ficha. */
   async verFirma(id: string, res: Response, user?: AuthUser) {
+    await this.subscribers.exigirSuCliente(user, id);
     const abs = await this.contracts.rutaImagen(id, 'firma', user);
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.sendFile(abs);
   }
 
   async verHuella(id: string, res: Response, user?: AuthUser) {
+    await this.subscribers.exigirSuCliente(user, id);
     const abs = await this.contracts.rutaImagen(id, 'huella', user);
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.sendFile(abs);
   }
 
   async statementPdfEndpoint(id: string, res: Response, user?: AuthUser) {
+    await this.subscribers.exigirSuCliente(user, id);
     const data = await this.subscribers.statement(id, user);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="estado-cuenta-${data.subscriber.abonado}.pdf"`);

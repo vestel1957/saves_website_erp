@@ -257,7 +257,7 @@ export class NetworkService {
       this.prisma.equipment.count({ where }),
     ]);
     return {
-      items: rows.map((e) => ({ id: e.id, code: e.code, mac: e.mac, serial: e.serial, brand: e.brand, status: e.status, warehouse: e.warehouse?.name ?? null, client: subName(e.subscriber), subscriberId: e.subscriber?.id ?? null, installType: e.installType, genieacs: !!e.genieacsId, returnedAt: e.returnedAt })),
+      items: rows.map((e) => ({ id: e.id, code: e.code, mac: e.mac, serial: e.serial, brand: e.brand, status: e.status, observation: e.observation, warehouse: e.warehouse?.name ?? null, client: subName(e.subscriber), subscriberId: e.subscriber?.id ?? null, installType: e.installType, genieacs: !!e.genieacsId, returnedAt: e.returnedAt })),
       total, page, pageSize, pages: Math.ceil(total / pageSize),
     };
   }
@@ -286,6 +286,102 @@ export class NetworkService {
       branchName: w.branchLegacy != null ? sede.get(w.branchLegacy) ?? null : null,
     }));
   }
+
+  /**
+   * Equipos disponibles por sede (2026-09-14, pedido del usuario).
+   *
+   * "La bodega de disponibles de cada sede" es una VISTA, no una bodega física: se
+   * decidió no crear bodegas nuevas ni mover equipo, porque una bodega de equipos no
+   * puede nacer sólo aquí (`EquipmentWarehouse.legacyId` es obligatorio, bajan de
+   * `almacen_equipos`) y mover miles de filas se habría ido de viaje al legacy. Así
+   * que cada sede suma TODAS sus bodegas (la de la sede y sus "cabecera").
+   *
+   * Disponible = sin cliente, sin reserva de una orden y en buen estado (Bueno o
+   * Disponible, sin importar mayúsculas), en una bodega CON sede — "Depurados" no
+   * tiene sede y queda fuera por construcción. Es el mismo criterio de estado con el
+   * que la reserva aparta equipo (`EquipoReservaService.elegirDeBodega`).
+   *
+   * No se esconden los que tienen su serial autenticado en una OLT (el inventario
+   * arrastra unidades "en bodega" que están dando servicio en una casa): se marcan
+   * con `enOlt`, para que quien lo mira sepa que esa caja no está en el estante.
+   *
+   * Una cajera sólo ve sus sedes, como en el resto de bodegas.
+   */
+  async equipmentAvailable(params: { branch?: string; search?: string; page?: number; pageSize?: number }, user?: AuthUser) {
+    const page = Math.max(1, Number(params.page) || 1);
+    const pageSize = Math.min(100, Math.max(1, Number(params.pageSize) || 25));
+    const sedesUsuario = user ? await sedesDeUsuario(this.prisma, user) : null;
+    const alcance: Prisma.IntNullableFilter = sedesUsuario === null ? { not: null } : { in: sedesUsuario };
+
+    const base: Prisma.EquipmentWhereInput = {
+      subscriberId: null,
+      reservedTicketId: null,
+      OR: NetworkService.ESTADOS_DISPONIBLE.map((s) => ({ status: { equals: s, mode: 'insensitive' as const } })),
+      warehouse: { branchLegacy: alcance },
+    };
+
+    const [porBodega, bodegas, sedes] = await Promise.all([
+      this.prisma.equipment.groupBy({ by: ['warehouseId'], where: base, _count: { _all: true } }),
+      this.prisma.equipmentWarehouse.findMany({ where: { branchLegacy: alcance }, orderBy: { name: 'asc' }, select: { id: true, name: true, branchLegacy: true } }),
+      this.prisma.branch.findMany({
+        where: sedesUsuario === null ? {} : { legacyId: { in: sedesUsuario } },
+        orderBy: { name: 'asc' }, select: { legacyId: true, name: true },
+      }),
+    ]);
+    const cuenta = new Map(porBodega.map((g) => [g.warehouseId, g._count._all]));
+    const resumen = sedes.map((s) => {
+      const suyas = bodegas
+        .filter((w) => w.branchLegacy === s.legacyId)
+        .map((w) => ({ id: w.id, name: w.name, total: cuenta.get(w.id) ?? 0 }));
+      return { legacyId: s.legacyId, name: s.name, total: suyas.reduce((t, w) => t + w.total, 0), bodegas: suyas };
+    });
+
+    // Sede pedida: si no es de las suyas se ignora el filtro, como en `equipment`.
+    const and: Prisma.EquipmentWhereInput[] = [base];
+    const sede = Number(params.branch);
+    if (params.branch && Number.isInteger(sede) && (sedesUsuario === null || sedesUsuario.includes(sede))) {
+      and.push({ warehouse: { branchLegacy: sede } });
+    }
+    if (params.search?.trim()) {
+      const s = params.search.trim();
+      const n = Number(s);
+      and.push({ OR: [{ mac: { contains: s, mode: 'insensitive' } }, { serial: { contains: s, mode: 'insensitive' } }, { brand: { contains: s, mode: 'insensitive' } }, ...(Number.isInteger(n) ? [{ code: n }] : [])] });
+    }
+    const where: Prisma.EquipmentWhereInput = { AND: and };
+
+    const [rows, total] = await Promise.all([
+      this.prisma.equipment.findMany({
+        where, orderBy: { code: 'desc' }, skip: (page - 1) * pageSize, take: pageSize,
+        select: { id: true, code: true, mac: true, serial: true, brand: true, status: true, arrival: true, returnedAt: true, warehouse: { select: { name: true, branchLegacy: true } } },
+      }),
+      this.prisma.equipment.count({ where }),
+    ]);
+
+    const limpio = (sn: string | null) => (sn ?? '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+    const seriales = [...new Set(rows.map((r) => limpio(r.serial)).filter((s) => s.length >= 8))];
+    const enOlt = new Set(
+      seriales.length
+        ? (await this.prisma.$queryRaw<{ sn: string }[]>`SELECT DISTINCT upper(sn) AS sn FROM "OltOnu" WHERE upper(sn) = ANY(${seriales})`).map((r) => r.sn)
+        : [],
+    );
+    const nombreSede = new Map(sedes.map((s) => [s.legacyId, s.name]));
+
+    return {
+      sedes: resumen,
+      total: resumen.reduce((t, s) => t + s.total, 0),
+      items: rows.map((e) => ({
+        id: e.id, code: e.code, mac: e.mac, serial: e.serial, brand: e.brand, status: e.status,
+        arrival: e.arrival, returnedAt: e.returnedAt,
+        warehouse: e.warehouse?.name ?? null,
+        branch: e.warehouse?.branchLegacy != null ? nombreSede.get(e.warehouse.branchLegacy) ?? null : null,
+        enOlt: enOlt.has(limpio(e.serial)),
+      })),
+      filtrados: total, page, pageSize, pages: Math.ceil(total / pageSize),
+    };
+  }
+
+  /** Estados que cuentan como "buen estado" para estar disponible. */
+  private static readonly ESTADOS_DISPONIBLE = ['Bueno', 'Disponible'];
 
   /** Pools de IP por Mikrotik (IpUserMk): pool local/remoto y perfiles. */
   async ipPools(params: { search?: string }) {

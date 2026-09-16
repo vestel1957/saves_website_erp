@@ -1,4 +1,4 @@
-import { etiquetaProrrateo, valorProrrateado, ventanaProrrateo } from './prorrateo-reconexion';
+import { cabeceraDeProrrateo, etiquetaProrrateo, valorProrrateado, ventanaProrrateo } from './prorrateo-reconexion';
 import {
   esReconexionConArrastre, RECONEXIONES_CON_ARRASTRE, serviciosDeReconexion, tipoConArrastre,
   DETALLES_POR_CLASE,
@@ -104,5 +104,48 @@ describe('tipos de orden con arrastre (el "2" del legacy)', () => {
     // Lo que no es una reconexión no prorratea nada.
     expect(serviciosDeReconexion('Corte Internet')).toEqual([]);
     expect(serviciosDeReconexion('Instalacion')).toEqual([]);
+  });
+});
+
+describe('cabeceraDeProrrateo', () => {
+  /** Lo que decía la factura de junio del abonado 56720: combo con la TV cortada. */
+  const previa = {
+    serviceCombo: '100 Megas F-26', serviceTv: 'Television26', puntos: 0,
+    estadoCombo: null, estadoTv: 'CORTADO',
+  };
+
+  it('no le borra la televisión al que sólo se le devolvió el internet', () => {
+    // El error del 08-09-2026: la factura del prorrateo nombraba sólo el internet y
+    // la ficha del cliente pasó a enseñar "servicio de internet" a secas.
+    const c = cabeceraDeProrrateo(previa, { INTERNET: '100 Megas F-26' });
+    expect(c.serviceTv).toBe('Television26');
+    expect(c.serviceCombo).toBe('100 Megas F-26');
+  });
+
+  it('el servicio que vuelve queda al aire y el que sigue cortado conserva su marca', () => {
+    const c = cabeceraDeProrrateo(previa, { INTERNET: '100 Megas F-26' });
+    expect(c.estadoCombo).toBeNull();
+    expect(c.estadoTv).toBe('CORTADO');
+  });
+
+  it('devuelta la TV, su corte se levanta en la factura donde se le cobra', () => {
+    const c = cabeceraDeProrrateo(previa, { INTERNET: '100 Megas F-26', TV: 'Television26' });
+    expect(c.estadoTv).toBeNull();
+    expect(c.estadoCombo).toBeNull();
+  });
+
+  it('respeta el "no" del legacy: al que no tiene TV no se la inventa', () => {
+    const c = cabeceraDeProrrateo(
+      { serviceCombo: '100 Megas F-26', serviceTv: 'no', puntos: null, estadoCombo: 'CORTADO', estadoTv: null },
+      { INTERNET: '100 Megas F-26' },
+    );
+    expect(c.serviceTv).toBe('no');
+  });
+
+  it('sin factura anterior nombra lo que se cobra y nada más', () => {
+    const c = cabeceraDeProrrateo(null, { TV: 'Television26', puntos: 2 });
+    expect(c).toEqual({
+      serviceCombo: null, serviceTv: 'Television26', puntos: 2, estadoCombo: null, estadoTv: null,
+    });
   });
 });

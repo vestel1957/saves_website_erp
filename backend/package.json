@@ -33,7 +33,11 @@
     "smoke:anticipo-sin-factura": "ts-node --transpile-only scripts/smoke-anticipo-sin-factura.ts",
     "smoke:mes-adelantado": "ts-node --transpile-only scripts/smoke-mes-adelantado.ts",
     "smoke:tercero-documento": "ts-node --transpile-only scripts/smoke-tercero-documento.ts",
+    "smoke:editar-orden": "ts-node --transpile-only scripts/smoke-editar-orden-superadmin.ts",
+    "smoke:playhub-filtros": "ts-node --transpile-only scripts/smoke-playhub-filtros.ts",
     "pagos:portal": "ts-node --transpile-only scripts/reconectar-pagos-portal.ts",
+    "secrets:conciliar": "ts-node --transpile-only scripts/conciliar-secrets.ts",
+    "red:acceso": "ts-node --transpile-only scripts/verificar-acceso-remoto.ts",
     "verificar:prorrateo": "ts-node --transpile-only scripts/verificar-prorrateo-reconexion.ts",
     "smoke:purchase-lines": "ts-node prisma/smoke-purchase-lines.ts",
     "smoke:reconciliation": "ts-node prisma/smoke-reconciliation.ts",
@@ -46,7 +50,11 @@
     "contrato:extraer": "ts-node --transpile-only scripts/extraer-contrato-http.ts --json",
     "contrato:verificar": "ts-node --transpile-only scripts/verificar-contrato-http.ts",
     "generar:contenedor": "ts-node --transpile-only scripts/generar-contenedor.ts --escribir",
-    "generar:routers": "ts-node --transpile-only scripts/generar-routers.ts --escribir"
+    "generar:routers": "ts-node --transpile-only scripts/generar-routers.ts --escribir",
+    "smoke:portal-pagos": "ts-node --transpile-only scripts/smoke-portal-pagos.ts",
+    "smoke:material-orden": "ts-node --transpile-only scripts/smoke-material-orden.ts",
+    "smoke:material-proyecto": "ts-node --transpile-only scripts/smoke-material-proyecto.ts",
+    "comparar:portal-pagos": "ts-node --transpile-only scripts/comparar-portal-pagos.ts"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"

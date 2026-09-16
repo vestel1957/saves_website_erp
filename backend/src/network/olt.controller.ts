@@ -162,6 +162,13 @@ export class OltController {
     return this.olt.history(oltId, Number(limit) || 100);
   }
   subscribers(q: string) { return this.olt.searchSubscribers(q); }
+  /**
+   * Señal óptica de la ONU del abonado: el bloque "Señal óptica" de la ficha del
+   * cliente. `refresh=1` salta la caché de 60 s (botón Refrescar).
+   */
+  opticaAbonado(subscriberId: string, refresh?: string) {
+    return this.olt.opticaDeAbonado(subscriberId, refresh === '1');
+  }
   link(onuId: string, dto: LinkDto, user: AuthUser) {
     return this.olt.linkCustomer(onuId, dto.subscriberId ?? null, user);
   }

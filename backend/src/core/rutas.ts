@@ -8,7 +8,7 @@
  * Varios routers comparten prefijo a propósito (`network`, `whatsapp`, `admin`):
  * Express los prueba en orden y cada uno responde a las suyas.
  *
- * Routers: 50
+ * Routers: 51
  */
 import { accountingRouter } from '../accounting/accounting.router';
 import { auditRouter } from '../common/audit/audit.router';
@@ -43,6 +43,7 @@ import { bundlesRouter } from '../plans/bundles.router';
 import { plansRouter } from '../plans/plans.router';
 import { playhubRouter } from '../playhub/playhub.router';
 import { portalRouter } from '../portal/portal.router';
+import { portalPagosRouter } from '../portal-pagos/portal-pagos.router';
 import { profileRouter } from '../auth/profile.router';
 import { signatureRouter } from '../common/signature/signature.router';
 import { projectsRouter } from '../projects/projects.router';
@@ -95,6 +96,7 @@ export const RUTAS = [
   { prefijo: 'plans', router: plansRouter },
   { prefijo: 'playhub', router: playhubRouter },
   { prefijo: 'portal', router: portalRouter },
+  { prefijo: 'portal-pagos', router: portalPagosRouter },
   { prefijo: 'profile', router: profileRouter },
   { prefijo: 'profile', router: signatureRouter },
   { prefijo: 'projects', router: projectsRouter },

@@ -98,7 +98,7 @@ Las seis áreas de Vestel y las pantallas que cada una trae por defecto.
 | Actividad en el sistema | `/reportes/actividad` | Sí | — | — | — | — | — |
 | **Facturación** | |  |  |  |  |  |  |
 | Administrar facturas | `/facturacion` | — | — | Sí | — | — | — |
-| Notas crédito/débito | `/facturacion/notas` | — | — | Sí | — | — | — |
+| Notas crédito/débito ¹ | `/facturacion/notas` | — | — | Sí | — | — | — |
 | Facturas electrónicas | `/facturacion/electronica` | — | — | Sí | — | — | — |
 | Cotizaciones | `/cotizaciones` | — | — | Sí | — | — | — |
 | **Caja / Cobranza** | |  |  |  |  |  |  |
@@ -191,12 +191,35 @@ todavía no protegen nada (el módulo correspondiente no existe o no los usa).
 | `network.olt.manage` | Administrar ONUs de la OLT (autorizar/reiniciar/eliminar) | Sí | Superadministrador, Técnicos, Sistemas |
 | `system.cron.run` | Ejecutar procesos programados a mano (facturación masiva) | Sí | Superadministrador, Contabilidad, Sistemas |
 | `purchases.approve` | Aprobar órdenes de compra | Sí | Superadministrador, Gerencia |
+| `billing.notes.emit` | Emitir notas crédito/débito (incluida la nota crédito DIAN) | Sí | **ninguno — es nominal, ver abajo** |
 | `inventory.admin` | Administración total de inventario | Sí | Superadministrador, Jefe de bodega |
 | `inventory.assets.assign` | Asignar material a funcionarios | — | Superadministrador, Jefe de bodega |
 | `hr.access.manage` | Dar acceso al sistema y asignar roles (RRHH) | — | Superadministrador, Director de Recursos Humanos |
 | `hr.employees.write` | Gestionar empleados y documentos (RRHH) | Sí | Superadministrador, Director de Recursos Humanos |
 | `accounting.manage` | Gestionar contabilidad | — | Superadministrador, Contador |
 | `dashboard.view` | Ver panel ejecutivo | — | Superadministrador, Gerencia, Administración, Contabilidad, Auditoría / Consulta y 3 más |
+
+### ¹ Emitir notas crédito/débito es NOMINAL (desde 2026-09-10)
+
+`billing.notes.emit` es el único permiso que **no se concede por rol y que el
+superusuario no hereda**. Una nota crédito le rebaja al abonado lo que debe sin que
+entre un peso —la débito se lo sube—, así que por decisión de negocio la firman las
+personas autorizadas una por una, y nadie más.
+
+- La **pantalla** `/facturacion/notas` la sigue viendo Contabilidad entera: consultar
+  qué se le rebajó a quién es media auditoría. Lo que desaparece sin el permiso es el
+  botón **Nueva nota** (y el de nota crédito DIAN en `/facturacion`).
+- Cubre las tres puertas: la nota suelta sobre una factura, el lote de depuración de
+  cartera y la **nota crédito electrónica ante la DIAN**. Consecuencia a tener
+  presente: una factura ya timbrada no se puede anular sin su nota crédito DIAN, así
+  que esa anulación pasa por una de las personas autorizadas.
+- **No** frena las notas que genera el sistema solo (descuento de pronto pago del
+  portal, reversa de un descuento vencido, aplicación de un anticipo): ésas no las
+  emite una persona.
+- Se administra con `backend/scripts/autorizar-emisor-notas.ts` (`--agregar` /
+  `--quitar` por correo); sin argumentos lista quién puede hoy. La pestaña de permisos
+  de la ficha del empleado sólo administra pantallas, así que este permiso no está ahí.
+- Si alguna vez se le da a un ROL, deja de ser nominal: el script avisa cuando pasa.
 
 **Áreas que el sistema verifica hoy del lado del servidor:** `administracion`, `caja`, `contabilidad`, `gerencia`, `sistemas`, `tecnicos`.
 
@@ -213,7 +236,6 @@ el catálogo, no existe la llave `screen.*` que permitiría concederla: esa opci
 | PRINCIPAL | Mapa | `/mapa` |
 | CLIENTES / CRM | Grupos de clientes | `/clientes/grupos` |
 | CLIENTES / CRM | Geo-cerca de cierres | `/soporte/geocerca` |
-| FACTURACIÓN | Ventas recurrentes | `/facturacion/recurrente` |
 | FACTURACIÓN | Promociones | `/configuracion/promociones` |
 | INVENTARIO | Categorías de material | `/inventario/categorias` |
 | INVENTARIO | Actas | `/inventario/actas` |
@@ -221,7 +243,6 @@ el catálogo, no existe la llave `screen.*` que permitiría concederla: esa opci
 | INVENTARIO | Categorías de compra | `/ordenes/categorias` |
 | CONFIGURACIÓN | Categorías de transacción | `/configuracion/categorias` |
 | CONFIGURACIÓN | Plantillas | `/configuracion/whatsapp/plantillas` |
-| CONFIGURACIÓN | Envío masivo | `/configuracion/whatsapp/masivo` |
 | DOCUMENTACIÓN | Manuales de uso | `/documentacion` |
 
 > Esta tabla es una **lista de pendientes**, no una descripción de cómo debería ser. Cada fila

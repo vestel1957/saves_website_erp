@@ -34,6 +34,9 @@
  *                        binario: se bajan del legacy vivo por HTTP, con tope por
  *                        pasada y reintento de lo que falle (ver `syncArchivos`).
  *   · cierres_caja NO se sincroniza (tabla muerta en el legacy; ver modelo CashClose).
+ *   · SubscriberService (el PLAN facturable) → no existe como tabla en el legacy: se
+ *                        siembra de la cabecera de la factura, y sólo para el abonado
+ *                        recién instalado (ver `syncServiciosDeAlta`).
  *
  * `estados` no guarda legacyId en PG: su marca inicial sale del MAX(id) de la copia
  * vestel_dev (la fuente exacta de lo ya importado).
@@ -64,6 +67,7 @@ try {
   }
 } catch {}
 
+const { createHash } = require('crypto');
 const { PrismaClient } = require('@prisma/client');
 // Pool corto: convive con el backend en el mismo Postgres (los slots libres son pocos)
 const dbUrl = (u => u ? u + (u.includes('?') ? '&' : '?') + 'connection_limit=5' : u)(process.env.DATABASE_URL);
@@ -106,6 +110,7 @@ const {
   norm, bool, dOnly, dTime, money, subStatus, ron, invStatus, svcStatus, eiType, payMethod,
   mapCustomer, mapInvoice, mapItem, mapTx, esPagoDeCompra, num, diffKeys,
 } = require('./lib/vestel-map');
+const { serviciosMovidos, mismaCabecera, armarCatalogo, cambiosDePlan } = require('./lib/plan-cabecera');
 
 async function inChunks(arr, size, fn) {
   for (let i = 0; i < arr.length; i += size) await fn(arr.slice(i, i + size));
@@ -118,6 +123,96 @@ async function createMany(model, rows, chunk = 2000) {
   await inChunks(rows, chunk, async (slice) => { n += (await prisma[model].createMany({ data: slice, skipDuplicates: true })).count; });
   return n;
 }
+/**
+ * Avisa al TÉCNICO cuando el legacy le pone un equipo a su nombre.
+ *
+ * Va aquí y no en el ERP porque aquí es donde ocurre: en nexus un equipo se le
+ * asigna a un CLIENTE o vive en una bodega de sede, nunca se le transfiere a una
+ * persona (ver `red/transferencias`). Quien pone una caja a nombre de un técnico es
+ * el sistema viejo, escribiendo su usuario en `equipos.asignado` — y hasta hoy el
+ * técnico se enteraba entrando a "Mis equipos" a mirar si le había caído algo.
+ *
+ * Lo pidió el usuario el 2026-09-04 junto con el resto de la limpieza de avisos:
+ * al técnico le compete "asignamiento de equipos, material, o si le agendaron
+ * órdenes"; los otros dos ya le llegaban y éste no.
+ *
+ * Cómo se distingue un técnico de un cliente en la misma columna: el cliente es un
+ * ENTERO (su id en el legacy) y el técnico es su usuario en texto. Es la misma
+ * convención que ya usan los 5.832 equipos asignados de la base, así que no hay que
+ * inventar nada — sólo mirar si el valor nuevo tiene letras.
+ *
+ * Sólo avisa de CAMBIOS (`eqCambios`), nunca de las altas: una carga inicial de
+ * inventario dejaría 5.000 avisos en la campanita de nadie. Y nunca lanza: un aviso
+ * no puede tumbar la pasada del sync.
+ */
+async function avisarEquiposDeTecnico(eqCambios) {
+  try {
+    const nuevos = new Map(); // usuario del legacy → equipos que le acaban de poner
+    for (const c of eqCambios) {
+      if (!c.keys.includes('assignedRaw')) continue;
+      const quien = String(c.mapped.assignedRaw ?? '').trim();
+      // Vacío = se lo quitaron; sólo dígitos = es de un cliente, no de una persona.
+      if (!quien || /^[0-9]+$/.test(quien)) continue;
+      const lista = nuevos.get(quien.toLowerCase()) ?? { ref: quien, equipos: [] };
+      lista.equipos.push({ code: c.mapped.code, serial: c.mapped.serial ?? null });
+      nuevos.set(quien.toLowerCase(), lista);
+    }
+    if (!nuevos.size) return 0;
+
+    // Del usuario del legacy a la CUENTA con la que entra: dos saltos por las mismas
+    // tres columnas sucias de siempre (`Staff` casa con `User` por correo o por
+    // nombre exacto). Es el mismo camino que `usuarioDelTecnico` en el ERP.
+    const fichas = await prisma.staff.findMany({
+      where: { banned: false, username: { in: [...nuevos.values()].map((v) => v.ref), mode: 'insensitive' } },
+      select: { username: true, name: true, email: true },
+    });
+    let avisados = 0;
+    for (const f of fichas) {
+      const lote = nuevos.get(String(f.username ?? '').toLowerCase());
+      if (!lote) continue;
+      const user = await prisma.user.findFirst({
+        where: {
+          isActive: true,
+          OR: [
+            ...(f.email ? [{ email: { equals: f.email, mode: 'insensitive' } }] : []),
+            { name: { equals: f.name, mode: 'insensitive' } },
+          ],
+        },
+        select: { id: true },
+      });
+      if (!user) continue; // técnico sin login: ve su inventario en el legacy
+      const codigos = lote.equipos.slice(0, 5)
+        .map((e) => (e.serial ? `${e.code} (S/N ${e.serial})` : String(e.code)));
+      const resto = lote.equipos.length > codigos.length ? ` y ${lote.equipos.length - codigos.length} más` : '';
+      // Un asunto por técnico y día: si le cargan seis cajas en una tarde es UN
+      // aviso que se actualiza, no seis renglones de lo mismo (misma regla que
+      // `groupKey` en `NotificationsService`).
+      const groupKey = `equipos:${user.id}:${new Date().toISOString().slice(0, 10)}`;
+      const datos = {
+        kind: 'inventario.equipo_asignado',
+        title: lote.equipos.length === 1
+          ? `Tienes el equipo ${lote.equipos[0].code} a tu nombre`
+          : `Tienes ${lote.equipos.length} equipos a tu nombre`,
+        body: `${codigos.join(', ')}${resto}. Míralos en Mis equipos.`,
+        link: '/red/equipos',
+        groupKey,
+      };
+      const vivo = await prisma.notification.findFirst({
+        where: { userId: user.id, groupKey, readAt: null },
+        select: { id: true },
+      });
+      if (vivo) await prisma.notification.update({ where: { id: vivo.id }, data: { ...datos, createdAt: new Date() } });
+      else await prisma.notification.create({ data: { userId: user.id, ...datos } });
+      avisados++;
+    }
+    if (avisados) log(`equipos: ${avisados} técnico(s) avisados de equipo nuevo a su nombre`);
+    return avisados;
+  } catch (e) {
+    log(`⚠️ no se pudo avisar de equipos de técnico: ${e.message}`);
+    return 0;
+  }
+}
+
 // IN (...) contra MySQL en tandas para no armar SQL kilométrico
 async function mysqlIn(my, sqlTpl, ids, chunk = 5000) {
   const out = [];
@@ -151,6 +246,7 @@ async function initWatermarks(st, my) {
   await init('recibos', 'paymentReceipt');
   await init('anulaciones', 'voiding');
   await init('addsvc', 'additionalService');
+  await init('eventos', 'calendarEvent');
   await init('einvoice', 'electronicInvoice');
   await init('tickets', 'ticket');
   await init('ticketsTh', 'ticketThread');
@@ -323,10 +419,64 @@ async function syncInvoices(my, st, sum, subMap, lapidas) {
   const nuevasRows = (await my.query('SELECT * FROM invoices WHERE id > ? ORDER BY id', [st.invoices]))[0]
     .filter((r) => !lapidas.tiene('subInvoice', r.id));
   // 2) modificadas por huella (los pagos NO tocan fecha_actualizacion)
-  const [fpMy] = await my.query('SELECT id,status,pamnt,total,ron,estado_tv,estado_combo,rec,promo,promo2 FROM invoices WHERE id <= ?', [st.invoices]);
+  const [fpMy] = await my.query('SELECT id,status,pamnt,total,ron,estado_tv,estado_combo,rec,promo,promo2,television,combo,puntos FROM invoices WHERE id <= ?', [st.invoices]);
   const fpPg = await prisma.subInvoice.findMany({ where: { legacyId: { not: null } },
-    select: { legacyId: true, status: true, paidAmount: true, total: true, ron: true, estadoTv: true, estadoCombo: true, rec: true, promo: true, promo2: true, editedAt: true, serviceAssignedAt: true, serviceStatusAt: true } });
+    select: { id: true, legacyId: true, status: true, paidAmount: true, total: true, ron: true, estadoTv: true, estadoCombo: true, rec: true, promo: true, promo2: true, editedAt: true, serviceAssignedAt: true, serviceStatusAt: true, serviceTv: true, serviceCombo: true, puntos: true } });
   const pgFp = new Map(fpPg.map((r) => [r.legacyId, r]));
+
+  /**
+   * EL PLAN DE LA CABECERA (`television`/`combo`/`puntos`).
+   *
+   * La huella no los miraba, y cerrar un 'Subir megas' o una 'Migración' allá reescribe
+   * `combo` sin tocar el total: el cambio no bajaba nunca (2026-09-14, "los ajustes de
+   * agosto no quedaron": 22 combos y 4 TV viejos aquí). Comparado sin caja ni espacios
+   * (`mismaCabecera`), que si no los 524 'SoloTelevision ' de aquí cambiarían en cada pasada.
+   * Con el servicio asignado AQUÍ (`serviceAssignedAt`) manda este lado: no es diferencia.
+   *
+   * `planMovido` anota qué servicios se movieron en qué factura: es la señal con la que
+   * `syncPlanDesdeCabecera` le cambia el plan a la ficha. Sólo "el legacy lo movió", nunca
+   * "la ficha no coincide": un cambio de plan hecho aquí desde la ficha no sella la
+   * cabecera y no puede deshacerse cada 15 minutos.
+   */
+  const planMovido = new Map();
+  const cabeceraAlla = (r) => ({ tv: r.television, combo: r.combo, puntos: r.puntos });
+  const cabeceraAqui = (pg) => ({ tv: pg.serviceTv, combo: pg.serviceCombo, puntos: pg.puntos });
+  const planDistinto = (r, pg) => {
+    if (pg.serviceAssignedAt || mismaCabecera(cabeceraAlla(r), cabeceraAqui(pg))) return false;
+    const kinds = serviciosMovidos(cabeceraAqui(pg), cabeceraAlla(r));
+    if (kinds.length) planMovido.set(r.id, kinds);
+    return true;
+  };
+
+  /**
+   * COBRADA AQUÍ Y TODAVÍA NO REFLEJADA ALLÁ.
+   *
+   * Un recaudo hecho en este sistema (ventanilla, cargue de pagos, portal de pagos en
+   * línea) deja la factura en PAID aquí y tarda hasta un ciclo en llegar al legacy: el
+   * writeback corre en :07/:22/:37/:52 y esta ida corre cada 15 minutos. Si la ida pasa
+   * primero, ve `paid` aquí y `due` allá, se cree que allá va la verdad y REVIERTE EL
+   * COBRO — el cliente que acaba de pagar vuelve a deber durante unos minutos. Ya pasó
+   * (cuatro pagos del 24-08 quedaron en DUE aquí con la plata cobrada) y se documentaba
+   * como gaje del Modo A.
+   *
+   * Deja de serlo ahora que el PORTAL DE PAGOS pregunta aquí: en esos minutos el portal
+   * le volvería a ofrecer al cliente la factura que acaba de pagar, con su botón de
+   * Wompi. Eso ya no es un desajuste de quince minutos, es un cobro doble.
+   *
+   * El candado es el mismo de siempre —lo que movió nexus no se pisa— y se apoya en un
+   * hecho comprobable, no en una marca nueva: hay un movimiento de ESTE lado
+   * (`legacyId: null`, vigente) contra esa factura y aquí figura MÁS pagado que allá.
+   * En cuanto el writeback iguale los dos lados, la condición deja de cumplirse sola.
+   */
+  const desde30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const pagosDeAqui = await prisma.transaction.findMany({
+    where: { legacyId: null, status: 'VIGENTE', type: 'INCOME', invoiceId: { not: null }, date: { gte: desde30d } },
+    select: { invoiceId: true },
+  });
+  const conPagoDeAqui = new Set(pagosDeAqui.map((t) => t.invoiceId));
+  /** ¿El cobro de esta factura lo tiene este sistema y el legacy todavía no? */
+  const cobroPendienteDeBajar = (r, pg) =>
+    !!pg && conPagoDeAqui.has(pg.id) && num(pg.paidAmount) - num(r.pamnt) >= 1;
   const cambiadas = [], editadas = [];
   /**
    * El dinero de la factura, comparado con la tolerancia del legacy.
@@ -350,6 +500,8 @@ async function syncInvoices(my, st, sum, subMap, lapidas) {
   for (const r of fpMy) {
     const pg = pgFp.get(r.id);
     if (!pg) continue; // huérfana histórica (sin cliente en el ETL): se ignora
+    // Antes de cualquier `||`: además de decir si difiere, anota qué servicios se movieron.
+    const plan = planDistinto(r, pg);
     // Factura EDITADA en este sistema: sus valores mandan. Si entrara por la vía
     // normal, la huella (el total nunca vuelve a coincidir) la marcaría cambiada en
     // cada pasada y le restauraría los montos y los renglones viejos del legacy.
@@ -359,15 +511,21 @@ async function syncInvoices(my, st, sum, subMap, lapidas) {
       if (!mismoDinero(r.pamnt, pg.paidAmount) || ron(r.ron) !== pg.ron
         || (!estadoEsDeAqui(pg) && (svcStatus(r.estado_tv) !== pg.estadoTv || svcStatus(r.estado_combo) !== pg.estadoCombo))
         || (norm(r.rec) || null) !== pg.rec || (r.promo ?? null) !== (pg.promo ?? null) || (r.promo2 ?? null) !== (pg.promo2 ?? null)
-        || (invStatus(r.status) === 'CANCELED' && pg.status !== 'CANCELED')) {
-        editadas.push({ r, pg });
+        || (invStatus(r.status) === 'CANCELED' && pg.status !== 'CANCELED')
+        || plan) {
+        editadas.push({ r, pg, plan });
       }
       continue;
     }
-    if (invStatus(r.status) !== pg.status || !mismoDinero(r.pamnt, pg.paidAmount) || !mismoDinero(r.total, pg.total)
+    // El cobro que aún no ha bajado no cuenta como diferencia: es lo de aquí yendo
+    // hacia allá, no lo de allá que hay que traer.
+    const nuestro = cobroPendienteDeBajar(r, pg);
+    if ((!nuestro && (invStatus(r.status) !== pg.status || !mismoDinero(r.pamnt, pg.paidAmount)))
+      || !mismoDinero(r.total, pg.total)
       || ron(r.ron) !== pg.ron
       || (!estadoEsDeAqui(pg) && (svcStatus(r.estado_tv) !== pg.estadoTv || svcStatus(r.estado_combo) !== pg.estadoCombo))
-      || (norm(r.rec) || null) !== pg.rec || (r.promo ?? null) !== (pg.promo ?? null) || (r.promo2 ?? null) !== (pg.promo2 ?? null)) {
+      || (norm(r.rec) || null) !== pg.rec || (r.promo ?? null) !== (pg.promo ?? null) || (r.promo2 ?? null) !== (pg.promo2 ?? null)
+      || plan) {
       cambiadas.push(r.id);
     }
   }
@@ -388,9 +546,15 @@ async function syncInvoices(my, st, sum, subMap, lapidas) {
     if (tidTomado.has(r.tid) && tidTomado.get(r.tid) !== r.id) { conflictos.push(r.tid); continue; }
     inserts.push(mapInvoice(r, sid));
   }
-  sum.invoices = { nuevas: inserts.length, actualizadas: cambiadasRows.length, editadasAqui: editadas.length, huerfanas, conflictosTid: conflictos };
+  sum.invoices = { nuevas: inserts.length, actualizadas: cambiadasRows.length, editadasAqui: editadas.length, huerfanas, conflictosTid: conflictos, planMovido: planMovido.size };
   if (conflictos.length) log(`⚠️ invoices: ${conflictos.length} tid en conflicto con facturas propias del stack nuevo: ${conflictos.slice(0, 10).join(',')}`);
-  if (DRY) return;
+  // Para `syncPlanDesdeCabecera`: las cabeceras que el legacy movió (con sus servicios) y
+  // las recurrentes que acaban de nacer allá (su plan se compara con la anterior).
+  const planes = {
+    movidas: planMovido,
+    nuevas: inserts.filter((i) => i.kind === 'RECURRENTE').map((i) => i.legacyId),
+  };
+  if (DRY) return planes;
   await createMany('subInvoice', inserts);
   await pooled(cambiadasRows, 5, async (r) => {
     const sid = subMap.get(r.csd);
@@ -416,17 +580,24 @@ async function syncInvoices(my, st, sum, subMap, lapidas) {
     const pgf = pgFp.get(r.id);
     if (pgf && mismoDinero(r.pamnt, pgf.paidAmount)) delete data.paidAmount;
     if (pgf && mismoDinero(r.total, pgf.total)) delete data.total;
+    // Y el cobro hecho aquí que todavía no ha llegado allá tampoco se pisa: la factura
+    // puede entrar por esta vía por CUALQUIER otra diferencia (un cambio de `ron`) y el
+    // `mapInvoice` completo le devolvería el `due` del legacy. Ver `cobroPendienteDeBajar`.
+    if (cobroPendienteDeBajar(r, pgf)) { delete data.paidAmount; delete data.status; }
     await prisma.subInvoice.update({ where: { legacyId: r.id }, data }).catch((e) => log(`⚠️ invoice ${r.id}: ${e.message}`));
   });
 
   // Facturas editadas aquí: actualización PARCIAL (sólo el cobro y el estado de
   // servicio que se movieron en el legacy). Los montos y los renglones son los de
   // este sistema y no se tocan.
-  await pooled(editadas, 5, async ({ r, pg }) => {
+  await pooled(editadas, 5, async ({ r, pg, plan }) => {
     // Lo de aquí manda cuando la única diferencia es la truncación del legacy.
     const paid = mismoDinero(r.pamnt, pg.paidAmount) ? num(pg.paidAmount) : num(r.pamnt);
     const total = num(pg.total);
     const data = {
+      // El plan de la cabecera no es ni monto ni renglón: editar la factura aquí no lo
+      // hace de este lado (eso lo sella `serviceAssignedAt`, y `plan` ya viene falso).
+      ...(plan ? { serviceTv: r.television, serviceCombo: r.combo, puntos: r.puntos } : {}),
       paidAmount: paid, ron: ron(r.ron),
       ...(estadoEsDeAqui(pg) ? {} : { estadoTv: svcStatus(r.estado_tv), estadoCombo: svcStatus(r.estado_combo) }),
       rec: norm(r.rec) || null, reconnectFlag: norm(r.rec) === '1',
@@ -477,6 +648,7 @@ async function syncInvoices(my, st, sum, subMap, lapidas) {
     }
     sum.items = { upserted, borrados: borrados.count };
   }
+  return planes;
 }
 
 async function syncTransactions(my, st, sum, subMap) {
@@ -833,6 +1005,319 @@ async function syncAddSvc(my, st, sum) {
   st.addsvc = maxId; await saveState(st);
 }
 
+/**
+ * LA AGENDA DEL LEGACY (`events`) — lo que se pinta en `/agenda`.
+ *
+ * No estaba en el sync: `CalendarEvent` lo sembró una sola vez el ETL
+ * (`etl-config-omni.js`) y ahí se quedó. Resultado, el 2026-09-10: 131.913 eventos
+ * aquí con el último del 1 de julio, contra 135.371 allá con el último del 8 de
+ * septiembre. La pantalla no estaba rota — abría en el mes corriente y el mes
+ * corriente estaba vacío, que es la peor forma de que falten datos: no falla nada.
+ *
+ * Va por marca de agua sobre `id`, como los servicios adicionales: trae los NUEVOS.
+ * Las ediciones de un evento ya traído (le cambian la hora allá) no vuelven a bajar;
+ * si algún día hace falta, es un `updated`/`diffKeys` como el de facturas.
+ *
+ * LA HORA SE LEE COMO COLOMBIANA, no como UTC. `dTime` —el ayudante que usa el resto
+ * del sync— le pega una 'Z' a la hora de pared del legacy; el ETL que sembró estos
+ * mismos eventos la rehizo a -05:00. Usar aquí `dTime` metería los eventos nuevos
+ * cinco horas por delante de los 131.913 que ya están: la misma cita de las 8:00 a
+ * dos alturas distintas de la rejilla según quién la trajo.
+ */
+const dtEvento = (v) => {
+  if (!v || String(v).startsWith('0000-00-00')) return null;
+  if (v instanceof Date) {
+    // mysql2 ya lo convirtió con la zona del proceso: se deshace leyendo la hora de
+    // pared que dejó en local y se rehace contra Colombia.
+    const z = (n) => String(n).padStart(2, '0');
+    return INSTANTE_CO(
+      `${v.getFullYear()}-${z(v.getMonth() + 1)}-${z(v.getDate())}`,
+      `${z(v.getHours())}:${z(v.getMinutes())}:${z(v.getSeconds())}`,
+    );
+  }
+  const t = norm(v).replace(' ', 'T');
+  return INSTANTE_CO(t.slice(0, 10), t.slice(11, 19));
+};
+
+async function syncEventos(my, st, sum) {
+  const [rows] = await my.query('SELECT * FROM events WHERE id > ? ORDER BY id', [st.eventos]);
+  let maxId = st.eventos;
+  const data = rows.map((e) => {
+    maxId = Math.max(maxId, e.id);
+    return {
+      legacyId: e.id, orderNo: e.idorden ?? null, taskId: e.id_tarea ?? null,
+      title: norm(e.title) || null, description: norm(e.description) || null,
+      color: norm(e.color) || null, start: dtEvento(e.start), end: dtEvento(e.end),
+      allDay: bool(e.allDay), rel: e.rel ?? null, rid: e.rid ?? null,
+      assignedBy: norm(e.asigno) || null,
+    };
+  });
+  sum.eventos = { nuevos: data.length };
+  if (DRY) return;
+  await createMany('calendarEvent', data, 3000);
+  st.eventos = maxId; await saveState(st);
+}
+
+/**
+ * Siembra `SubscriberService` (el plan facturable) de los abonados RECIÉN INSTALADOS.
+ *
+ * El legacy no guarda el plan en `customers`: lo lleva en la CABECERA de la factura
+ * (`invoices.combo` / `television`) y de ahí lo re-tarifa cada mes. Este sync nunca
+ * escribió `SubscriberService`, así que todo cliente nacido allá llegaba aquí sin
+ * plan. Al recién instalado tampoco lo salvaba el respaldo por facturas: su mes de
+ * instalación se emite en $0, o sea que no hay un solo renglón con precio del que
+ * deducirlo. Resultado: `NO_SERVICES` y la corrida del mes lo saltaba en silencio
+ * (2026-09-01: 29 instalaciones de agosto sin facturar).
+ *
+ * Alcance ESTRECHO a propósito — sólo se siembra a quien cumple las cuatro:
+ *   1. no tiene ninguna fila de servicio (fuera de PUNTOS),
+ *   2. está en un estado que paga o volverá a pagar (`ESTADOS_QUE_PAGAN`),
+ *   3. su última recurrente es de los últimos 3 meses,
+ *   4. no tiene NINGÚN renglón con precio en su histórico.
+ * La (4) es la que deja fuera a los ~500 del hueco de la migración: ésos sí tienen
+ * historia de precios, y ahí manda lo que el cliente PAGA (`plan-facturable.ts`),
+ * no la tarifa de catálogo. Sembrarles el catálogo les subiría la mensualidad sola.
+ * La (2) y la (3) dejan fuera 989 RETIRADO y demás cuentas muertas de 2020-2022 que
+ * también casan con la (1) y la (4): revivirles el plan sólo ensucia la ficha.
+ */
+/** Estados desde los que un abonado paga hoy o volverá a pagar. Fuera quedan las
+ *  bajas (RETIRADO/DEPURADO/INACTIVO/POR_RETIRAR), EVENTO y EXONERADO (no pagan
+ *  mensualidad: sembrarles una tarifa sería inventarles un cobro). */
+const ESTADOS_QUE_PAGAN = ['ACTIVO', 'COMPROMISO', 'CORTADO', 'SUSPENDIDO', 'CARTERA', 'INSTALAR', 'REPORTADO'];
+
+async function syncServiciosDeAlta(sum) {
+  // Ventana de 3 meses: la cuenta viva factura todos los meses. Sin esto entran ~100
+  // cuentas cuya última factura es de 2020 y que nadie ha tocado desde entonces.
+  const hoy = new Date();
+  const desde = new Date(Date.UTC(hoy.getUTCFullYear(), hoy.getUTCMonth() - 3, 1));
+  const filas = await prisma.$queryRaw`
+    WITH sin_plan AS (
+      SELECT s.id
+        FROM "Subscriber" s
+       WHERE s.status::text = ANY (${ESTADOS_QUE_PAGAN})
+         AND NOT EXISTS (SELECT 1 FROM "SubscriberService" ss
+                          WHERE ss."subscriberId" = s.id AND ss.kind <> 'PUNTOS')
+         AND EXISTS (SELECT 1 FROM "SubInvoice" i
+                      WHERE i."subscriberId" = s.id AND i.kind = 'RECURRENTE' AND i.status <> 'CANCELED'
+                        AND i."invoiceDate" >= ${desde})
+         AND NOT EXISTS (SELECT 1 FROM "SubInvoice" i JOIN "SubInvoiceItem" it ON it."invoiceId" = i.id
+                          WHERE i."subscriberId" = s.id AND it.price > 0
+                            AND EXISTS (SELECT 1 FROM "Plan" pl
+                                         WHERE lower(btrim(pl.name)) = lower(btrim(COALESCE(it."productName", it.description)))))
+    ),
+    ult AS (
+      SELECT DISTINCT ON (i."subscriberId")
+             i."subscriberId", i."serviceCombo" AS combo, i."serviceTv" AS tv
+        FROM "SubInvoice" i JOIN sin_plan p ON p.id = i."subscriberId"
+       WHERE i.kind = 'RECURRENTE' AND i.status <> 'CANCELED'
+       ORDER BY i."subscriberId", i."invoiceDate" DESC, i.tid DESC
+    ),
+    huecos AS (
+      SELECT "subscriberId", 'INTERNET' AS kind, btrim(combo) AS name FROM ult
+       WHERE combo IS NOT NULL AND lower(btrim(combo)) NOT IN ('', 'no')
+      UNION ALL
+      SELECT "subscriberId", 'TV', btrim(tv) FROM ult
+       WHERE tv IS NOT NULL AND lower(btrim(tv)) NOT IN ('', 'no')
+    ),
+    tarifado AS (
+      SELECT DISTINCT ON (h."subscriberId", h.kind)
+             h."subscriberId", h.kind, pl.id AS "planId", pl.name, pl.price, pl."taxRate", pl.megas
+        FROM huecos h
+        LEFT JOIN "Plan" pl ON lower(btrim(pl.name)) = lower(h.name)
+                           AND pl.kind::text = h.kind AND pl.price > 0
+       ORDER BY h."subscriberId", h.kind, pl.price DESC NULLS LAST
+    )
+    -- TODO o NADA: si una de las dos patas no está en el catálogo no se siembra
+    -- ninguna. Medio combo se factura callado y nadie lo revisa (el mismo daño que
+    -- vino a reparar completar-servicios-combo.js).
+    SELECT t.* FROM tarifado t
+     WHERE t.name IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM tarifado x
+                        WHERE x."subscriberId" = t."subscriberId" AND x.name IS NULL)`;
+
+  sum.serviciosDeAlta = { nuevos: filas.length, abonados: new Set(filas.map((f) => f.subscriberId)).size };
+  if (DRY || !filas.length) return;
+  await createMany('subscriberService', filas.map((f) => ({
+    subscriberId: f.subscriberId, kind: f.kind, planId: f.planId, planName: f.name,
+    price: f.price, taxRate: f.taxRate ?? 0, megas: f.megas ?? null, qty: 1, status: 'ACTIVO',
+  })));
+  log(`servicios de alta: +${filas.length} filas para ${sum.serviciosDeAlta.abonados} abonados nuevos`);
+}
+
+/**
+ * El PLAN que el legacy le cambió al abonado, llevado a su ficha (`SubscriberService`).
+ *
+ * Allá el plan se cambia en la cabecera de la última recurrente: lo hace el cierre de
+ * 'Subir megas'/'Bajar megas' (`Tickets.php`: `combo` de la factura de la orden), la
+ * 'Migración' y "ASIGNAR SERVICIO" al editar la factura; y la corrida del mes siguiente
+ * lo arrastra a la factura nueva. Aquí la corrida factura desde `SubscriberService`, que
+ * nadie tocaba: la ficha seguía en el plan viejo y el día que facture este sistema lo
+ * habría cobrado a la tarifa vieja (2026-09-14: 37 internet y 46 TV desfasados).
+ *
+ * Dos modos:
+ *   · Por EVENTO (la pasada normal): sólo abonados cuya cabecera acaba de mover el legacy
+ *     —la huella de `syncInvoices` la vio cambiar— o cuya recurrente NUEVA trae un plan
+ *     distinto de la anterior, y sólo en los servicios que se movieron. Nunca por "la
+ *     ficha no coincide": un cambio de plan hecho aquí desde la ficha no sella la cabecera,
+ *     y el legacy seguiría mandando la misma de siempre; eso no puede deshacerlo.
+ *   · `todos` (`--mode=planes`): la puesta al día de los desfases viejos. Compara la
+ *     cabecera vigente con la ficha en todos los abonados que pagan, y se salta la fila
+ *     tocada aquí después que la factura (`nexusMasReciente`, para revisarla a mano).
+ *
+ * Reglas comunes: sólo la cabecera que DICTA el plan (la última recurrente no anulada,
+ * nacida allá y sin servicio asignado aquí), tarifa del catálogo por nombre exacto como
+ * hace el legacy (`plan-cabecera.js`), y lo que no está en el catálogo se reporta sin
+ * tocar. No toca el router ni el `pppProfile`: el legacy ya movió el Mikrotik y el perfil
+ * baja por `customers`.
+ *
+ * Interruptor `LEGACY_PLAN_DESDE_CABECERA`: 'on' escribe; cualquier otro valor sólo informa.
+ */
+async function syncPlanDesdeCabecera(sum, planes, { todos = false } = {}) {
+  const vivo = process.env.LEGACY_PLAN_DESDE_CABECERA === 'on';
+  const res = { vivo, abonados: 0, cambiados: 0, creados: 0, quitados: 0, sinCatalogo: 0, nexusMasReciente: 0, detalle: [] };
+  sum.planDesdeLegacy = res;
+
+  // Por evento: de las facturas movidas o nuevas, a sus abonados.
+  let ids = null;
+  const movidas = planes?.movidas ?? new Map();
+  const nuevas = new Set(planes?.nuevas ?? []);
+  if (!todos) {
+    const legacyIds = [...movidas.keys(), ...nuevas];
+    if (!legacyIds.length) return res;
+    const facturas = [];
+    for (let i = 0; i < legacyIds.length; i += 2000) {
+      facturas.push(...await prisma.subInvoice.findMany({
+        where: { legacyId: { in: legacyIds.slice(i, i + 2000) } }, select: { subscriberId: true },
+      }));
+    }
+    ids = [...new Set(facturas.map((f) => f.subscriberId))];
+    if (!ids.length) return res;
+  }
+
+  const hoy = new Date();
+  const desde = new Date(Date.UTC(hoy.getUTCFullYear(), hoy.getUTCMonth() - 3, 1));
+  // La última recurrente, con la ventana de 3 meses DENTRO (la que dicta el plan tiene que
+  // caer en ella, y así no se ordena el histórico entero), y la anterior por abonado con
+  // LATERAL + LIMIT 1. La primera versión numeraba las 450k facturas y cruzaba el CTE
+  // consigo mismo sin índice: `--mode=planes` pasaba de seis minutos en archivos temporales.
+  const filas = await prisma.$queryRaw`
+    SELECT u."subscriberId", u."legacyId", u.tid, u.tv, u.combo, u."updatedAt", s.abonado,
+           COALESCE(p.hay, false) AS "hayPrevia", p.tv AS "tvPrevia", p.combo AS "comboPrevia"
+      FROM (
+        SELECT DISTINCT ON (i."subscriberId")
+               i."subscriberId", i."legacyId", i.tid, i."invoiceDate", i."serviceTv" AS tv, i."serviceCombo" AS combo,
+               i."serviceAssignedAt", i."updatedAt"
+          FROM "SubInvoice" i
+         WHERE i.kind = 'RECURRENTE' AND i.status <> 'CANCELED' AND i."invoiceDate" >= ${desde}
+           AND (${ids}::text[] IS NULL OR i."subscriberId" = ANY (${ids}::text[]))
+         ORDER BY i."subscriberId", i."invoiceDate" DESC, i.tid DESC
+      ) u
+      JOIN "Subscriber" s ON s.id = u."subscriberId"
+      LEFT JOIN LATERAL (
+        SELECT i2."serviceTv" AS tv, i2."serviceCombo" AS combo, true AS hay
+          FROM "SubInvoice" i2
+         WHERE i2."subscriberId" = u."subscriberId" AND i2.kind = 'RECURRENTE' AND i2.status <> 'CANCELED'
+           AND (i2."invoiceDate", i2.tid) < (u."invoiceDate", u.tid)
+         ORDER BY i2."invoiceDate" DESC, i2.tid DESC
+         LIMIT 1
+      ) p ON true
+     WHERE u."legacyId" IS NOT NULL AND u."serviceAssignedAt" IS NULL
+       AND s.status::text = ANY (${ESTADOS_QUE_PAGAN})`;
+  if (!filas.length) return res;
+
+  const catalogo = armarCatalogo(await prisma.plan.findMany({
+    select: { id: true, kind: true, name: true, price: true, taxRate: true, megas: true },
+  }));
+  const servicios = new Map();
+  const subIds = filas.map((f) => f.subscriberId);
+  for (let i = 0; i < subIds.length; i += 2000) {
+    for (const s of await prisma.subscriberService.findMany({
+      where: { subscriberId: { in: subIds.slice(i, i + 2000) } },
+      select: { id: true, subscriberId: true, kind: true, planName: true, updatedAt: true },
+    })) {
+      const arr = servicios.get(s.subscriberId) ?? [];
+      arr.push(s);
+      servicios.set(s.subscriberId, arr);
+    }
+  }
+
+  /**
+   * La puesta al día (`todos`) sólo cambia el internet con PRUEBA: una orden de megas o
+   * migración RESUELTA en los últimos 6 meses cuyo plan destino es el de la cabecera. La
+   * cabecera sola no basta: la dry-run del 14-09 enseñó cabeceras que no dicen lo que el
+   * legacy cobra (#504852: '300 Megas FS-26' en la cabecera, cobra '300Megas26F-S' a
+   * 75.000; el catálogo lo habría pasado a 147.000).
+   */
+  const letras = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const destinoDeOrden = new Map();
+  if (todos) {
+    const hace6m = new Date(Date.UTC(hoy.getUTCFullYear(), hoy.getUTCMonth() - 6, 1));
+    for (const t of await prisma.ticket.findMany({
+      where: {
+        subscriberId: { in: subIds }, status: 'RESUELTO', created: { gte: hace6m }, planToName: { not: null },
+        OR: [{ type: { contains: 'megas', mode: 'insensitive' } }, { type: { contains: 'migracion', mode: 'insensitive' } }],
+      },
+      orderBy: [{ created: 'asc' }, { code: 'asc' }],
+      select: { subscriberId: true, planToName: true },
+    })) destinoDeOrden.set(t.subscriberId, t.planToName); // manda la última
+  }
+
+  const aplicar = [];
+  for (const f of filas) {
+    let kinds;
+    if (todos) {
+      const destino = destinoDeOrden.get(f.subscriberId);
+      if (!destino || letras(destino) !== letras(f.combo)) continue;
+      kinds = ['INTERNET'];
+    } else if (movidas.has(f.legacyId)) kinds = movidas.get(f.legacyId);
+    // Recurrente nueva: sólo lo que cambió respecto de la anterior. Sin anterior es un
+    // alta, y de ésa se ocupa `syncServiciosDeAlta`.
+    else if (nuevas.has(f.legacyId) && f.hayPrevia) {
+      kinds = serviciosMovidos({ tv: f.tvPrevia, combo: f.comboPrevia }, { tv: f.tv, combo: f.combo });
+    } else continue;
+    if (!kinds.length) continue;
+
+    const suyos = servicios.get(f.subscriberId) ?? [];
+    const cambios = cambiosDePlan({ cabecera: { tv: f.tv, combo: f.combo }, servicios: suyos, catalogo, kinds });
+    if (!cambios.length) continue;
+    // Plan derivado de sus facturas: no hay ficha que cambiar (ver `cambiosDePlan`).
+    if (cambios[0].tipo === 'derivado') { res.derivados = (res.derivados ?? 0) + 1; continue; }
+    res.abonados++;
+    for (const c of cambios) {
+      const fila = { abonado: f.abonado, tid: f.tid, tipo: c.tipo, kind: c.kind, de: c.de ?? null, a: c.plan?.name ?? c.nombre ?? null };
+      const actual = c.id ? suyos.find((s) => s.id === c.id) : null;
+      if (todos && actual && actual.updatedAt > f.updatedAt) {
+        res.nexusMasReciente++;
+        res.detalle.push({ ...fila, tipo: 'nexusMasReciente' });
+        continue;
+      }
+      // Lo que no se aplica se cuenta y va al detalle, para revisarlo a mano.
+      if (c.tipo === 'sinCatalogo') res.sinCatalogo++;
+      else if (c.tipo === 'pataFaltante') res.pataFaltante = (res.pataFaltante ?? 0) + 1;
+      else aplicar.push({ ...c, subscriberId: f.subscriberId });
+      res.detalle.push(fila);
+    }
+  }
+  for (const c of aplicar) res[{ cambiar: 'cambiados', quitar: 'quitados' }[c.tipo]]++;
+  // En la línea del CronRun no cabe el detalle entero de una pasada grande.
+  if (!todos && res.detalle.length > 30) res.detalle = res.detalle.slice(0, 30);
+  if (DRY || !vivo || !aplicar.length) {
+    if (aplicar.length) log(`plan desde el legacy: ${aplicar.length} cambios ${DRY ? 'en seco' : 'RETENIDOS (LEGACY_PLAN_DESDE_CABECERA no está en on)'}`);
+    return res;
+  }
+
+  await pooled(aplicar, 5, async (c) => {
+    const p = c.plan;
+    const datos = { planId: p?.id, planName: p?.name, price: p?.price, taxRate: p?.taxRate ?? 0, megas: p?.megas ?? null, status: 'ACTIVO' };
+    const op = c.tipo === 'quitar' ? prisma.subscriberService.delete({ where: { id: c.id } })
+      : c.tipo === 'cambiar' ? prisma.subscriberService.update({ where: { id: c.id }, data: { ...datos, bundleId: null } })
+      : prisma.subscriberService.create({ data: { ...datos, subscriberId: c.subscriberId, kind: c.kind, qty: 1 } });
+    await op.catch((e) => log(`⚠️ plan desde el legacy ${c.subscriberId} ${c.kind}: ${e.message}`));
+  });
+  log(`plan desde el legacy: ${res.cambiados} cambiados, ${res.creados} creados, ${res.quitados} quitados en ${res.abonados} abonados`);
+  return res;
+}
+
 async function syncEInvoice(my, st, sum, subMap) {
   const [rows] = await my.query('SELECT * FROM facturacion_electronica_siigo WHERE id > ? ORDER BY id', [st.einvoice]);
   let maxId = st.einvoice;
@@ -969,6 +1454,272 @@ async function arrastreDe(cashAccountId, dia) {
 }
 
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+// ---------- empleados (fichas y logins) ----------
+/**
+ * El censo de personal, que hasta hoy era una FOTO.
+ *
+ * Las fichas (`Staff`) y los logins (`User`) se trajeron una sola vez, con
+ * `etl-rrhh-proyectos.js` + `etl-usuarios.js` el 2026-07-24, y ningún paso volvía a
+ * mirar `employee_profile`. Resultado: todo el que entró a nómina en el legacy
+ * después de esa fecha NO EXISTÍA aquí — sin ficha no se le puede agendar una orden,
+ * no sale en el desplegable de técnicos, no cuenta en rendimiento, y sus órdenes
+ * salen firmadas con el username crudo porque no cruza con nadie. Eran 3 técnicos
+ * cuando se detectó (2026-09-08): Diego Salamanca, Jesús Quenza y José Raúl García.
+ *
+ * Qué trae y qué NO:
+ *  · ALTAS: ficha completa + login con su MISMA clave del legacy (hash Aauth
+ *    `aauth:<md5(id)>:<pass>`, que `verifyPassword` acepta y re-hashea a scrypt en el
+ *    primer ingreso) y su rol RBAC por `roleid`. Igual que hizo el ETL.
+ *  · ACCESO de los que ya están: `banned`, `role`, `lastLogin` y `sedeAccede`. El
+ *    legacy sigue siendo el sistema de RRHH mientras convivan y aquí no hay writeback
+ *    de personal, así que manda él. Ojo: inhabilitar a alguien SOLO aquí se deshace en
+ *    la siguiente pasada — hay que hacerlo también allá.
+ *  · Lo demás de la ficha (teléfono, dirección, EPS, foto, firma, área) se toca sólo
+ *    al CREARLA. Son los campos que se corrigen a mano de este lado y el legacy los
+ *    tiene peor; pisarlos cada 15 minutos borraría el trabajo de RRHH.
+ *
+ * Las fichas sin `legacyId` (las de prueba, y quien se dé de alta sólo aquí) quedan
+ * fuera del paso: no tienen contraparte que mirar.
+ */
+const ROL_RBAC_POR_LEGACY = { 5: 'super-admin', 4: 'area-administracion', 3: 'area-caja', 2: 'area-tecnicos' };
+/** Campos de ACCESO: los únicos que el legacy sigue mandando sobre una ficha ya creada. */
+const CAMPOS_ACCESO = ['banned', 'role', 'lastLogin', 'sedeAccede'];
+
+/**
+ * `sede_accede` ('-2-,-3-') → [2,3]. '0' y '-0-' solos = TODAS ([]), y el 0 dentro de
+ * una lista se descarta: es lo que hace el legacy (Search.php quita los guiones antes
+ * de comparar). Copiado de `etl-usuarios.js` porque es la misma regla.
+ */
+/** `norm` devuelve '' para lo vacío; en una ficha eso es null, no una cadena en blanco. */
+const txt = (v) => norm(v) || null;
+
+/**
+ * 'YYYY-MM-DD HH:MM:SS' del legacy → el instante real. Va por `INSTANTE_CO` y no por
+ * `new Date(...)`: MySQL estampa hora de Colombia y el proceso corre en Berlín, así que
+ * la conversión directa adelantaría el último ingreso siete horas.
+ */
+function instanteLegacy(v) {
+  const t = norm(v);
+  if (!t || t.startsWith('0000-00-00')) return null;
+  const [fecha, hora] = t.split(/[ T]/);
+  return INSTANTE_CO(fecha, hora);
+}
+
+function parseSedesAccede(raw, sedesValidas) {
+  const limpio = (raw ?? '').replace(/-/g, '').trim();
+  if (!limpio || limpio === '0') return [];
+  const ids = [...new Set(limpio.split(',').map((x) => parseInt(x.trim(), 10)).filter((x) => !Number.isNaN(x)))];
+  return ids.filter((id) => sedesValidas.has(id)).sort((a, b) => a - b);
+}
+
+async function syncEmpleados(my, sum) {
+  const [rows] = await my.query(`
+    SELECT ep.*, au.email, au.roleid, au.banned, au.pass, au.last_login, au.sede_accede, a.tipo AS caja
+      FROM employee_profile ep
+      LEFT JOIN aauth_users au ON au.id = ep.id
+      LEFT JOIN asignaciones a ON a.colaborador = ep.id AND a.detalle = 'caja'
+  `);
+  const fichas = await prisma.staff.findMany({ where: { legacyId: { not: null } } });
+  const byLegacy = new Map(fichas.map((f) => [f.legacyId, f]));
+  const areas = new Map((await prisma.staffArea.findMany({ select: { id: true, legacyId: true } }))
+    .flatMap((a) => (a.legacyId != null ? [[a.legacyId, a.id]] : [])));
+
+  const nuevos = [], cambios = [];
+  for (const r of rows) {
+    const acceso = {
+      banned: r.banned == 1,
+      role: r.roleid ?? null,
+      lastLogin: instanteLegacy(r.last_login),
+      sedeAccede: r.sede_accede == null ? null : String(r.sede_accede),
+    };
+    const pg = byLegacy.get(r.id);
+    if (!pg) {
+      nuevos.push({
+        fila: r,
+        data: {
+          legacyId: r.id, name: txt(r.name) || txt(r.username) || `Empleado ${r.id}`,
+          docNumber: r.dto ? String(r.dto) : null, username: txt(r.username), email: txt(r.email),
+          entryDate: dOnly(r.ingreso), rh: txt(r.rh), eps: txt(r.eps), pension: txt(r.pensiones),
+          address: txt(r.address), city: txt(r.city), region: txt(r.region), country: txt(r.country),
+          areaId: areas.get(r.area) || null, areaLegacy: r.area ?? null,
+          phone: txt(r.phone), phoneAlt: txt(r.phonealt), picture: txt(r.picture), sign: txt(r.sign),
+          ...acceso,
+        },
+      });
+      continue;
+    }
+    const keys = CAMPOS_ACCESO.filter((k) => {
+      const a = acceso[k], b = pg[k];
+      if (a instanceof Date || b instanceof Date) return (a ? a.getTime() : null) !== (b ? b.getTime() : null);
+      return a !== b;
+    });
+    if (keys.length) cambios.push({ id: pg.id, nombre: pg.name, email: txt(r.email), keys, acceso });
+  }
+
+  const porCampo = {};
+  for (const c of cambios) for (const k of c.keys) porCampo[k] = (porCampo[k] || 0) + 1;
+  sum.empleados = { nuevos: nuevos.length, acceso: cambios.length, campos: porCampo };
+  if (DRY) {
+    for (const n of nuevos) log(`empleados: en plan → alta de ${n.data.name} (${n.data.username})`);
+    // También en seco: lo que informa son los almacenes que YA faltan, que es
+    // precisamente lo que se quiere ver antes de escribir nada.
+    await asegurarAlmacenesDeTecnico(sum);
+    return;
+  }
+
+  for (const n of nuevos) {
+    const ficha = await prisma.staff.create({ data: n.data });
+    log(`empleados: alta de ${n.data.name} (${n.data.username}, legacy ${n.data.legacyId})`);
+    await crearLoginDe(n.fila, n.data.name, sum);
+    await atribuirOrdenes(ficha, sum);
+  }
+  await pooled(cambios, 5, async (c) => {
+    const data = {};
+    for (const k of c.keys) data[k] = c.acceso[k];
+    await prisma.staff.update({ where: { id: c.id }, data });
+    // El acceso de la ficha y el del login son la misma cosa: al inhabilitar allá, aquí
+    // se cierra la puerta además de esconder la ficha (es lo que hace `setBanned`).
+    if (c.keys.includes('banned') && c.email) {
+      const u = await prisma.user.findUnique({ where: { email: c.email.toLowerCase() }, select: { id: true, isActive: true } });
+      if (u && u.isActive === c.acceso.banned) await prisma.user.update({ where: { id: u.id }, data: { isActive: !c.acceso.banned } });
+    }
+    if (c.keys.includes('banned')) log(`empleados: ${c.nombre} ${c.acceso.banned ? 'inhabilitado' : 'habilitado'} en el legacy`);
+  });
+  if (nuevos.length || cambios.length) log(`empleados: +${nuevos.length} altas, ~${cambios.length} cambios de acceso`);
+  await asegurarAlmacenesDeTecnico(sum);
+}
+
+/** El cargo de técnico es el 2 — fuente única en `src/staff/cargos-legacy.ts`. */
+const CARGO_TECNICO = 2;
+const refDeAlmacen = (v) => (v ?? '').trim().toLowerCase();
+
+/**
+ * El almacén de material del técnico, que nadie crea solo.
+ *
+ * La pantalla de traspaso "a técnico" no se arma con la lista de empleados sino con
+ * las BODEGAS que tienen `technicianRef` (así es como el legacy ata el material a una
+ * persona: `product_warehouse.id_tecnico`). O sea que un técnico sin almacén no existe
+ * para quien reparte material — no le sale a la cajera aunque su ficha esté perfecta.
+ * Y allá pasa lo mismo: `Tickets.php` busca `product_warehouse` por `id_tecnico` para
+ * descontar lo que gastó al cerrar la orden, y sin almacén no descuenta nada.
+ *
+ * Allá el almacén lo crea una persona a mano y con los técnicos nuevos no se hizo, así
+ * que aquí nace con la ficha. Se empuja al legacy en `writeback-legacy.js` (bloque de
+ * bodegas de técnico), que es quien le pone el `legacyId`: sin ese id la ida crearía
+ * un SEGUNDO almacén el día que alguien lo cree allá también.
+ *
+ * Sólo para el cargo 2 y sólo con `username`: `technicianRef` es texto y esa es la
+ * llave con la que casa. Se comprueba en cada pasada, no sólo al dar de alta, porque
+ * también arregla a los que ya estaban sin él.
+ */
+async function asegurarAlmacenesDeTecnico(sum) {
+  const [tecnicos, bodegas] = await Promise.all([
+    prisma.staff.findMany({ where: { banned: false, role: CARGO_TECNICO }, select: { id: true, name: true, username: true } }),
+    prisma.materialWarehouse.findMany({ select: { title: true, technicianRef: true } }),
+  ]);
+  const refs = new Set(bodegas.map((b) => refDeAlmacen(b.technicianRef)).filter(Boolean));
+  // Bodegas SIN dueño: el `id_tecnico` del legacy admite vacío, y hay almacenes
+  // creados a mano para una persona a los que nadie se lo puso.
+  const huerfanas = bodegas.filter((b) => !refDeAlmacen(b.technicianRef));
+  const faltan = tecnicos.filter((t) => t.username
+    && !refs.has(refDeAlmacen(t.username)) && !refs.has(refDeAlmacen(t.name)));
+  if (!faltan.length) return;
+  const dudosos = [];
+  for (const t of faltan) {
+    // Antes de crear, mirar si YA hay un almacén suyo esperando a que alguien lo
+    // enlace. Pasó con Diego Salamanca (2026-09-08): "Almacen Diego" llevaba desde
+    // julio con material y dos actas dentro, pero con el `id_tecnico` vacío, así que
+    // no casaba con nadie y aquí le nació un segundo almacén. Ante la duda NO se crea
+    // y se avisa: un almacén sin enlazar lo arregla una persona en un minuto, y un
+    // técnico con dos almacenes parte su material en dos sin que nadie se entere.
+    const candidata = huerfanas.find((b) => tituloApuntaA(b.title, t.name));
+    if (candidata) { dudosos.push({ tecnico: t.name, bodega: candidata.title }); continue; }
+    sum.empleados.almacenes = (sum.empleados.almacenes || 0) + 1;
+    if (DRY) { log(`empleados: en plan → almacén de material para ${t.name}`); continue; }
+    await prisma.materialWarehouse.create({
+      data: { title: `Almacén ${t.name.trim()}`, extra: 'Material y dotación', technicianRef: t.username },
+    });
+    log(`empleados: almacén de material creado para ${t.name} (${t.username})`);
+  }
+  if (dudosos.length) {
+    sum.empleados.almacenesDudosos = dudosos;
+    for (const d of dudosos) {
+      log(`empleados: ⚠️ ${d.tecnico} se queda sin almacén — "${d.bodega}" no tiene dueño y parece el suyo.`
+        + ' Enlázalo en Bodegas de material (o ponle el técnico allá) en vez de crear otro.');
+    }
+  }
+}
+
+/** Sin tildes y en minúsculas: los nombres del legacy vienen escritos de mil maneras. */
+const sinTildes = (v) => (v ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
+/**
+ * ¿El título de una bodega huérfana apunta a esta persona? Basta con que aparezca
+ * cualquiera de sus nombres o apellidos ("Almacen Diego" ← Diego Amando Salamanca
+ * Parra). Se piden 4 letras para que no case por un "de" o un "la", y se compara por
+ * palabras enteras para que "Almacen Luis" no se lleve a "Luisa".
+ */
+function tituloApuntaA(titulo, nombre) {
+  const palabras = new Set(sinTildes(titulo).split(/[^a-z0-9]+/).filter(Boolean));
+  return sinTildes(nombre).split(/[^a-z0-9]+/).filter((p) => p.length >= 4).some((p) => palabras.has(p));
+}
+
+/**
+ * Las órdenes que el técnico ya traía a su nombre.
+ *
+ * `Ticket.assignedStaffId` es DERIVADO de `Ticket.assigned` (texto libre del legacy) y
+ * sólo se resuelve al crear o al cambiar la asignación, así que las órdenes que bajaron
+ * ANTES de que existiera la ficha se quedaron sin atribuir para siempre: el técnico
+ * nuevo aparecía con cero trabajo en rendimiento y en su panel de jornada. Se cosen al
+ * darlo de alta, que es el único momento en que puede haber huérfanas suyas.
+ */
+async function atribuirOrdenes(ficha, sum) {
+  const claves = [ficha.username, ficha.name].filter(Boolean);
+  if (!claves.length) return;
+  const { count } = await prisma.ticket.updateMany({
+    where: { assignedStaffId: null, OR: claves.map((c) => ({ assigned: { equals: c, mode: 'insensitive' } })) },
+    data: { assignedStaffId: ficha.id },
+  });
+  if (count) {
+    log(`empleados: ${count} órdenes ya existentes atribuidas a ${ficha.name}`);
+    sum.empleados.ordenesAtribuidas = (sum.empleados.ordenesAtribuidas || 0) + count;
+  }
+}
+
+/**
+ * El login del empleado nuevo, con su misma clave del legacy.
+ *
+ * Nunca pisa una cuenta que ya exista (misma regla que `etl-usuarios.js`): si el
+ * correo ya está tomado se deja como está y se avisa — puede ser una cuenta creada
+ * aquí a mano, y sobrescribirle la clave o el rol sería peor que no crear nada.
+ */
+async function crearLoginDe(u, nombre, sum) {
+  const email = String(u.email ?? '').trim().toLowerCase();
+  if (!email || !u.pass) { log(`empleados: ${nombre} sin correo o sin clave en el legacy — queda sin login`); return; }
+  if (await prisma.user.findUnique({ where: { email }, select: { id: true } })) {
+    log(`empleados: ${email} ya tiene cuenta — no se toca`);
+    return;
+  }
+  const rolKey = ROL_RBAC_POR_LEGACY[u.roleid];
+  const rol = rolKey ? await prisma.role.findUnique({ where: { key: rolKey }, select: { id: true } }) : null;
+  const sedesValidas = new Set((await prisma.branch.findMany({ select: { legacyId: true } }))
+    .flatMap((b) => (b.legacyId != null ? [b.legacyId] : [])));
+  await prisma.user.create({
+    data: {
+      email, name: nombre,
+      // Hash Aauth del legacy: sha256(md5(id) + clave). `verifyPassword` lo acepta tal
+      // cual y `auth.service.login` lo re-hashea a scrypt en el primer ingreso.
+      passwordHash: `aauth:${createHash('md5').update(String(u.id)).digest('hex')}:${u.pass}`,
+      isActive: u.banned != 1,
+      sedesAccede: parseSedesAccede(u.sede_accede, sedesValidas),
+      cajaLegacyId: u.caja != null ? parseInt(u.caja, 10) || null : null,
+      ...(rol ? { roles: { create: [{ roleId: rol.id }] } } : {}),
+    },
+  });
+  log(`empleados: login creado para ${email}${rolKey ? ` (rol ${rolKey})` : ' SIN ROL'}`);
+  sum.empleados.logins = (sum.empleados.logins || 0) + 1;
+}
 
 // ---------- órdenes de servicio (tickets) ----------
 // El legacy llama `tickets` a las órdenes de trabajo. Este paso faltaba desde que
@@ -1116,6 +1867,10 @@ async function syncTickets(my, st, sum, subMap) {
   // 4) a dónde se muda el cliente en una orden de TRASLADO. Va también en seco: es
   // el paso que hay que poder mirar antes de soltarlo sobre 4.000 órdenes.
   await syncDestinoTraslados(my, st, sum);
+
+  // 5) y a cuántas megas pasa al cliente una orden de megas, que el legacy guarda en
+  // la misma cesta y en otra columna.
+  await syncPlanDeMegas(my, sum);
 }
 
 // ---------- destino de los traslados (tabla `temporales`) ----------
@@ -1233,6 +1988,102 @@ async function syncDestinoTraslados(my, st, sum) {
   });
   if (updates.length) log(`traslados: ${updates.length} órdenes con su dirección nueva`);
   st.temporales = maxId; await saveState(st);
+}
+
+// ---------- a cuántas megas pasa la orden (tabla `temporales`) ----------
+/**
+ * El PLAN DESTINO de un 'Subir megas'/'Bajar megas' abierto en el legacy.
+ *
+ * La otra mitad de la cesta de arriba: donde un traslado guarda la dirección nueva,
+ * un cambio de megas guarda en `temporales.internet` el NOMBRE del plan al que se
+ * pasa el cliente. Allá la orden tampoco lo dice en `tickets`, así que sus 2.8xx
+ * órdenes de megas llegaban aquí mudas y la ficha sacaba el aviso «orden de megas
+ * sin plan»: el técnico no sabía a qué velocidad dejar al cliente aunque el dato
+ * existiera desde el primer día (el plan iba escrito a mano en la observación, que
+ * nadie lee para eso).
+ *
+ * Se rellena `planToName` siempre y `planToId`/`planToMegas` cuando el nombre casa
+ * con un plan del catálogo (2.617 de 2.704, el resto son planes que ya no existen:
+ * de ésos se guarda el nombre tal cual y las megas que dice ese nombre — vale más
+ * "100 Megas F" que nada).
+ *
+ * Lo que NO hace, por lo mismo que el destino del traslado:
+ *  · **No le cambia el plan al cliente.** Allá el cambio se aplica al cerrar la
+ *    orden, y esa escritura ya baja por `customers`.
+ *  · **No sella `planAppliedAt`.** Esa marca es "este sistema le cambió el plan".
+ *  · **No pisa lo que ya diga la orden.** Si tiene plan, lo puso alguien de aquí.
+ *
+ * Sin marca de agua a propósito: son ~2.800 filas contando todo el histórico, la
+ * consulta ya sale filtrada por tipo de orden y así el paso se auto-corrige — una
+ * fila de `temporales` puede llegar antes que la orden a la que pertenece, y con
+ * cursor esa se perdería para siempre.
+ */
+async function syncPlanDeMegas(my, sum) {
+  const [rows] = await my.query(
+    `SELECT tm.id, tm.corden, tm.internet
+       FROM temporales tm
+       JOIN tickets t ON t.codigo = tm.corden
+      WHERE tm.corden > 0 AND LOWER(t.detalle) LIKE '%megas%'
+      ORDER BY tm.id`);
+  // Una orden puede tener más de una fila (se reabrió la solicitud allá): manda la
+  // última, que es la que el legacy va a aplicar al cerrarla.
+  const porCodigo = new Map();
+  for (const r of rows) {
+    const txt = norm(r.internet);
+    if (!txt || txt.toLowerCase() === 'no') continue;
+    porCodigo.set(Number(r.corden), txt);
+  }
+  sum.megasDestino = { filas: rows.length, conPlan: porCodigo.size, aplicados: 0, sinCatalogo: 0 };
+  if (!porCodigo.size) return;
+
+  // El catálogo, por nombre normalizado: el legacy escribe el mismo plan de tres
+  // maneras ('300Megas26F', '300 Megas F-26', '100Megas(F)') y lo único estable es
+  // la ristra de letras y números. Con dos que colapsen al mismo nombre manda el
+  // visible: es el que se le está vendiendo a alguien hoy.
+  const claveDe = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const planes = await prisma.plan.findMany({
+    where: { kind: 'INTERNET' },
+    select: { id: true, name: true, megas: true, active: true },
+  });
+  const catalogo = new Map();
+  for (const p of planes) {
+    const k = claveDe(p.name);
+    const previo = catalogo.get(k);
+    if (!previo || (p.active && !previo.active)) catalogo.set(k, p);
+  }
+
+  // Solo órdenes que vinieron del legacy y que todavía no dicen a cuántas megas van:
+  // una nacida aquí trae su plan puesto por quien la abrió, y el que se corrige desde
+  // «Corregir orden» no se puede volver a pisar cada 15 minutos.
+  const codigos = [...porCodigo.keys()];
+  const tickets = [];
+  for (let i = 0; i < codigos.length; i += 2000) {
+    tickets.push(...await prisma.ticket.findMany({
+      where: { code: { in: codigos.slice(i, i + 2000) }, legacyId: { not: null }, planToName: null, planToId: null },
+      select: { id: true, code: true },
+    }));
+  }
+
+  const updates = [];
+  for (const t of tickets) {
+    const nombre = porCodigo.get(t.code);
+    if (!nombre) continue;
+    const plan = catalogo.get(claveDe(nombre));
+    // Del plan retirado del catálogo se rescata el número que lleva el propio nombre:
+    // es lo que el técnico necesita leer para dejar la ONU a esa velocidad.
+    const megas = plan ? plan.megas : Number((/(\d+)\s*megas/i.exec(nombre) || [])[1]) || null;
+    if (!plan) sum.megasDestino.sinCatalogo++;
+    updates.push({ id: t.id, code: t.code, data: { planToId: plan?.id ?? null, planToName: plan?.name ?? nombre, planToMegas: megas } });
+  }
+
+  sum.megasDestino.aplicados = updates.length;
+  sum.megasDestino.ejemplo = updates[0] ? { orden: updates[0].code, plan: updates[0].data.planToName } : null;
+  if (DRY) return;
+  await pooled(updates, 5, async (u) => {
+    await prisma.ticket.update({ where: { id: u.id }, data: u.data })
+      .catch((e) => log(`⚠️ plan de megas ${u.id}: ${e.message}`));
+  });
+  if (updates.length) log(`megas: ${updates.length} órdenes con su plan destino`);
 }
 
 // ---------- observaciones y archivos del perfil del cliente ----------
@@ -1695,6 +2546,7 @@ async function syncInventario(my, st, sum, subMap, lapidas) {
         .catch((e) => log(`⚠️ equipo ${c.legacyId}: ${e.message}`));
     });
     if (eqNuevos.length || eqCambios.length) log(`equipos: +${eqNuevos.length} nuevos, ~${eqCambios.length} actualizados`);
+    res.equipos.avisados = await avisarEquiposDeTecnico(eqCambios);
   }
 
   // 3) purchase → SupplyOrder: altas + cambios, con blindaje. --------------------
@@ -1900,6 +2752,28 @@ async function main() {
     return;
   }
 
+  // Sólo el censo de personal. Sirve para la puesta al día de una vez (los 3 técnicos
+  // que el legacy contrató después del ETL) y para comprobarlo en seco sin arrastrar
+  // una pasada entera.
+  if (MODE === 'empleados') {
+    const sum = { ok: true, mode: MODE, dry: DRY };
+    await syncEmpleados(my, sum);
+    console.log(JSON.stringify(sum));
+    await my.end(); await prisma.$disconnect();
+    return;
+  }
+
+  // Sólo la puesta al día del plan: la ficha contra la cabecera vigente de TODOS los que
+  // pagan (ver `syncPlanDesdeCabecera`). Correrlo detrás de una pasada normal, que es la
+  // que baja las cabeceras que el legacy movió. Con --dry lista sin escribir.
+  if (MODE === 'planes') {
+    const sum = { ok: true, mode: MODE, dry: DRY };
+    await syncPlanDesdeCabecera(sum, null, { todos: true });
+    console.log(JSON.stringify(sum));
+    await my.end(); await prisma.$disconnect();
+    return;
+  }
+
   const st = await loadState();
   await initWatermarks(st, my);
   const sum = { ok: true, mode: MODE, dry: DRY, db: `${MYSQL.host}/${MYSQL.database}` };
@@ -1926,6 +2800,9 @@ async function main() {
     return;
   }
 
+  // Antes que nada el personal: `syncTickets` cruza `assigned` (un username) contra
+  // las fichas, así que la orden del técnico nuevo necesita su ficha ya creada.
+  await syncEmpleados(my, sum);
   await syncCustomers(my, sum);
   const subs = await prisma.subscriber.findMany({ where: { legacyId: { not: null } }, select: { id: true, legacyId: true } });
   const subMap = new Map(subs.map((r) => [r.legacyId, r.id]));
@@ -1934,7 +2811,7 @@ async function main() {
   if (lapidas.total) sum.lapidas = lapidas.total;
 
   await syncEstados(my, st, sum, subMap);
-  await syncInvoices(my, st, sum, subMap, lapidas);
+  const planes = await syncInvoices(my, st, sum, subMap, lapidas);
   await syncTransactions(my, st, sum, subMap);
   await refrescarTransacciones(my, sum);
   await syncComprobantes(my, st, sum);
@@ -1943,6 +2820,13 @@ async function main() {
   await syncBorradas(my, sum);
   await syncAperturas(my, sum);
   await syncAddSvc(my, st, sum);
+  await syncEventos(my, st, sum);
+  // Detrás de las facturas: el plan del cliente nuevo se lee de la cabecera de la
+  // recurrente que acaba de bajar, así que este paso necesita `syncInvoices` hecho.
+  await syncServiciosDeAlta(sum);
+  // Detrás del alta: ése siembra sólo a quien no tiene NINGUNA fila, y si este paso le
+  // creara antes una sola pata el alta ya no lo miraría y quedaría con medio combo.
+  await syncPlanDesdeCabecera(sum, planes);
   await syncEInvoice(my, st, sum, subMap);
   await syncTickets(my, st, sum, subMap);
   await syncObservaciones(my, st, sum, subMap);

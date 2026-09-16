@@ -348,6 +348,93 @@ export const esAgregarInternet = (tipo?: string | null): boolean =>
   normalizar(tipo ?? '') === normalizar(AGREGAR_INTERNET);
 
 /**
+ * LA REINSTALACIÓN: se vuelve a dejar funcionando lo que ya está puesto.
+ *
+ * Cae dentro del fragmento 'instalac' y por eso venía heredando, sin que nadie lo
+ * decidiera, todo lo que se hizo para la instalación nueva. El usuario lo separó
+ * el 2026-09-08: una reinstalación NO saca una caja de la bodega y NO lleva el
+ * bloque de autenticación de la ONU. El equipo ya está en casa del cliente y ya
+ * está dado de alta en la OLT; apartarle una unidad restaba stock para nada y
+ * mandaba al técnico a recoger un aparato que no iba a instalar, igual que pasaba
+ * con los traslados (ver `TIPOS_CON_RESERVA` en `equipo-reserva.service.ts`).
+ *
+ * Lo que SÍ sigue siendo: trabajo de campo (`esTrabajoDeCampo`) y trabajo de
+ * conexión (`esTrabajoDeConexion`, abajo) — al cerrarla el abonado no puede
+ * quedarse en 'INSTALAR', porque el trabajo se hizo y queda conectado.
+ *
+ * Se compara SIN TILDES porque en la base conviven 'Reinstalación' y
+ * 'Reinstalacion', y por fragmento como el resto del catálogo (`detalle` es
+ * `varchar(50)` allá y llega recortado y en cualquier caja).
+ */
+export function esReinstalacion(tipo?: string | null): boolean {
+  return normalizar(tipo ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .includes('reinstalac');
+}
+
+/**
+ * LOS CINCO TRABAJOS QUE DEJAN AL CLIENTE CONECTADO EN SITIO.
+ *
+ * Instalación —y reinstalación, que es el mismo trabajo—, traslado, migración,
+ * cambio de equipo y agregar internet (los que pidió el usuario el 2026-09-08).
+ * Se comparan por FRAGMENTO porque `tickets.detalle` del legacy es `varchar(50)`
+ * y viene escrito de varias formas ('Migracion', 'Migración', 'MIGRACION').
+ *
+ * Vive aquí, y no en cada módulo, porque de esta lista dependen dos cosas que
+ * tienen que decir lo mismo:
+ *   · desde estas órdenes SE PUEDE AUTENTICAR el equipo (`modoDeOrden`), con la
+ *     única excepción de la reinstalación (ver `esReinstalacion`, arriba);
+ *   · al cerrarlas ninguna puede dejar al abonado en 'INSTALAR' — el trabajo se
+ *     hizo, el cliente quedó conectado, y en 'INSTALAR' no se le factura. Es el
+ *     agujero que dejó a nueve abonados "por instalar" navegando (02→05-09-2026)
+ *     y a otros dos sin cobrar durante meses.
+ */
+export const FRAGMENTOS_TRABAJO_DE_CONEXION = ['instalac', 'traslado', 'migraci', 'cambio de equipo'];
+
+/** @see FRAGMENTOS_TRABAJO_DE_CONEXION — incluye 'AgregarInternet', que va pegado. */
+export function esTrabajoDeConexion(tipo?: string | null): boolean {
+  const t = normalizar(tipo ?? '');
+  return esAgregarInternet(t) || FRAGMENTOS_TRABAJO_DE_CONEXION.some((k) => t.includes(k));
+}
+
+/**
+ * ¿En esta orden el abonado EMPIEZA A NAVEGAR?
+ *
+ * Son la instalación y 'AgregarInternet'. La reinstalación calza con el fragmento
+ * pero nunca llega aquí: su bloque de ONU no existe (ver `esReinstalacion`), y
+ * quien pregunta esto es justo el alta en la Mikrotik que va antes de autenticar. Se separan del resto porque son las únicas en las que el
+ * cliente puede llegar SIN datos de integración con la Mikrotik: en un cambio de
+ * equipo, un traslado o un cambio de megas el `/ppp/secret` existe desde que se
+ * le vendió el servicio, aquí puede no existir todavía.
+ *
+ * Se compara por fragmento igual que `TIPOS_AUTENTICAR` (el `detalle` del legacy
+ * es `varchar(50)` y viene escrito de varias formas), y 'AgregarInternet' va
+ * aparte porque su nombre no casa con ninguna palabra: se escribe pegado.
+ */
+export function esAltaDeInternet(tipo?: string | null): boolean {
+  const t = normalizar(tipo ?? '');
+  return esAgregarInternet(t) || t.includes('instalac');
+}
+
+/**
+ * ¿La orden lleva un PLAN DE INTERNET destino (`Ticket.planToId`)?
+ *
+ * Son las de megas —que mueven al cliente de un plan a otro— y 'AgregarInternet',
+ * que le pone el primero. Se separó de `esCambioDeMegas` porque las dos cosas se
+ * confundieron y salió caro: 'AgregarInternet' no pedía plan al abrirse y su cierre
+ * no caía en ninguna rama de la cascada, así que el técnico cerraba la orden, se le
+ * cobraban los 30.000 del cargo y el cliente seguía con la televisión sola y sin
+ * `SubscriberService` de internet (orden #505503, 07-09-2026). Cuando una orden
+ * lleva plan, el cierre lo aplica; la diferencia entre "cambiar" y "agregar" es sólo
+ * qué se hace con la factura del mes (repreciar el renglón vs. cobrar los días que
+ * quedan) — ver `aplicarPlanDeInternetDeLaOrden`.
+ */
+export function ordenLlevaPlanInternet(tipo?: string | null): boolean {
+  return esCambioDeMegas(tipo) || esAgregarInternet(tipo);
+}
+
+/**
  * SUBIR / BAJAR MEGAS: el cliente se pasa a otro plan de internet.
  *
  * Son los dos detalles del catálogo que necesitan saber A CUÁNTO se pasa, y ese
@@ -407,3 +494,82 @@ export function esOrdenDeRetiroOSuspension(tipo?: string | null): boolean {
   const t = normalizar(tipo ?? '');
   return t.includes('retiro') || t.includes('suspen');
 }
+
+// ---------------------------------------------------------------------------
+// QUÉ SERVICIO NOMBRA LA ORDEN
+// ---------------------------------------------------------------------------
+
+/** El servicio que puede nombrar el detalle de una orden: TV, internet o los dos. */
+export const SERVICIOS_NOMBRADOS = ['TV', 'INTERNET', 'COMBO'] as const;
+export type ServicioNombrado = (typeof SERVICIOS_NOMBRADOS)[number];
+
+/** ¿Es uno de los tres? Sirve para no fiarse de lo que llega por la URL. */
+export const esServicioNombrado = (v: unknown): v is ServicioNombrado =>
+  typeof v === 'string' && (SERVICIOS_NOMBRADOS as readonly string[]).includes(v.trim().toUpperCase());
+
+/**
+ * Los fragmentos con los que el DETALLE nombra cada servicio.
+ *
+ * Se exportan porque el FILTRO de la lista tiene que preguntar lo mismo en SQL que
+ * lo que aquí se decide en memoria (ver `servicio-orden.filtro.ts`): si las dos
+ * reglas se escriben por separado, la fila que lleva cartel y la que el filtro dice
+ * enseñar acaban discrepando. `servicio-orden.spec.ts` compara las dos sobre el
+ * catálogo entero y sobre los 24 detalles que hay en la base.
+ *
+ * 'tv' va suelto por 'Revision tv e internet', el único detalle que llama así a la
+ * televisión. Es un fragmento corto, pero ninguna palabra del catálogo lo lleva
+ * dentro ('Activacion', 'Instalacion'…) y `serviciosDeOrden` lleva desde agosto
+ * decidiendo por fragmentos igual de cortos.
+ */
+export const FRAGMENTOS_SERVICIO: Record<ServicioNombrado, readonly string[]> = {
+  TV: ['televi', 'tv'],
+  INTERNET: ['internet'],
+  COMBO: ['combo'],
+};
+
+/**
+ * QUÉ SERVICIO DICE EL NOMBRE DE LA ORDEN, o `null` si no dice ninguno.
+ *
+ * Hermano de `serviciosDeOrden`, y la diferencia es que aquella, pensada para la
+ * cascada de cierre, contesta SIEMPRE —una 'Instalacion' devuelve los dos
+ * servicios, porque hay que ir a mirar qué tiene contratado el abonado— y ésta
+ * calla cuando el nombre no lo dice.
+ *
+ * PARA QUÉ SE USA HOY: es la PUERTA del cartel de servicio de las listas, no su
+ * contenido (`esOrdenDeServicio`). Lo que el cartel dice —Solo TV, Solo internet,
+ * Combo— sale de lo que el CLIENTE tiene contratado
+ * (`common/servicios-del-abonado.ts`); esto sólo decide en qué filas se pinta, que
+ * son las que van de un servicio. Un cartel colgado también de las instalaciones,
+ * las migraciones y los cambios de equipo sería ruido en toda la lista.
+ *
+ * Se probó al revés y no servía: hasta la mañana del 2026-09-10 el cartel ERA esto,
+ * y marcaba "TV" las 38 'Reconexion Television2' abiertas cuando 33 de esos
+ * clientes tienen también internet. Quien reparte el trabajo las leía como "de solo
+ * televisión" y tenía que abrirlas igual para desengañarse.
+ */
+export function servicioNombradoEnOrden(tipo?: string | null): ServicioNombrado | null {
+  const t = normalizar(tipo ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  if (!t) return null;
+  // 'Corte Combo' ya se nombra combo; y 'Revision tv e internet' nombra los dos
+  // servicios sin usar la palabra: para quien mira la lista es lo mismo.
+  if (t.includes('combo')) return 'COMBO';
+  const tv = FRAGMENTOS_SERVICIO.TV.some((f) => t.includes(f));
+  const internet = t.includes('internet');
+  if (tv && internet) return 'COMBO';
+  if (tv) return 'TV';
+  if (internet) return 'INTERNET';
+  return null;
+}
+
+/**
+ * ¿ESTA ORDEN VA DE UN SERVICIO? Es la puerta del cartel de las listas y del filtro
+ * que lo acompaña: sólo llevan cartel las órdenes que tocan la televisión o el
+ * internet y lo declaran en su detalle (reconexiones, cortes, suspensiones,
+ * revisiones, altas de servicio).
+ *
+ * El SQL equivalente es `ORDEN_DE_SERVICIO` en `servicio-orden.filtro.ts`, sobre
+ * los mismos `FRAGMENTOS_SERVICIO`. El spec comprueba que las dos coincidan.
+ */
+export const esOrdenDeServicio = (tipo?: string | null): boolean => servicioNombradoEnOrden(tipo) !== null;

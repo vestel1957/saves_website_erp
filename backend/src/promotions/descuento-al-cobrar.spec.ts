@@ -15,7 +15,7 @@ const HOY = new Date(Date.UTC(2026, 8, 3)); // 3 de septiembre de 2026
 const PROMO = {
   id: 'promo-1', name: '5% Pronto pago', active: true,
   discountFormat: '%', percentage: 5, flatAmount: 0,
-  invoiceScope: 'MENSUALIDAD_DEL_MES',
+  invoiceKinds: ['RECURRENTE'], onlyCurrentMonth: true,
   allSubscribers: false, subscriberStatuses: ['ACTIVO'], neighborhoodRefs: [],
   subscribers: [], plans: [], branches: [],
   startDate: new Date(Date.UTC(2026, 8, 1)), endDate: new Date(Date.UTC(2026, 8, 5)),
@@ -25,7 +25,7 @@ const PROMO = {
 const PROMO_CARTERA = {
   ...PROMO,
   id: 'promo-cartera', name: 'cartera 50%', percentage: 50,
-  invoiceScope: 'MENSUALIDADES_PENDIENTES', subscriberStatuses: ['CARTERA'],
+  onlyCurrentMonth: false, subscriberStatuses: ['CARTERA'],
   startDate: new Date(Date.UTC(2026, 8, 1)), endDate: new Date(Date.UTC(2026, 8, 30)),
 };
 
@@ -105,18 +105,36 @@ describe('descuento de promoción al cobrar', () => {
   /**
    * El cargo suelto NO entra en la campaña de cartera: un traslado facturado esta
    * misma mañana no es deuda vieja, y al 50% se cobraría a 15.000. Para perdonarlo
-   * también hay que pedir `CUALQUIER_PENDIENTE` a propósito.
+   * también hay que añadir `FIJA` a los tipos a propósito.
    */
-  it('la promo de cartera NO toca el cargo suelto; CUALQUIER_PENDIENTE sí', async () => {
+  it('la promo de cartera NO toca el cargo suelto; con FIJA sí', async () => {
     const traslado = factura({ id: 'f-tras', tid: 504969, kind: 'FIJA', subtotal: 30000, total: 30000 });
     const cartera = await descuentosDePromocionPendientes(
       prismaFake([PROMO_CARTERA], 'CARTERA'), 'sub-1', [traslado], HOY);
     expect(cartera.has('f-tras')).toBe(false);
 
     const todo = await descuentosDePromocionPendientes(
-      prismaFake([{ ...PROMO_CARTERA, invoiceScope: 'CUALQUIER_PENDIENTE' }], 'CARTERA'),
+      prismaFake([{ ...PROMO_CARTERA, invoiceKinds: ['RECURRENTE', 'FIJA'] }], 'CARTERA'),
       'sub-1', [traslado], HOY);
     expect(todo.get('f-tras')?.amount).toBe(15000);
+  });
+
+  /**
+   * La campaña que sólo rebaja CARGOS: "instalación a mitad de precio". Hasta el
+   * 2026-09-10 no se podía pedir —toda opción que alcanzara un cargo alcanzaba también
+   * la mensualidad—, así que rebajar la instalación obligaba a rebajar el servicio.
+   */
+  it('la promo de cargos rebaja el traslado y NO la mensualidad', async () => {
+    const soloCargos = {
+      ...PROMO, id: 'promo-inst', name: 'Instalación 50%', percentage: 50,
+      invoiceKinds: ['FIJA'],
+    };
+    const traslado = factura({ id: 'f-tras', tid: 504969, kind: 'FIJA', subtotal: 30000, total: 30000 });
+    const mensualidad = factura({ id: 'f-mes', tid: 500001 });
+    const r = await descuentosDePromocionPendientes(
+      prismaFake([soloCargos]), 'sub-1', [traslado, mensualidad], HOY);
+    expect(r.get('f-tras')?.amount).toBe(15000);
+    expect(r.has('f-mes')).toBe(false);
   });
 
   /**
@@ -132,5 +150,44 @@ describe('descuento de promoción al cobrar', () => {
     expect(r.get('f-ago')?.promotionName).toBe('cartera 50%');
     // La del mes la alcanzan las dos: 50% > 5%.
     expect(r.get('f-sep')?.amount).toBe(25000);
+  });
+
+  /**
+   * Facturas elegidas a mano (2026-09-10): el cliente debe cinco y se le rebajan tres.
+   * Con "también las atrasadas" era todo o nada. La lista manda sobre el tipo y la
+   * antigüedad: aquí la promo dice "sólo la mensualidad del mes" y aun así rebaja
+   * las dos atrasadas elegidas, y NO la del mes, que no se eligió.
+   */
+  it('con facturas elegidas rebaja exactamente esas', async () => {
+    const elegidas = { ...PROMO, percentage: 50, invoiceIds: ['f-jul', 'f-ago'] };
+    const julio = factura({ id: 'f-jul', tid: 499000, invoiceDate: new Date(Date.UTC(2026, 6, 1)) });
+    const agosto = factura({ id: 'f-ago', tid: 500000, invoiceDate: new Date(Date.UTC(2026, 7, 1)) });
+    const junio = factura({ id: 'f-jun', tid: 498000, invoiceDate: new Date(Date.UTC(2026, 5, 1)) });
+    const septiembre = factura({ id: 'f-sep', tid: 500001 });
+    const r = await descuentosDePromocionPendientes(
+      prismaFake([elegidas]), 'sub-1', [junio, julio, agosto, septiembre], HOY);
+    expect(r.get('f-jul')?.amount).toBe(25000);
+    expect(r.get('f-ago')?.amount).toBe(25000);
+    expect(r.has('f-jun')).toBe(false);
+    expect(r.has('f-sep')).toBe(false);
+  });
+
+  /**
+   * Caso real 52420: noviembre con 34.751 abonados y 3.574 de saldo. El 50 % del total
+   * (19.162) pasa del saldo: por la regla automática se salta, pero ELEGIDA a mano se
+   * le perdona el saldo entero — y ni un peso más (lo abonado no vuelve a favor).
+   */
+  it('elegida a mano, el descuento que pasa del saldo se topa en el saldo', async () => {
+    const nov = factura({
+      id: 'f-nov', tid: 408506, invoiceDate: new Date(Date.UTC(2025, 10, 1)),
+      subtotal: 38325, total: 38325, paidAmount: 34751,
+    });
+    const regla = { ...PROMO_CARTERA, subscriberStatuses: ['ACTIVO'] };
+    const porRegla = await descuentosDePromocionPendientes(prismaFake([regla]), 'sub-1', [nov], HOY);
+    expect(porRegla.has('f-nov')).toBe(false);
+
+    const aMano = await descuentosDePromocionPendientes(
+      prismaFake([{ ...regla, invoiceIds: ['f-nov'] }]), 'sub-1', [nov], HOY);
+    expect(aMano.get('f-nov')?.amount).toBe(3574);
   });
 });

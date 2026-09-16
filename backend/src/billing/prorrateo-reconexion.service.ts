@@ -5,8 +5,11 @@ import { PostingService } from '../accounting/posting.service';
 import { nextTid, TID_SEQ } from '../common/tid';
 import { num, round2 } from '../common/money';
 import { hoyEnColombia } from '../common/fecha-colombia';
-import { etiquetaProrrateo, valorProrrateado, ventanaProrrateo, VentanaProrrateo } from './prorrateo-reconexion';
+import {
+  cabeceraDeProrrateo, etiquetaProrrateo, valorProrrateado, ventanaProrrateo, VentanaProrrateo,
+} from './prorrateo-reconexion';
 import { planDeUltimaFactura } from './plan-facturable';
+import { CARGOS_POR_ORDEN } from './cargos-orden';
 
 /**
  * El cobro de los días que quedan del mes cuando a un abonado se le devuelve un
@@ -30,13 +33,21 @@ import { planDeUltimaFactura } from './plan-facturable';
  * misma pregunta que hace idempotente el cobro: si el renglón ya está, no se
  * vuelve a poner, cobre quien cobre y por donde cobre.
  *
+ * CUÁNDO NO COBRA, aunque haya días sin facturar: si lo ÚNICO que el abonado pagó
+ * hoy fue un cargo puntual —el traslado vale 30.000 y ya (`pagoDeHoyFueSoloUnCargo`,
+ * regla del usuario del 08-09-2026)—. Sólo se mira cuando el disparo es un pago
+ * (`porPago`), no cuando lo dispara el cierre de una orden.
+ *
  * DÓNDE CAE EL COBRO.
- *   · Factura del mes con saldo → se le añade el renglón (y queda `editedAt`, o el
- *     sync de ida la revertiría en la siguiente pasada de 15 minutos).
+ *   · Factura de la MENSUALIDAD del mes con saldo → se le añade el renglón (y queda
+ *     `editedAt`, o el sync de ida la revertiría en la siguiente pasada de 15
+ *     minutos).
  *   · Factura del mes ya pagada, timbrada ante la DIAN, o inexistente → factura
  *     NUEVA con vencimiento a fin de mes. El legacy sí revive una factura pagada;
  *     aquí no, porque eso deja mintiendo al recibo que el cliente acaba de recibir
  *     y rompe el documento electrónico.
+ *   · NUNCA en un cobro puntual de ventanilla (traslado, 'Agregar Internet',
+ *     afiliación): esa factura se emitió por un valor cerrado (`esCobroPuntual`).
  *
  * INTERRUPTOR. `billing.prorrateoReconexion` (o `BILLING_PRORRATEO_RECONEXION`):
  *   `on` cobra · `informe` calcula y lo deja escrito en el log sin tocar plata ·
@@ -88,6 +99,34 @@ const VACIO = (modo: ModoProrrateo, mensaje: string): ResultadoProrrateo => ({
 const clave = (s: string | null | undefined) => (s || '').trim().toLowerCase().replace(/\s+/g, ' ');
 
 /**
+ * ¿La cabecera de una factura NOMBRA ese servicio? ('no' y '-' son como el legacy
+ * escribe "este servicio no lo tiene"; vacío o NULL es "aquí no se dijo nada").
+ */
+const nombra = (s: string | null | undefined) => {
+  const t = clave(s);
+  return !!t && t !== 'no' && t !== '-';
+};
+
+/**
+ * Los renglones de CARGO DE ORDEN ('Agregar Internet', 'Traslado'): un pago único
+ * por un trabajo, no la mensualidad de un servicio.
+ *
+ * Sin esto, 'Agregar Internet' cae en el `/internet/` de `tipoPorNombre` y el
+ * prorrateo da el internet por facturado este mes — justo en la factura donde SIEMPRE
+ * está ese renglón, que es la del cliente al que se le acaba de montar el servicio.
+ * Resultado: al que estrena internet no se le cobraba ni un solo día del mes.
+ *
+ * Sale de `CARGOS_POR_ORDEN` y no de una lista escrita aquí para que el día que se
+ * añada un cargo nuevo no haya que acordarse de este fichero.
+ *
+ * A propósito NO entran aquí los otros renglones de una vez que hay en las facturas
+ * heredadas ('Reconexión Internet', 'Afiliación …', 'Instalacion'): son 11.000
+ * renglones del legacy y cambiar cómo se leen movería plata en el prorrateo de las
+ * reconexiones, que es un camino distinto del que arregla esto.
+ */
+const CARGOS_DE_ORDEN = new Set(CARGOS_POR_ORDEN.map((c) => clave(c.producto)));
+
+/**
  * Qué servicio es un renglón que NO está en el catálogo `Plan`.
  *
  * Hace falta porque las facturas viejas del legacy traen nombres que aquí no
@@ -96,6 +135,7 @@ const clave = (s: string | null | undefined) => (s || '').trim().toLowerCase().r
  * prorrateo lo volvería a cobrar.
  */
 function tipoPorNombre(nombre: string): string | null {
+  if (CARGOS_DE_ORDEN.has(nombre)) return null;
   if (/punto|deco/.test(nombre)) return 'PUNTOS';
   if (/televi|tv\b/.test(nombre)) return 'TV';
   if (/mega|internet|fibra|banda/.test(nombre)) return 'INTERNET';
@@ -160,6 +200,87 @@ export class ProrrateoReconexionService {
   }
 
   /**
+   * ¿Esta factura es un COBRO PUNTUAL de ventanilla y no la mensualidad del mes?
+   *
+   * Lo es la que no lleva ni un renglón de servicio: la del traslado (30.000 y ya),
+   * la de 'Agregar Internet', la de una afiliación o la venta de un equipo. A esas
+   * NO se les cuelga nada.
+   *
+   * Por qué importa: el destino del prorrateo era «la última factura del mes», y en
+   * un traslado esa es justo la de los 30.000 recién emitida. La factura 500029
+   * (28-08-2026) acabó con 'Traslado 30.000' + '10Megas(F) · reconexión 28–31 ago
+   * 5.161' = 35.161, y el cliente que iba a pagar un traslado se encontró otra cosa
+   * en la ventanilla. El cobro de los días no está mal —sigue haciéndose— pero va en
+   * la mensualidad del mes o en una factura propia, nunca dentro de un cargo que se
+   * emitió por un valor cerrado.
+   */
+  private esCobroPuntual(
+    items: Array<{ productName: string | null; description: string | null; price: Prisma.Decimal | number | null }>,
+    catalogo: Map<string, string>,
+  ): boolean {
+    return !items.some((it) => {
+      if (num(it.price) <= 0) return false;
+      const nombre = clave(it.productName || it.description);
+      return Boolean(catalogo.get(nombre) ?? tipoPorNombre(nombre));
+    });
+  }
+
+  /** `esCobroPuntual` para quien no tiene el catálogo a mano (scripts de reparación). */
+  async esCobroPuntualDeFactura(
+    items: Array<{ productName: string | null; description: string | null; price: Prisma.Decimal | number | null }>,
+  ): Promise<boolean> {
+    return this.esCobroPuntual(items, await this.catalogoDePlanes());
+  }
+
+  /**
+   * ¿Lo ÚNICO que pagó hoy el abonado fue un cobro puntual (el traslado, 'Agregar
+   * Internet', una afiliación)?
+   *
+   * Regla del usuario (08-09-2026): «las facturas de traslado solo deben cobrar los
+   * 30.000 y ya, no debe cobrar días ni nada de eso». El traslado se paga en
+   * ventanilla o por el portal, ese pago reconecta al que estaba cortado, y la
+   * reconexión traía detrás el cobro de los días que quedan del mes: el cliente
+   * pagaba 30.000 y le nacía un cobro que no pidió. Aquí se corta esa cadena.
+   *
+   * Se mira LO PAGADO y no de dónde viene la llamada porque el traslado entra por
+   * dos puertas —la cajera (`CobranzasService`) y el portal, cuyo pago aplica el
+   * legacy y aquí sólo se reconecta— y ninguna de las dos le puede contar a la otra
+   * lo que cobró. La transacción, en cambio, apunta a su factura en los dos casos.
+   *
+   * Si hoy también pagó su mensualidad, esto es `false` y los días se cobran como
+   * siempre: lo que exime es haber pagado SÓLO el cargo.
+   */
+  async pagoDeHoyFueSoloUnCargo(
+    subscriberId: string,
+    hoy: Date = hoyEnColombia(),
+  ): Promise<{ si: boolean; conceptos: string[] }> {
+    const manana = new Date(Date.UTC(hoy.getUTCFullYear(), hoy.getUTCMonth(), hoy.getUTCDate() + 1));
+    const pagos = await this.prisma.transaction.findMany({
+      where: {
+        subscriberId, status: 'VIGENTE', type: 'INCOME',
+        date: { gte: hoy, lt: manana },
+        invoiceId: { not: null },
+      },
+      select: {
+        invoice: {
+          select: { tid: true, items: { select: { productName: true, description: true, price: true } } },
+        },
+      },
+    });
+    const facturas = pagos.map((p) => p.invoice).filter((f): f is NonNullable<typeof f> => !!f);
+    // Sin pagos de hoy no hay nada que eximir: esto lo dispara también el cierre de
+    // una orden, donde el cobro de los días es justamente lo que toca.
+    if (!facturas.length) return { si: false, conceptos: [] };
+
+    const catalogo = await this.catalogoDePlanes();
+    if (!facturas.every((f) => this.esCobroPuntual(f.items, catalogo))) return { si: false, conceptos: [] };
+    const conceptos = [...new Set(
+      facturas.flatMap((f) => f.items.filter((it) => num(it.price) > 0).map((it) => (it.productName || it.description || '').trim())),
+    )].filter(Boolean);
+    return { si: true, conceptos };
+  }
+
+  /**
    * Qué se cobraría, sin escribir nada. Separado de `aplicar` porque el nombre de
    * la orden se decide con esto mismo y no tiene sentido calcularlo dos veces.
    */
@@ -203,15 +324,27 @@ export class ProrrateoReconexionService {
     const faltan = kinds.filter((k) => k !== 'PUNTOS' && !contratados.some((c) => c.kind === k));
     if (faltan.length) {
       const derivados = await planDeUltimaFactura(this.prisma, [subscriberId], mesIni).catch(() => new Map());
+      // UNO por servicio y nada más, la misma regla que la corrida mensual: el
+      // respaldo puede traer dos planes del mismo tipo (el catálogo tiene el mismo
+      // nombre repetido con distinta caja, o el abonado cambió de plan dentro de las
+      // dos últimas facturas) y aquí cada uno es un renglón que se cobra. Al abonado
+      // 4286 se le cobraron $73.600 de reconexión el 08-09-2026 — '10MegasF' y
+      // '10megasF', su internet dos veces — y encima no era lo que parecía: nadie le
+      // cobró la televisión, que es lo que la cajera creía estar viendo.
+      const yaTomado = new Set<string>();
       for (const d of derivados.get(subscriberId) ?? []) {
-        if (!faltan.includes(d.kind as any)) continue;
+        if (!faltan.includes(d.kind as any) || yaTomado.has(d.kind)) continue;
+        yaTomado.add(d.kind);
         contratados.push({ kind: d.kind, planName: d.planName, price: d.price, taxRate: d.taxRate, qty: 1 });
       }
     }
 
-    // Factura del mes en curso (la última que no esté anulada). De ella salen dos
-    // cosas: si el servicio ya está facturado, y dónde cae el cobro.
-    const factura = await this.prisma.subInvoice.findFirst({
+    // LAS facturas del mes en curso (todas las que no estén anuladas, de la última a
+    // la primera). De ellas salen dos cosas distintas, y por eso no basta con mirar
+    // una: si el servicio ya está facturado se responde con TODAS —un cargo de
+    // ventanilla emitido después de la mensualidad tapaba la mensualidad y el mes se
+    // cobraba dos veces— y el cobro cae sólo en la que se puede tocar.
+    const facturas = await this.prisma.subInvoice.findMany({
       where: { subscriberId, status: { not: 'CANCELED' }, invoiceDate: { gte: mesIni, lt: mesFin } },
       orderBy: [{ invoiceDate: 'desc' }, { tid: 'desc' }],
       select: {
@@ -232,13 +365,20 @@ export class ProrrateoReconexionService {
     const catalogo = await this.catalogoDePlanes();
     const yaFacturado = new Set<string>();
     const tiposFacturados = new Set<string>();
-    for (const it of factura?.items ?? []) {
-      if (num(it.price) <= 0) continue;
-      const nombre = clave(it.productName || it.description);
-      yaFacturado.add(nombre);
-      const tipo = catalogo.get(nombre) ?? tipoPorNombre(nombre);
-      if (tipo) tiposFacturados.add(tipo);
+    for (const f of facturas) {
+      for (const it of f.items) {
+        if (num(it.price) <= 0) continue;
+        const nombre = clave(it.productName || it.description);
+        yaFacturado.add(nombre);
+        const tipo = catalogo.get(nombre) ?? tipoPorNombre(nombre);
+        if (tipo) tiposFacturados.add(tipo);
+      }
     }
+
+    // DÓNDE cae el cobro: la factura de la MENSUALIDAD del mes, nunca un cobro
+    // puntual de ventanilla (ver `esCobroPuntual`). Si en el mes sólo hay cobros
+    // puntuales —o no hay nada—, los días se van a una factura nueva.
+    const factura = facturas.find((f) => !this.esCobroPuntual(f.items, catalogo));
 
     const lineas: LineaProrrateo[] = [];
     const sinPrecio: string[] = [];
@@ -285,8 +425,19 @@ export class ProrrateoReconexionService {
   async aplicar(
     subscriberId: string,
     servicios: ServicioProrrateable[],
-    opts: { ctx?: string; autor?: string } = {},
+    opts: { ctx?: string; autor?: string; porPago?: boolean } = {},
   ): Promise<ResultadoProrrateo> {
+    // Lo dispara un PAGO: si ese pago fue sólo el traslado (o cualquier otro cargo
+    // puntual), no se le cobra nada más — ver `pagoDeHoyFueSoloUnCargo`.
+    if (opts.porPago) {
+      const cargo = await this.pagoDeHoyFueSoloUnCargo(subscriberId).catch(() => ({ si: false, conceptos: [] as string[] }));
+      if (cargo.si) {
+        const que = cargo.conceptos.join(' + ') || 'un cargo puntual';
+        this.logger.log(`Prorrateo de reconexión del abonado ${subscriberId}: hoy sólo pagó ${que} — no se cobran días.`);
+        return VACIO('on', `Hoy sólo pagó ${que}: no se le cobran los días del mes.`);
+      }
+    }
+
     let plan: Awaited<ReturnType<ProrrateoReconexionService['evaluar']>>;
     try {
       plan = await this.evaluar(subscriberId, servicios);
@@ -324,6 +475,35 @@ export class ProrrateoReconexionService {
   // Escritura
   // ------------------------------------------------------------------
 
+  /** Qué servicios NOMBRA este cobro (y cuántos puntos), para la cabecera de la factura. */
+  private serviciosCobrados(r: ResultadoProrrateo) {
+    return {
+      INTERNET: r.lineas.find((l) => l.kind === 'INTERNET')?.concepto ?? null,
+      TV: r.lineas.find((l) => l.kind === 'TV')?.concepto ?? null,
+      puntos: r.lineas.filter((l) => l.kind === 'PUNTOS').reduce((n, l) => n + l.qty, 0) || null,
+    };
+  }
+
+  /**
+   * Lo que el abonado tiene contratado según su última factura recurrente, que es
+   * de donde lo lee todo el sistema (ficha, contrato, corrida). Sirve para que una
+   * factura de prorrateo no nazca contando media verdad.
+   */
+  private async snapshotDeServicios(subscriberId: string) {
+    const previa = await this.prisma.subInvoice.findFirst({
+      where: { subscriberId, kind: 'RECURRENTE', status: { not: 'CANCELED' } },
+      orderBy: [{ invoiceDate: 'desc' }, { tid: 'desc' }],
+      select: { serviceCombo: true, serviceTv: true, puntos: true, estadoCombo: true, estadoTv: true },
+    });
+    return {
+      serviceCombo: previa?.serviceCombo ?? null,
+      serviceTv: previa?.serviceTv ?? null,
+      puntos: previa?.puntos ?? null,
+      estadoCombo: previa?.estadoCombo ?? null,
+      estadoTv: previa?.estadoTv ?? null,
+    };
+  }
+
   /**
    * Mete los renglones en la factura del mes, si esa factura se puede tocar.
    *
@@ -341,14 +521,38 @@ export class ProrrateoReconexionService {
       where: { id: invoiceId },
       select: {
         id: true, tid: true, status: true, subtotal: true, tax: true, total: true, paidAmount: true,
+        serviceCombo: true, serviceTv: true, puntos: true,
+        items: { select: { productName: true, description: true, price: true } },
         electronicInvoices: { select: { type: true, dianNumber: true } },
       },
     });
     if (!inv) return null;
     if (inv.status === 'PAID' || num(inv.paidAmount) >= num(inv.total)) return null;
     if (inv.electronicInvoices.some((e) => e.type === 'FACTURADA' && e.dianNumber)) return null;
+    // El mismo freno que en `evaluar`, aquí porque esta es la puerta por la que se
+    // escribe: un cargo cerrado (traslado, agregar internet, afiliación) no engorda.
+    if (this.esCobroPuntual(inv.items, await this.catalogoDePlanes())) return null;
 
     const etiqueta = etiquetaProrrateo(v);
+    // La cabecera tiene que nombrar lo que la factura cobra. Esta factura puede ser
+    // otro prorrateo del mismo día —al que se le devolvió primero el internet y luego
+    // la TV— y entonces le falta el servicio que se añade ahora: la factura #505081
+    // del abonado 56720 quedó con un renglón 'Television26' y `serviceTv` en blanco, y
+    // la ficha del cliente dejó de enseñar su televisión. Sólo se rellena lo que se
+    // cobra; el otro servicio se queda como estaba.
+    const cobrado = this.serviciosCobrados(r);
+    const cabecera: {
+      serviceCombo?: string; serviceTv?: string; puntos?: number;
+      estadoCombo?: null; estadoTv?: null;
+    } = {};
+    if (cobrado.INTERNET && !nombra(inv.serviceCombo)) cabecera.serviceCombo = cobrado.INTERNET;
+    if (cobrado.TV && !nombra(inv.serviceTv)) cabecera.serviceTv = cobrado.TV;
+    if (cobrado.puntos && !inv.puntos) cabecera.puntos = cobrado.puntos;
+    // Y el servicio que vuelve queda al aire en la factura donde se le cobra (misma
+    // convención del legacy: NULL = al aire).
+    if (cobrado.INTERNET) cabecera.estadoCombo = null;
+    if (cobrado.TV) cabecera.estadoTv = null;
+
     await this.prisma.$transaction(async (tx) => {
       for (const l of r.lineas) {
         await tx.subInvoiceItem.create({
@@ -370,6 +574,7 @@ export class ProrrateoReconexionService {
           total,
           itemsCount: { increment: r.lineas.length },
           status: pagado <= 0 ? 'DUE' : pagado < total ? 'PARTIAL' : 'PAID',
+          ...cabecera,
           // Sin esto el sync de ida compara la huella (total/pamnt/status) contra el
           // MySQL vivo y a los 15 minutos devuelve el total viejo y borra el renglón:
           // el prorrateo se evaporaría solo. Con la marca, además, el writeback lo
@@ -412,9 +617,13 @@ export class ProrrateoReconexionService {
       select: { id: true, status: true, eInvoice: true },
     });
     const etiqueta = etiquetaProrrateo(v);
-    const internet = r.lineas.find((l) => l.kind === 'INTERNET')?.concepto ?? null;
-    const tv = r.lineas.find((l) => l.kind === 'TV')?.concepto ?? null;
-    const puntos = r.lineas.filter((l) => l.kind === 'PUNTOS').reduce((n, l) => n + l.qty, 0) || null;
+    // La cabecera es el snapshot de lo que el cliente TIENE, no de lo que este
+    // documento cobra: se arrastra la de su factura anterior y se pisa sólo el
+    // servicio que vuelve (ver `cabeceraDeProrrateo`).
+    const cabecera = cabeceraDeProrrateo(
+      await this.snapshotDeServicios(subscriberId),
+      this.serviciosCobrados(r),
+    );
 
     const inv = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const tid = await nextTid(tx, TID_SEQ.subInvoice);
@@ -427,7 +636,11 @@ export class ProrrateoReconexionService {
           // Es la mensualidad (el pedazo que queda), no un cargo suelto: el estado
           // que se estampa es ACTIVO porque el servicio acaba de volver.
           ron: 'ACTIVO',
-          serviceCombo: internet, serviceTv: tv, puntos,
+          serviceCombo: cabecera.serviceCombo,
+          serviceTv: cabecera.serviceTv,
+          puntos: cabecera.puntos,
+          estadoCombo: cabecera.estadoCombo as Prisma.SubInvoiceCreateInput['estadoCombo'],
+          estadoTv: cabecera.estadoTv as Prisma.SubInvoiceCreateInput['estadoTv'],
           eInvoiceFlag: sub?.eInvoice ? 'Crear Factura Electronica' : null,
           itemsCount: r.lineas.length,
           notes: `Reconexión: ${etiqueta}.${opts.ctx ? ` Origen: ${opts.ctx}.` : ''}`,

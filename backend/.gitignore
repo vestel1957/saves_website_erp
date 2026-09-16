@@ -4,3 +4,6 @@ dist
 *.log
 .whatsapp-auth/
 banco-chatbot.md
+
+# Informes de scripts (barridos de red, exportaciones puntuales)
+salida/

@@ -249,6 +249,10 @@ export default function FacturaDetallePage() {
             {/* `editedAt` también lo pone una nota crédito (para blindarla del sync),
                 así que el rótulo va por `editCount`, que sólo cuenta ediciones. */}
             {f.editCount > 0 && <Badge label={f.editCount > 1 ? `Editada ×${f.editCount}` : "Editada"} tone="warning" />}
+            {/* POR QUÉ existe esta factura. El tipo (fija/recurrente) no lo dice:
+                afiliación, traslado, reconexión y venta de equipo son las cuatro
+                «Fija». Las facturas viejas y las de la corrida no traen motivo. */}
+            {f.purposeLabel && <Badge label={f.purposeLabel} tone="info" />}
             <span className="text-[11px] text-text-tertiary">{INVOICE_KIND_LABEL[f.kind] ?? f.kind}</span>
           </>
         }
@@ -374,6 +378,44 @@ export default function FacturaDetallePage() {
         <div className="mb-3 flex items-start gap-2 rounded-xl border border-border-subtle bg-surface p-3 text-[12px] text-text-secondary shadow-sm">
           <Icon name="file-text" size={15} className="mt-0.5 shrink-0 text-brand" />
           <span><span className="font-semibold text-text-primary">Observación:</span> {f.notes}</span>
+        </div>
+      )}
+
+      {/* EL TRABAJO QUE LLEVA DETRÁS: la orden que nace cuando esta factura se pague
+          (hoy, el traslado). Mientras está sin pagar es un aviso —cobrarla no es el
+          final del asunto—; pagada, el enlace a la orden que se abrió. */}
+      {f.ordenAlPagar && (
+        <div
+          className={`mb-3 flex flex-wrap items-start gap-2 rounded-xl border p-3 text-[12px] shadow-sm ${
+            f.ordenAlPagar.abierta || f.status === "CANCELED"
+              ? "border-border-subtle bg-surface text-text-secondary"
+              : "border-warning-border bg-warning-soft text-text-secondary"
+          }`}
+        >
+          <Icon name={f.ordenAlPagar.abierta ? "clipboard-check" : "clipboard-list"} size={15} className="mt-0.5 shrink-0 text-brand" />
+          <span className="min-w-0">
+            <span className="font-semibold text-text-primary">
+              {f.ordenAlPagar.abierta
+                ? `Orden de ${(f.ordenAlPagar.motivo ?? f.ordenAlPagar.tipo).toLowerCase()} abierta:`
+                : f.status === "CANCELED"
+                  // Anulada: la orden ya no va a nacer (el disparo sólo mira las
+                  // facturas PAGADAS). Decirlo evita esperar una visita que no viene.
+                  ? `Factura anulada: no se abrirá la orden de ${(f.ordenAlPagar.motivo ?? f.ordenAlPagar.tipo).toLowerCase()}.`
+                  : `Al pagarse se abre la orden de ${(f.ordenAlPagar.motivo ?? f.ordenAlPagar.tipo).toLowerCase()}.`}
+            </span>{" "}
+            {f.ordenAlPagar.resumen}
+            {f.ordenAlPagar.abierta && f.ordenAlPagar.ticketId && (
+              <>
+                {" · "}
+                <Link href={`/soporte/${f.ordenAlPagar.ticketId}`} className="font-semibold text-brand hover:underline">
+                  Ver orden #{f.ordenAlPagar.ticketCode}
+                </Link>
+              </>
+            )}
+            {f.ordenAlPagar.error && !f.ordenAlPagar.abierta && (
+              <span className="block text-error-text">No se pudo abrir todavía: {f.ordenAlPagar.error}</span>
+            )}
+          </span>
         </div>
       )}
 

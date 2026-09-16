@@ -11,12 +11,10 @@ import { Pagination } from "@/components/ui/Pagination";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { LoadError } from "@/components/ui/LoadError";
 import { ListToolbar } from "@/components/ui/ListToolbar";
-import { Input } from "@/components/ui/Field";
 import { MultiSelect } from "@/components/ui/MultiSelect";
-import { Button } from "@/components/ui/Button";
-import { Modal } from "@/components/Modal";
 import { TecChip } from "@/components/soporte/TecChip";
 import { TarjetaOrden } from "@/components/soporte/TarjetaOrden";
+import { ChipServicio } from "@/components/soporte/ChipServicio";
 import { AvisoTurno } from "@/components/soporte/AvisoTurno";
 import { useAuth } from "@/context/AuthProvider";
 import { useRequest } from "@/lib/useRequest";
@@ -31,21 +29,6 @@ import {
 /** Un filtro múltiple tal como viaja en la URL: "PENDIENTE,REALIZANDO" → ["PENDIENTE","REALIZANDO"]. */
 const listaDeUrl = (crudo?: string): string[] => (crudo ? crudo.split(",").map((v) => v.trim()).filter(Boolean) : []);
 
-/** Atajos de periodo. `created` es una columna `date`, así que "hasta hoy" incluye hoy. */
-function atajosDeFecha(): { label: string; from: string; to: string }[] {
-  const iso = (d: Date) => d.toISOString().slice(0, 10);
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = now.getMonth();
-  const d = now.getDate();
-  return [
-    { label: "Hoy", from: iso(new Date(y, m, d)), to: iso(new Date(y, m, d)) },
-    { label: "7 días", from: iso(new Date(y, m, d - 6)), to: iso(new Date(y, m, d)) },
-    { label: "Este mes", from: iso(new Date(y, m, 1)), to: iso(new Date(y, m + 1, 0)) },
-    { label: "Este año", from: `${y}-01-01`, to: iso(new Date(y, m, d)) },
-  ];
-}
-
 /**
  * La bandeja del técnico: SUS órdenes y nada más.
  *
@@ -57,17 +40,23 @@ function atajosDeFecha(): { label: string; from: string; to: string }[] {
  * lista que no se puede filtrar y que dice cuántas son a tu nombre no deja lugar a
  * esa duda.
  *
- * Sin selectores a propósito: no hay filtro de técnico (sólo hay uno posible), ni de
- * sede (las suyas son de su sede), ni de fechas (se muestran TODAS las suyas, sin el
- * corte por año que sí tiene la vista general — a él no se le esconde su historia).
- * Ordenar por una columna sí se deja: ordenar no es filtrar, y "las más viejas
- * primero" es una pregunta legítima de quien va a ponerse al día.
+ * **Sólo el DÍA DE HOY (2026-09-10)**, a pedido del usuario: «mostrar únicamente las
+ * órdenes asignadas al técnico para el día actual; no deben visualizar usuarios
+ * generales ni el historial completo de órdenes realizadas». Antes traía las 966 de
+ * toda su vida. Qué es "hoy" lo decide el servidor y no esta pantalla
+ * (`whereTrabajoDelDia`): su agenda del día con lo atrasado, lo que tenga empezado,
+ * lo que se le asignó hoy sin agendar y lo que cerró hoy. Lo de días pasados sigue a
+ * un clic, en «Lo que ya hice» (`/mi-agenda/historial`), que va por día de trabajo.
  *
- * El BUSCADOR sí está (2026-08-03, a pedido): con cientos de órdenes a su nombre,
- * paginar hasta encontrar la del cliente que le acaba de llamar no es viable. Busca
- * DENTRO de las suyas y no puede sacarlo de ahí: el alcance va en `where.AND` del
+ * Sin selectores a propósito: no hay filtro de técnico (sólo hay uno posible), ni de
+ * sede (las suyas son de su sede), ni de fechas (la lista ES de hoy: un rango de
+ * fechas encima sólo podría dejarla vacía). Ordenar por una columna sí se deja:
+ * ordenar no es filtrar.
+ *
+ * El BUSCADOR se queda (2026-08-03, a pedido), aunque hoy busque sobre un día: busca
+ * DENTRO de lo suyo y no puede sacarlo de ahí — el alcance va en `where.AND` del
  * servicio y el texto sólo alimenta el `OR` de la búsqueda, así que teclear no
- * destapa órdenes de otro técnico.
+ * destapa órdenes de otro técnico ni de otro día.
  *
  * El alcance real no lo pone esta pantalla: lo impone `SupportService.tickets`
  * (`soloMisOrdenes`), que además cierra el detalle por URL. Aquí no se manda ningún
@@ -99,9 +88,6 @@ function MisOrdenesLista({ urlInicial, recordado }: { urlInicial: Record<string,
   const [status, setStatus] = useState<string[]>(listaDeUrl(urlInicial.estado));
   const [type, setType] = useState<string[]>(listaDeUrl(urlInicial.detalle));
   const [priority, setPriority] = useState<string[]>(listaDeUrl(urlInicial.prioridad));
-  const [from, setFrom] = useState(urlInicial.desde ?? "");
-  const [to, setTo] = useState(urlInicial.hasta ?? "");
-  const [showFechas, setShowFechas] = useState(false);
   const [page, setPage] = useState(Number(urlInicial.pag) > 1 ? Number(urlInicial.pag) : 1);
   const [pageSize, setPageSize] = useState(Number(urlInicial.tam) > 0 ? Number(urlInicial.tam) : 25);
   const orden = useOrden(ordenDeTexto(urlInicial.ord));
@@ -110,11 +96,10 @@ function MisOrdenesLista({ urlInicial, recordado }: { urlInicial: Record<string,
   // estable, cosa que un array —nuevo en cada render— no puede ser.
   const kStatus = status.join(","), kType = type.join(","), kPriority = priority.join(",");
 
-  const filtrosFecha = (from ? 1 : 0) + (to ? 1 : 0);
   // Cuenta filtros PUESTOS, no valores marcados: tres estados son un filtro de estado.
-  const filtrosActivos = filtrosFecha + (search ? 1 : 0) + [status, type, priority].filter((f) => f.length > 0).length;
+  const filtrosActivos = (search ? 1 : 0) + [status, type, priority].filter((f) => f.length > 0).length;
   const limpiarTodo = () => {
-    setSearch(""); setStatus([]); setType([]); setPriority([]); setFrom(""); setTo("");
+    setSearch(""); setStatus([]); setType([]); setPriority([]);
   };
 
   const { data, cargando, error, refrescar: load } = useRequest<Paged<TicketRow>>(
@@ -124,16 +109,13 @@ function MisOrdenesLista({ urlInicial, recordado }: { urlInicial: Record<string,
       if (kStatus) qs.set("status", kStatus);
       if (kType) qs.set("type", kType);
       if (kPriority) qs.set("priority", kPriority);
-      if (from) qs.set("from", from);
-      if (to) qs.set("to", to);
-      // Sin periodo elegido = TODO su histórico. La vista general recorta al año en
-      // curso porque barre 314.000 órdenes; las de una sola persona caben enteras.
-      // `all=1` y las fechas son excluyentes en el servidor (`scopeDate` ignora el
-      // rango si `all` viene puesto), así que sólo se manda cuando no hay fechas.
-      if (!from && !to) qs.set("all", "1");
+      // `all=1` desactiva el corte por año de la vista general (`scopeDate`). Aquí ya
+      // no amplía nada —el servidor acota al día— pero sin él la lista se quedaría
+      // además dentro del año en curso, que es una regla de otra pantalla.
+      qs.set("all", "1");
       return `/support/tickets?${qs.toString()}`;
     },
-    [page, pageSize, orden.clave, search, kStatus, kType, kPriority, from, to],
+    [page, pageSize, orden.clave, search, kStatus, kType, kPriority],
     // Al teclear se espera un poco y se cancela la petición en vuelo, para que una
     // respuesta lenta no pise a otra más nueva (mismo criterio que /soporte).
     { saltar: authLoading, debounceMs: search ? 350 : 0 },
@@ -148,13 +130,12 @@ function MisOrdenesLista({ urlInicial, recordado }: { urlInicial: Record<string,
   useEffect(() => {
     if (primerRender.current) { primerRender.current = false; return; }
     setPage(1);
-  }, [pageSize, orden.clave, search, kStatus, kType, kPriority, from, to]);
+  }, [pageSize, orden.clave, search, kStatus, kType, kPriority]);
 
   // Lo que está puesto en pantalla se refleja en la dirección (y queda guardado
   // para la próxima visita).
   useFiltrosEnUrl({
     q: search.trim(), estado: kStatus, detalle: kType, prioridad: kPriority,
-    desde: from, hasta: to,
     pag: page > 1 ? page : "", tam: pageSize !== 25 ? pageSize : "", ord: orden.clave,
   });
 
@@ -177,27 +158,38 @@ function MisOrdenesLista({ urlInicial, recordado }: { urlInicial: Record<string,
     <>
       {/* Sin botón de "Nueva orden" (2026-07-31): el técnico atiende órdenes, no las
           abre. El backend lo repite por su cuenta en `createTicket`. */}
-      <div className="mb-4">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-2">
         <PageHeading
           icon="clipboard-check"
-          title="Mis órdenes de trabajo"
-          subtitle="Todo lo que está a tu nombre. Lo que te toca ahora está en «Mi agenda»."
+          title="Mis órdenes de hoy"
+          subtitle="Tu trabajo del día. La que te toca ahora está en «Mi agenda»."
         />
+        {/* Lo de días pasados ya no está en esta lista (2026-09-10): tiene su
+            pantalla, y va por día de trabajo. Ver `app/mi-agenda/historial`. */}
+        <Link
+          href="/mi-agenda/historial"
+          className="tap inline-flex items-center gap-1.5 rounded-lg border border-border-default px-3 py-2 text-[12.5px] font-semibold text-text-secondary hover:bg-surface-2"
+        >
+          <Icon name="history" size={14} /> Lo que ya hice
+        </Link>
       </div>
 
-      {/* Con visita en turno, esta lista es historial y no un menú donde elegir. Se
-          avisa aquí arriba para que el bloqueo no se descubra chocando con él. */}
+      {/* Con una orden EMPEZADA encima no se puede empezar otra de esta lista (una
+          orden a la vez, 2026-09-10). Abrirlas y trabajarlas sí: lo único cerrado es
+          arrancar la segunda. Se avisa aquí arriba para que no se descubra al pulsar
+          "Empezar". */}
       <div className="mb-2.5">
         <AvisoTurno />
       </div>
 
-      {/* Cuántas son y cómo están. Es también la prueba de que la lista es suya: el
-          total de aquí y el de la tabla son el mismo número. */}
+      {/* Cuántas son y cómo están. Es también la prueba de que la lista es suya y de
+          hoy: el total de aquí y el de la tabla son el mismo número —los contadores
+          salen del mismo alcance que la lista (`SupportService.stats`)—. */}
       <div className="mb-2.5 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
         <Contador label="Por atender" value={abiertas} icon="hourglass" tono="bg-warning-soft text-warning-text" />
         <Contador label="En curso" value={st.REALIZANDO ?? 0} icon="loader" tono="bg-info-soft text-info-text" />
-        <Contador label="Resueltas" value={st.RESUELTO ?? 0} icon="check" tono="bg-success-soft text-success-text" />
-        <Contador label="A tu nombre (total)" value={stats?.total ?? 0} icon="clipboard-list" tono="bg-surface-2 text-text-secondary" />
+        <Contador label="Cerradas hoy" value={st.RESUELTO ?? 0} icon="check" tono="bg-success-soft text-success-text" />
+        <Contador label="Tu día (total)" value={stats?.total ?? 0} icon="clipboard-list" tono="bg-surface-2 text-text-secondary" />
       </div>
 
       {/* Buscar y filtrar entre las SUYAS. Ni el texto ni los filtros amplían el
@@ -207,7 +199,7 @@ function MisOrdenesLista({ urlInicial, recordado }: { urlInicial: Record<string,
       <ListToolbar
         search={search}
         onSearch={setSearch}
-        searchPlaceholder="Buscar en tus órdenes: n° de orden, cliente, nº de abonado o asunto…"
+        searchPlaceholder="Buscar en tus órdenes de hoy: n° de orden, cliente, nº de abonado o asunto…"
       >
         <MultiSelect
           label="Estado" todos="Todos los estados" value={status} onChange={setStatus}
@@ -221,12 +213,6 @@ function MisOrdenesLista({ urlInicial, recordado }: { urlInicial: Record<string,
           label="Detalles" todos="Todos los detalles" value={type} onChange={setType} width={280}
           options={TICKET_TYPES.map((t) => ({ value: t, label: t }))}
         />
-        <button
-          onClick={() => setShowFechas(true)}
-          className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-[12px] font-semibold transition-colors ${filtrosFecha > 0 ? "border-brand bg-brand-soft text-brand" : "border-border-default bg-surface text-text-secondary hover:bg-surface-2"}`}
-        >
-          <Icon name="calendar" size={14} /> Fechas{filtrosFecha > 0 ? ` (${filtrosFecha})` : ""}
-        </button>
         {filtrosActivos > 0 && (
           <button
             onClick={limpiarTodo}
@@ -237,46 +223,13 @@ function MisOrdenesLista({ urlInicial, recordado }: { urlInicial: Record<string,
         )}
       </ListToolbar>
 
-      {/* Periodo aparte, en un diálogo: en el móvil del técnico dos campos de fecha
-          más en la barra la parten en cuatro renglones. Sin fechas = todo su
-          histórico, así que aquí no hace falta el interruptor de "histórico
-          completo" que sí tiene la vista general. */}
-      <Modal open={showFechas} onClose={() => setShowFechas(false)} title="Filtrar por fecha" maxWidth="max-w-lg">
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[12px] font-medium text-text-tertiary">Periodo:</span>
-            <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="w-auto" />
-            <span className="text-text-tertiary">→</span>
-            <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="w-auto" />
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {atajosDeFecha().map((p) => (
-              <button
-                key={p.label}
-                onClick={() => { setFrom(p.from); setTo(p.to); }}
-                className="rounded-lg border border-border-subtle bg-surface px-2.5 py-1.5 text-[12px] font-medium text-text-secondary hover:bg-surface-2"
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
-          <p className="text-[12px] text-text-tertiary">Sin fechas se muestran todas tus órdenes, desde la primera.</p>
-          <div className="flex justify-end gap-2 pt-1">
-            {filtrosFecha > 0 && (
-              <Button variant="ghost" size="sm" onClick={() => { setFrom(""); setTo(""); }}>Quitar fechas</Button>
-            )}
-            <Button variant="primary" size="sm" onClick={() => setShowFechas(false)}>Aplicar</Button>
-          </div>
-        </div>
-      </Modal>
-
       {/* Al entrar por el menú los filtros vuelven puestos: hay que decirlo, o una
           lista corta parece un sistema roto y no una lista filtrada. */}
       {recordado && filtrosActivos > 0 && (
         <p className="mb-2 flex flex-wrap items-center gap-1.5 text-[12px] text-text-tertiary">
           <Icon name="history" size={13} />
           Se aplicaron los filtros de tu última visita.
-          <button onClick={limpiarTodo} className="font-semibold text-brand hover:underline">Ver todas tus órdenes</button>
+          <button onClick={limpiarTodo} className="font-semibold text-brand hover:underline">Ver todo tu día</button>
         </p>
       )}
 
@@ -297,8 +250,8 @@ function MisOrdenesLista({ urlInicial, recordado }: { urlInicial: Record<string,
           <DataTable
             rows={data?.items ?? []}
             empty={filtrosActivos > 0
-              ? "Ninguna de tus órdenes coincide con esos filtros."
-              : "No tienes órdenes de trabajo asignadas."}
+              ? "Ninguna de tus órdenes de hoy coincide con esos filtros."
+              : "Hoy no tienes órdenes asignadas. Lo de días pasados está en «Lo que ya hice»."}
             rowHref={(r) => `/soporte/${r.id}`}
             sort={orden.sort}
             onSort={orden.onSort}
@@ -312,7 +265,10 @@ function MisOrdenesLista({ urlInicial, recordado }: { urlInicial: Record<string,
               { key: "orden", header: "Orden", sortable: true, render: (r) => (
                 <div className="flex min-w-0 flex-col">
                   <span className="truncate text-[11px] text-text-tertiary" title={r.subject}>{r.subject || r.type}</span>
-                  <span className="truncate font-medium text-text-primary">{r.type}</span>
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <span className="truncate font-medium text-text-primary">{r.type}</span>
+                    <ChipServicio servicio={r.servicio} />
+                  </span>
                 </div>
               ) },
               // Sin "Descripción": en las órdenes del legacy viene vacía casi siempre

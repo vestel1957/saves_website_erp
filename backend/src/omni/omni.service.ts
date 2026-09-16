@@ -223,6 +223,89 @@ export class OmniService {
     return { asignadores, sinAsignar: sin, prioridades: OmniService.PRIORIDADES };
   }
 
+  /**
+   * Tope de eventos que devuelve el calendario en UNA carga.
+   *
+   * La agenda arrastra 131.913 eventos del legacy, así que un tope tiene que haber:
+   * sin él, la ventana de seis semanas del mes devuelve decenas de miles de filas
+   * para pintar cuadraditos de 14 px.
+   *
+   * EL NÚMERO SALE DE MEDIR, NO DE ELEGIRLO REDONDO. Estaba en 2.000, y con eso se
+   * recortaban TODOS los meses: contadas las ventanas de verdad, un mes va de 2.208
+   * (junio 2026) a 4.808 (diciembre 2025) eventos. Un tope que salta siempre no es un
+   * tope, es un techo — y además de mentir en cada mes, entrena a la gente a ignorar
+   * el aviso justo antes del mes en que sí importa. 6.000 deja el peor mes medido
+   * entero y sigue cortando lo patológico.
+   */
+  private static readonly TOPE_CALENDARIO = 6000;
+
+  /**
+   * Los eventos que CRUZAN una ventana de días, para pintarlos en el calendario.
+   *
+   * No vale reutilizar el listado (`events`): aquél filtra por `start` dentro del
+   * rango, que es lo correcto para una tabla —una fila, un evento, ordenados por
+   * cuándo empiezan— y lo incorrecto para una rejilla. Un evento del 28 de marzo al
+   * 2 de abril tiene que salir pintado en el 1 de abril, y con el filtro del listado
+   * la primera semana de abril lo perdería: no empieza ahí.
+   *
+   * La condición de SOLAPE es la de dos intervalos: empieza antes de que la ventana
+   * acabe y acaba después de que la ventana empiece. El caso del evento sin `end` va
+   * aparte porque no es un intervalo sino un instante: cae dentro si su `start` cae
+   * dentro, y en SQL `end >= desde` con `end` nulo no es falso — es NULL, y descarta
+   * la fila entera sin decirlo. Ese es justo el evento más común de la tabla (la cita
+   * puntual), así que el descuido se llevaría por delante media agenda.
+   */
+  async eventsCalendar(params: {
+    from?: string; to?: string; search?: string; priority?: string; assignedBy?: string;
+  }) {
+    const ventana = rangoDeDiasColombia(params.from, params.to);
+    if (ventana === null || !ventana.gte || !ventana.lt) {
+      throw new BadRequestException('El calendario necesita un rango de días válido ("desde" y "hasta").');
+    }
+    const { gte: desde, lt: hasta } = ventana;
+
+    // Los filtros de texto/prioridad/persona son los MISMOS que los de la tabla, para
+    // que cambiar de vista no cambie lo que se está mirando. El de fechas no: aquí lo
+    // pone la ventana del calendario, así que se le pasa sin `from`/`to`.
+    const comunes = OmniService.filtroEventos({
+      search: params.search, priority: params.priority, assignedBy: params.assignedBy,
+    });
+
+    const where: Prisma.CalendarEventWhereInput = {
+      AND: [
+        comunes,
+        { start: { not: null, lt: hasta } },
+        { OR: [{ end: { gte: desde } }, { AND: [{ end: null }, { start: { gte: desde } }] }] },
+      ],
+    };
+
+    const rows = await this.prisma.calendarEvent.findMany({
+      where,
+      orderBy: [{ start: 'asc' }, { id: 'asc' }],
+      take: OmniService.TOPE_CALENDARIO + 1,
+    });
+    const truncado = rows.length > OmniService.TOPE_CALENDARIO;
+    const pagina = truncado ? rows.slice(0, OmniService.TOPE_CALENDARIO) : rows;
+    // Desde qué instante deja de ser completo lo que se devuelve: es el `start` del
+    // primer evento que NO cupo. Sin este dato el aviso sólo puede decir «falta algo»,
+    // y quien mira no sabe si el hueco del día 24 es que no hay nada o que se cortó.
+    const cortadoDesde = truncado ? rows[OmniService.TOPE_CALENDARIO].start : null;
+
+    const nombres = await this.nombresDeAsignadores(pagina.map((e) => e.assignedBy));
+    return {
+      items: pagina.map((e) => ({
+        id: e.id, orderNo: e.orderNo, title: e.title, description: e.description, color: e.color,
+        start: e.start, end: e.end, allDay: e.allDay, priority: e.priority,
+        assignedBy: e.assignedBy ? OmniService.etiquetaAsignador(e.assignedBy, nombres) : null,
+      })),
+      // Con `truncado`, la pantalla avisa en vez de mentir por omisión: un calendario
+      // al que le faltan eventos y no lo dice es peor que uno que no carga.
+      truncado,
+      cortadoDesde,
+      tope: OmniService.TOPE_CALENDARIO,
+    };
+  }
+
   async createEvent(dto: EventDto, user: AuthUser) {
     const e = await this.prisma.calendarEvent.create({
       data: {

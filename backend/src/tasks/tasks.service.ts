@@ -1,10 +1,18 @@
-import { NotFoundException } from '../core/http/errores';
+import { BadRequestException, NotFoundException } from '../core/http/errores';
 import { orden } from '../common/pagination-params';
 import { Prisma, TodoStatus, TodoPriority } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
-import { CreateTaskDto, UpdateTaskDto, TaskFilter } from './dto/tasks.dto';
-import { autorDeOrden } from '../support/autor-orden';
+import { CreateTaskDto, UpdateTaskDto, TaskFilter, NoteDto, AttachNoteDto } from './dto/tasks.dto';
+import { autorDeOrden, autorDeSeguimiento, type FirmaDeSeguimiento, SEGUIMIENTO_DEL_SISTEMA } from '../support/autor-orden';
+
+/** Cómo se nombran los estados y las prioridades cuando el sistema los escribe en
+ *  el seguimiento. "Estado: DUE → DONE" no lo entiende nadie fuera de la base. */
+const ESTADO_ES: Record<string, string> = { DUE: 'Pendiente', PROGRESS: 'En progreso', DONE: 'Hecha' };
+const PRIORIDAD_ES: Record<string, string> = { LOW: 'Baja', MEDIUM: 'Media', HIGH: 'Alta', URGENT: 'Urgente' };
+
+/** Fecha suelta tal como se lee en la bitácora (sin hora: la tarea las guarda `@db.Date`). */
+const fechaEs = (d: Date | null | undefined) => (d ? d.toISOString().slice(0, 10) : 'sin fecha');
 
 /**
  * Tareas / to-do (migrado de `Tools.php` + tabla `todolist` del legacy).
@@ -95,7 +103,7 @@ export class TasksService {
     }
 
     const [rows, total] = await Promise.all([
-      this.prisma.todoTask.findMany({ where, orderBy: orden(f, TasksService.ORDEN_LISTA, [{ tdate: 'desc' }, { legacyId: 'desc' }]), skip: (page - 1) * pageSize, take: pageSize }),
+      this.prisma.todoTask.findMany({ where, orderBy: orden(f, TasksService.ORDEN_LISTA, [{ tdate: 'desc' }, { legacyId: 'desc' }]), skip: (page - 1) * pageSize, take: pageSize, include: { _count: { select: { files: true, notes: true } } } }),
       this.prisma.todoTask.count({ where }),
     ]);
     const names = await this.namesByLegacyId(rows.flatMap((r) => [r.employeeId, r.assigneeId]));
@@ -109,6 +117,11 @@ export class TasksService {
         author: r.createdByName ?? names.get(r.employeeId) ?? null,
         authorSource: r.createdBySource ?? null,
         assignee: names.get(r.assigneeId) ?? null,
+        // Cuántos adjuntos lleva: la tabla pinta el clip sin tener que pedir la
+        // lista de ficheros de cada fila. Lo mismo con los renglones de
+        // seguimiento: la lista dice de un vistazo cuáles están documentadas.
+        files: r._count.files,
+        notes: r._count.notes,
         overdue: r.status !== 'DONE' && !!r.dueDate && r.dueDate.toISOString().slice(0, 10) < hoy,
       })),
       total, page, pageSize, pages: Math.ceil(total / pageSize),
@@ -116,15 +129,198 @@ export class TasksService {
   }
 
   async detail(id: string) {
-    const t = await this.prisma.todoTask.findUnique({ where: { id } });
+    const t = await this.prisma.todoTask.findUnique({
+      where: { id },
+      include: {
+        files: { orderBy: { createdAt: 'asc' } },
+        // El seguimiento va en la misma consulta que la ficha: la pantalla de la
+        // tarea es una sola cosa —qué hay que hacer y qué se lleva hecho— y
+        // partirla en dos peticiones sólo hacía parpadear el hilo.
+        notes: { orderBy: { createdAt: 'asc' } },
+      },
+    });
     if (!t) throw new NotFoundException('Tarea no encontrada');
-    const names = await this.namesByLegacyId([t.employeeId, t.assigneeId]);
+    const names = await this.namesByLegacyId([t.employeeId, t.assigneeId, ...t.notes.map((n) => n.employeeId)]);
+    const { files, notes, ...fila } = t;
     return {
-      ...t,
+      ...fila,
       author: t.createdByName ?? names.get(t.employeeId) ?? null,
       authorSource: t.createdBySource ?? null,
       assignee: names.get(t.assigneeId) ?? null,
+      /// Responsable en id, para que la ficha pueda reasignar sin adivinar cuál es.
+      assigneeId: t.assigneeId || null,
+      files: files.map(TasksService.vistaDeAdjunto),
+      notes: notes.map((n) => TasksService.vistaDeNota(n, names)),
     };
+  }
+
+  // ------------------------------------------------------------------ //
+  //  Seguimiento (lo que en una orden se llama "documentar")            //
+  // ------------------------------------------------------------------ //
+
+  /** Forma con la que un renglón del seguimiento sale a la pantalla. */
+  private static vistaDeNota(
+    n: {
+      id: string; message: string | null; stage: string | null; auto: boolean;
+      authorName: string | null; employeeId: number; attach: string | null;
+      attachName: string | null; geoLat: string | null; geoLng: string | null; createdAt: Date;
+    },
+    names: Map<number, string>,
+  ) {
+    return {
+      id: n.id, message: n.message, stage: n.stage, auto: n.auto,
+      // El nombre sellado manda; el `eid` sólo es el respaldo de lo heredado, igual
+      // que en el hilo de la orden.
+      author: n.authorName ?? names.get(n.employeeId) ?? null,
+      attach: n.attach ? (n.attachName ?? 'Foto') : null,
+      geoLat: n.geoLat, geoLng: n.geoLng,
+      at: n.createdAt,
+    };
+  }
+
+  /** El seguimiento de una tarea, del renglón más viejo al más nuevo. */
+  async notes(id: string) {
+    await this.exigirTarea(id);
+    const rows = await this.prisma.todoTaskNote.findMany({ where: { taskId: id }, orderBy: { createdAt: 'asc' } });
+    const names = await this.namesByLegacyId(rows.map((r) => r.employeeId));
+    return rows.map((n) => TasksService.vistaDeNota(n, names));
+  }
+
+  /**
+   * Con qué se firma lo que se escribe en el seguimiento. Misma regla que en la
+   * orden (`SupportWriteService.firmaDeSeguimiento`): la ficha de empleado se busca
+   * para sacar el `eid`, pero que no aparezca no deja el renglón sin autor — el
+   * nombre se guarda igual, y si la consulta falla se firma con lo que hay en la
+   * sesión. Perder la documentación de alguien por no poder leer su ficha sería
+   * mucho peor que un `eid` en 0.
+   */
+  private async firmaDeSeguimiento(user?: AuthUser | null): Promise<FirmaDeSeguimiento> {
+    if (!user?.id) return SEGUIMIENTO_DEL_SISTEMA;
+    let ficha = null;
+    try {
+      ficha = await this.staffOf(user);
+    } catch {
+      ficha = null;
+    }
+    return autorDeSeguimiento(user, ficha);
+  }
+
+  /** Documenta la tarea: el texto de lo que se hizo y en qué quedó. */
+  async addNote(id: string, dto: NoteDto, user?: AuthUser) {
+    await this.exigirTarea(id);
+    const message = dto.message?.trim() || null;
+    const stage = dto.stage?.trim() || null;
+    if (!message && !stage) throw new BadRequestException('Escribe qué se hizo o elige en qué quedó.');
+    const n = await this.prisma.todoTaskNote.create({
+      data: { taskId: id, message, stage, ...(await this.firmaDeSeguimiento(user)) },
+    });
+    return TasksService.vistaDeNota(n, await this.namesByLegacyId([n.employeeId]));
+  }
+
+  /**
+   * Documenta con una FOTO de evidencia (y, si el dispositivo la dio, desde dónde
+   * se tomó). El binario ya lo dejó multer en `uploads/tasks/<taskId>/`; aquí sólo
+   * se registra el renglón.
+   */
+  async addNoteAttachment(
+    id: string,
+    file: { filename: string; originalname: string },
+    dto: AttachNoteDto,
+    user?: AuthUser,
+  ) {
+    await this.exigirTarea(id);
+    const n = await this.prisma.todoTaskNote.create({
+      data: {
+        taskId: id,
+        message: dto.message?.trim() || null,
+        stage: dto.stage?.trim() || null,
+        attach: file.filename,
+        attachName: Buffer.from(file.originalname, 'latin1').toString('utf8'),
+        geoLat: dto.lat?.trim() || null,
+        geoLng: dto.lng?.trim() || null,
+        ...(await this.firmaDeSeguimiento(user)),
+      },
+    });
+    return TasksService.vistaDeNota(n, await this.namesByLegacyId([n.employeeId]));
+  }
+
+  /** Metadata de la foto de un renglón, comprobando que sea de ESA tarea (si no, el
+   *  id de una nota ajena serviría para verla desde cualquier tarea). */
+  async noteAttachment(id: string, noteId: string) {
+    const n = await this.prisma.todoTaskNote.findFirst({ where: { id: noteId, taskId: id } });
+    if (!n?.attach) throw new NotFoundException('Esa entrada del seguimiento no tiene foto');
+    return { storedName: n.attach, originalName: n.attachName ?? n.attach };
+  }
+
+  /**
+   * Anota en el seguimiento algo que hizo el sistema (el cambio de estado, de
+   * responsable, de fecha). Nunca puede tumbar la operación que lo provocó: la
+   * tarea ya se guardó, y quedarse sin la línea de bitácora es infinitamente menos
+   * grave que devolver un 500 por ella.
+   */
+  private async anotar(taskId: string, message: string, user?: AuthUser | null) {
+    const firma = await this.firmaDeSeguimiento(user).catch(() => SEGUIMIENTO_DEL_SISTEMA);
+    await this.prisma.todoTaskNote
+      .create({ data: { taskId, message, auto: true, ...firma } })
+      .catch(() => undefined);
+  }
+
+  // ------------------------------------------------------------------ //
+  //  Adjuntos (metadata; el binario vive en uploads/tasks/<id>/)        //
+  // ------------------------------------------------------------------ //
+
+  /** Forma con la que un adjunto sale a la pantalla. Una sola, para que la lista,
+   *  la subida y el detalle no se contradigan. */
+  private static vistaDeAdjunto(f: {
+    id: string; originalName: string; mimeType: string; size: number;
+    uploadedByName: string | null; createdAt: Date;
+  }) {
+    return { id: f.id, name: f.originalName, mimeType: f.mimeType, size: f.size, by: f.uploadedByName, at: f.createdAt };
+  }
+
+  /** Adjuntos de una tarea. La tarea tiene que existir: si no, es un 404 y no una
+   *  lista vacía (una tarea borrada y una sin adjuntos no son lo mismo). */
+  async listFiles(id: string) {
+    await this.exigirTarea(id);
+    const files = await this.prisma.todoTaskFile.findMany({ where: { taskId: id }, orderBy: { createdAt: 'asc' } });
+    return files.map(TasksService.vistaDeAdjunto);
+  }
+
+  private async exigirTarea(id: string) {
+    const t = await this.prisma.todoTask.findUnique({ where: { id }, select: { id: true } });
+    if (!t) throw new NotFoundException('Tarea no encontrada');
+    return t;
+  }
+
+  /** Registra la metadata de un fichero que multer ya dejó en disco. */
+  async addFile(
+    id: string,
+    meta: { originalName: string; storedName: string; mimeType: string; size: number },
+    user?: AuthUser,
+  ) {
+    await this.exigirTarea(id);
+    const f = await this.prisma.todoTaskFile.create({
+      data: { taskId: id, ...meta, uploadedByName: user?.name ?? user?.email ?? null },
+    });
+    // Que el adjunto deje rastro EN EL TIEMPO: la lista de ficheros dice qué hay
+    // colgado, pero no cuándo apareció ni en respuesta a qué. En el seguimiento sí.
+    await this.anotar(id, `adjuntó «${meta.originalName}»`, user);
+    return TasksService.vistaDeAdjunto(f);
+  }
+
+  /** Metadata de un adjunto, comprobando que sea de ESA tarea (si no, el id de un
+   *  fichero ajeno serviría para bajarlo desde cualquier tarea). */
+  async fileMeta(id: string, fileId: string) {
+    const f = await this.prisma.todoTaskFile.findFirst({ where: { id: fileId, taskId: id } });
+    if (!f) throw new NotFoundException('Adjunto no encontrado');
+    return f;
+  }
+
+  /** Quita el adjunto. Devuelve la fila para que el controlador borre el binario. */
+  async deleteFile(id: string, fileId: string) {
+    const f = await this.fileMeta(id, fileId);
+    await this.prisma.todoTaskFile.delete({ where: { id: f.id } });
+    return f;
   }
 
   /** Responsables seleccionables: empleados con ficha legacy (los que la tabla referencia). */
@@ -154,7 +350,7 @@ export class TasksService {
     // así no chocan con una reejecución del ETL sobre el histórico.
     const max = await this.prisma.todoTask.aggregate({ _max: { legacyId: true } });
     const legacyId = (max._max.legacyId ?? 0) + 1;
-    return this.prisma.todoTask.create({
+    const creada = await this.prisma.todoTask.create({
       data: {
         legacyId,
         tdate: new Date(new Date().toISOString().slice(0, 10)),
@@ -173,21 +369,59 @@ export class TasksService {
         createdBySource: autor?.createdBySource ?? 'SISTEMA',
       },
     });
+    // El primer renglón del seguimiento: que la bitácora empiece en el día uno y no
+    // en el primer avance, para que "no tiene nada documentado" se distinga de
+    // "nadie la ha tocado".
+    await this.anotar(creada.id, 'Tarea creada.', user);
+    return creada;
   }
 
-  async update(id: string, dto: UpdateTaskDto) {
+  async update(id: string, dto: UpdateTaskDto, user?: AuthUser) {
     const t = await this.prisma.todoTask.findUnique({ where: { id } });
     if (!t) throw new NotFoundException('Tarea no encontrada');
     const data: Prisma.TodoTaskUpdateInput = {};
-    if (dto.name !== undefined) data.name = dto.name.trim();
-    if (dto.status !== undefined) data.status = dto.status as TodoStatus;
-    if (dto.priority !== undefined) data.priority = dto.priority as TodoPriority;
-    if (dto.start !== undefined) data.start = this.dOnly(dto.start);
-    if (dto.dueDate !== undefined) data.dueDate = this.dOnly(dto.dueDate);
-    if (dto.description !== undefined) data.description = dto.description?.trim() || null;
-    if (dto.assigneeId !== undefined) data.assigneeId = dto.assigneeId ?? 0;
-    if (dto.orderId !== undefined) data.orderId = dto.orderId ?? 0;
-    return this.prisma.todoTask.update({ where: { id }, data });
+    // Lo que cambia se va apuntando en castellano para el seguimiento: quién movió
+    // el estado, quién la reasignó y quién corrió la fecha son las tres preguntas
+    // que la tarea nunca podía responder. Mismo gesto que "Orden corregida por…".
+    const cambios: string[] = [];
+    if (dto.name !== undefined) {
+      data.name = dto.name.trim();
+      if (data.name !== (t.name ?? '')) cambios.push(`nombre: «${t.name ?? '—'}» → «${data.name}»`);
+    }
+    if (dto.status !== undefined) {
+      data.status = dto.status as TodoStatus;
+      if (data.status !== t.status) cambios.push(`estado: ${ESTADO_ES[t.status] ?? t.status} → ${ESTADO_ES[data.status] ?? data.status}`);
+    }
+    if (dto.priority !== undefined) {
+      data.priority = dto.priority as TodoPriority;
+      if (data.priority !== t.priority) cambios.push(`prioridad: ${PRIORIDAD_ES[t.priority] ?? t.priority} → ${PRIORIDAD_ES[data.priority] ?? data.priority}`);
+    }
+    if (dto.start !== undefined) {
+      data.start = this.dOnly(dto.start);
+      if (fechaEs(data.start) !== fechaEs(t.start)) cambios.push(`inicio: ${fechaEs(t.start)} → ${fechaEs(data.start)}`);
+    }
+    if (dto.dueDate !== undefined) {
+      data.dueDate = this.dOnly(dto.dueDate);
+      if (fechaEs(data.dueDate) !== fechaEs(t.dueDate)) cambios.push(`vence: ${fechaEs(t.dueDate)} → ${fechaEs(data.dueDate)}`);
+    }
+    if (dto.description !== undefined) {
+      data.description = dto.description?.trim() || null;
+      if ((data.description ?? '') !== (t.description ?? '')) cambios.push('se cambió el detalle');
+    }
+    if (dto.assigneeId !== undefined) {
+      data.assigneeId = dto.assigneeId ?? 0;
+      if (data.assigneeId !== t.assigneeId) {
+        const names = await this.namesByLegacyId([t.assigneeId, data.assigneeId]);
+        cambios.push(`responsable: ${names.get(t.assigneeId) ?? 'sin asignar'} → ${names.get(data.assigneeId) ?? 'sin asignar'}`);
+      }
+    }
+    if (dto.orderId !== undefined) {
+      data.orderId = dto.orderId ?? 0;
+      if (data.orderId !== t.orderId) cambios.push(`orden: ${t.orderId || 'ninguna'} → ${data.orderId || 'ninguna'}`);
+    }
+    const actualizada = await this.prisma.todoTask.update({ where: { id }, data });
+    if (cambios.length) await this.anotar(id, `${cambios.join('; ')}.`, user);
+    return actualizada;
   }
 
   async remove(id: string) {

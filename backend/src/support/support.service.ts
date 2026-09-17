@@ -18,6 +18,7 @@ import { ORDEN_CRONOLOGICO, porFecha } from './orden-cronologico';
 import { DIAS_REZAGO, whereTrabajoDelDia } from './agenda-dia';
 import { GeofenceService } from './geofence.service';
 import { esOrdenDeCampo } from './geofence.policy';
+import { faltaDocumentar } from './documentacion-cierre.policy';
 import { esIpRemotaUtil, faltaLaIpRemota } from './ip-remota.policy';
 import { esUsuarioPppUtil } from '../subscribers/conexion-alta';
 import { esOrdenDeServicio, esReconexion } from './order-types';
@@ -549,6 +550,18 @@ export class SupportService {
       ipRemotaValor: esIpRemotaUtil(sub?.ipRemote) ? sub!.ipRemote!.trim() : null,
       /** Sólo a quien tiene internet se le puede activar: el de sólo TV no tiene secret. */
       tieneInternet: esUsuarioPppUtil(sub?.pppUsername),
+      /**
+       * Lo que le falta documentar a QUIEN MIRA la orden para poder cerrarla
+       * (2026-09-17): con la misma función que frena el cierre. `null` = nada (o no
+       * le aplica: no es técnico, o la orden no tiene número).
+       */
+      documentacion: faltaDocumentar({
+        activo: process.env.TICKET_REQUIRE_DOCUMENTATION !== 'false',
+        esTecnico: esTecnicoDeCampo(user),
+        userId: user?.id ?? null,
+        tieneNumero: t.code != null,
+        renglones: threads,
+      }),
     };
 
     return {

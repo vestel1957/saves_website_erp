@@ -21,6 +21,7 @@ const ESPERA_EQUIPOS_MS = 20_000;
 import { parsePoint } from '../geo/geo.util';
 import { GeofenceService, type ResultadoCerca } from './geofence.service';
 import { faltaLaFoto, SIN_FOTO } from './foto-cierre.policy';
+import { faltaDocumentar, SIN_DOCUMENTAR, type RenglonHilo } from './documentacion-cierre.policy';
 import { faltaLaIpRemota, SIN_IP_REMOTA } from './ip-remota.policy';
 import { esUsuarioPppUtil } from '../subscribers/conexion-alta';
 import { ResponsibilityNotifierService } from '../responsibilities/responsibility-notifier.service';
@@ -1383,6 +1384,10 @@ export class SupportWriteService {
       throw new BadRequestException('No se puede cerrar la orden sin la firma de quien recibe. Registra la firma primero.');
     }
 
+    // Documentación: el técnico no cierra sin haber dejado la solución, el detalle
+    // y una foto suyos (2026-09-17). Va primero: es lo que le toca hacer a él.
+    if (dto.status === 'RESUELTO') await this.exigirDocumentacion(t, user);
+
     // Registro fotográfico: una visita a domicilio no se cierra sin evidencia
     // (2026-09-10). Va ANTES de la geo-cerca a propósito — es el requisito más
     // barato de comprobar y el más fácil de arreglar para quien está en la puerta:
@@ -1543,6 +1548,36 @@ export class SupportWriteService {
     });
     if (!faltaLaFoto({ ...entrada, fotos })) return;
     throw new HttpException({ code: 'FOTO_REQUERIDA', message: SIN_FOTO }, HttpStatus.UNPROCESSABLE_ENTITY);
+  }
+
+  /**
+   * Frena el cierre de un técnico que no documentó la orden: solución de la lista,
+   * detalle y foto, escritos por él en el seguimiento. La regla está en
+   * `documentacion-cierre.policy.ts`; aquí sólo se lee el hilo.
+   *
+   * 422 con `code` y `falta` para que la pantalla le diga qué le queda por hacer.
+   * Se apaga con `TICKET_REQUIRE_DOCUMENTATION=false`, como la foto y la firma.
+   */
+  private async exigirDocumentacion(t: { code: number | null }, user?: AuthUser) {
+    const entrada = {
+      activo: process.env.TICKET_REQUIRE_DOCUMENTATION !== 'false',
+      esTecnico: esTecnicoDeCampo(user),
+      userId: user?.id ?? null,
+      tieneNumero: t.code != null,
+      renglones: [] as RenglonHilo[],
+    };
+    // Sin técnico o apagado, no hace falta ir al hilo.
+    if (!faltaDocumentar(entrada)) return;
+    const renglones = await this.prisma.ticketThread.findMany({
+      where: { ticketCode: t.code!, authorId: user!.id },
+      select: { message: true, attach: true, authorId: true },
+    });
+    const falta = faltaDocumentar({ ...entrada, renglones });
+    if (!falta) return;
+    throw new HttpException(
+      { code: 'DOCUMENTACION_REQUERIDA', message: SIN_DOCUMENTAR, falta },
+      HttpStatus.UNPROCESSABLE_ENTITY,
+    );
   }
 
   /**

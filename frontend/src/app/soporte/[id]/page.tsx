@@ -328,6 +328,14 @@ export default function OrdenDetallePage() {
           setCerca({ estado: nuevo, ...d });
           return;
         }
+        // 422 con code DOCUMENTACION_REQUERIDA = el técnico no ha documentado la
+        // orden (solución, detalle y foto suyos). El qué falta ya está en el bloque
+        // «Para cerrar esta visita»; aquí se le recuerda y se refresca ese bloque.
+        if (res.status === 422 && d?.code === "DOCUMENTACION_REQUERIDA") {
+          toast(d.message as string, "alert-triangle");
+          reload();
+          return;
+        }
         // 422 con code FOTO_REQUERIDA = falta la evidencia de la visita. Como el de
         // la cerca, no es un error a secas: hay algo concreto que hacer y está en
         // esta misma pantalla, unos centímetros más abajo.
@@ -533,15 +541,29 @@ export default function OrdenDetallePage() {
           los dos requisitos y anunciarlos sería ruido en el 85% de las órdenes.
           Se pinta con lo que manda el servidor (`requisitosCierre`) y no con una
           lista de tipos repetida aquí. */}
-      {abierta && puedeEscribir && t.requisitosCierre?.deCampo
+      {abierta && puedeEscribir && (t.requisitosCierre?.documentacion || (t.requisitosCierre?.deCampo
         && (t.requisitosCierre.foto || t.requisitosCierre.ubicacion || t.requisitosCierre.firma
-          || t.requisitosCierre.ipRemota || t.requisitosCierre.ipRemotaValor) && (
+          || t.requisitosCierre.ipRemota || t.requisitosCierre.ipRemotaValor))) && (
         <div className="mb-3 rounded-xl border border-border-subtle bg-surface p-3">
           <div className="mb-1.5 flex items-center gap-2 text-[12.5px] font-bold text-text-primary">
             <Icon name="clipboard-check" size={14} className="text-brand" /> Para cerrar esta visita
           </div>
           <ul className="flex flex-col gap-1">
-            {t.requisitosCierre.foto && (
+            {/* Documentar es de TODA orden que cierre un técnico (2026-09-17): lo que le
+                falta a él, escrito por él. Ver `documentacion-cierre.policy.ts`. */}
+            {t.requisitosCierre.documentacion && (
+              <li className="flex items-start gap-1.5 text-[12.5px] text-text-secondary">
+                <Icon name="file-text" size={14} className="mt-0.5 shrink-0 text-warning-text" />
+                <span>
+                  Documenta la orden abajo, en el seguimiento:{" "}
+                  {[
+                    t.requisitosCierre.documentacion.documentacion ? "escoge la solución y escribe qué hiciste (mínimo 20 letras)" : null,
+                    t.requisitosCierre.documentacion.foto ? "sube al menos una foto tuya" : null,
+                  ].filter(Boolean).join(" y ")}.
+                </span>
+              </li>
+            )}
+            {t.requisitosCierre.deCampo && t.requisitosCierre.foto && (
               <li className="flex items-start gap-1.5 text-[12.5px] text-text-secondary">
                 <Icon
                   name={t.requisitosCierre.fotos > 0 ? "check" : "camera"}
@@ -555,7 +577,7 @@ export default function OrdenDetallePage() {
                 </span>
               </li>
             )}
-            {t.requisitosCierre.ubicacion && (
+            {t.requisitosCierre.deCampo && t.requisitosCierre.ubicacion && (
               <li className="flex items-start gap-1.5 text-[12.5px] text-text-secondary">
                 <Icon name="map-pin" size={14} className="mt-0.5 shrink-0 text-warning-text" />
                 <span>
@@ -564,7 +586,7 @@ export default function OrdenDetallePage() {
                 </span>
               </li>
             )}
-            {t.requisitosCierre.firma && (
+            {t.requisitosCierre.deCampo && t.requisitosCierre.firma && (
               <li className="flex items-start gap-1.5 text-[12.5px] text-text-secondary">
                 <Icon name="pencil" size={14} className="mt-0.5 shrink-0 text-warning-text" />
                 <span>Falta la firma de quien recibe, al pie de la orden.</span>
@@ -574,7 +596,7 @@ export default function OrdenDetallePage() {
                 renglón: el técnico no tiene que ir a Red ni llamar a sistemas. Y
                 cuando ya está, se enseña cuál es — es la dirección por la que se
                 entra al equipo del cliente. */}
-            {(t.requisitosCierre.ipRemota || t.requisitosCierre.ipRemotaValor) && (
+            {t.requisitosCierre.deCampo && (t.requisitosCierre.ipRemota || t.requisitosCierre.ipRemotaValor) && (
               <li className="flex flex-wrap items-start gap-1.5 text-[12.5px] text-text-secondary">
                 <Icon
                   name={t.requisitosCierre.ipRemota ? "wifi" : "check"}

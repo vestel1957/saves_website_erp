@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
 import { Button } from "@/components/ui/Button";
@@ -17,13 +17,36 @@ import { useAuth } from "@/context/AuthProvider";
 import type { Nap, Paged, BranchOpt, VlanOpt } from "@/lib/network";
 import { useRequest } from "@/lib/useRequest";
 import { useOrden } from "@/lib/useOrden";
+import { ordenDeTexto, useFiltrosEnUrl, useFiltrosRecordados } from "@/lib/useFiltrosUrl";
 import { listaJson, mensajeDeError } from "@/lib/errores";
 
 export default function NapsPage() {
+  // `useFiltrosRecordados` usa `useSearchParams`, que en el App Router exige una
+  // frontera de Suspense.
+  return (
+    <Suspense fallback={<PageSkeleton />}>
+      <NapsConUrl />
+    </Suspense>
+  );
+}
+
+/**
+ * De dónde arranca la pantalla: de la dirección (`?sede=…&q=…`), que es lo que
+ * permite mandar el enlace de "las NAPs de Yopal con puertos libres" y lo que
+ * devuelve el "Volver" de una ficha de NAP a la sede de la que se salió.
+ * Entrando por el MENÚ se empieza siempre en la lista de sedes: la sede es un
+ * sitio, no un filtro, y caer dentro de una sin haberla pedido desorienta.
+ */
+function NapsConUrl() {
+  const inicial = useFiltrosRecordados();
+  if (!inicial) return <PageSkeleton />;
+  return <Naps urlInicial={inicial.recordado ? {} : inicial.valores} />;
+}
+
+function Naps({ urlInicial }: { urlInicial: Record<string, string> }) {
   const { loading: authLoading, authFetch } = useAuth();
   const [branches, setBranches] = useState<BranchOpt[] | null>(null);
-  const [branch, setBranch] = useState<BranchOpt | null>(null);
-  const [sedeSearch, setSedeSearch] = useState("");
+  const [branchId, setBranchId] = useState(urlInicial.sede ?? "");
 
   const loadBranches = useCallback(async () => {
     setBranches(await (await authFetch("/network/branches")).json());
@@ -35,12 +58,29 @@ export default function NapsPage() {
 
   if (authLoading || !branches) return <PageSkeleton />;
 
-  // Vista B: cajas NAP de la sede seleccionada.
+  // Vista B: cajas NAP de la sede seleccionada. (Una `?sede=` que ya no existe
+  // cae sola en la lista de sedes.)
+  const branch = branches.find((b) => b.id === branchId);
   if (branch) {
-    return <BranchNaps branch={branch} onBack={() => { setBranch(null); void loadBranches(); }} />;
+    return (
+      <BranchNaps
+        branch={branch}
+        urlInicial={urlInicial}
+        onBack={() => { setBranchId(""); void loadBranches(); }}
+      />
+    );
   }
 
   // Vista A: selector de sede (tabla).
+  return <SedesConNaps branches={branches} onPick={setBranchId} />;
+}
+
+function SedesConNaps({ branches, onPick }: { branches: BranchOpt[]; onPick: (id: string) => void }) {
+  const [sedeSearch, setSedeSearch] = useState("");
+  // En la lista de sedes no hay filtros puestos: la dirección queda limpia (y se
+  // olvida el filtro guardado, que era de la sede de la que se acaba de salir).
+  useFiltrosEnUrl({});
+
   const totalNaps = branches.reduce((a, b) => a + b.naps, 0);
   const list = sedeSearch.trim()
     ? branches.filter((b) => b.name.toLowerCase().includes(sedeSearch.trim().toLowerCase()))
@@ -65,7 +105,7 @@ export default function NapsPage() {
       <DataTable
         rows={list}
         empty="Sin sedes."
-        onRowClick={(b) => setBranch(b)}
+        onRowClick={(b) => onPick(b.id)}
         columns={[
           { key: "name", header: "Sede", sortable: true, render: (b) => (
             <span className="flex items-center gap-2.5">
@@ -81,26 +121,35 @@ export default function NapsPage() {
   );
 }
 
-function BranchNaps({ branch, onBack }: { branch: BranchOpt; onBack: () => void }) {
+function BranchNaps({ branch, urlInicial, onBack }: { branch: BranchOpt; urlInicial: Record<string, string>; onBack: () => void }) {
   const { authFetch } = useAuth();
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(urlInicial.q ?? "");
   const [sort, setSort] = useState<"name" | "vlan">("name");
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(25);
+  const [page, setPage] = useState(Number(urlInicial.pag) > 1 ? Number(urlInicial.pag) : 1);
+  const [pageSize, setPageSize] = useState(Number(urlInicial.tam) > 0 ? Number(urlInicial.tam) : 25);
   const [creating, setCreating] = useState(false);
 
   // Filtros del listado. Viajan al servidor (el listado pagina allí), así que
-  // filtran sobre las 1.398 NAPs y no sólo sobre la página que se está viendo.
-  const [vlanId, setVlanId] = useState("");
-  const [ocupacion, setOcupacion] = useState("");
-  const [address, setAddress] = useState("");
+  // filtran sobre las 1.406 NAPs y no sólo sobre la página que se está viendo.
+  // Nacen de la dirección y vuelven a ella (ver `useFiltrosEnUrl` más abajo).
+  const [vlanId, setVlanId] = useState(urlInicial.vlan ?? "");
+  const [ocupacion, setOcupacion] = useState(urlInicial.ocupacion ?? "");
+  const [address, setAddress] = useState(urlInicial.barrio ?? "");
   const [vlans, setVlans] = useState<VlanOpt[]>([]);
   const [barrios, setBarrios] = useState<{ value: string; naps: number }[]>([]);
 
   // Carga con cancelación: al teclear se aborta la petición en vuelo para que
   // una respuesta lenta no pise a otra más reciente. Ver lib/useRequest.
   // Pagina en el servidor: el orden viaja en la query.
-  const orden = useOrden();
+  const orden = useOrden(ordenDeTexto(urlInicial.ord));
+
+  // La sede y los filtros viven en la dirección: el enlace lleva a lo que se
+  // está mirando y el "Volver" de la ficha de una NAP devuelve a esta lista tal
+  // como estaba, no al índice de sedes.
+  useFiltrosEnUrl({
+    sede: branch.id, q: search.trim(), vlan: vlanId, ocupacion, barrio: address,
+    pag: page > 1 ? page : "", tam: pageSize !== 25 ? pageSize : "", ord: orden.clave,
+  });
 
   const { data, cargando: loading, error, refrescar: load } = useRequest<Paged<Nap>>(
     () => {
@@ -122,7 +171,11 @@ function BranchNaps({ branch, onBack }: { branch: BranchOpt; onBack: () => void 
     void authFetch(`/network/nap-addresses?branchId=${branch.id}`).then(listaJson).then(setBarrios).catch(() => setBarrios([]));
   }, [branch.id, authFetch]);
 
+  // Cambiar un filtro manda a la página 1 — pero no en el primer render, que
+  // borraría la página que venía en la URL.
+  const primerRender = useRef(true);
   useEffect(() => {
+    if (primerRender.current) { primerRender.current = false; return; }
     setPage(1);
   }, [search, sort, pageSize, vlanId, ocupacion, address, orden.clave]);
 

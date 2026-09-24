@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
 import { Modal } from "@/components/Modal";
@@ -16,6 +17,8 @@ import { cop } from "@/lib/subscribers";
 import type { CashAccount } from "@/lib/cobranzas";
 import { mensajeDeError } from "@/lib/errores";
 import { useValidacion, requerido, numero } from "@/lib/useValidacion";
+import { RangoFechas, rangoDePreset, rangoDeUrl, rangoAUrl, etiquetaRango, type RangoFechasValor } from "@/components/ui/RangoFechas";
+import { useFiltrosEnUrl, useFiltrosRecordados } from "@/lib/useFiltrosUrl";
 
 type Category = { id: string; name: string };
 
@@ -98,7 +101,26 @@ function CajaModal({ caja, onClose, onDone }: { caja: CashAccount | "new" | null
   );
 }
 
+/**
+ * El rango de fechas y la búsqueda viven en la URL (`?q=…&periodo=…&desde=…&hasta=…`),
+ * como en Movimientos: recargar o pasar el enlace deja la pantalla igual.
+ */
 export default function CajasPage() {
+  return (
+    <Suspense fallback={<PageSkeleton />}>
+      <CajasConFiltros />
+    </Suspense>
+  );
+}
+
+function CajasConFiltros() {
+  const { loading: authLoading } = useAuth();
+  const inicial = useFiltrosRecordados();
+  if (authLoading || !inicial) return <PageSkeleton />;
+  return <Cajas urlInicial={inicial.valores} />;
+}
+
+function Cajas({ urlInicial }: { urlInicial: Record<string, string> }) {
   const { loading: authLoading, authFetch } = useAuth();
   const [accounts, setAccounts] = useState<CashAccount[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -107,7 +129,12 @@ export default function CajasPage() {
   const [toDelete, setToDelete] = useState<CashAccount | null>(null);
   const [newCat, setNewCat] = useState("");
   const [catToDelete, setCatToDelete] = useState<Category | null>(null);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(urlInicial.q ?? "");
+  /** Periodo: el saldo de la columna «Saldo hoy» es el de siempre; el rango decide lo
+   *  que entró y salió de cada caja y con qué saldo abrió y cerró ese periodo. */
+  const [rango, setRango] = useState<RangoFechasValor>(() => rangoDeUrl(urlInicial));
+
+  useFiltrosEnUrl({ q: search.trim(), ...rangoAUrl(rango) });
 
   // Filtro en cliente por nombre/número de cuenta sobre lo ya cargado.
   const shown = useMemo(() => {
@@ -120,12 +147,12 @@ export default function CajasPage() {
     setLoading(true);
     try {
       const [a, c] = await Promise.all([
-        authFetch(`/treasury/cash-accounts`).then((r) => (r.ok ? r.json() : [])),
+        authFetch(`/treasury/cash-accounts?${new URLSearchParams({ from: rango.desde, to: rango.hasta })}`).then((r) => (r.ok ? r.json() : [])),
         authFetch(`/treasury/categories`).then((r) => (r.ok ? r.json() : [])),
       ]);
       setAccounts(a); setCategories(c);
     } finally { setLoading(false); }
-  }, [authFetch]);
+  }, [authFetch, rango.desde, rango.hasta]);
 
   useEffect(() => { if (!authLoading) void load(); }, [authLoading, load]);
 
@@ -180,9 +207,17 @@ export default function CajasPage() {
     } catch (e) { toast(mensajeDeError(e), "alert-triangle"); setCatToDelete(null); }
   }
 
-  if (authLoading || loading) return <PageSkeleton />;
+  if (authLoading || (loading && accounts.length === 0)) return <PageSkeleton />;
 
   const totalSaldo = accounts.reduce((s, a) => s + (a.balance ?? 0), 0);
+  const totales = shown.reduce(
+    (t, a) => ({ ingresos: t.ingresos + (a.periodo?.ingresos ?? 0), egresos: t.egresos + (a.periodo?.egresos ?? 0) }),
+    { ingresos: 0, egresos: 0 },
+  );
+  // Enlace a Movimientos con la caja y el mismo rango puestos.
+  const verMovimientos = (a: CashAccount) =>
+    `/tesoreria?${new URLSearchParams({ caja: String(a.id), periodo: "personalizado", desde: rango.desde, hasta: rango.hasta })}`;
+  const monto = (v: number | undefined, clase = "") => <span className={`tabular-nums ${clase}`}>{cop(v ?? 0)}</span>;
 
   return (
     <>
@@ -194,16 +229,31 @@ export default function CajasPage() {
       <section className="mt-4 flex flex-col gap-2">
         <div className="flex items-center justify-between">
           <h2 className="text-[13px] font-bold uppercase tracking-wide text-text-tertiary">Cajas y bancos</h2>
-          <span className="text-[12px] text-text-secondary">Saldo total: <b className="text-text-primary">{cop(totalSaldo)}</b></span>
+          <span className="text-[12px] text-text-secondary">Saldo total hoy: <b className="text-text-primary">{cop(totalSaldo)}</b></span>
         </div>
-        <ListToolbar search={search} onSearch={setSearch} searchPlaceholder="Buscar caja o banco…" />
+        <ListToolbar search={search} onSearch={setSearch} searchPlaceholder="Buscar caja o banco…">
+          <RangoFechas value={rango} onChange={setRango} presets={["hoy", "semana", "mes", "mesPasado", "anio", "personalizado"]} />
+        </ListToolbar>
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-text-secondary">
+          <span>{etiquetaRango(rango)}{loading && " · actualizando…"}</span>
+          <span>Ingresos: <b className="tabular-nums text-success-text">{cop(totales.ingresos)}</b></span>
+          <span>Egresos: <b className="tabular-nums text-error-text">{cop(totales.egresos)}</b></span>
+          <span>Neto: <b className="tabular-nums text-text-primary">{cop(totales.ingresos - totales.egresos)}</b></span>
+        </div>
         <PagedTable
           rows={shown}
           empty={search ? "Ninguna caja coincide con la búsqueda." : "No hay cajas registradas."}
           columns={[
             { key: "name", header: "Caja / Banco", render: (a: CashAccount) => <span className="font-medium text-text-primary">{a.name}</span> },
             { key: "acc", header: "N.º cuenta", render: (a: CashAccount) => a.accountNumber || "—" },
-            { key: "saldo", header: "Saldo", align: "right" as const, render: (a: CashAccount) => <span className="font-semibold tabular-nums">{cop(a.balance ?? 0)}</span> },
+            { key: "inicial", header: "Saldo inicial", align: "right" as const, render: (a: CashAccount) => monto(a.periodo?.saldoInicial, "text-text-secondary") },
+            { key: "ingresos", header: "Ingresos", align: "right" as const, render: (a: CashAccount) => monto(a.periodo?.ingresos, "text-success-text") },
+            { key: "egresos", header: "Egresos", align: "right" as const, render: (a: CashAccount) => monto(a.periodo?.egresos, "text-error-text") },
+            { key: "final", header: "Saldo final", align: "right" as const, render: (a: CashAccount) => monto(a.periodo?.saldoFinal, "font-semibold") },
+            { key: "movs", header: "Movs.", align: "right" as const, render: (a: CashAccount) => a.periodo?.movimientos
+              ? <Link href={verMovimientos(a)} className="tabular-nums text-brand hover:underline" title="Ver los movimientos de esta caja en el periodo">{a.periodo.movimientos}</Link>
+              : <span className="text-text-tertiary">0</span> },
+            { key: "saldo", header: "Saldo hoy", align: "right" as const, render: (a: CashAccount) => monto(a.balance, "text-text-secondary") },
             { key: "estado", header: "", render: (a: CashAccount) => a.persisted === false ? <span className="text-[11px] text-text-tertiary">derivada</span> : null },
             { key: "acciones", header: "", align: "right" as const, render: (a: CashAccount) => (
               <div className="flex justify-end gap-2">

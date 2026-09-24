@@ -350,7 +350,9 @@ export class TramitesToolset implements Toolset {
         // Con el cambio de plan pasa lo mismo: el cliente dice "quiero más megas" y
         // el plan concreto —con su precio— lo confirma quien atienda la orden, así
         // que nace sin plan destino y no se le reprecia nada por WhatsApp.
-        { destinoOpcional: true, planOpcional: true },
+        // Y el cambio de titular: por chat solo se dicta el nombre; los datos y los
+        // documentos del nuevo titular se toman en oficina.
+        { destinoOpcional: true, planOpcional: true, titularOpcional: true },
       );
       await ctx.audit({
         userId: ctx.user.id,

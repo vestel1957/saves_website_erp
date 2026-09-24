@@ -33,7 +33,7 @@ function bytesToBase64url(bytes: Uint8Array): string {
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-type TokenClaims = { exp?: number; areas?: string[]; sa?: boolean; inv?: boolean };
+type TokenClaims = { exp?: number; areas?: string[]; sa?: boolean; inv?: boolean; prj?: boolean };
 
 /**
  * Verifica firma + expiración y devuelve el payload decodificado, o null si el
@@ -80,6 +80,8 @@ const ROUTE_AREA: [RegExp, string[]][] = [
   // técnicos su jornada (las órdenes que le tocan hoy y su rendimiento).
   [/^\/dashboard(\/|$)/, ["gerencia", "caja", "tecnicos"]],
   [/^\/reportes(\/|$)/, ["gerencia"]],
+  // Metabase (análisis de datos). Lo sirve el rewrite de next.config.mjs.
+  [/^\/analitica(\/|$)/, ["gerencia"]],
   [/^\/facturacion(\/|$)/, ["contabilidad", "caja"]],
   // Pagos en línea del portal: es el recaudo de TODAS las sedes y trae el botón de
   // forzar la pasada (que sale a tocar routers y OLTs). Regla específica ANTES de
@@ -88,9 +90,12 @@ const ROUTE_AREA: [RegExp, string[]][] = [
   [/^\/tesoreria\/pagos-en-linea(\/|$)/, ["contabilidad", "administracion", "gerencia"]],
   [/^\/tesoreria(\/|$)/, ["contabilidad", "caja"]],
   [/^\/cotizaciones(\/|$)/, ["contabilidad"]],
+  // «Mi agenda» es de todos desde 2026-09-23: a un evento se invita a cualquier
+  // funcionario y el aviso de la campanita lo trae aquí. Mismas áreas que la API
+  // (`/support/mi-agenda`); al técnico le sigue abriendo en su jornada de «Hoy».
+  [/^\/mi-agenda(\/|$)/, ["tecnicos", "administracion", "caja", "gerencia", "contabilidad", "sistemas"]],
   // El agendamiento lo hace la cajera (y administración), no el técnico: regla
   // específica ANTES de /soporte, que sí es suyo.
-  [/^\/mi-agenda(\/|$)/, ["tecnicos"]],
   [/^\/soporte\/agenda(\/|$)/, ["caja", "administracion"]],
   // Administración entra también (2026-09-07): la API ya le abría todas las rutas
   // de tickets y ya tenía el agendamiento, que trabaja sobre estas mismas órdenes
@@ -105,10 +110,10 @@ const ROUTE_AREA: [RegExp, string[]][] = [
   // El inventario de equipos lo administra administración (2026-07-31): el técnico
   // dejó de tener la pantalla, pero el área sigue en la lista porque el jefe de
   // bodega y la cajera entran por aquí a mover equipo.
-  [/^\/red\/equipos(\/|$)/, ["tecnicos", "administracion"]],
+  [/^\/red\/equipos(\/|$)/, ["tecnicos", "administracion", "caja"]],
   // Lo ÚNICO de /red que le queda al técnico: sus equipos. Va ANTES de la regla
   // general, que ya no lo incluye.
-  [/^\/red\/bodegas(\/|$)/, ["tecnicos", "administracion"]],
+  [/^\/red\/bodegas(\/|$)/, ["tecnicos", "administracion", "caja"]],
   // Equipos disponibles por sede: administración y la cajera (el backend la acota a
   // sus sedes). El jefe de bodega entra por RUTAS_JEFE_BODEGA.
   [/^\/red\/disponibles(\/|$)/, ["administracion", "caja"]],
@@ -158,7 +163,7 @@ const ROUTE_AREA: [RegExp, string[]][] = [
   // Bodegas de material: al técnico se le abre SU bodega (el backend sólo le
   // devuelve esa). Regla específica ANTES de /inventario, que sigue siendo de
   // administración — del módulo no se le abre nada más.
-  [/^\/inventario\/bodegas(\/|$)/, ["administracion", "tecnicos"]],
+  [/^\/inventario\/bodegas(\/|$)/, ["administracion", "tecnicos", "caja"]],
   // Actas de traspaso: es la pantalla donde se FIRMA el recibido, así que la tiene
   // que abrir quien recibe — el técnico en su almacén — además de quien entrega (la
   // cajera) y de administración. La API ya las aceptaba a las tres
@@ -166,24 +171,28 @@ const ROUTE_AREA: [RegExp, string[]][] = [
   // material en tránsito y sin forma de acreditarlo. Regla específica ANTES de la
   // general de /inventario.
   [/^\/inventario\/actas(\/|$)/, ["administracion", "tecnicos", "caja"]],
-  [/^\/inventario(\/|$)/, ["administracion"]],
+  // Desde 2026-09-17 la cajera tiene el inventario COMPLETO (a pedido del usuario):
+  // material, categorías, bodegas, compras, devoluciones y proveedores.
+  [/^\/inventario(\/|$)/, ["administracion", "caja"]],
   // Compras salió del perfil de caja (2026-07-29): quien recauda no ordena compras.
   // Matiz de 2026-09-08 (a pedido del usuario): la cajera entra a MIRAR la orden y a
   // subirle el papel —la factura del proveedor, el comprobante del pago—, que es lo
   // que tiene en la mano en ventanilla. Ordenar la compra sigue sin ser suyo: crear
   // (/nueva) y los catálogos (categorías) quedan fuera con reglas específicas ANTES de
   // la general, y la API le niega todo lo que no sea leer o adjuntar.
-  [/^\/ordenes\/nueva(\/|$)/, ["administracion"]],
-  [/^\/ordenes\/categorias(\/|$)/, ["administracion"]],
+  // 2026-09-17: Compras COMPLETO para la cajera (crear, categorías, pagar...); las
+  // reglas de /ordenes/nueva y /ordenes/categorias sobraban y se quitaron.
   [/^\/ordenes(\/|$)/, ["administracion", "caja"]],
-  [/^\/proveedores(\/|$)/, ["administracion"]],
-  [/^\/devoluciones(\/|$)/, ["administracion"]],
+  [/^\/proveedores(\/|$)/, ["administracion", "caja"]],
+  [/^\/devoluciones(\/|$)/, ["administracion", "caja"]],
   // El archivo de documentos bajó a PERSONAS / PROYECTOS (2026-08-05): dejó de ser
   // /configuracion/documentos y por eso ya no hereda el gate de sistemas. Se le
   // conserva el área además de dársela a administración, dueña de la sección.
   // OJO: no confundir con /documentacion (los manuales), que no lleva gate.
   [/^\/documentos(\/|$)/, ["administracion", "sistemas"]],
   [/^\/proyectos(\/|$)/, ["administracion"]],
+  // Códigos de afiliado: lo mismo que exige la API (`staff.router.ts`).
+  [/^\/afiliados(\/|$)/, ["administracion", "gerencia"]],
   // El Panel de Tareas salió del perfil del TÉCNICO (2026-09-10, a pedido del
   // usuario: «sus actividades se gestionan mediante el agendamiento diario»). Le
   // queda a administración, gerencia y caja; la API repite lo mismo por su cuenta
@@ -259,7 +268,10 @@ export async function middleware(req: NextRequest) {
     // comprobación de arriba lo rebotaba SIEMPRE (también fuera de su pantalla, con
     // lo que quedaba dando vueltas sin poder entrar a nada).
     const jefeBodega = !!claims.inv && RUTAS_JEFE_BODEGA.some((re) => re.test(pathname));
-    if (areas && !jefeBodega && !areas.some((a) => claims.areas!.includes(a))) {
+    // Proyectos concedido a título personal (`screen.proyectos`, técnicos autorizados
+    // uno a uno el 2026-09-21): la API ya los deja pasar con `orPermission`.
+    const proyectos = !!claims.prj && /^\/proyectos(\/|$)/.test(pathname);
+    if (areas && !jefeBodega && !proyectos && !areas.some((a) => claims.areas!.includes(a))) {
       const mine = claims.areas[0];
       const dest = (mine && AREA_LANDING[mine]) || (claims.inv ? LANDING_JEFE_BODEGA : "/");
       return NextResponse.redirect(new URL(dest === pathname ? "/" : dest, req.url));

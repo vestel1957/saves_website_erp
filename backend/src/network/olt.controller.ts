@@ -1,6 +1,7 @@
-import { Allow, IsOptional, IsString } from 'class-validator';
+import { Allow, IsBoolean, IsOptional, IsString } from 'class-validator';
 import { OltService } from './olt.service';
 import { OltPlanProfileService } from './olt-plan-profile.service';
+import { VlanEquiposService } from './vlan-equipos.service';
 import { APP_PERMISSIONS } from '../auth/permissions.catalog';
 import { AuthUser } from '../auth/current-user.decorator';
 
@@ -115,10 +116,19 @@ export class OltUpsertDto {
 }
 
 /** Gestión OLT — clon SmartOLT (control total de ONUs por SSH). */
+/** Configurar una VLAN del catálogo en la OLT y el Mikrotik (`VlanEquiposService`). */
+export class ConfigurarVlanEquiposDto {
+  /** Por defecto true: solo devuelve los comandos. false = ejecutarlos. */
+  @IsOptional() @IsBoolean() dryRun?: boolean;
+  /** F/S/P del uplink, solo cuando la OLT usa varios y hay que elegir. */
+  @IsOptional() @IsString() uplink?: string;
+}
+
 export class OltController {
   constructor(
     private readonly olt: OltService,
     private readonly planProfiles: OltPlanProfileService,
+    private readonly vlanEquipos: VlanEquiposService,
   ) {}
 
   // --- Velocidad por plan (PlanOltProfile) ---
@@ -185,6 +195,21 @@ export class OltController {
   test(id: string, user: AuthUser) { return this.olt.testConnection(id, user); }
   system(id: string, refresh?: string) { return this.olt.systemInfo(id, refresh === '1'); }
   boards(id: string, frame?: string, refresh?: string) { return this.olt.boards(id, Number(frame) || 0, refresh === '1'); }
+  /** Tarjetas, puertos y VLAN en uso de la OLT de una sede, para el catálogo de VLANs. */
+  mapaVlans(branchId?: string, refresh?: string) { return this.olt.mapaVlansDeSede(String(branchId ?? ''), refresh === '1'); }
+  /** Cada VLAN de la sede en catálogo / OLT / uplink / Mikrotik, con veredicto y qué falta. Solo lectura. */
+  // `refresh=1` relee todo (también el mapa, ~20 s); `refresh=vlans` solo las VLANs y los Mikrotik.
+  saludVlans(branchId?: string, refresh?: string) {
+    return this.vlanEquipos.salud(String(branchId ?? ''), refresh === '1' ? true : refresh === 'vlans' ? 'vlans' : false);
+  }
+  /** Número de VLAN sugerido para un PON sin VLAN, según el patrón de su tarjeta. */
+  sugerirVlan(oltId?: string, slot?: string, port?: string) {
+    return this.vlanEquipos.sugerir(String(oltId ?? ''), 0, Number(slot), Number(port));
+  }
+  /** Deja la VLAN en la OLT (creada + uplink) y el Mikrotik (interfaz + PPPoE). dryRun por defecto. */
+  configurarVlanEquipos(id: string, dto: ConfigurarVlanEquiposDto, user: AuthUser) {
+    return this.vlanEquipos.configurarEquipos(id, { dryRun: dto.dryRun, uplink: dto.uplink ?? null }, user);
+  }
   autofind(id: string) { return this.olt.autofind(id); }
   profiles(id: string, refresh?: string) { return this.olt.profiles(id, refresh === '1'); }
   trafficTables(id: string, refresh?: string) { return this.olt.trafficTables(id, refresh === '1'); }

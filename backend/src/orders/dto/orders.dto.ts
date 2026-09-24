@@ -32,6 +32,8 @@ export class CreateOrderDto extends ConsignacionDto {
   @IsOptional() @IsString() orderDate?: string;
   @IsOptional() @IsString() dueDate?: string;
   @IsOptional() @IsString() warehouseId?: string; // bodega destino (MaterialWarehouse)
+  /** Sede de la orden (`Branch.name`, lo que el legacy guarda en `purchase.refer`). */
+  @IsOptional() @IsString() branch?: string;
   @IsOptional() @IsString() categoryRef?: string; // categoría de compra (PurchaseCategory.name)
   @IsOptional() @IsString() notes?: string;
   @IsArray() @ValidateNested({ each: true }) @Type(() => OrderItemDto) items!: OrderItemDto[];
@@ -53,6 +55,9 @@ export class UpdateOrderDto extends ConsignacionDto {
   @IsOptional() @IsString() dueDate?: string;
   @IsOptional() @IsString() categoryRef?: string;
   @IsOptional() @IsString() notes?: string;
+  /** Bodega destino y sede: se corrigen en cualquier estado mientras no se haya recibido nada. */
+  @IsOptional() @IsString() warehouseId?: string;
+  @IsOptional() @IsString() branch?: string;
   @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => OrderItemDto) items?: OrderItemDto[];
 }
 
@@ -92,8 +97,14 @@ export class CategoryNameDto {
 export class ReceiveItemDto {
   @IsString() itemId!: string;
   @IsInt() @Min(0) received!: number; // cantidad recibida ABSOLUTA
+  /**
+   * Producto de la bodega destino al que se suma lo recibido. Sin él se usa el ligado
+   * al ítem o el del mismo nombre en la bodega; si no hay ninguno, se crea.
+   */
+  @IsOptional() @IsString() materialId?: string;
 }
 export class ReceiveOrderDto {
+  /** Bodega donde entra el material. Sin ella se usa la de la orden; si la orden tampoco tiene, es un error. */
   @IsOptional() @IsString() warehouseId?: string;
   @IsArray() @ValidateNested({ each: true }) @Type(() => ReceiveItemDto) items!: ReceiveItemDto[];
 }

@@ -1,3 +1,4 @@
+import { hoyEnColombia } from '../common/fecha-colombia';
 import { BadRequestException, NotFoundException } from '../core/http/errores';
 import { Logger } from '../core/logger';
 import { PrismaService } from '../prisma/prisma.service';
@@ -414,6 +415,14 @@ export class EinvoiceEmitService {
       include: { items: true, subscriber: { include: { branch: { select: { legacyId: true } } } } },
     });
     if (!invoice) throw new NotFoundException('Factura no encontrada');
+    // El mes adelantado se factura el día que se cobra (ver
+    // `FacturasService.emitirMesesAdelantados`), pero ante la DIAN no se timbra un
+    // servicio que todavía no se presta: entra en el lote de su mes, desde el día 1.
+    if (new Date(invoice.invoiceDate) > hoyEnColombia()) {
+      throw new BadRequestException(
+        `La factura #${invoice.tid} es de un mes que aún no empieza: se timbra a partir del ${new Date(invoice.invoiceDate).toISOString().slice(0, 10)}.`,
+      );
+    }
 
     const sub = invoice.subscriber;
     const wantTv = !!sub?.eInvoiceTv;

@@ -28,7 +28,7 @@ import { proximoDiaHabil } from '../common/festivos';
  */
 
 /** Los dos capitalizados que conviven en los datos para el efectivo. */
-const CASH = ['Cash', 'cash'];
+export const CASH = ['Cash', 'cash'];
 
 /**
  * `Saldo 2026-07-16` y NADA más.
@@ -102,9 +102,15 @@ export const aporteEfectivo = (t: { credit: Prisma.Decimal | number; debit: Pris
  * Excluye la pata EXPENSE del cierre de ESE mismo día, para poder ver el efectivo que
  * había ANTES de barrerlo. Sin esto, consultar un día ya cerrado devuelve 0: correcto
  * (el cajón quedó vacío) pero inútil para mostrar el arqueo.
+ *
+ * NO usar `NOT: { note, type }`: en SQL queda `NOT (note = … AND type = 'EXPENSE')`, que
+ * con `note` NULL da NULL y descarta la fila. Así se perdía todo GASTO SIN NOTA: el
+ * cierre de Villanueva del 2026-09-23 barrió $1.828.862 en vez de $1.020.862 porque
+ * no descontó un egreso de $808.000 sin nota. Va dentro de `AND` para no pisar el `OR`
+ * de `whereEfectivo` al esparcirlos juntos.
  */
 export const sinElBarridoDelDia = (d: Date): Prisma.TransactionWhereInput => ({
-  NOT: { note: notaSaldo(d), type: 'EXPENSE' },
+  AND: [{ OR: [{ note: null }, { note: { not: notaSaldo(d) } }, { type: { not: 'EXPENSE' } }] }],
 });
 
 /**

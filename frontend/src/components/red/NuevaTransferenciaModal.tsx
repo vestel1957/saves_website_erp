@@ -8,6 +8,7 @@ import { Modal } from "@/components/Modal";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { listaJson, mensajeDeError } from "@/lib/errores";
+import { esCajera } from "@/lib/treasury";
 
 type Bodega = { id: string; name: string; branchLegacy: number | null; branchName: string | null };
 
@@ -33,9 +34,11 @@ export function NuevaTransferenciaModal({
   onCreated?: () => void;
   sedeOrigen?: number;
 }) {
-  const { authFetch, can } = useAuth();
+  const { authFetch, can, user } = useAuth();
   // Mandar equipo de una sede a OTRA es solo del encargado de bodega (2026-07-30).
-  const canEntreSedes = can("inventory.admin");
+  // La cajera trae `inventory.admin` desde 2026-09-17 pero sigue en su sede (espejo
+  // de `esJefeDeBodega` en `network/bodega-scope.ts`).
+  const canEntreSedes = can("inventory.admin") && !esCajera(user);
 
   const [warehouses, setWarehouses] = useState<Bodega[]>([]);
   const [fromId, setFromId] = useState("");

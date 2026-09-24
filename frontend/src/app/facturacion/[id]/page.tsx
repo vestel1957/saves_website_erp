@@ -467,6 +467,11 @@ export default function FacturaDetallePage() {
         rows={f.payments ?? []}
         empty="Sin pagos registrados."
         columns={[
+          // Código de la transacción (el mismo de Tesorería): contabilidad cruza el pago
+          // con ese número. Vacío = pago nacido aquí que aún no ha viajado al legacy.
+          { key: "codigo", header: "Código", render: (r: any) => r.codigo != null
+            ? <span className="font-mono text-[12px] text-text-secondary">{r.codigo}</span>
+            : <span className="text-text-tertiary">—</span> },
           { key: "date", header: "Fecha", render: (r: any) => fmtDate(r.date) },
           { key: "amount", header: "Monto", align: "right", render: (r: any) => <span className="font-semibold text-success-text">{cop(r.amount)}</span> },
           { key: "method", header: "Método", render: (r: any) => r.method ?? "—" },

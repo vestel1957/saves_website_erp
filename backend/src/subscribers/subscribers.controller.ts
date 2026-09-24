@@ -120,11 +120,19 @@ export class SubscribersController {
     return this.alta.afiliaciones();
   }
 
+  /** Funcionarios que el asistente de alta ofrece como afiliador (sin cajeras). */
+  afiliadores() {
+    return this.subscribers.afiliadores();
+  }
+
   branchesStats(user: AuthUser) {
     return this.subscribers.branchesStats(user);
   }
 
   // ── Operaciones masivas por FILTRO (corta/reconecta TODOS los que cumplen) ──
+  bulkIds(dto: BulkFilterDto, user: AuthUser) {
+    return this.subscribers.bulkIds(dto, user);
+  }
   bulkCut(dto: BulkFilterDto, user: AuthUser) {
     this.soloMira(user, 'cortar servicio en masa');
     return this.subscribers.cutByFilter(dto, user);

@@ -166,8 +166,11 @@ export class NetworkService {
     return new Map(filas.map((f) => [f.napId as string, f._count._all]));
   }
 
-  private mapNap(n: { id: string; name: string; branch: { name: string } | null; vlan: { vlan: number } | null; portCount: number; _count: { ports: number }; address: string; gpsLat: string | null; gpsLng: string | null }) {
-    return { id: n.id, name: n.name, branch: n.branch?.name ?? null, vlan: n.vlan?.vlan ?? null, portCount: n.portCount, portsRegistered: n._count.ports, address: n.address, gps: n.gpsLat && n.gpsLng ? { lat: n.gpsLat, lng: n.gpsLng } : null };
+  // `branchId`/`vlanId` (los ids, no los rótulos) viajan además de `branch`/`vlan`
+  // porque el modal de EDITAR necesita preseleccionar la VLAN actual y pedir las de
+  // esa sede (`GET /network/vlans?branchId=`). Lo que se pinta sigue siendo el nombre.
+  private mapNap(n: { id: string; name: string; branchId: string | null; branch: { name: string } | null; vlanId: string | null; vlan: { vlan: number } | null; portCount: number; _count: { ports: number }; address: string; gpsLat: string | null; gpsLng: string | null }) {
+    return { id: n.id, name: n.name, branchId: n.branchId, branch: n.branch?.name ?? null, vlanId: n.vlanId, vlan: n.vlan?.vlan ?? null, portCount: n.portCount, portsRegistered: n._count.ports, address: n.address, gps: n.gpsLat && n.gpsLng ? { lat: n.gpsLat, lng: n.gpsLng } : null };
   }
 
   /** Una NAP por id (para la vista de detalle). */
@@ -182,27 +185,31 @@ export class NetworkService {
    * select de alta de NAP (que sólo mira id/vlan/detail) y la pantalla de
    * administración /red/vlans, que además necesita sede, datos de OLT y cuántas
    * NAPs cuelgan de cada una (una VLAN con NAPs no se puede borrar).
+   *
+   * `branchId` acota a una sede y el valor `none` pesca las que el legacy dejó
+   * sin sede (un `sede` que ya no existe como grupo): sin esa puerta no habría
+   * forma de verlas desde una pantalla que entra por sede.
    */
   async vlans(branchId?: string) {
-    const where: Prisma.VlanWhereInput = branchId ? { branchId } : {};
+    const where: Prisma.VlanWhereInput = branchId === 'none' ? { branchId: null } : branchId ? { branchId } : {};
     const rows = await this.prisma.vlan.findMany({
       where,
       orderBy: [{ vlan: 'asc' }, { detail: 'asc' }],
       select: {
-        id: true, vlan: true, detail: true, olt: true, tray: true, oltPort: true,
+        id: true, vlan: true, detail: true, olt: true, oltId: true, tray: true, oltPort: true,
         branchId: true, branch: { select: { name: true } }, _count: { select: { naps: true } },
       },
     });
     return rows.map((v) => ({
-      id: v.id, vlan: v.vlan, detail: v.detail, olt: v.olt, tray: v.tray, oltPort: v.oltPort,
+      id: v.id, vlan: v.vlan, detail: v.detail, olt: v.olt, oltId: v.oltId, tray: v.tray, oltPort: v.oltPort,
       branchId: v.branchId, branch: v.branch?.name ?? null, naps: v._count.naps,
     }));
   }
 
-  /** Sedes con su número de cajas NAP (para la vista de red, sin depender de otros módulos). */
+  /** Sedes con su número de cajas NAP y de VLANs (las dos pantallas de red entran por sede). */
   async branches() {
-    const rows = await this.prisma.branch.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true, _count: { select: { naps: true } } } });
-    return rows.map((b) => ({ id: b.id, name: b.name, naps: b._count.naps }));
+    const rows = await this.prisma.branch.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true, _count: { select: { naps: true, vlans: true } } } });
+    return rows.map((b) => ({ id: b.id, name: b.name, naps: b._count.naps, vlans: b._count.vlans }));
   }
 
   /**

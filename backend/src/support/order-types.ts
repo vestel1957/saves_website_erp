@@ -17,7 +17,7 @@
  * reportes sigan agrupando por el mismo texto.
  *
  * No es una lista cerrada para toda la API: el chatbot abre órdenes con tipos
- * propios ('PQR', 'Cambio de titular') y esos siguen siendo válidos. Lo que este
+ * propios ('PQR') y esos siguen siendo válidos. Lo que este
  * catálogo garantiza es lo que se ofrece en la web.
  */
 
@@ -109,6 +109,17 @@ export function motivoDeRetiroCanonico(v?: string | null): string | null {
   return MOTIVOS_RETIRO.find((x) => x.toLowerCase() === m) ?? null;
 }
 
+/**
+ * El servicio pasa a nombre de otra persona. En el legacy nunca fue una orden (se
+ * corregía la ficha en mostrador); aquí sí, y es la única que pide los datos del
+ * nuevo titular (`Ticket.holderTo`). Ver `common/cambio-titular.ts`.
+ */
+export const CAMBIO_TITULAR = 'Cambio de titular';
+
+/** ¿Esta orden cambia el titular del servicio? */
+export const esCambioTitular = (tipo?: string | null): boolean =>
+  (tipo || '').trim().toLowerCase() === CAMBIO_TITULAR.toLowerCase();
+
 export const CLASES_ORDEN = ['servicio', 'reclamo', 'incidente'] as const;
 export type ClaseOrden = (typeof CLASES_ORDEN)[number];
 
@@ -143,6 +154,7 @@ export const DETALLES_POR_CLASE: Record<ClaseOrden, string[]> = {
     'Activacion',
     'Cambio de clave',
     'Cambio de equipo',
+    CAMBIO_TITULAR,
     'Traslado',
     'Traslado interno De Equipos Red en cliente final',
     'Migracion',

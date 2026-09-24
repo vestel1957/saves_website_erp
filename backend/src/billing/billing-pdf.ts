@@ -26,7 +26,7 @@ type InvoiceDetail = {
   notes?: string | null;
   subscriber: { name: string; abonado: number; docType: string | null; docNumber: string | null; email: string | null; phone: string | null; branch: string | null } | null;
   items: { product: string | null; description: string | null; qty: number; price: number; taxRate: number; subtotal: number; taxTotal: number }[];
-  payments: { date: Date | string; amount: number; method: string | null; status: string | null }[];
+  payments: { date: Date | string; amount: number; method: string | null; status: string | null; codigo?: number | null }[];
 };
 
 /** Factura de venta (impresión estándar Vestel). */
@@ -121,15 +121,18 @@ function renderInvoice(doc: PDFKit.PDFDocument, inv: InvoiceDetail) {
   if (inv.payments?.length) {
     B.section(doc, 'Pagos aplicados');
     const pc: B.Col[] = [
-      { label: 'Fecha', x: 46, w: 90 },
-      { label: 'Medio', x: 150, w: 140 },
-      { label: 'Estado', x: 300, w: 120 },
+      // El código de la transacción es el número con el que contabilidad cruza el
+      // pago contra la lista de movimientos de Tesorería.
+      { label: 'Código', x: 46, w: 80 },
+      { label: 'Fecha', x: 130, w: 80 },
+      { label: 'Medio', x: 215, w: 120 },
+      { label: 'Estado', x: 340, w: 95 },
       { label: 'Valor', x: 440, w: 110, align: 'right' },
     ];
     B.thead(doc, pc);
     inv.payments.forEach((p, i) =>
       B.trow(doc, pc, [
-        fmt(p.date), p.method ?? '—', p.status ?? '—',
+        p.codigo != null ? String(p.codigo) : '—', fmt(p.date), p.method ?? '—', p.status ?? '—',
         { t: cop(p.amount), color: B.OK, bold: true },
       ], i),
     );

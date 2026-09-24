@@ -18,7 +18,8 @@ import { can, PERM, type AuthUser } from "@/lib/auth";
 import { MiCalendario, type VisitaCalendario } from "@/components/soporte/MiCalendario";
 import { MiniCalendario } from "@/components/agenda/MiniCalendario";
 import {
-  diaISO, inicioDeDia, nombreDeMes, rejillaDeMes, semanaDe, sumarDias, sumarMeses, type Evento,
+  colorDe, cruzaElDia, diaISO, horaCorta, inicioDe, inicioDeDia, nombreDeMes, rejillaDeMes, semanaDe, sumarDias,
+  sumarMeses, type Evento,
 } from "@/components/agenda/calendario";
 
 type Vista = "dia" | "semana" | "mes";
@@ -212,24 +213,61 @@ export default function MiAgendaPage() {
     backend escribe al crearlas) y no todas: en la ventana de un mes hay miles del
     legacy, y esta pantalla es "mi agenda".
 
-    Al técnico no se le piden: su API de eventos es de otras áreas y su pantalla no
-    tiene dónde pintarlas.
+    LOS EVENTOS A LOS QUE ME INVITAN (2026-09-23, a pedido del usuario). Un evento
+    puede llevar funcionarios invitados, y a cada uno le aparece aquí —técnicos
+    incluidos, en su vista de «Hoy»—. Por eso se piden a `/omni/events/mine`, que no
+    cuelga de un área: devuelve lo que puse yo y aquello a lo que me invitaron.
   */
   const [tareas, setTareas] = useState<Evento[]>([]);
   const [recargaTareas, setRecargaTareas] = useState(0);
   const [modalAbierto, setModalAbierto] = useState(false);
   const [enEdicion, setEnEdicion] = useState<Evento | null>(null);
 
+  // En «Hoy» no hay rejilla, pero los eventos del día sí se enseñan: la ventana es ese día.
+  const tareasDesde = desde ?? (vistaResuelta ? fecha : null);
+  const tareasHasta = hasta ?? (vistaResuelta ? fecha : null);
   useEffect(() => {
-    if (authLoading || !agendable || !desde || !hasta || !user?.name) return;
+    if (authLoading || !tareasDesde || !tareasHasta || !user) return;
     let vivo = true;
-    const qs = new URLSearchParams({ from: desde, to: hasta, assignedBy: user.name });
-    void authFetch(`/omni/events/calendar?${qs}`)
+    const qs = new URLSearchParams({ from: tareasDesde, to: tareasHasta });
+    void authFetch(`/omni/events/mine?${qs}`)
       .then((r) => (r.ok ? r.json() : { items: [] }))
       .then((j) => { if (vivo) setTareas(j?.items ?? []); })
       .catch(() => { if (vivo) setTareas([]); });
     return () => { vivo = false; };
-  }, [authLoading, authFetch, agendable, desde, hasta, user?.name, recargaTareas]);
+  }, [authLoading, authFetch, tareasDesde, tareasHasta, user, recargaTareas]);
+
+  /** Lo que es mío y puedo cambiar; lo de otro (me invitaron) sólo se mira. */
+  const editable = (e: Evento | null) => !e || (agendable && e.propio !== false);
+
+  // El aviso de la campanita trae `?evento=…&dia=…`: se va a ese día y se abre el evento.
+  const [eventoPedido, setEventoPedido] = useState<string | null>(null);
+  useEffect(() => {
+    try {
+      const q = new URLSearchParams(window.location.search);
+      const dia = q.get("dia");
+      if (dia && /^\d{4}-\d{2}-\d{2}$/.test(dia)) {
+        const [y, m, dd] = dia.split("-").map(Number);
+        setAncla(new Date(y, m - 1, dd));
+        setMesDelMini(new Date(y, m - 1, 1));
+      }
+      setEventoPedido(q.get("evento"));
+    } catch { /* sin query: nada que abrir */ }
+  }, []);
+  useEffect(() => {
+    if (!eventoPedido) return;
+    const e = tareas.find((t) => t.id === eventoPedido);
+    if (!e) return;
+    setEventoPedido(null);
+    setEnEdicion(e);
+    setModalAbierto(true);
+  }, [eventoPedido, tareas]);
+
+  /** Los eventos del día que se mira, para la vista «Hoy». */
+  const eventosDelDia = useMemo(
+    () => tareas.filter((t) => cruzaElDia(t, ancla)).sort((a, b) => inicioDe(a).getTime() - inicioDe(b).getTime()),
+    [tareas, ancla],
+  );
 
   const abrirTarea = (e: Evento | null, dia?: Date) => {
     setEnEdicion(e);
@@ -383,6 +421,32 @@ export default function MiAgendaPage() {
 
       {vista === "dia" ? (
        <>
+      {/* Los eventos del día (reuniones, capacitaciones): los míos y a los que me
+          invitaron. Van arriba y cortos: la jornada de visitas sigue siendo lo principal. */}
+      {eventosDelDia.length > 0 && (
+        <div className="flex flex-col gap-1.5 rounded-xl border border-border-subtle bg-surface p-2.5">
+          <p className="px-1 text-[11px] font-semibold uppercase tracking-wide text-text-tertiary">
+            {esHoy ? "Eventos de hoy" : "Eventos de ese día"}
+          </p>
+          {eventosDelDia.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => abrirTarea(t)}
+              className="foco tap flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-surface-2"
+            >
+              <i className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: colorDe(t) }} />
+              <span className="w-[62px] shrink-0 text-[12px] tabular-nums text-text-tertiary">
+                {t.allDay ? "Todo el día" : horaCorta(inicioDe(t))}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-text-primary">{t.title?.trim() || "Evento"}</span>
+              {t.propio === false && t.assignedBy && (
+                <span className="hidden shrink-0 text-[11.5px] text-text-tertiary sm:inline">Te invitó {t.assignedBy}</span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
       {/* La orden que tiene EMPEZADA, cuando NO es de este día: una que dejó a medias
           ayer, o una sin agendar. Sin este cartel la pantalla enseñaría la jornada sin
           poder empezar nada y el bloqueo se descubriría chocando con él. Ver
@@ -581,7 +645,7 @@ export default function MiAgendaPage() {
               tareas={tareas}
               hoyISO={hoyISO}
               onVerDia={verDia}
-              onAbrirTarea={agendable ? (t) => abrirTarea(t) : undefined}
+              onAbrirTarea={(t) => abrirTarea(t)}
               onNuevaTarea={agendable ? (dia) => abrirTarea(null, new Date(dia.getFullYear(), dia.getMonth(), dia.getDate(), 9, 0)) : undefined}
             />
 
@@ -600,11 +664,12 @@ export default function MiAgendaPage() {
 
       {/* El mismo formulario de `/agenda`: una tarea agendada aquí es un evento de la
           agenda de la empresa, no una cosa aparte que sólo viva en esta pantalla. */}
-      {agendable && (
+      {(agendable || enEdicion) && (
         <EventoModal
           abierto={modalAbierto}
           evento={enEdicion}
           fechaSugerida={fechaSugerida}
+          soloLectura={!editable(enEdicion)}
           onCerrar={() => setModalAbierto(false)}
           onGuardado={() => setRecargaTareas((n) => n + 1)}
         />

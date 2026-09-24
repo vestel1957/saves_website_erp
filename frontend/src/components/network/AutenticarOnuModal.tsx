@@ -81,7 +81,11 @@ export function AutenticarOnuModal({
    * abonados que ya cuelgan de ahí y precargar con eso. Evita que el técnico
    * tenga que saberse la VLAN y el perfil de cada puerto de memoria.
    */
-  const [sugerencia, setSugerencia] = useState<{ basadoEn: number } | null>(null);
+  const [sugerencia, setSugerencia] = useState<{
+    basadoEn: number;
+    /** Puerto sin ONUs: lo precargado sale del catálogo de VLANs y del perfil flexible. */
+    puertoVacio?: { vlanDeCatalogo: string | null; vlanMotivo: string | null; srvMotivo: string | null; lineMotivo: string | null } | null;
+  } | null>(null);
   useEffect(() => {
     if (!open || form.slot === "" || form.port === "") { setSugerencia(null); return; }
     let vigente = true;
@@ -93,7 +97,7 @@ export function AutenticarOnuModal({
       void authFetch(`/network/olt/${oltId}/sugerencia?frame=${Number(form.frame) || 0}&slot=${form.slot}&port=${form.port}${qModel}`)
         .then((r) => r.json())
         .then((d) => {
-          if (!vigente || !d?.sugerencia?.basadoEn) return;
+          if (!vigente || !(d?.sugerencia?.basadoEn || d?.sugerencia?.puertoVacio)) return;
           const s = d.sugerencia;
           setSugerencia(s);
           // Solo rellena lo que el usuario aún no tocó: nunca pisa una elección suya.
@@ -252,11 +256,22 @@ export function AutenticarOnuModal({
         <p className="text-[12px] text-text-tertiary">Cargando perfiles del equipo por SSH… (si la OLT no es alcanzable puede tardar/fallar; puede escribir los IDs a mano).</p>
       )}
 
-      {sugerencia && (
+      {sugerencia && !sugerencia.puertoVacio && (
         <p className="text-[12px] text-text-tertiary">
           <Icon name="wand-sparkles" size={13} className="mr-1 inline text-brand" />
           Precargado con la configuración de los <b>{sugerencia.basadoEn}</b> servicios que ya hay en este puerto.
           Puede cambiar cualquier campo.
+        </p>
+      )}
+      {sugerencia?.puertoVacio && (
+        <p className="text-[12px] text-text-tertiary">
+          <Icon name="wand-sparkles" size={13} className="mr-1 inline text-brand" />
+          Este puerto aún no tiene ninguna ONU. Se precargó la VLAN del catálogo de la sede, el perfil flexible y el
+          srv-profile del modelo.
+          {[sugerencia.puertoVacio.vlanMotivo && !sugerencia.puertoVacio.vlanDeCatalogo ? sugerencia.puertoVacio.vlanMotivo : null,
+            sugerencia.puertoVacio.lineMotivo, sugerencia.puertoVacio.srvMotivo]
+            .filter(Boolean)
+            .map((m) => <span key={m as string} className="block text-warning-text">Falta: {m}.</span>)}
         </p>
       )}
 

@@ -268,7 +268,7 @@ export class CollectionsService {
   async listBySubscriber(subscriberId: string) {
     const rows = await this.prisma.callLog.findMany({
       where: { subscriberId },
-      orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
+      orderBy: [{ date: 'desc' }, { time: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
     });
     return rows.map((c) => ({
       id: c.id, callType: c.callType, responseType: c.responseType, responseDetail: c.responseDetail,

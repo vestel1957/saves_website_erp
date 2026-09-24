@@ -40,8 +40,13 @@ export class OmniController {
   /** Opciones de los desplegables del filtro (gente que aparece, prioridades). */
   eventFilters() { return this.omni.eventFilters(); }
   createEvent(dto: EventDto, user: AuthUser) { return this.omni.createEvent(dto, user); }
-  updateEvent(id: string, dto: UpdateEventDto) { return this.omni.updateEvent(id, dto); }
-  deleteEvent(id: string) { return this.omni.deleteEvent(id); }
+  updateEvent(id: string, dto: UpdateEventDto, user: AuthUser) { return this.omni.updateEvent(id, dto, user); }
+  deleteEvent(id: string, user: AuthUser) { return this.omni.deleteEvent(id, user); }
+  /**
+   * Los eventos de quien pregunta (los que puso y a los que lo invitaron). Sin área:
+   * a un evento se invita a cualquier funcionario y tiene que poder verlo.
+   */
+  myEvents(from: string | undefined, to: string | undefined, user: AuthUser) { return this.omni.myEvents(from, to, user); }
 
   // Los EVENTOS son la agenda (`/agenda`, que sí es de la cajera) y quedan como están.
   // Las COTIZACIONES no: una cotización se convierte en FACTURA, y facturar es de

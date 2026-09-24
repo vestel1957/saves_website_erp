@@ -4,7 +4,10 @@ import type {
   AgingBuckets,
   BalanceSheet,
   CashFlow,
+  CostCenterBranch,
+  CostCenterRow,
   IncomeStatement,
+  IncomeStatementByCenter,
   JournalEntry,
   Ledger,
   OpenItems,
@@ -136,6 +139,9 @@ export function accountingApi(authFetch: Fetcher) {
     getIncomeStatement: (r?: { from?: string; to?: string }) => get<IncomeStatement>(`/accounting/reports/income-statement${qs(r)}`),
     getBalanceSheet: (r?: { from?: string; to?: string }) => get<BalanceSheet>(`/accounting/reports/balance-sheet${qs(r)}`),
     getCashFlow: (r?: { from?: string; to?: string }) => get<CashFlow>(`/accounting/reports/cash-flow${qs(r)}`),
+    /** Estado de resultados por sede (centro de costo), con su cuadre contra el total. */
+    getIncomeStatementByCenter: (r?: { from?: string; to?: string }) =>
+      get<IncomeStatementByCenter>(`/accounting/reports/income-statement-by-center${qs(r)}`),
     getMonthlySummary: (months = 6) => get<MonthlySummary>(`/accounting/reports/monthly-summary?months=${months}`),
 
     // cartera / CxP
@@ -153,6 +159,15 @@ export function accountingApi(authFetch: Fetcher) {
     previewClose: (id: string) => get<ClosePreview>(`/accounting/periods/${id}/preview`),
     closePeriod: (id: string) => send<ClosedPeriod>(`/accounting/periods/${id}/close`, "POST"),
     reopenPeriod: (id: string) => send<FiscalPeriodRow>(`/accounting/periods/${id}/reopen`, "POST"),
+
+    // centros de costo
+    getCostCenters: (all = false) => get<CostCenterRow[]>(`/accounting/cost-centers${all ? "?all=1" : ""}`),
+    getCostCenterBranches: () => get<CostCenterBranch[]>("/accounting/cost-centers/sedes"),
+    createCostCenter: (data: { code: string; name: string; parentId?: string | null }) =>
+      send<CostCenterRow>("/accounting/cost-centers", "POST", data),
+    /** Nombre, activo y sede (`branchLegacyId`: el gid; `null` la desenlaza). */
+    updateCostCenter: (id: string, data: { name?: string; isActive?: boolean; branchLegacyId?: number | null }) =>
+      send<CostCenterRow>(`/accounting/cost-centers/${id}`, "PATCH", data),
 
     // mapeo de cuentas
     getMappings: () => get<AccountMappingRow[]>("/accounting/mappings"),

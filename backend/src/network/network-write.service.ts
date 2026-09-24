@@ -93,9 +93,11 @@ export class CreateVlanDto {
   @IsString() @MinLength(1) branchId!: string;
   @Type(() => Number) @IsInt() @Min(1) @Max(4094) vlan!: number;
   @IsString() @MinLength(1) detail!: string;
+  /** Texto heredado; si viene `oltId` se ignora y se escribe el nombre de esa OLT. */
   @IsOptional() @IsString() olt?: string;
-  @IsOptional() @Type(() => Number) @IsInt() tray?: number;
-  @IsOptional() @Type(() => Number) @IsInt() oltPort?: number;
+  @IsOptional() @IsString() oltId?: string;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) tray?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) oltPort?: number;
 }
 export class UpdateNapDto {
   @IsOptional() @IsString() name?: string;
@@ -393,6 +395,9 @@ export class NetworkWriteService {
       );
     }
 
+    // La cajera (que trae `inventory.admin` desde 2026-09-17) aprueba sólo las de su sede.
+    exigirBodegaDeSuSede(await sedesDeUsuario(this.prisma, user), from ?? { name: t.fromWarehouseName ?? 'origen', branchLegacy: null });
+
     if (t.requestedById && t.requestedById === user.id) throw new BadRequestException('No puedes aprobar tu propia solicitud; debe aprobarla inventario');
     if (!t.toWarehouseId || !t.fromWarehouseId) throw new BadRequestException('La solicitud no tiene bodegas válidas (creada antes del flujo de aprobación)');
 
@@ -672,6 +677,8 @@ export class NetworkWriteService {
     const t = await this.prisma.equipmentTransfer.findUnique({ where: { id } });
     if (!t) throw new NotFoundException('Transferencia no encontrada');
     if (t.status !== 'Pendiente') throw new BadRequestException('Solo se puede rechazar una solicitud pendiente');
+    const { from } = await this.bodegasDe(t);
+    exigirBodegaDeSuSede(await sedesDeUsuario(this.prisma, user), from ?? { name: t.fromWarehouseName ?? 'origen', branchLegacy: null });
     await this.prisma.equipmentTransfer.update({
       where: { id },
       data: { status: 'Rechazada', approvedById: user.id, approvedByName: user.name, approvedAt: new Date(), rejectReason: reason?.trim() || null },
@@ -799,6 +806,27 @@ export class NetworkWriteService {
     return { id, status: 'Disponible' };
   }
 
+  /**
+   * La sede como la escriben naps/vlans/puertos: NO es `Branch.legacyId`
+   * (`customers_group`) sino el id de la BODEGA (`almacen_equipos`), que es contra lo
+   * que el legacy resuelve el nombre (`Redes_model.php:250`). Los dos catálogos se
+   * parecen y por eso el ETL las dejó a todas en la sede de al lado
+   * (`prisma/migrate-sede-naps-almacen-2026-09.ts`).
+   *
+   * De cada sede se toma la bodega de `legacyId` más bajo: la que se llama como el
+   * pueblo, no las "cabecera". Una sede sin bodega (Mocoa) devuelve 0 — se guarda
+   * igual, pero sin sede legible desde el legacy.
+   */
+  private async sedeRedDe(branchLegacy: number | null): Promise<number> {
+    if (branchLegacy == null) return 0;
+    const bodega = await this.prisma.equipmentWarehouse.findFirst({
+      where: { branchLegacy },
+      orderBy: { legacyId: 'asc' },
+      select: { legacyId: true },
+    });
+    return bodega?.legacyId ?? 0;
+  }
+
   /** Alta de caja NAP: crea la NAP y genera sus puertos (todos disponibles). */
   async createNap(dto: CreateNapDto) {
     const branch = await this.prisma.branch.findUnique({ where: { id: dto.branchId } });
@@ -812,6 +840,7 @@ export class NetworkWriteService {
     const name = dto.name.trim();
     const dup = await this.prisma.nap.findFirst({ where: { branchId: branch.id, name: { equals: name, mode: 'insensitive' } }, select: { id: true } });
     if (dup) throw new BadRequestException('Ya existe una NAP con ese nombre en la sede');
+    const sedeRed = await this.sedeRedDe(branch.legacyId);
 
     return this.prisma.$transaction(async (tx) => {
       const [napMax, portMax] = await Promise.all([
@@ -821,7 +850,7 @@ export class NetworkWriteService {
       const legacyId = (napMax._max.legacyId ?? 0) + 1;
       const nap = await tx.nap.create({
         data: {
-          legacyId, branchId: branch.id, sedeLegacy: branch.legacyId ?? 0,
+          legacyId, branchId: branch.id, sedeLegacy: sedeRed,
           vlanId: vlan?.id ?? null, vlanLegacy: vlan?.legacyId ?? 0,
           name, portCount: dto.portCount, address: dto.address?.trim() ?? '',
           gpsLat: dto.gpsLat?.trim() || null, gpsLng: dto.gpsLng?.trim() || null,
@@ -829,7 +858,7 @@ export class NetworkWriteService {
       });
       let pl = portMax._max.legacyId ?? 0;
       const ports = Array.from({ length: dto.portCount }, (_, i) => ({
-        legacyId: ++pl, sedeLegacy: branch.legacyId ?? 0, vlanLegacy: vlan?.legacyId ?? 0,
+        legacyId: ++pl, sedeLegacy: sedeRed, vlanLegacy: vlan?.legacyId ?? 0,
         napId: nap.id, napLegacy: legacyId, port: i + 1, status: 'Disponible', assignedLegacy: 0, detail: '',
       }));
       await tx.port.createMany({ data: ports });
@@ -838,14 +867,65 @@ export class NetworkWriteService {
   }
 
   // --- VLANs (CRUD) ---
+  /**
+   * Dónde vive la VLAN en la planta. La OLT se elige de las registradas y tiene
+   * que ser de la MISMA sede; bandeja y puerto van juntos. Y un puerto PON lleva
+   * una sola VLAN: si el catálogo ya le da otra, se rechaza, porque el alta del
+   * primer abonado de ese puerto sale de aquí (`OltService.vlansDeCatalogo`) y
+   * con dos no sabría cuál usar.
+   */
+  private async ubicacionDeVlan(
+    dto: CreateVlanDto,
+    branchId: string,
+    previa?: { id: string; vlan: number; tray: number | null; oltPort: number | null },
+  ) {
+    const excluirId = previa?.id;
+    const tray = dto.tray ?? null;
+    const oltPort = dto.oltPort ?? null;
+    if ((tray === null) !== (oltPort === null)) {
+      throw new BadRequestException('La bandeja y el puerto de OLT van juntos: indique los dos o ninguno.');
+    }
+    let olt: string | null = dto.olt?.trim() || null;
+    let oltId: string | null = null;
+    if (dto.oltId) {
+      const o = await this.prisma.olt.findUnique({ where: { id: dto.oltId }, select: { id: true, name: true, branchId: true } });
+      if (!o) throw new NotFoundException('OLT no encontrada');
+      if (o.branchId !== branchId) throw new BadRequestException(`La OLT ${o.name} no es de la sede de esta VLAN.`);
+      oltId = o.id;
+      olt = o.name;
+    }
+    // Lo que ya estaba así no se vuelve a juzgar: el legacy trae puertos con
+    // dos VLANs y editar el barrio de una de ellas no puede quedar bloqueado.
+    // La tabla de `/red/vlans` enseña esos choques contra la OLT.
+    const sinMoverse = !!previa && previa.vlan === dto.vlan && previa.tray === tray && previa.oltPort === oltPort;
+    if (tray !== null && oltPort !== null && !sinMoverse) {
+      const choque = await this.prisma.vlan.findFirst({
+        where: {
+          branchId, tray, oltPort, vlan: { not: dto.vlan },
+          ...(excluirId ? { id: { not: excluirId } } : {}),
+          ...(oltId ? { OR: [{ oltId }, { oltId: null }] } : {}),
+        },
+        select: { vlan: true, detail: true },
+      });
+      if (choque) {
+        throw new BadRequestException(
+          `El puerto ${tray}/${oltPort} ya tiene la VLAN ${choque.vlan}${choque.detail ? ` (${choque.detail})` : ''} en el catálogo. `
+          + 'Un puerto PON lleva una sola VLAN: corrija esa antes.',
+        );
+      }
+    }
+    return { olt, oltId, tray, oltPort };
+  }
+
   async createVlan(dto: CreateVlanDto) {
     const branch = await this.prisma.branch.findUnique({ where: { id: dto.branchId } });
     if (!branch) throw new NotFoundException('Sede no encontrada');
+    const ubic = await this.ubicacionDeVlan(dto, branch.id);
     const max = await this.prisma.vlan.aggregate({ _max: { legacyId: true } });
     const v = await this.prisma.vlan.create({
       data: {
-        legacyId: (max._max.legacyId ?? 0) + 1, branchId: branch.id, sedeLegacy: branch.legacyId ?? 0,
-        vlan: dto.vlan, detail: dto.detail.trim(), olt: dto.olt ?? null, tray: dto.tray ?? null, oltPort: dto.oltPort ?? null,
+        legacyId: (max._max.legacyId ?? 0) + 1, branchId: branch.id, sedeLegacy: await this.sedeRedDe(branch.legacyId),
+        vlan: dto.vlan, detail: dto.detail.trim(), ...ubic,
       },
     });
     return { id: v.id, vlan: v.vlan, detail: v.detail };
@@ -864,9 +944,10 @@ export class NetworkWriteService {
       if (!branch) throw new NotFoundException('Sede no encontrada');
       branchData = { branchId: branch.id, sedeLegacy: branch.legacyId ?? 0 };
     }
+    const ubic = await this.ubicacionDeVlan(dto, branchData?.branchId ?? v.branchId ?? dto.branchId, v);
     const upd = await this.prisma.vlan.update({
       where: { id },
-      data: { vlan: dto.vlan, detail: dto.detail.trim(), olt: dto.olt ?? null, tray: dto.tray ?? null, oltPort: dto.oltPort ?? null, ...branchData },
+      data: { vlan: dto.vlan, detail: dto.detail.trim(), ...ubic, ...branchData },
     });
     return { id: upd.id, vlan: upd.vlan, detail: upd.detail };
   }
@@ -890,7 +971,12 @@ export class NetworkWriteService {
       where: { id },
       data: {
         name: dto.name?.trim() ?? nap.name, address: dto.address?.trim() ?? nap.address,
-        gpsLat: dto.gpsLat?.trim() ?? nap.gpsLat, gpsLng: dto.gpsLng?.trim() ?? nap.gpsLng,
+        // Campo de GPS en blanco = borrar la coordenada, y borrarla es dejarla NULA,
+        // no guardar "". La cadena vacía es justo el valor que el legacy usa para
+        // "sin dato" y que `geo.util.ts` tiene que descartar a mano en cada lectura;
+        // no hay motivo para sembrar más. (`createNap` ya hacía `|| null`.)
+        gpsLat: dto.gpsLat === undefined ? nap.gpsLat : dto.gpsLat.trim() || null,
+        gpsLng: dto.gpsLng === undefined ? nap.gpsLng : dto.gpsLng.trim() || null,
         vlanId: dto.vlanId !== undefined ? (dto.vlanId || null) : undefined, vlanLegacy,
       },
     });

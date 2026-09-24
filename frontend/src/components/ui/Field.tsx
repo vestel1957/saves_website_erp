@@ -11,7 +11,7 @@ import type {
 
 /** Estilo base compartido por todos los controles de formulario. */
 const control =
-  "w-full rounded-lg border border-border-default bg-surface px-3 py-2 text-[13px] text-text-primary shadow-sm outline-none transition-colors placeholder:text-text-tertiary hover:border-border-strong focus:border-border-focus focus:ring-2 focus:ring-brand/25";
+  "w-full rounded-lg border border-border-default bg-surface px-3 py-2 text-[13px] text-text-primary shadow-sm outline-none transition-colors placeholder:text-text-tertiary hover:border-border-strong focus:border-border-focus focus:ring-2 focus:ring-brand/25 aria-[invalid=true]:border-error aria-[invalid=true]:ring-2 aria-[invalid=true]:ring-error/20";
 
 export function Input({ className = "", ...props }: InputHTMLAttributes<HTMLInputElement>) {
   // Un `type="number"` ENFOCADO suma o resta con la rueda del ratón (paso 1). En el
@@ -109,7 +109,14 @@ export function Field({
       {label && (
         <label htmlFor={id} className="mb-1 block text-[11px] font-semibold text-text-tertiary">
           {label}
-          {required && " *"}
+          {/* El asterisco va en rojo y desde el principio: que el campo es obligatorio
+              se tiene que ver ANTES de intentar avanzar, no descubrirlo en el error. */}
+          {required && (
+            <>
+              <span aria-hidden="true" className="ml-0.5 text-error">*</span>
+              <span className="sr-only"> (obligatorio)</span>
+            </>
+          )}
         </label>
       )}
       {controlado}

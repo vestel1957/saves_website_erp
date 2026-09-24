@@ -42,6 +42,12 @@ export class AccountingController {
   createCostCenter(body: { code: string; name: string; parentId?: string | null }) { return this.costCenters.create(body); }
   
   deactivateCostCenter(id: string) { return this.costCenters.setActive(id, false); }
+  /** Las sedes y el centro con que está enlazada cada una. */
+  listCostCenterBranches() { return this.costCenters.sedes(); }
+  /** Nombre, activo y sede vinculada (el código no se edita). */
+  updateCostCenter(id: string, body: { name?: string; isActive?: boolean; branchLegacyId?: number | null }) {
+    return this.costCenters.update(id, body ?? {});
+  }
 
   // ---- Plan de cuentas ----
   listAccounts(all?: string) { return this.accounts.list(all === '1'); }
@@ -86,7 +92,13 @@ export class AccountingController {
     return this.reports.ledger(accountId, { from, to });
   }
   trialBalance(from?: string, to?: string) { return this.reports.trialBalance({ from, to }); }
-  incomeStatement(from?: string, to?: string) { return this.reports.incomeStatement({ from, to }); }
+  /** `costCenterId`: un centro, o `sin-asignar` para las líneas sin centro. Vacío = todo. */
+  incomeStatement(from?: string, to?: string, costCenterId?: string) {
+    const filtro = !costCenterId ? {} : { costCenterId: costCenterId === 'sin-asignar' ? null : costCenterId };
+    return this.reports.incomeStatement({ from, to }, filtro);
+  }
+  /** Resultados por sede: cuentas de resultado × centro de costo, con su cuadre contra el total. */
+  incomeStatementByCenter(from?: string, to?: string) { return this.reports.incomeStatementByCenter({ from, to }); }
   balanceSheet(from?: string, to?: string) { return this.reports.balanceSheet({ from, to }); }
   cashFlow(from?: string, to?: string) { return this.reports.cashFlow({ from, to }); }
   monthlySummary(months?: string) { return this.reports.monthlySummary(Number(months) || 6); }

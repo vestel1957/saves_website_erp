@@ -43,6 +43,7 @@
     "smoke:reconciliation": "ts-node prisma/smoke-reconciliation.ts",
     "smoke:crud-guards": "ts-node prisma/smoke-crud-guards.ts",
     "smoke:reconexion": "ts-node --transpile-only prisma/smoke-reconexion.ts",
+    "db": "bash scripts/psql.sh",
     "db:reset-inventory": "ts-node prisma/reset-inventory-data.ts",
     "db:backup": "bash scripts/backup-db.sh",
     "db:setup": "prisma generate && prisma migrate deploy && ts-node prisma/seed.ts && ts-node prisma/seed-inventory.ts && ts-node prisma/seed-sst.ts && ts-node prisma/seed-payroll.ts",

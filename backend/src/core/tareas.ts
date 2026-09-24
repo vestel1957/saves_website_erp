@@ -14,7 +14,7 @@
  * hace la foto diaria de métricas corre siempre, a propósito, porque un día perdido
  * del histórico no se puede reconstruir.
  */
-import { cronService } from './contenedor';
+import { cronService, paymentImportsService } from './contenedor';
 import { programarTodas, type TareaProgramada } from './cron';
 
 export const TAREAS: TareaProgramada[] = [
@@ -35,6 +35,11 @@ export const TAREAS: TareaProgramada[] = [
     nombre: 'metrics-snapshot',
     expresion: '20 0 * * *', // diario 00:20 — antes de que nada mueva los estados
     ejecutar: () => cronService.scheduledMetrics(),
+  },
+  {
+    nombre: 'cartera-seguimiento',
+    expresion: '40 0 * * *', // diario 00:40; sólo actúa el día 1 (cierra el mes y abre el nuevo)
+    ejecutar: () => cronService.scheduledCarteraSeguimiento(),
   },
   {
     nombre: 'cartera',
@@ -62,6 +67,15 @@ export const TAREAS: TareaProgramada[] = [
     // pasó con 23 a la vez y nadie lo supo en dos semanas). Sólo lee los routers.
     expresion: '0 7 * * *',
     ejecutar: () => cronService.scheduledCortesDeshechos(),
+  },
+  {
+    nombre: 'revision-vlans',
+    // Diaria 06:30 — lee las VLANs de cada OLT y de los Mikrotik de su sede y avisa
+    // al cargo Red / ISP de las que tienen clientes y les falta un tramo (uplink,
+    // interfaz o PPPoE): la 590 de Villanueva dejó así a una clienta el 22-09-2026 y
+    // nada lo avisó. Solo lee (`display` / `print`); NUNCA corrige sola.
+    expresion: '30 6 * * *',
+    ejecutar: () => cronService.scheduledRevisionVlans(),
   },
   {
     nombre: 'exchange-rate',
@@ -115,6 +129,15 @@ export const TAREAS: TareaProgramada[] = [
     // factura es del mes corriente—, la TV la deja siempre para una visita.
     expresion: '3,8,13,18,23,28,33,38,43,48,53,58 * * * *',
     ejecutar: () => cronService.scheduledPagosEnLinea(),
+  },
+  {
+    nombre: 'cargue-reconexion',
+    // Cada 5 min. Reconecta a quien pagó por CARGUE (corresponsal/convenio) cuando la
+    // tanda se cortó antes de reconectar (reinicio del backend a mitad de petición).
+    // Sin filas marcadas no hace nada. Corre aunque CRONS_ENABLED esté apagado: no
+    // inventa trabajo, termina uno que la persona ya ordenó al aplicar el cargue.
+    expresion: '1,6,11,16,21,26,31,36,41,46,51,56 * * * *',
+    ejecutar: async () => { await paymentImportsService.reconectarPendientes(); },
   },
   {
     nombre: 'descuento-portal',

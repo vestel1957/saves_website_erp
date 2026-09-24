@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '../core/http/errores';
+import { AFILIADORES, rangoBogota } from './afiliadores';
 import { Type } from 'class-transformer';
 import { IsArray, IsBoolean, IsDateString, IsInt, IsOptional, IsString, Matches, MinLength } from 'class-validator';
 import { randomBytes } from 'crypto';
@@ -277,6 +278,69 @@ export class StaffService {
       after: { name: after.name, docNumber: after.docNumber, email: after.email, role: after.role, areaId: after.areaId },
     });
     return after;
+  }
+
+  // ── Afiliados ────────────────────────────────────────────────────────────
+
+  /**
+   * Funcionarios que afilian (lista nominal de `AFILIADORES`) y cuántos clientes han traído (en el
+   * rango, si se da). Es la lista de /afiliados.
+   */
+  async afiliadosResumen(from?: string, to?: string) {
+    const rango = rangoBogota(from, to);
+    const activos = await this.prisma.staff.findMany({
+      where: AFILIADORES,
+      select: { id: true, name: true, role: true, area: { select: { name: true } } },
+      orderBy: { name: 'asc' },
+    });
+
+    const [enRango, total, ultimo] = await Promise.all([
+      this.prisma.subscriber.groupBy({
+        by: ['affiliateStaffId'],
+        where: { affiliateStaffId: { not: null }, ...(rango ? { affiliateAt: rango } : {}) },
+        _count: { _all: true },
+      }),
+      this.prisma.subscriber.groupBy({ by: ['affiliateStaffId'], where: { affiliateStaffId: { not: null } }, _count: { _all: true } }),
+      this.prisma.subscriber.groupBy({ by: ['affiliateStaffId'], where: { affiliateStaffId: { not: null } }, _max: { affiliateAt: true } }),
+    ]);
+    const n = (filas: { affiliateStaffId: string | null; _count: { _all: number } }[], id: string) =>
+      filas.find((f) => f.affiliateStaffId === id)?._count._all ?? 0;
+
+    const funcionarios = activos.map((s) => ({
+      id: s.id,
+      nombre: s.name,
+      cargo: cargoLegacy(s.role),
+      area: s.area?.name ?? null,
+      clientes: n(enRango, s.id),
+      clientesTotal: n(total, s.id),
+      ultimaAfiliacion: ultimo.find((f) => f.affiliateStaffId === s.id)?._max.affiliateAt ?? null,
+    }));
+    return { funcionarios, totalClientes: funcionarios.reduce((a, f) => a + f.clientes, 0) };
+  }
+
+  /** Los clientes que trajo un funcionario, con la fecha y hora exactas del alta. */
+  async afiliadosDe(staffId: string, from?: string, to?: string) {
+    const s = await this.prisma.staff.findUnique({ where: { id: staffId }, select: { id: true, name: true, banned: true } });
+    if (!s) throw new NotFoundException('Empleado no encontrado');
+    const rango = rangoBogota(from, to);
+    const filas = await this.prisma.subscriber.findMany({
+      where: { affiliateStaffId: staffId, ...(rango ? { affiliateAt: rango } : {}) },
+      orderBy: { affiliateAt: 'desc' },
+      select: {
+        id: true, abonado: true, fullName: true, docNumber: true, phone1: true, status: true,
+        affiliateAt: true, affiliateBy: true, branch: { select: { name: true } },
+      },
+    });
+    return {
+      funcionario: { id: s.id, nombre: s.name, inhabilitado: s.banned },
+      total: filas.length,
+      activos: filas.filter((c) => c.status === 'ACTIVO').length,
+      clientes: filas.map((c) => ({
+        id: c.id, abonado: c.abonado, nombre: c.fullName, documento: c.docNumber, celular: c.phone1,
+        estado: c.status, sede: c.branch?.name ?? null,
+        fecha: c.affiliateAt, registradoPor: c.affiliateBy,
+      })),
+    };
   }
 
   // ── Permisos del empleado ────────────────────────────────────────────────

@@ -72,6 +72,8 @@ export function NapPortPicker({
   const [ports, setPorts] = useState<PuertoFila[]>([]);
   const [cargandoPorts, setCargandoPorts] = useState(false);
   const caja = useCerrarAlPulsarFuera(abierto, () => setAbierto(false));
+  /** Lo que se ofrece es de otras sedes: en su sede no hay ninguna con ese nombre. */
+  const ajenas = !!subscriberId && naps.length > 0 && !naps.some((n) => n.deSuSede);
 
   // Lista de cajas: del servidor. Son 1.406 y sin texto se ofrecen las de la sede
   // del cliente, que son las que pueden estar de verdad en su poste.
@@ -154,6 +156,15 @@ export function NapPortPicker({
               </p>
             ) : (
               <ul className="divide-y divide-border-subtle">
+                {/* Sólo se ofrecen las cajas de la SEDE del cliente. Si ninguna de su
+                    sede se llama así, el servidor abre las demás — y entonces hay que
+                    decirlo, porque elegir la caja de otro pueblo es el error caro. */}
+                {ajenas && (
+                  <li className="bg-warning-soft px-3 py-2 text-[11px] text-warning-text">
+                    <Icon name="alert-triangle" size={12} className="mr-1 inline" />
+                    Ninguna de estas cajas está en la sede del cliente: compruébalo antes de elegir.
+                  </li>
+                )}
                 {naps.map((n) => (
                   <li key={n.id}>
                     <button
@@ -163,7 +174,11 @@ export function NapPortPicker({
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-[13px] font-semibold text-text-primary">{n.name}</span>
                         <span className="block truncate text-[11px] text-text-tertiary">
-                          {[n.branch, n.address].filter(Boolean).join(" · ") || "Sin dirección"}
+                          {n.branch && (
+                            <span className={n.deSuSede || !subscriberId ? "" : "font-semibold text-warning-text"}>{n.branch}</span>
+                          )}
+                          {n.branch && n.address ? " · " : ""}
+                          {n.address || (n.branch ? "" : "Sin dirección")}
                         </span>
                       </span>
                       <span className={`shrink-0 text-[11px] font-medium ${n.libres ? "text-success-text" : "text-text-tertiary"}`}>

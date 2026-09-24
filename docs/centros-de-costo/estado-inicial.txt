@@ -1,0 +1,398 @@
+# Estado inicial del árbol — 2026-09-23 20:53:11 Bogotá
+# rama: refactor/fundamentos-arquitectura  HEAD: 2396b32
+
+## git status --porcelain
+ M backend/contenedor-mapa.json
+ M backend/contrato-http.json
+ M backend/package.json
+ M backend/prisma/schema.prisma
+ M backend/scripts/etl-red.js
+ M backend/scripts/preview-pdf-brand.ts
+ M backend/scripts/smoke-informe.ts
+ M backend/scripts/smoke-mes-adelantado.ts
+ M backend/scripts/sync-legacy-vivo.js
+ M backend/scripts/writeback-legacy.js
+ M backend/src/auth/auth.service.ts
+ M backend/src/auth/crypto.util.ts
+ M backend/src/auth/permissions.catalog.ts
+ M backend/src/billing/anticipos.ts
+ M backend/src/billing/billing-pdf.ts
+ M backend/src/billing/billing.service.ts
+ M backend/src/billing/facturas.service.ts
+ M backend/src/billing/plan-facturable.ts
+ M backend/src/billing/prorrateo-reconexion.service.ts
+ M backend/src/chatbot/toolsets/interno-tickets.toolset.ts
+ M backend/src/chatbot/toolsets/tramites.toolset.ts
+ M backend/src/collections/collections.service.ts
+ M backend/src/common/corte.policy.ts
+ M backend/src/common/material-stock.ts
+ M backend/src/common/money.spec.ts
+ M backend/src/common/money.ts
+ M backend/src/common/pdf/brand.ts
+ M backend/src/common/pdf/pdf-docs.ts
+ M backend/src/common/pdf/recibo-rollo.ts
+ M backend/src/core/contenedor.ts
+ M backend/src/core/suscripciones.ts
+ M backend/src/core/tareas.ts
+ M backend/src/cron/cron.service.ts
+ M backend/src/dashboard/dashboard.controller.ts
+ M backend/src/dashboard/dashboard.router.ts
+ M backend/src/dashboard/dashboard.service.ts
+ M backend/src/einvoice/einvoice-emit.service.ts
+ M backend/src/extras/extras.router.ts
+ M backend/src/inventory/inventory.router.ts
+ M backend/src/inventory/inventory.service.ts
+ M backend/src/network/bodega-scope.ts
+ M backend/src/network/corte-solo-vencido.spec.ts
+ M backend/src/network/corte-tv-orden.spec.ts
+ M backend/src/network/genieacs-tv-encolada.spec.ts
+ M backend/src/network/genieacs.controller.ts
+ M backend/src/network/genieacs.service.ts
+ M backend/src/network/mikrotik.service.ts
+ M backend/src/network/network-write.service.ts
+ M backend/src/network/network.controller.ts
+ M backend/src/network/network.router.ts
+ M backend/src/network/network.service.ts
+ M backend/src/network/olt.controller.ts
+ M backend/src/network/olt.router.ts
+ M backend/src/network/olt.service.ts
+ M backend/src/network/olt/olt-huawei.driver.ts
+ M backend/src/network/olt/olt-ssh.client.ts
+ M backend/src/network/reconexion.service.spec.ts
+ M backend/src/network/reconexion.service.ts
+ M backend/src/omni/omni.controller.ts
+ M backend/src/omni/omni.router.ts
+ M backend/src/omni/omni.service.ts
+ M backend/src/orders/dto/orders.dto.ts
+ M backend/src/orders/orders.controller.ts
+ M backend/src/orders/orders.router.ts
+ M backend/src/orders/orders.service.ts
+ M backend/src/payment-imports/payment-imports.service.ts
+ M backend/src/playhub/playhub.router.ts
+ M backend/src/projects/projects.router.ts
+ M backend/src/reports/reports.controller.ts
+ M backend/src/reports/reports.router.ts
+ M backend/src/reports/reports.service.ts
+ M backend/src/reports/staff-reports.service.ts
+ M backend/src/responsibilities/responsibilities.catalog.ts
+ M backend/src/returns/returns.router.ts
+ M backend/src/settings/settings.service.ts
+ M backend/src/staff/staff.controller.ts
+ M backend/src/staff/staff.router.ts
+ M backend/src/staff/staff.service.ts
+ M backend/src/subscribers/dto/bulk.dto.ts
+ M backend/src/subscribers/dto/update-subscriber.dto.ts
+ M backend/src/subscribers/subscribers.controller.ts
+ M backend/src/subscribers/subscribers.events.ts
+ M backend/src/subscribers/subscribers.router.ts
+ M backend/src/subscribers/subscribers.service.ts
+ M backend/src/support/alta-mikrotik-al-autenticar.spec.ts
+ M backend/src/support/cascada-cierre-tv.spec.ts
+ M backend/src/support/geofence.service.ts
+ M backend/src/support/naps-para-equipo.spec.ts
+ M backend/src/support/onu-provision.service.ts
+ M backend/src/support/order-types.ts
+ M backend/src/support/support-write.service.ts
+ M backend/src/support/support.service.ts
+ M backend/src/support/ubicar-equipo.spec.ts
+ M backend/src/tasks/dto/tasks.dto.ts
+ M backend/src/tasks/tasks.service.ts
+ M backend/src/treasury/cierre-informe.ts
+ M backend/src/treasury/cierre-legacy.ts
+ M backend/src/treasury/cobranzas.service.ts
+ M backend/src/treasury/treasury.controller.ts
+ M backend/src/treasury/treasury.router.ts
+ M backend/src/treasury/treasury.service.ts
+ M ecosystem.config.js
+ M frontend/next.config.mjs
+ M frontend/src/app/clientes/page.tsx
+ M frontend/src/app/dashboard/page.tsx
+ M frontend/src/app/error.tsx
+ M frontend/src/app/facturacion/[id]/page.tsx
+ M frontend/src/app/inventario/traspasos/nuevo/page.tsx
+ M frontend/src/app/mi-agenda/page.tsx
+ M frontend/src/app/mikrotik/masivo/page.tsx
+ M frontend/src/app/ordenes/[id]/page.tsx
+ M frontend/src/app/ordenes/nueva/page.tsx
+ M frontend/src/app/ordenes/page.tsx
+ M frontend/src/app/red/naps/[id]/page.tsx
+ M frontend/src/app/red/naps/page.tsx
+ M frontend/src/app/red/vlans/page.tsx
+ M frontend/src/app/soporte/[id]/page.tsx
+ M frontend/src/app/tareas/[id]/page.tsx
+ M frontend/src/app/tareas/page.tsx
+ M frontend/src/app/tesoreria/cajas/page.tsx
+ M frontend/src/app/tesoreria/cierres/page.tsx
+ M frontend/src/app/tesoreria/page.tsx
+ M frontend/src/components/Icon.tsx
+ M frontend/src/components/agenda/EventoModal.tsx
+ M frontend/src/components/agenda/calendario.ts
+ M frontend/src/components/cobranzas/RegistrarPagoModal.tsx
+ M frontend/src/components/network/AutenticarOnuModal.tsx
+ M frontend/src/components/red/NuevaTransferenciaModal.tsx
+ M frontend/src/components/reportes/ReportBody.tsx
+ M frontend/src/components/reportes/ReportView.tsx
+ M frontend/src/components/soporte/AutenticarOnuOrden.tsx
+ M frontend/src/components/soporte/EditarOrdenModal.tsx
+ M frontend/src/components/soporte/NapPortPicker.tsx
+ M frontend/src/components/soporte/NuevaOrdenModal.tsx
+ M frontend/src/components/subscribers/ClienteWizardModal.tsx
+ M frontend/src/components/subscribers/DevolverEquipoModal.tsx
+ M frontend/src/components/treasury/CerrarCajaBoton.tsx
+ M frontend/src/components/treasury/CierreArqueo.tsx
+ M frontend/src/components/treasury/InformeCierre.tsx
+ M frontend/src/components/treasury/PanelCaja.tsx
+ M frontend/src/components/ui/Dropdown.tsx
+ M frontend/src/components/ui/Field.tsx
+ M frontend/src/context/NotificationsProvider.tsx
+ M frontend/src/lib/cobranzas.ts
+ M frontend/src/lib/format.ts
+ M frontend/src/lib/nav.ts
+ M frontend/src/lib/network.ts
+ M frontend/src/lib/reportes.ts
+ M frontend/src/lib/support.ts
+ M frontend/src/lib/treasury.ts
+ M frontend/src/lib/useValidacion.ts
+ M frontend/src/middleware.ts
+?? backend/_e2e.js
+?? backend/analitica/
+?? backend/informes/
+?? backend/prisma/_respaldo-sede-naps-2026-09-19.json
+?? backend/prisma/migrate-caja-inventario-completo-2026-09.ts
+?? backend/prisma/migrate-pantalla-afiliados-2026-09.ts
+?? backend/prisma/migrate-pantalla-cartera-seguimiento-2026-09.ts
+?? backend/prisma/migrate-pantallas-huerfanas-2026-09.ts
+?? backend/prisma/migrate-playhub-operar-2026-09.ts
+?? backend/prisma/migrate-proyectos-tecnicos-2026-09.ts
+?? backend/prisma/migrate-sede-naps-almacen-2026-09.ts
+?? backend/prisma/migrations/20260917150000_tarea_fecha_realizada/
+?? backend/prisma/migrations/20260917180000_orden_cambio_titular/
+?? backend/prisma/migrations/20260922160000_vlan_olt/
+?? backend/prisma/migrations/20260922200000_cargue_reconexion_pendiente/
+?? backend/prisma/migrations/20260923150000_codigo_afiliado/
+?? backend/prisma/migrations/20260923180000_evento_asistentes/
+?? backend/prisma/migrations/20260923200000_canal_venta/
+?? backend/prisma/migrations/20260923220000_cartera_seguimiento/
+?? backend/scripts/_auditar-tmp.ts
+?? backend/scripts/_respaldo-plan-duplicado-2026-09-09.json
+?? backend/scripts/altas-vlans-confirmadas-olt.ts
+?? backend/scripts/auditoria-red-lectura.ts
+?? backend/scripts/cartera-seguimiento-reconstruir.ts
+?? backend/scripts/corregir-pago-anulado-18485.js
+?? backend/scripts/corregir-sobrepago-6880.js
+?? backend/scripts/corregir-sobrepago-8843.js
+?? backend/scripts/diagnostico-vlans-mikrotik.ts
+?? backend/scripts/diagnostico-vlans-olt.ts
+?? backend/scripts/diagnostico-vlans-tabla.ts
+?? backend/scripts/etl-llamadas-legacy.js
+?? backend/scripts/fijar-servicio-57068.ts
+?? backend/scripts/informe-septiembre-sin-internet.ts
+?? backend/scripts/lib/llamadas-legacy.js
+?? backend/scripts/ligar-vlans-a-olt.ts
+?? backend/scripts/planes-legacy-faltantes.ts
+?? backend/scripts/psql.sh
+?? backend/scripts/rellenar-ip-local.ts
+?? backend/scripts/revisar-combos-antes-de-corrida.js
+?? backend/scripts/saldos-fantasma-2026-09-18.csv
+?? backend/scripts/sanear-centavos-facturas.ts
+?? backend/scripts/smoke-datos-cliente-inicio.ts
+?? backend/scripts/smoke-revision-vlans.ts
+?? backend/scripts/smoke-vlan-salud.ts
+?? backend/scripts/traer-tx-faltantes-legacy.js
+?? backend/src/common/abonado-nuevo.ts
+?? backend/src/common/abonado-retirado.ts
+?? backend/src/common/cambio-titular.ts
+?? backend/src/common/nap-legacy.ts
+?? backend/src/common/servicios-contratados.ts
+?? backend/src/common/whatsapp/whatsapp-webhook.controller.ts.bak-202608121356
+?? backend/src/network/editar-nap.spec.ts
+?? backend/src/network/ip-heredada-address-list.spec.ts
+?? backend/src/network/olt/olt-huawei.puerto-vacio.spec.ts
+?? backend/src/network/sede-nap-es-bodega.spec.ts
+?? backend/src/network/tv-solo-sistema.spec.ts
+?? backend/src/network/vlan-equipos.escritura.spec.ts
+?? backend/src/network/vlan-equipos.service.spec.ts
+?? backend/src/network/vlan-equipos.service.ts
+?? backend/src/network/vlan-salud.spec.ts
+?? backend/src/network/vlan-salud.ts
+?? backend/src/payment-imports/reconexion-pendiente.spec.ts
+?? backend/src/reports/cartera-seguimiento.spec.ts
+?? backend/src/reports/cartera-seguimiento.ts
+?? backend/src/staff/afiliadores.ts
+?? backend/src/subscribers/canal-venta.ts
+?? backend/src/subscribers/estado-manual.spec.ts
+?? backend/src/support/cambio-titular-orden.spec.ts
+?? backend/src/support/datos-cliente-inicio.spec.ts
+?? backend/src/support/datos-cliente.policy.spec.ts
+?? backend/src/support/datos-cliente.policy.ts
+?? backend/src/support/onu-navegacion.spec.ts
+?? backend/src/treasury/cierre-informe.spec.ts
+?? docs/centros-de-costo/
+?? frontend/src/app/afiliados/
+?? frontend/src/app/reportes/afiliados/
+?? frontend/src/app/reportes/cartera-seguimiento/
+?? frontend/src/components/afiliados/
+?? frontend/src/components/orders/DestinoCampos.tsx
+?? frontend/src/components/reportes/Afiliados.tsx
+?? frontend/src/components/reportes/CarteraSeguimiento.tsx
+?? frontend/src/components/soporte/DatosDelCliente.tsx
+?? frontend/src/components/soporte/TitularFields.tsx
+?? frontend/src/components/subscribers/MovimientoAbonadosModal.tsx
+?? frontend/src/components/treasury/WompiDelDia.tsx
+?? id_database.txt
+?? scripts/pgweb.sh
+
+## git diff --stat
+ backend/contenedor-mapa.json                       |    3 +-
+ backend/contrato-http.json                         | 1426 ++++++++++++++++----
+ backend/package.json                               |    1 +
+ backend/prisma/schema.prisma                       |  186 ++-
+ backend/scripts/etl-red.js                         |   39 +-
+ backend/scripts/preview-pdf-brand.ts               |    5 +-
+ backend/scripts/smoke-informe.ts                   |   11 +-
+ backend/scripts/smoke-mes-adelantado.ts            |   49 +-
+ backend/scripts/sync-legacy-vivo.js                |  179 ++-
+ backend/scripts/writeback-legacy.js                |  222 ++-
+ backend/src/auth/auth.service.ts                   |    4 +-
+ backend/src/auth/crypto.util.ts                    |   10 +-
+ backend/src/auth/permissions.catalog.ts            |   66 +-
+ backend/src/billing/anticipos.ts                   |    8 +-
+ backend/src/billing/billing-pdf.ts                 |   13 +-
+ backend/src/billing/billing.service.ts             |    4 +
+ backend/src/billing/facturas.service.ts            |   79 +-
+ backend/src/billing/plan-facturable.ts             |    4 +-
+ .../src/billing/prorrateo-reconexion.service.ts    |    4 +-
+ .../chatbot/toolsets/interno-tickets.toolset.ts    |    2 +-
+ backend/src/chatbot/toolsets/tramites.toolset.ts   |    4 +-
+ backend/src/collections/collections.service.ts     |    2 +-
+ backend/src/common/corte.policy.ts                 |   68 +-
+ backend/src/common/material-stock.ts               |    6 +-
+ backend/src/common/money.spec.ts                   |   50 +-
+ backend/src/common/money.ts                        |   50 +-
+ backend/src/common/pdf/brand.ts                    |    9 +-
+ backend/src/common/pdf/pdf-docs.ts                 |   77 +-
+ backend/src/common/pdf/recibo-rollo.ts             |    3 +-
+ backend/src/core/contenedor.ts                     |   10 +-
+ backend/src/core/suscripciones.ts                  |    6 +-
+ backend/src/core/tareas.ts                         |   25 +-
+ backend/src/cron/cron.service.ts                   |  167 +++
+ backend/src/dashboard/dashboard.controller.ts      |    5 +
+ backend/src/dashboard/dashboard.router.ts          |    9 +-
+ backend/src/dashboard/dashboard.service.ts         |   69 +-
+ backend/src/einvoice/einvoice-emit.service.ts      |    9 +
+ backend/src/extras/extras.router.ts                |    5 +-
+ backend/src/inventory/inventory.router.ts          |   34 +-
+ backend/src/inventory/inventory.service.ts         |   29 +-
+ backend/src/network/bodega-scope.ts                |   11 +-
+ backend/src/network/corte-solo-vencido.spec.ts     |   83 +-
+ backend/src/network/corte-tv-orden.spec.ts         |   30 +-
+ backend/src/network/genieacs-tv-encolada.spec.ts   |    6 +-
+ backend/src/network/genieacs.controller.ts         |   10 +-
+ backend/src/network/genieacs.service.ts            |  187 ++-
+ backend/src/network/mikrotik.service.ts            |  233 +++-
+ backend/src/network/network-write.service.ts       |  102 +-
+ backend/src/network/network.controller.ts          |    6 +-
+ backend/src/network/network.router.ts              |   10 +-
+ backend/src/network/network.service.ts             |   23 +-
+ backend/src/network/olt.controller.ts              |   27 +-
+ backend/src/network/olt.router.ts                  |   43 +-
+ backend/src/network/olt.service.ts                 |  193 ++-
+ backend/src/network/olt/olt-huawei.driver.ts       |  284 +++-
+ backend/src/network/olt/olt-ssh.client.ts          |   40 +-
+ backend/src/network/reconexion.service.spec.ts     |  194 ++-
+ backend/src/network/reconexion.service.ts          |  217 ++-
+ backend/src/omni/omni.controller.ts                |    9 +-
+ backend/src/omni/omni.router.ts                    |   12 +-
+ backend/src/omni/omni.service.ts                   |  132 +-
+ backend/src/orders/dto/orders.dto.ts               |   11 +
+ backend/src/orders/orders.controller.ts            |    5 +
+ backend/src/orders/orders.router.ts                |   67 +-
+ backend/src/orders/orders.service.ts               |  213 ++-
+ .../src/payment-imports/payment-imports.service.ts |   83 +-
+ backend/src/playhub/playhub.router.ts              |   21 +-
+ backend/src/projects/projects.router.ts            |   26 +-
+ backend/src/reports/reports.controller.ts          |    6 +
+ backend/src/reports/reports.router.ts              |   16 +-
+ backend/src/reports/reports.service.ts             |    6 +
+ backend/src/reports/staff-reports.service.ts       |   77 ++
+ .../responsibilities/responsibilities.catalog.ts   |    6 +-
+ backend/src/returns/returns.router.ts              |   12 +-
+ backend/src/settings/settings.service.ts           |    3 +
+ backend/src/staff/staff.controller.ts              |    7 +
+ backend/src/staff/staff.router.ts                  |   16 +-
+ backend/src/staff/staff.service.ts                 |   64 +
+ backend/src/subscribers/dto/bulk.dto.ts            |    8 +-
+ .../src/subscribers/dto/update-subscriber.dto.ts   |   18 +
+ backend/src/subscribers/subscribers.controller.ts  |    8 +
+ backend/src/subscribers/subscribers.events.ts      |   19 +
+ backend/src/subscribers/subscribers.router.ts      |   17 +-
+ backend/src/subscribers/subscribers.service.ts     |  157 ++-
+ .../support/alta-mikrotik-al-autenticar.spec.ts    |   11 +
+ backend/src/support/cascada-cierre-tv.spec.ts      |    4 +-
+ backend/src/support/geofence.service.ts            |   19 +-
+ backend/src/support/naps-para-equipo.spec.ts       |   31 +-
+ backend/src/support/onu-provision.service.ts       |  172 ++-
+ backend/src/support/order-types.ts                 |   14 +-
+ backend/src/support/support-write.service.ts       |  222 ++-
+ backend/src/support/support.service.ts             |   63 +-
+ backend/src/support/ubicar-equipo.spec.ts          |   34 +
+ backend/src/tasks/dto/tasks.dto.ts                 |    4 +
+ backend/src/tasks/tasks.service.ts                 |   48 +-
+ backend/src/treasury/cierre-informe.ts             |  202 ++-
+ backend/src/treasury/cierre-legacy.ts              |   10 +-
+ backend/src/treasury/cobranzas.service.ts          |  110 +-
+ backend/src/treasury/treasury.controller.ts        |   40 +-
+ backend/src/treasury/treasury.router.ts            |   18 +-
+ backend/src/treasury/treasury.service.ts           |  216 ++-
+ ecosystem.config.js                                |   20 +
+ frontend/next.config.mjs                           |   10 +
+ frontend/src/app/clientes/page.tsx                 |    2 +-
+ frontend/src/app/dashboard/page.tsx                |   50 +-
+ frontend/src/app/error.tsx                         |   20 +
+ frontend/src/app/facturacion/[id]/page.tsx         |    5 +
+ .../src/app/inventario/traspasos/nuevo/page.tsx    |   10 +-
+ frontend/src/app/mi-agenda/page.tsx                |   83 +-
+ frontend/src/app/mikrotik/masivo/page.tsx          |  380 +++++-
+ frontend/src/app/ordenes/[id]/page.tsx             |  106 +-
+ frontend/src/app/ordenes/nueva/page.tsx            |   16 +-
+ frontend/src/app/ordenes/page.tsx                  |   19 +-
+ frontend/src/app/red/naps/[id]/page.tsx            |  125 +-
+ frontend/src/app/red/naps/page.tsx                 |   83 +-
+ frontend/src/app/red/vlans/page.tsx                |  946 ++++++++++++-
+ frontend/src/app/soporte/[id]/page.tsx             |  228 +++-
+ frontend/src/app/tareas/[id]/page.tsx              |   16 +-
+ frontend/src/app/tareas/page.tsx                   |   17 +-
+ frontend/src/app/tesoreria/cajas/page.tsx          |   66 +-
+ frontend/src/app/tesoreria/cierres/page.tsx        |  111 +-
+ frontend/src/app/tesoreria/page.tsx                |    7 +-
+ frontend/src/components/Icon.tsx                   |    2 +
+ frontend/src/components/agenda/EventoModal.tsx     |  135 +-
+ frontend/src/components/agenda/calendario.ts       |    4 +
+ .../components/cobranzas/RegistrarPagoModal.tsx    |   53 +-
+ .../src/components/network/AutenticarOnuModal.tsx  |   21 +-
+ .../src/components/red/NuevaTransferenciaModal.tsx |    7 +-
+ frontend/src/components/reportes/ReportBody.tsx    |    4 +
+ frontend/src/components/reportes/ReportView.tsx    |    2 +-
+ .../src/components/soporte/AutenticarOnuOrden.tsx  |   92 ++
+ .../src/components/soporte/EditarOrdenModal.tsx    |   40 +
+ frontend/src/components/soporte/NapPortPicker.tsx  |   17 +-
+ .../src/components/soporte/NuevaOrdenModal.tsx     |   57 +-
+ .../components/subscribers/ClienteWizardModal.tsx  |  135 +-
+ .../components/subscribers/DevolverEquipoModal.tsx |   39 +
+ .../src/components/treasury/CerrarCajaBoton.tsx    |    3 +-
+ frontend/src/components/treasury/CierreArqueo.tsx  |   22 +-
+ frontend/src/components/treasury/InformeCierre.tsx |  226 ++--
+ frontend/src/components/treasury/PanelCaja.tsx     |  119 +-
+ frontend/src/components/ui/Dropdown.tsx            |    7 +-
+ frontend/src/components/ui/Field.tsx               |   11 +-
+ frontend/src/context/NotificationsProvider.tsx     |    1 +
+ frontend/src/lib/cobranzas.ts                      |    2 +
+ frontend/src/lib/format.ts                         |   19 +
+ frontend/src/lib/nav.ts                            |    5 +
+ frontend/src/lib/network.ts                        |   44 +-
+ frontend/src/lib/reportes.ts                       |  101 ++
+ frontend/src/lib/support.ts                        |    6 +-
+ frontend/src/lib/treasury.ts                       |   17 +-
+ frontend/src/lib/useValidacion.ts                  |   16 +-
+ frontend/src/middleware.ts                         |   34 +-
+ 152 files changed, 9181 insertions(+), 1268 deletions(-)

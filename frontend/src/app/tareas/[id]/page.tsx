@@ -7,7 +7,7 @@ import { Icon } from "@/components/Icon";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { DetailHeader } from "@/components/ui/DetailHeader";
-import { Select, Textarea } from "@/components/ui/Field";
+import { Input, Select, Textarea } from "@/components/ui/Field";
 import { toast } from "@/components/ui/Toast";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { useAuth } from "@/context/AuthProvider";
@@ -319,6 +319,20 @@ export default function TareaDetallePage() {
           <KV k="Vence">
             <span className={vencida ? "font-semibold text-error-text" : undefined}>{fmtDate(t.dueDate)}</span>
           </KV>
+          {/* Se sella sola al marcarla Hecha; se corrige aquí si se hizo otro día. */}
+          {t.status === "DONE" && (
+            <KV k="Realizada">
+              <Input
+                type="date"
+                disabled={busy}
+                max={new Date().toLocaleDateString("en-CA")}
+                value={t.doneDate ? String(t.doneDate).slice(0, 10) : ""}
+                onChange={(e) => e.target.value && void patch({ doneDate: e.target.value }, "Fecha de realización actualizada")}
+                className="max-w-xs"
+              />
+              {!t.doneDate && <span className="mt-1 block text-[11px] text-text-tertiary">Sin fecha registrada (tarea heredada del sistema anterior).</span>}
+            </KV>
+          )}
           <KV k="Orden">
             {t.orderId ? (
               <Link href={`/soporte?search=${t.orderId}`} className="text-brand hover:underline">

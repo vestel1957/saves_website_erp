@@ -102,8 +102,11 @@ function Movimientos({ urlInicial, recordado }: { urlInicial: Record<string, str
     }
     return [...m.entries()].sort((x, y) => x[1].localeCompare(y[1]));
   }, [accounts]);
-  /** Los movimientos y los totales de arriba miran SIEMPRE el mismo periodo. */
-  const qsRango = soloSuCaja ? "" : `from=${rango.desde}&to=${rango.hasta}`;
+  /** Los movimientos y los totales de arriba miran SIEMPRE el mismo periodo y la misma sede. */
+  const qsRango = [
+    soloSuCaja ? "" : `from=${rango.desde}&to=${rango.hasta}`,
+    sede !== "" ? `sede=${sede}` : "",
+  ].filter(Boolean).join("&");
 
   const loadStats = useCallback(() => {
     void authFetch(`/treasury/stats${qsRango ? `?${qsRango}` : ""}`).then(objetoJson).then(setStats).catch(() => {});

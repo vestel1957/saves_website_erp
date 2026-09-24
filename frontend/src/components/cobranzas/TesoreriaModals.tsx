@@ -11,6 +11,7 @@ import { cop } from "@/lib/subscribers";
 import { type CashAccount, PAY_METHODS, BANKS, isBankMethod } from "@/lib/cobranzas";
 import { SubscriberPicker, type PickedSub } from "@/components/cobranzas/SubscriberPicker";
 import { BeneficiarioPicker, type Beneficiario } from "@/components/cobranzas/BeneficiarioPicker";
+import { CentroCostoField, useCentrosCosto } from "@/components/cobranzas/CentroCostoField";
 import { mensajeDeError } from "@/lib/errores";
 import { useMiCaja } from "@/lib/useMiCaja";
 import { ACCEPT_IMAGEN_PDF } from "@/lib/adjuntos";
@@ -125,6 +126,8 @@ export function EgresoModal({ open, onClose, onDone }: { open: boolean; onClose:
   const [method, setMethod] = useState("Cash");
   const [bank, setBank] = useState(BANKS[0]);
   const [cashAccountId, setCashAccountId] = useState("");
+  const centros = useCentrosCosto(open);
+  const [costCenterId, setCostCenterId] = useState("");
   const [beneficiario, setBeneficiario] = useState<Beneficiario | null>(null);
   const [date, setDate] = useState(today());
   const [note, setNote] = useState("");
@@ -132,7 +135,7 @@ export function EgresoModal({ open, onClose, onDone }: { open: boolean; onClose:
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  useEffect(() => { if (open) { setAmount(""); setNote(""); setBeneficiario(null); setFile(null); setErr(null); } }, [open]);
+  useEffect(() => { if (open) { setAmount(""); setNote(""); setBeneficiario(null); setCostCenterId(""); setFile(null); setErr(null); } }, [open]);
   // El default de la caja lo pone <CajaField/> (respeta la caja fija de la cajera).
   useEffect(() => { if (categories.length && !category) setCategory(categories[0]); }, [categories, category]);
 
@@ -152,6 +155,7 @@ export function EgresoModal({ open, onClose, onDone }: { open: boolean; onClose:
           cashAccountId: cashAccountId ? Number(cashAccountId) : undefined,
           accountName: accounts.find((a) => String(a.id) === cashAccountId)?.name,
           bankName: isBankMethod(method) ? bank : undefined,
+          costCenterId: costCenterId || undefined,
           // Del directorio va el id (el nombre lo pone el servidor); el texto libre
           // sigue viajando como payerName para el pago suelto.
           supplierId: beneficiario?.id ?? undefined,
@@ -182,6 +186,7 @@ export function EgresoModal({ open, onClose, onDone }: { open: boolean; onClose:
         {isBankMethod(method) && <Field label="Banco"><Select value={bank} onChange={(e) => setBank(e.target.value)}>{BANKS.map((b) => <option key={b} value={b}>{b}</option>)}</Select></Field>}
         <CajaField accounts={accounts} value={cashAccountId} onChange={setCashAccountId} />
         <Field label="Fecha"><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></Field>
+        <CentroCostoField centros={centros} caja={accounts.find((a) => String(a.id) === cashAccountId)} value={costCenterId} onChange={setCostCenterId} />
         <div className="sm:col-span-2">
           <Field label="Proveedor" hint="Se elige del directorio (proveedores y terceros) o se escribe a mano.">
             <BeneficiarioPicker value={beneficiario} onChange={setBeneficiario} />
@@ -217,6 +222,8 @@ export function IngresoLibreModal({ open, onClose, onDone }: { open: boolean; on
   const [method, setMethod] = useState("Cash");
   const [bank, setBank] = useState(BANKS[0]);
   const [cashAccountId, setCashAccountId] = useState("");
+  const centros = useCentrosCosto(open);
+  const [costCenterId, setCostCenterId] = useState("");
   const [payerName, setPayerName] = useState("");
   const [payerSub, setPayerSub] = useState<PickedSub | null>(null);
   const [date, setDate] = useState(today());
@@ -225,7 +232,7 @@ export function IngresoLibreModal({ open, onClose, onDone }: { open: boolean; on
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  useEffect(() => { if (open) { setAmount(""); setNote(""); setPayerName(""); setPayerSub(null); setFile(null); setErr(null); } }, [open]);
+  useEffect(() => { if (open) { setAmount(""); setNote(""); setPayerName(""); setPayerSub(null); setCostCenterId(""); setFile(null); setErr(null); } }, [open]);
   // El default de la caja lo pone <CajaField/> (respeta la caja fija de la cajera).
   useEffect(() => { if (categories.length && !category) setCategory(categories[0]); }, [categories, category]);
 
@@ -245,6 +252,7 @@ export function IngresoLibreModal({ open, onClose, onDone }: { open: boolean; on
           cashAccountId: cashAccountId ? Number(cashAccountId) : undefined,
           accountName: accounts.find((a) => String(a.id) === cashAccountId)?.name,
           bankName: isBankMethod(method) ? bank : undefined,
+          costCenterId: costCenterId || undefined,
           // Si se eligió un cliente, manda su id y su nombre (paridad legacy:
           // `payer_id` + `payer_name`). El texto libre sigue valiendo para
           // pagadores que no son clientes.
@@ -276,6 +284,7 @@ export function IngresoLibreModal({ open, onClose, onDone }: { open: boolean; on
         {isBankMethod(method) && <Field label="Banco"><Select value={bank} onChange={(e) => setBank(e.target.value)}>{BANKS.map((b) => <option key={b} value={b}>{b}</option>)}</Select></Field>}
         <CajaField accounts={accounts} value={cashAccountId} onChange={setCashAccountId} />
         <Field label="Fecha"><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></Field>
+        <CentroCostoField centros={centros} caja={accounts.find((a) => String(a.id) === cashAccountId)} value={costCenterId} onChange={setCostCenterId} />
         {/* Paridad legacy ("Search Payer"): el ingreso puede quedar ligado a un
             cliente. No toca sus facturas; solo deja constancia de quién pagó. */}
         <div className="sm:col-span-2">

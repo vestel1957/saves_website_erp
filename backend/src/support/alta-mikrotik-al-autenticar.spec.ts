@@ -26,6 +26,7 @@ describe('OnuProvisionService · el alta en la Mikrotik al autenticar', () => {
     pppUsername?: string | null;
     /** ¿El router dice que su secret ya está puesto? */
     secretExiste?: boolean;
+    ipLocalPuesta?: string;
     /** El alta en el router responde que no (router caído, perfil ambiguo…). */
     provisionFalla?: boolean;
     /** Plan DESTINO de la orden: 'AgregarInternet' solo vale con él. */
@@ -85,6 +86,7 @@ describe('OnuProvisionService · el alta en la Mikrotik al autenticar', () => {
           : { ok: true, dryRun: false, steps: ['secret creado'], message: 'Alta aplicada: ANAGOMEZ provisionado en YOPAL-GPON.', mikrotik: { name: 'YOPAL-GPON' } },
       ),
       applyProfile: jest.fn(),
+      completarIpLocal: jest.fn().mockResolvedValue(opts.ipLocalPuesta ?? null),
     };
     const reserva: any = { conciliarTrasAutenticar: jest.fn().mockResolvedValue(null) };
     const subs: any = {
@@ -134,6 +136,15 @@ describe('OnuProvisionService · el alta en la Mikrotik al autenticar', () => {
     expect(mikrotik.provision).not.toHaveBeenCalled();
     expect(r.altaMikrotik.ok).toBe(true);
     expect(r.altaMikrotik.creado).toBe(false);
+  });
+
+  it('a un secret existente sin IP local se le completa (y solo eso)', async () => {
+    const { svc, mikrotik } = armar({ pppUsername: 'ANAGOMEZ', secretExiste: true, ipLocalPuesta: '10.1.100.1' });
+    const r: any = await svc.autenticar('t1', { sn: SN });
+    expect(mikrotik.completarIpLocal).toHaveBeenCalled();
+    expect(mikrotik.provision).not.toHaveBeenCalled();
+    expect(r.altaMikrotik.ok).toBe(true);
+    expect(r.altaMikrotik.mensaje).toContain('10.1.100.1');
   });
 
   it('en una orden que no estrena internet no se toca la Mikrotik', async () => {

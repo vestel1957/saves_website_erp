@@ -22,6 +22,8 @@ import { parsePoint } from '../geo/geo.util';
 import { GeofenceService, type ResultadoCerca } from './geofence.service';
 import { faltaLaFoto, SIN_FOTO } from './foto-cierre.policy';
 import { faltaLaIpRemota, SIN_IP_REMOTA } from './ip-remota.policy';
+import { aplicaDatosDelCliente, datosQueFaltan, mensajeDatosCliente } from './datos-cliente.policy';
+import { KIND_VIVIENDA } from '../subscribers/subscriber-file-kinds';
 import { esUsuarioPppUtil } from '../subscribers/conexion-alta';
 import { ResponsibilityNotifierService } from '../responsibilities/responsibility-notifier.service';
 import {
@@ -32,18 +34,18 @@ import {
 import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CARGO_TECNICO } from '../staff/cargos-legacy';
-import { bodegaMaterialDelTecnico, esTecnicoDeCampo, fichaDelUsuario } from '../common/tecnico-scope';
+import { bodegaMaterialDelTecnico, esClienteDeSuOrden, esTecnicoDeCampo, fichaDelUsuario } from '../common/tecnico-scope';
 import { bodegasConMaterial, buscarMaterialConStock, FiltroMaterial } from '../common/material-stock';
 import { hoyEnColombia } from '../common/fecha-colombia';
 import { ORDEN_CRONOLOGICO } from './orden-cronologico';
 import { EquipoReservaService, tipoConReserva } from './equipo-reserva.service';
 import { exigirSedeSuscriptor } from '../common/sede-scope';
-import { num, round2 } from '../common/money';
+import { ivaDe, num, round2 } from '../common/money';
 import { puedeEmpezarOrden } from './turno';
 import { nextTid, TID_SEQ } from '../common/tid';
 import { AgendaService } from './agenda.service';
 import { autorDeOrden, autorDeSeguimiento, SEGUIMIENTO_DEL_SISTEMA, type FirmaDeSeguimiento } from './autor-orden';
-import { ETIQUETA_CLASE, esAgregarInternet, esCambioDeMegas, esClaseOrden, esReconexion, esReconexionPorDias, esRetiroVoluntario, esTrabajoDeConexion, esTraslado, MAX_DIAS_GRACIA, motivoDeRetiroCanonico, MOTIVOS_RETIRO, ordenLlevaPlanInternet, resolverClase, sentidoDeMegas, serviciosDeOrden, serviciosDeReconexion } from './order-types';
+import { ETIQUETA_CLASE, esAgregarInternet, esCambioDeMegas, esCambioTitular, esClaseOrden, esReconexion, esReconexionPorDias, esRetiroVoluntario, esTrabajoDeConexion, esTraslado, MAX_DIAS_GRACIA, motivoDeRetiroCanonico, MOTIVOS_RETIRO, ordenLlevaPlanInternet, resolverClase, sentidoDeMegas, serviciosDeOrden, serviciosDeReconexion } from './order-types';
 import type { SubscribersService } from '../subscribers/subscribers.service';
 import type { ProrrateoReconexionService } from '../billing/prorrateo-reconexion.service';
 import type { CargoOrdenService, ResultadoCargo } from '../billing/cargo-orden.service';
@@ -51,6 +53,7 @@ import { cargoDeTipoDeOrden } from '../billing/cargos-orden';
 import { direccionDe } from '../common/subscriber-address';
 import { subName } from '../common/subscriber-name';
 import { armarTraslado, TrasladoDto, type FichaParaTraslado } from '../common/traslado';
+import { armarCambioTitular, NuevoTitularDto, SELECT_TITULAR, type FichaParaTitular } from '../common/cambio-titular';
 import { OrderScoreService } from './order-score.service';
 
 /** Carpeta de firmas PNG dibujadas de las órdenes. */
@@ -65,6 +68,7 @@ export const TICKET_PRIORITIES = ['Baja', 'Media', 'Alta', 'Urgente'] as const;
  * importe desde aquí, que es donde vivía.
  */
 export { TrasladoDto };
+export { NuevoTitularDto };
 
 export class CreateTicketDto {
   @IsString() subscriberId!: string;
@@ -111,6 +115,11 @@ export class CreateTicketDto {
    * preguntar por teléfono a dónde iba.
    */
   @IsOptional() @ValidateNested() @Type(() => TrasladoDto) moveTo?: TrasladoDto;
+  /**
+   * Los datos del NUEVO TITULAR de un 'Cambio de titular'. Obligatorio en ese tipo
+   * de orden y sin uso en los demás (ver `common/cambio-titular.ts`).
+   */
+  @IsOptional() @ValidateNested() @Type(() => NuevoTitularDto) newHolder?: NuevoTitularDto;
   /**
    * A CUÁNTAS MEGAS se pasa el cliente: el plan destino (`Plan.id`) de una orden de
    * 'Subir megas' / 'Bajar megas'. Obligatorio en esas dos y sin uso en las demás.
@@ -181,6 +190,11 @@ export class UpdateTicketDto {
    * por teléfono. Solo cuenta si el detalle final es 'Traslado'.
    */
   @IsOptional() @ValidateNested() @Type(() => TrasladoDto) moveTo?: TrasladoDto;
+  /**
+   * Los datos del nuevo titular de un 'Cambio de titular', para las que nacieron sin
+   * ellos (las del chatbot) o para corregirlos. Solo cuenta en ese tipo de orden.
+   */
+  @IsOptional() @ValidateNested() @Type(() => NuevoTitularDto) newHolder?: NuevoTitularDto;
   /**
    * El PLAN DESTINO de una orden de megas, para las que no lo traen y para las que
    * lo traen mal.
@@ -473,6 +487,9 @@ export class SupportWriteService {
    * @param opts.planOpcional  deja abrir una orden de MEGAS sin el plan destino, por
    *   lo mismo: el cliente pide "más megas" por WhatsApp y a qué plan se pasa lo
    *   confirma quien atienda la orden, con el precio delante.
+   * @param opts.titularOpcional  deja abrir un CAMBIO DE TITULAR sin los datos del
+   *   nuevo titular: por WhatsApp solo se dicta el nombre, y el cambio se hace en
+   *   oficina con los documentos. Quien la atienda los completa desde la web.
    * @param opts.yaFacturada  el trabajo YA SE COBRÓ y esta es la factura con la que
    *   se pagó. Es el camino de la factura de traslado (2026-09-08): allí se factura
    *   primero y la orden nace sola al pagarse, así que volver a llamar al cargo
@@ -486,6 +503,7 @@ export class SupportWriteService {
     opts: {
       destinoOpcional?: boolean;
       planOpcional?: boolean;
+      titularOpcional?: boolean;
       yaFacturada?: { tid: number; concepto?: string | null };
     } = {},
   ) {
@@ -502,6 +520,7 @@ export class SupportWriteService {
       // también a las cajeras de Villavicencio, que no la iban a repartir nunca.
       select: {
         id: true, nomenclature: true, addressLine: true, neighborhood: true,
+        ...SELECT_TITULAR,
         branch: { select: { legacyId: true } },
       },
     });
@@ -509,6 +528,9 @@ export class SupportWriteService {
     // A dónde se muda, si es un traslado. Se resuelve ANTES de tocar nada: una
     // orden de traslado sin dirección destino no se abre.
     const traslado = this.prepararTraslado(dto, sub, opts.destinoOpcional === true);
+    // Y a nombre de quién queda, si es un cambio de titular. Igual que el destino:
+    // sin los datos del nuevo titular la orden no se abre (salvo por chat).
+    const titular = this.prepararCambioTitular(dto, sub, opts.titularOpcional === true);
     // Y a cuántas megas se pasa, si es de ésas. Se valida ANTES por lo mismo: una
     // orden de 'Subir megas' que no dice cuántas es la que manda al técnico a
     // preguntar por teléfono a qué velocidad tiene que dejar al cliente.
@@ -525,7 +547,7 @@ export class SupportWriteService {
     // La dirección destino va también en la OBSERVACIÓN, que es la que viaja al
     // legacy: allá no hay columna donde meterla y es donde el técnico que sigue
     // trabajando en el sistema viejo la va a leer.
-    const observacion = [prosa, traslado?.notaObservacion ?? null, megas?.notaObservacion ?? null, dto.section?.trim() || null]
+    const observacion = [prosa, traslado?.notaObservacion ?? null, titular?.notaObservacion ?? null, megas?.notaObservacion ?? null, dto.section?.trim() || null]
       .filter(Boolean).join('\n') || null;
 
     if (dto.scheduledFor && !assignedStaffId) {
@@ -559,6 +581,13 @@ export class SupportWriteService {
           moveToText: traslado?.direccionNueva ?? undefined,
           moveFromText: traslado?.direccionVieja ?? undefined,
           moveAppliedAt: traslado ? new Date() : undefined,
+          // Cambio de titular: quién queda y quién era. La foto del anterior se
+          // guarda porque la ficha solo sabe quién es el titular HOY.
+          holderTo: titular ? (titular.nuevo as Prisma.InputJsonValue) : undefined,
+          holderToText: titular?.textoNuevo ?? undefined,
+          holderFrom: titular ? (titular.anterior as Prisma.InputJsonValue) : undefined,
+          holderFromText: titular?.textoAnterior ?? undefined,
+          holderAppliedAt: titular ? new Date() : undefined,
           // Megas: a qué plan va y de cuál venía. Las copias del nombre y de las
           // megas se guardan aunque el plan siga en el catálogo — el catálogo se
           // renombra y se repreciona, y dentro de un año esta orden tiene que
@@ -586,6 +615,15 @@ export class SupportWriteService {
             // en la orden, que es donde se puede preguntar por qué).
             editedAt: new Date(),
           },
+        });
+      }
+      // El titular también se cambia al abrir la orden, como la dirección del
+      // traslado. `editedAt` para que el sync de ida no devuelva el anterior y el
+      // writeback lo lleve al legacy.
+      if (titular) {
+        await tx.subscriber.update({
+          where: { id: sub.id },
+          data: { ...titular.fichaData, editedAt: new Date() },
         });
       }
       return { id: t.id, code: t.code };
@@ -686,6 +724,7 @@ export class SupportWriteService {
 
     return {
       ...creada,
+      cambioTitular: titular ? { desde: titular.textoAnterior, hasta: titular.textoNuevo } : null,
       // Lo que hay que DECIRLE a quien la abrió: se le movió la dirección al cliente
       // y se le emitió (o no) la factura del traslado. Sin esto la cajera no sabe si
       // tiene que cobrar algo en ventanilla.
@@ -827,6 +866,20 @@ export class SupportWriteService {
       throw new BadRequestException('Una orden de traslado necesita la dirección nueva del cliente.');
     }
     return this.armarTraslado(dto.moveTo, sub);
+  }
+
+  /**
+   * Valida y arma el cambio de titular de una orden nueva. `null` si la orden no es
+   * de ese tipo (y el `newHolder` que venga se ignora, como el `moveTo` fuera del
+   * traslado).
+   */
+  private prepararCambioTitular(dto: CreateTicketDto, sub: FichaParaTitular, titularOpcional = false) {
+    if (!esCambioTitular(dto.type)) return null;
+    if (!dto.newHolder) {
+      if (titularOpcional) return null;
+      throw new BadRequestException('Una orden de cambio de titular necesita los datos del nuevo titular.');
+    }
+    return armarCambioTitular(dto.newHolder, sub);
   }
 
   /**
@@ -1185,7 +1238,7 @@ export class SupportWriteService {
       const baseVieja = round2(num(linea.price) * qty);
       const ivaViejo = num(linea.taxTotal);
       const baseNueva = round2(num(plan.price) * qty);
-      const ivaNuevo = round2((baseNueva * num(plan.taxRate)) / 100);
+      const ivaNuevo = ivaDe(baseNueva, num(plan.taxRate));
       const deltaBase = round2(baseNueva - baseVieja);
       const deltaIva = round2(ivaNuevo - ivaViejo);
       if (deltaBase === 0 && deltaIva === 0 && norma(linea.productName) === norma(plan.name)) {
@@ -1368,6 +1421,14 @@ export class SupportWriteService {
       }
     }
 
+    // Datos del cliente ANTES de empezar (2026-09-18): la visita de campo no arranca
+    // si al abonado le falta la ubicación o la foto de la vivienda. Va aquí, en el
+    // arranque y no en el cierre, porque son los dos datos que sólo se pueden tomar
+    // estando en la puerta — y porque la ubicación es contra lo que la geo-cerca va a
+    // medir después: capturada al llegar, el cierre cuadra solo. Ver
+    // `datos-cliente.policy.ts`.
+    if (dto.status === 'REALIZANDO') await this.exigirDatosDelCliente(t, user);
+
     // Bloqueo de cierre sin firma (porta Tickets.php). Desactivable con
     // TICKET_REQUIRE_SIGNATURE=false. Solo aplica al pasar a RESUELTO.
     //
@@ -1439,7 +1500,7 @@ export class SupportWriteService {
     // de orden (porta Tickets.php). Las operaciones Mikrotik respetan su gate dry-run.
     let cascade: any = {};
     if (dto.status === 'RESUELTO' && t.subscriberId) {
-      cascade = await this.applyCloseCascade({ ticketId: id, subscriberId: t.subscriberId, type: t.type, graceDays: t.graceDays, code: t.code, moveToText: t.moveToText, planToId: t.planToId, planToName: t.planToName, planToMegas: t.planToMegas }, user);
+      cascade = await this.applyCloseCascade({ ticketId: id, subscriberId: t.subscriberId, type: t.type, graceDays: t.graceDays, code: t.code, moveToText: t.moveToText, holderToText: t.holderToText, planToId: t.planToId, planToName: t.planToName, planToMegas: t.planToMegas }, user);
     }
 
     // Aviso para quien quiera reaccionar al cierre. Hoy lo escucha el chatbot, que le
@@ -1543,6 +1604,70 @@ export class SupportWriteService {
     });
     if (!faltaLaFoto({ ...entrada, fotos })) return;
     throw new HttpException({ code: 'FOTO_REQUERIDA', message: SIN_FOTO }, HttpStatus.UNPROCESSABLE_ENTITY);
+  }
+
+  /**
+   * Ubicación y foto de la vivienda del cliente, ANTES de empezar la visita
+   * (2026-09-18, del requerimiento del usuario: «si el cliente no tiene la ubicación
+   * aún, y la foto de la vivienda, a la hora de abrir la orden debe sí o sí obligarlo
+   * a subir primero estos datos y ahí sí hacer lo que tiene que hacer»).
+   *
+   * Las reglas —a quién sí y a quién no— están en `datos-cliente.policy.ts`. Aquí
+   * sólo se traen los dos datos del abonado, y en ese orden: primero se pregunta si
+   * el requisito aplica siquiera (con valores optimistas se descarta el 85% de los
+   * cambios de estado sin tocar la base), y sólo entonces se va a buscarlos.
+   *
+   * `falta` viaja en el cuerpo del 422 para que la pantalla ofrezca el botón de cada
+   * cosa que falte en vez de un error seco: capturar el GPS, tomar la foto, o las dos.
+   */
+  private async exigirDatosDelCliente(
+    t: { type: string | null; subscriberId: string | null },
+    user?: AuthUser,
+  ) {
+    const activo = process.env.TICKET_REQUIRE_CLIENT_DATA !== 'false';
+    if (!activo) return;
+    const entrada = {
+      activo,
+      tipoOrden: t.type,
+      tiposCampo: await this.geofence.tiposCampo(),
+      permisosUsuario: user?.permissions,
+      hayUsuario: Boolean(user?.id),
+      // Sólo al técnico de campo (2026-09-18): sistemas y administración no están en
+      // la vivienda, así que no pueden tomar ni la foto ni el punto.
+      esTecnicoDeCampo: esTecnicoDeCampo(user),
+      hayCliente: Boolean(t.subscriberId),
+      // Optimistas a propósito, igual que en `exigirIpRemota`: con estos dos la
+      // política ya dice que no hay nada que pedir en todo lo que no es de campo.
+      tieneUbicacion: true,
+      tieneFotoVivienda: true,
+    };
+    if (!aplicaDatosDelCliente(entrada)) return;
+
+    const [sub, fotos] = await Promise.all([
+      this.prisma.subscriber.findUnique({
+        where: { id: t.subscriberId! },
+        select: { gpsLat: true, gpsLng: true },
+      }),
+      this.prisma.subscriberFile.count({
+        where: { subscriberId: t.subscriberId!, kind: KIND_VIVIENDA },
+      }),
+    ]);
+    const falta = datosQueFaltan({
+      ...entrada,
+      tieneUbicacion: Boolean(sub?.gpsLat && sub?.gpsLng),
+      tieneFotoVivienda: fotos > 0,
+    });
+    if (!falta.ubicacion && !falta.foto) return;
+
+    throw new HttpException(
+      {
+        code: 'DATOS_CLIENTE_REQUERIDOS',
+        message: mensajeDatosCliente(falta),
+        falta,
+        subscriberId: t.subscriberId,
+      },
+      HttpStatus.UNPROCESSABLE_ENTITY,
+    );
   }
 
   /**
@@ -1780,7 +1905,7 @@ export class SupportWriteService {
       // sesión SSH contra la OLT. Si se pasa, se dice y el trabajo se da por hecho en
       // sitio (mismo criterio que el tope de la caja en `ReconexionService`).
       const r: any = await Promise.race([
-        this.genieacs.tvBatchBySubscribers([sid], enable, user),
+        this.genieacs.tvBatchBySubscribers([sid], enable, user, { desdeOrden: true }),
         new Promise((_, rechazar) =>
           setTimeout(() => rechazar(new Error('los equipos no contestaron a tiempo.')), ESPERA_EQUIPOS_MS).unref?.(),
         ),
@@ -1813,7 +1938,7 @@ export class SupportWriteService {
    * reconectaba el internet de quien seguía debiendo) y 'Corte Television' dejaba
    * sin internet a alguien que solo debía perder la TV.
    */
-  private async applyCloseCascade(t: { ticketId?: string; subscriberId: string; type: string | null; graceDays?: number | null; code?: number | null; moveToText?: string | null; planToId?: string | null; planToName?: string | null; planToMegas?: number | null }, user?: AuthUser) {
+  private async applyCloseCascade(t: { ticketId?: string; subscriberId: string; type: string | null; graceDays?: number | null; code?: number | null; moveToText?: string | null; holderToText?: string | null; planToId?: string | null; planToName?: string | null; planToMegas?: number | null }, user?: AuthUser) {
     const cascade: any = {};
     const kind = (t.type || '').toLowerCase();
     const sid = t.subscriberId;
@@ -2021,6 +2146,10 @@ export class SupportWriteService {
       } else {
         cascade.note = 'Cambio de plan/megas: aplica el nuevo plan al cliente desde su ficha (Cambiar plan); la orden no porta el plan destino.';
       }
+    } else if (esCambioTitular(t.type)) {
+      cascade.note = t.holderToText
+        ? `Cambio de titular resuelto: el servicio quedó a nombre de ${t.holderToText}.`
+        : 'Cambio de titular resuelto: registra los datos del nuevo titular en la orden (Corregir orden).';
     } else if (kind.includes('traslado')) {
       // Desde 2026-08-27 la orden de 'Traslado' SÍ porta el destino y la dirección
       // ya se le cambió al cliente al abrirla, así que aquí no hay nada que mover:
@@ -2542,6 +2671,40 @@ export class SupportWriteService {
       }
     }
 
+    // Los datos del NUEVO TITULAR. Se registran aquí para las órdenes que nacieron
+    // sin ellos (las del chatbot, donde solo se dicta el nombre) y para corregir un
+    // error de dedo. La foto del titular anterior se conserva si ya estaba: la
+    // ficha ya tiene los datos que puso esta misma orden.
+    let fichaTitular: { data: Prisma.SubscriberUpdateInput; texto: string } | null = null;
+    if (dto.newHolder && esCambioTitular(tipoFinal)) {
+      if (!t.subscriberId) throw new BadRequestException('Esta orden no tiene cliente: no hay ficha a la que cambiarle el titular.');
+      const sub = await this.prisma.subscriber.findUnique({ where: { id: t.subscriberId }, select: SELECT_TITULAR });
+      if (!sub) throw new NotFoundException('Cliente no encontrado');
+      const titular = armarCambioTitular(dto.newHolder, sub);
+      if (JSON.stringify(titular.nuevo) !== JSON.stringify(t.holderTo ?? null)) {
+        data.holderTo = titular.nuevo as Prisma.InputJsonValue;
+        data.holderToText = titular.textoNuevo;
+        if (!t.holderAppliedAt) {
+          data.holderFrom = titular.anterior as Prisma.InputJsonValue;
+          data.holderFromText = titular.textoAnterior;
+        }
+        data.holderAppliedAt = new Date();
+        cambios.push(
+          t.holderToText
+            ? `nuevo titular: «${t.holderToText}» → «${titular.textoNuevo}»`
+            : `se registró el nuevo titular: ${titular.textoNuevo}`,
+        );
+        fichaTitular = { data: { ...titular.fichaData, editedAt: new Date() }, texto: titular.textoNuevo };
+        // La nota va en la OBSERVACIÓN, que es lo que viaja al legacy. Se reemplaza
+        // la que hubiera: dos notas dirían dos titulares distintos.
+        const desde = t.holderAppliedAt ? t.holderFromText : titular.textoAnterior;
+        const nota = `Cambio de titular: de ${desde ?? 'titular sin registrar'} a ${titular.textoNuevo}.`;
+        const observacion = data.section !== undefined ? (data.section as string | null) : t.section;
+        const sinNotaVieja = (observacion ?? '').split('\n').filter((l) => !l.startsWith('Cambio de titular: de ')).join('\n');
+        data.section = [sinNotaVieja || null, nota].filter(Boolean).join('\n').slice(0, 1500);
+      }
+    }
+
     // El PLAN DESTINO de una orden de megas: a cuántas se pasa el cliente. Se
     // registra aquí por lo mismo que el destino del traslado — hay órdenes que
     // nacen sin él (las del legacy, donde el plan vive en su tabla `temporales`, y
@@ -2596,6 +2759,7 @@ export class SupportWriteService {
     // 15 min no la devuelva a como estaba allá. Ojo: la dirección nueva SÍ llega al
     // legacy, pero por la observación —que es una de esas columnas.
     const SOLO_NUESTRO = ['graceDays', 'moveTo', 'moveToText', 'moveFromText', 'moveAppliedAt',
+      'holderTo', 'holderToText', 'holderFrom', 'holderFromText', 'holderAppliedAt',
       'planToId', 'planToName', 'planToMegas', 'planFromName', 'planFromMegas', 'planAppliedAt'];
     const tocaAlLegacy = Object.keys(data).some((k) => !SOLO_NUESTRO.includes(k));
     if (tocaAlLegacy) {
@@ -2611,6 +2775,10 @@ export class SupportWriteService {
     if (ficha) {
       await this.prisma.subscriber.update({ where: { id: t.subscriberId! }, data: ficha.data });
       cambios.push(`la ficha del cliente quedó en ${ficha.direccion}`);
+    }
+    if (fichaTitular) {
+      await this.prisma.subscriber.update({ where: { id: t.subscriberId! }, data: fichaTitular.data });
+      cambios.push(`la ficha del cliente quedó a nombre de ${fichaTitular.texto}`);
     }
 
     // Corregir el plan NO se lo cambia al cliente: eso pasa al cerrar la orden. En
@@ -2930,10 +3098,27 @@ export class SupportWriteService {
       ? (await this.prisma.subscriber.findUnique({ where: { id: subscriberId }, select: { branchId: true } }))?.branchId ?? null
       : null;
     const todas = await this.prisma.nap.findMany({
-      where: !texto && sede ? { branchId: sede } : {},
+      // Las 21 cajas SIN sede entran siempre: no son "de otra sede", es que el ETL no
+      // les puso ninguna, y esconderlas dejaría al técnico sin poder elegir la suya.
+      where: !texto && sede ? { OR: [{ branchId: sede }, { branchId: null }] } : {},
       select: { id: true, name: true, address: true, portCount: true, branchId: true, branch: { select: { name: true } } },
     });
-    const naps = texto ? todas.filter((n) => plano(n.name).includes(texto) || plano(n.address).includes(texto)) : todas;
+    const coincide = (n: { name: string; address: string | null }) =>
+      plano(n.name).includes(texto) || plano(n.address).includes(texto);
+    // La sede manda TAMBIÉN al buscar (2026-09-18: «aparecen todas las cajas, sale en
+    // Yopal y no en la sede que corresponde»). Yopal tiene 508 de las 1.406 y los
+    // rótulos se repiten entre sedes, así que buscar "03" desde un cliente de
+    // Monterrey devolvía sobre todo cajas de Yopal: caja equivocada a un clic.
+    const deSuSede = texto && sede
+      ? todas.filter((n) => (n.branchId === sede || n.branchId == null) && coincide(n))
+      : null;
+    // La excepción: si en su sede no hay NINGUNA con ese nombre se abren las demás.
+    // La sede del cliente puede estar mal puesta, o la caja mal clasificada, y dejar
+    // al técnico sin caja que elegir es peor — van marcadas (`deSuSede: false`) y la
+    // pantalla lo dice.
+    const naps = deSuSede
+      ? (deSuSede.length ? deSuSede : todas.filter(coincide))
+      : (texto ? todas.filter(coincide) : todas);
     if (!naps.length) return [];
     const ids = naps.map((n) => n.id);
     const [total, ocupados] = await Promise.all([
@@ -3260,12 +3445,25 @@ export class SupportWriteService {
   }
 
   /**
+   * Quién alcanza a este cliente para tocarle el equipo. Regla de siempre: manda la
+   * sede… salvo para el técnico de campo, al que "es mía" le gana a "es de mi sede"
+   * (igual que en `activarIpRemota` y en el detalle de su orden). Un técnico de Yopal
+   * que atiende una instalación en Monterrey tiene que poder ponerle la caja y el
+   * puerto al equipo que acaba de colgar; exigirle además la sede es darle el trabajo
+   * y quitarle la herramienta.
+   */
+  private async exigirAlcanceDeAbonado(user: AuthUser, subscriberId: string) {
+    if (esTecnicoDeCampo(user) && (await esClienteDeSuOrden(this.prisma, user, subscriberId))) return;
+    await exigirSedeSuscriptor(this.prisma, user, subscriberId);
+  }
+
+  /**
    * La VLAN que la OLT tiene para la ONU del cliente, para enseñarla en el editor
    * antes de guardar. Vive en soporte (y no en Red) por lo mismo que las NAP: quien
    * corrige la caja de un equipo puede ser la cajera, que no entra al módulo Red.
    */
   async vlanOltDeAbonado(subscriberId: string, user: AuthUser, refresh = false) {
-    await exigirSedeSuscriptor(this.prisma, user, subscriberId);
+    await this.exigirAlcanceDeAbonado(user, subscriberId);
     if (!this.olt) {
       return { ok: false, motivo: 'SIN_OLT', vlan: null, vlans: [], error: 'La consulta a la OLT no está disponible.' };
     }
@@ -3288,7 +3486,7 @@ export class SupportWriteService {
    * razón para no poder corregir una caja.
    */
   async ubicarEquipo(subscriberId: string, equipmentId: string, dto: UbicarEquipoDto, user: AuthUser) {
-    await exigirSedeSuscriptor(this.prisma, user, subscriberId);
+    await this.exigirAlcanceDeAbonado(user, subscriberId);
     const eq = await this.prisma.equipment.findUnique({
       where: { id: equipmentId },
       select: { id: true, subscriberId: true, mac: true, code: true, port: true, nat: true, vlan: true, serial: true },

@@ -69,7 +69,7 @@ function servicioDePrueba(opts: {
       };
     })(),
   };
-  const posting: any = { postSalesInvoice: async () => null, postSalesInvoiceAdjustment: async () => null };
+  const posting: any = { postSalesInvoice: async () => null, postSalesInvoiceAdjustment: async () => null, centroDeAbonado: async () => null };
   return new ProrrateoReconexionService(prisma, posting);
 }
 

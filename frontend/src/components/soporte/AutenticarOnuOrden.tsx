@@ -118,6 +118,7 @@ type Auto = {
   deStock: boolean;
   motivo: string;
 };
+type VlanPuerto = { fsp: string; vlan: number | null; origen: string | null; ok: boolean | null; falta: string[]; vlanCatalogoId: string | null; branchId: string | null };
 type Estado = {
   /**
    * Por dónde se le da servicio a este abonado. `MIKROTIK` = tecnología sin OLT
@@ -165,6 +166,17 @@ type Estado = {
     autenticadaEn?: { fsp: string; ontId: number; descripcion: string; runState: string } | null;
   } | null;
   onuActual: { sn: string | null; frame: number | null; slot: number | null; port: number | null; ontId: number | null; runState: string | null } | null;
+  /**
+   * ¿La VLAN del puerto donde está la ONU llega al PPPoE? (existe en la OLT, sale
+   * por el uplink, y el Mikrotik tiene su interfaz y servidor PPPoE). `ok: false`
+   * = si se autentica, la ONU quedará en línea y SIN internet (la 590 de
+   * Villanueva, sep-2026). `ok: null` = no se pudo comprobar.
+   */
+  vlanPuerto?: VlanPuerto | null;
+  /** El mismo chequeo por cada puerto con ONUs esperando (hasta 3): se enseña el de la elegida. */
+  vlanPuertos?: VlanPuerto[];
+  /** Lo que dio la comprobación "¿navega?" 60 s después de autenticar. */
+  navegacion?: { at: number; estado: "PENDIENTE" | "NAVEGANDO" | "SIN_PPPOE" | "SIN_REVISAR"; mensaje: string } | null;
 };
 type Resultado = {
   ok: boolean; dryRun?: boolean; message?: string; error?: string; ontId?: string; fsp?: string;
@@ -395,6 +407,16 @@ export function AutenticarOnuOrden({
     void cargar();
   }, [modo, abierta, cargar]);
 
+  // Recién autenticada, el servidor mira a los 60 s si el abonado levantó PPPoE:
+  // se vuelve a consultar sola un poco después para enseñar el resultado.
+  const navPendienteDesde = est?.navegacion?.estado === "PENDIENTE" ? est.navegacion.at : null;
+  useEffect(() => {
+    if (navPendienteDesde == null) return;
+    const espera = Math.max(5_000, navPendienteDesde + 65_000 - Date.now());
+    const t = setTimeout(() => void cargar(), espera);
+    return () => clearTimeout(t);
+  }, [navPendienteDesde, cargar]);
+
   if (!modo) return null;
 
   async function ejecutar(url: string, body?: unknown) {
@@ -535,6 +557,8 @@ export function AutenticarOnuOrden({
               </span>
             )}
           </div>
+
+          {est.navegacion && <AvisoNavegacion n={est.navegacion} />}
 
           {bloqueoDuro ? (
             <div className="rounded-lg border border-warning bg-warning-soft px-3 py-2 text-[12.5px] leading-relaxed text-text-secondary">
@@ -726,6 +750,12 @@ export function AutenticarOnuOrden({
                   solos —usuario, clave y su secret con el perfil del plan—: no hace falta ir a crearlos a mano.
                 </p>
               )}
+              {(() => {
+                // El aviso del puerto de la ONU que está elegida (o, sin elegir, el primero).
+                const norm = (f: string) => f.replace(/\s+/g, "");
+                const v = (elegida?.fsp ? est.vlanPuertos?.find((x) => norm(x.fsp) === norm(String(elegida.fsp))) : null) ?? est.vlanPuerto;
+                return v ? <AvisoVlanPuerto v={v} /> : null;
+              })()}
               {est.onuActual?.sn && (
                 <p className="rounded-lg bg-surface-2 px-3 py-1.5 text-[11.5px] text-text-tertiary">
                   Ojo: este abonado ya tiene la ONU <span className="font-mono">{est.onuActual.sn}</span> vinculada
@@ -1030,5 +1060,67 @@ function BloqueMikrotik({
         </div>
       )}
     </>
+  );
+}
+
+/**
+ * La VLAN del puerto, dicha ANTES de autenticar. Si no llega al PPPoE la ONU
+ * quedaría en línea y sin internet, y el técnico se iría creyendo que la dejó
+ * funcionando. No bloquea: lo arregla quien administra la red.
+ */
+function AvisoVlanPuerto({ v }: { v: VlanPuerto }) {
+  const enlace = v.branchId && v.vlan ? `/red/vlans?sede=${v.branchId}&q=${v.vlan}` : null;
+  if (v.ok === true) {
+    return (
+      <p className="text-[11.5px] text-text-tertiary">
+        <Icon name="check" size={13} className="mr-1 inline text-success-text" />
+        VLAN {v.vlan} de {v.fsp}: completa en la OLT, el uplink y el Mikrotik.
+      </p>
+    );
+  }
+  if (v.ok === null) {
+    return v.falta.length ? (
+      <p className="text-[11.5px] text-text-tertiary">
+        <Icon name="info" size={13} className="mr-1 inline" />
+        No se pudo comprobar la VLAN{v.vlan ? ` ${v.vlan}` : ""} de {v.fsp}: {v.falta.join("; ")}.
+      </p>
+    ) : null;
+  }
+  return (
+    <div className="rounded-lg border border-error-text/40 bg-error-soft px-3 py-2 text-[12.5px] leading-relaxed text-text-secondary">
+      <p>
+        <Icon name="alert-triangle" size={13} className="mr-1 inline text-error-text" />
+        <b>La VLAN{v.vlan ? ` ${v.vlan}` : ""} del puerto {v.fsp} no llega al PPPoE:</b> {v.falta.join("; ")}.
+      </p>
+      <p className="mt-1">
+        Si autentica así, la ONU quedará en línea pero el cliente <b>no navegará</b>. Avise a administración / redes para
+        que la configuren en Red › VLANs → <i>Configurar en equipos</i>
+        {enlace && (
+          <>
+            {" "}(<a href={enlace} className="font-semibold text-brand hover:underline" target="_blank" rel="noreferrer">abrir</a>)
+          </>
+        )}.
+      </p>
+    </div>
+  );
+}
+
+/** Resultado de "¿navega?" tras autenticar (lo mismo queda en el seguimiento de la orden). */
+function AvisoNavegacion({ n }: { n: NonNullable<Estado["navegacion"]> }) {
+  if (n.estado === "PENDIENTE") {
+    return (
+      <p className="mb-2 flex items-center gap-1.5 rounded-lg bg-surface-2 px-3 py-1.5 text-[12px] text-text-secondary">
+        <Icon name="refresh-cw" size={13} className="animate-spin" /> {n.mensaje} Se actualiza sola.
+      </p>
+    );
+  }
+  const tono = n.estado === "NAVEGANDO"
+    ? "border-success-soft bg-success-soft text-success-text"
+    : n.estado === "SIN_PPPOE" ? "border-error-text/40 bg-error-soft text-text-secondary" : "border-border-subtle bg-surface-2 text-text-secondary";
+  return (
+    <p className={`mb-2 rounded-lg border px-3 py-2 text-[12.5px] leading-relaxed ${tono}`}>
+      <Icon name={n.estado === "NAVEGANDO" ? "check" : n.estado === "SIN_PPPOE" ? "alert-triangle" : "info"} size={13} className="mr-1 inline" />
+      <b>{n.estado === "NAVEGANDO" ? "Navegando." : n.estado === "SIN_PPPOE" ? "Sin sesión PPPoE." : "Sin comprobar."}</b> {n.mensaje}
+    </p>
   );
 }

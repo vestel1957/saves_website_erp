@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { PageHeading } from "@/components/ui/PageHeading";
 import { Icon } from "@/components/Icon";
@@ -14,6 +14,7 @@ import { PanelCaja } from "@/components/treasury/PanelCaja";
 import { PanelTecnico } from "@/components/support/PanelTecnico";
 import { RangoFechas, RangoFechasValor, etiquetaRango, rangoDePreset } from "@/components/ui/RangoFechas";
 import { Select } from "@/components/ui/Field";
+import { MovimientoAbonadosModal, TipoMovimiento } from "@/components/subscribers/MovimientoAbonadosModal";
 
 function compact(n: number): string {
   const a = Math.abs(n);
@@ -142,7 +143,15 @@ export default function DashboardPage() {
   const { loading: authLoading, user } = useAuth();
 
   if (authLoading) return <PageSkeleton />;
-  if (tieneCaja(user) || esCajera(user)) return <PanelCaja />;
+  // `PanelCaja` guarda su día en la dirección y para eso lee `useSearchParams`, que en
+  // el App Router exige una frontera de Suspense.
+  if (tieneCaja(user) || esCajera(user)) {
+    return (
+      <Suspense fallback={<PageSkeleton />}>
+        <PanelCaja />
+      </Suspense>
+    );
+  }
   if (esTecnico(user)) return <PanelTecnico />;
   return <PanelEjecutivo />;
 }
@@ -160,6 +169,8 @@ function PanelEjecutivo() {
   // Sede mirada: "" = todas las que alcance el usuario. Viaja a la API como el
   // `legacyId` de la sede, que es lo que entienden el resto de filtros del sistema.
   const [sede, setSede] = useState("");
+  // Card de abonados cuyo listado está abierto (null = ninguno).
+  const [movimiento, setMovimiento] = useState<TipoMovimiento | null>(null);
 
   // El periodo elegido se recuerda entre visitas, pero las FECHAS se recalculan a
   // partir del atajo: guardado "este mes" en julio, al volver en agosto tiene que
@@ -226,17 +237,30 @@ function PanelEjecutivo() {
 
   const maxSede = Math.max(1, ...(d.ventasPorSede ?? []).map((s: any) => s.total));
 
-  const Kpi = ({ label, value, icon, href, tone }: { label: string; value: string; icon: string; href: string; tone?: string }) => (
-    <Link href={href} className="flex items-center gap-3 rounded-xl border border-border-subtle bg-surface px-4 py-3 shadow-sm transition-colors hover:border-border-strong">
-      <span className={`flex h-9 w-9 items-center justify-center rounded-lg ${tone ?? "bg-brand-soft text-brand"}`}><Icon name={icon} size={17} /></span>
-      <div><div className="text-[17px] font-bold leading-none text-text-primary">{value}</div><div className="text-[11px] text-text-tertiary">{label}</div></div>
-    </Link>
-  );
+  // Con `onClick` en vez de `href` la card abre un detalle en el sitio (el listado de
+  // abonados nuevos o de retiros) en lugar de navegar a otra pantalla.
+  const Kpi = ({ label, value, icon, href, onClick, tone }: { label: string; value: string; icon: string; href?: string; onClick?: () => void; tone?: string }) => {
+    const cls = "flex items-center gap-3 rounded-xl border border-border-subtle bg-surface px-4 py-3 text-left shadow-sm transition-colors hover:border-border-strong";
+    const cuerpo = (
+      <>
+        <span className={`flex h-9 w-9 items-center justify-center rounded-lg ${tone ?? "bg-brand-soft text-brand"}`}><Icon name={icon} size={17} /></span>
+        <div><div className="text-[17px] font-bold leading-none text-text-primary">{value}</div><div className="text-[11px] text-text-tertiary">{label}</div></div>
+      </>
+    );
+    return onClick
+      ? <button type="button" onClick={onClick} className={cls}>{cuerpo}</button>
+      : <Link href={href ?? "#"} className={cls}>{cuerpo}</Link>;
+  };
   const Rotulo = ({ children }: { children: React.ReactNode }) => (
     <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-text-tertiary">{children}</div>
   );
 
   const periodo = etiquetaRango(rango);
+  // El clic en Recaudo/Egresos abre Movimientos con el MISMO periodo y la misma sede,
+  // para que la cifra de arriba sea la misma que se acaba de ver aquí.
+  const hrefTesoreria = `/tesoreria?${new URLSearchParams({
+    periodo: "personalizado", desde: rango.desde, hasta: rango.hasta, ...(sede ? { sede } : {}),
+  })}`;
   // El catálogo lo trae la propia respuesta ya acotado a las sedes del usuario: no hay
   // llamada aparte, y quien sólo alcanza una sede no ve un desplegable que no le sirve.
   const sedes: { id: number; nombre: string }[] = d.sedes ?? [];
@@ -273,12 +297,13 @@ function PanelEjecutivo() {
       {/* Franja de KPIs del periodo elegido */}
       <div className="shrink-0">
         <Rotulo>En el periodo</Rotulo>
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
           <Kpi label="Facturado" value={compact(d.facturacion.total)} icon="file-text" href="/facturacion" />
-          <Kpi label="Recaudo" value={compact(d.tesoreria.ingresos)} icon="banknote" href="/tesoreria" tone="bg-success-soft text-success-text" />
-          <Kpi label="Egresos" value={compact(d.tesoreria.egresos)} icon="arrow-down" href="/tesoreria" tone="bg-error-soft text-error-text" />
+          <Kpi label="Recaudo" value={compact(d.tesoreria.ingresos)} icon="banknote" href={hrefTesoreria} tone="bg-success-soft text-success-text" />
+          <Kpi label="Egresos" value={compact(d.tesoreria.egresos)} icon="arrow-down" href={hrefTesoreria} tone="bg-error-soft text-error-text" />
           <Kpi label="Órdenes creadas" value={nfmt(d.soporte.total)} icon="headphones" href="/soporte" tone="bg-info-soft text-info-text" />
-          <Kpi label="Abonados nuevos" value={nfmt(d.nuevosAbonados ?? 0)} icon="user-plus" href="/clientes" tone="bg-success-soft text-success-text" />
+          <Kpi label="Abonados nuevos" value={nfmt(d.nuevosAbonados ?? 0)} icon="user-plus" onClick={() => setMovimiento("nuevos")} tone="bg-success-soft text-success-text" />
+          <Kpi label="Retiros" value={nfmt(d.retirosAbonados ?? 0)} icon="user-minus" onClick={() => setMovimiento("retiros")} tone="bg-error-soft text-error-text" />
         </div>
       </div>
 
@@ -378,6 +403,7 @@ function PanelEjecutivo() {
           </div>
         </div>
       </div>
+      <MovimientoAbonadosModal tipo={movimiento} desde={desde} hasta={hasta} sede={sede} periodo={`${ambito} · ${periodo}`} onClose={() => setMovimiento(null)} />
     </>
   );
 }

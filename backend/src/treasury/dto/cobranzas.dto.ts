@@ -143,6 +143,13 @@ export class ExpenseDto {
 
   @IsOptional() @IsString()
   note?: string;
+
+  /**
+   * Opcional: centro de costo del asiento contable. Si no viene, el de la sede de la caja
+   * (la de banco va a «Administración general»). Nunca obligatorio: no frena a la cajera.
+   */
+  @IsOptional() @IsString()
+  costCenterId?: string;
 }
 
 /** Transferencia de dinero entre dos cajas (egreso en origen + ingreso en destino). */
@@ -234,6 +241,13 @@ export class IncomeDto {
 
   @IsOptional() @IsString()
   note?: string;
+
+  /**
+   * Opcional: centro de costo del asiento contable. Si no viene, el de la sede de la caja
+   * (la de banco va a «Administración general»). Nunca obligatorio: no frena a la cajera.
+   */
+  @IsOptional() @IsString()
+  costCenterId?: string;
 }
 
 /**

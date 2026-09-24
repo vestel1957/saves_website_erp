@@ -88,6 +88,7 @@ import { NetworkWriteService } from '../network/network-write.service';
 import { NetworkService } from '../network/network.service';
 import { OltPlanProfileService } from '../network/olt-plan-profile.service';
 import { OltService } from '../network/olt.service';
+import { VlanEquiposService } from '../network/vlan-equipos.service';
 import { OnuAlDevolverService } from '../network/onu-al-devolver.service';
 import { ReconexionService } from '../network/reconexion.service';
 import { OmniService } from '../omni/omni.service';
@@ -176,6 +177,8 @@ export const mikrotikService = new MikrotikService(prismaService, whatsappServic
 // La OLT baja detrás del Mikrotik: la señal óptica de la ficha le pregunta con qué
 // MAC navega el cliente cuando el equipo del inventario no aparece en la OLT.
 export const oltService = new OltService(prismaService, mikrotikService);
+// Las VLANs en los equipos: lee y configura OLT + Mikrotik, así que va tras los dos.
+export const vlanEquiposService = new VlanEquiposService(prismaService, oltService, mikrotikService);
 export const onuAlDevolverService = new OnuAlDevolverService(prismaService, oltService);
 export const genieacsService = new GenieacsService(prismaService, oltService, ordenesAutomaticasService);
 // Cobro de los días que quedan del mes al devolver un servicio cortado (las órdenes
@@ -271,7 +274,7 @@ export const whatsappCampaignService = new WhatsappCampaignService(prismaService
 export const whatsappInternalAlertListener = new WhatsappInternalAlertListener(whatsappService);
 export const whatsappLogService = new WhatsappLogService(prismaService, whatsappInboxService);
 export const whatsappRemindersService = new WhatsappRemindersService(prismaService, whatsappCampaignService);
-export const cronService = new CronService(prismaService, facturasService, mailService, whatsappRemindersService, metricsService, responsibilityNotifierService, altaClienteService, onlinePaymentsService, portalPagosService, ordenAlPagarService, mikrotikService);
+export const cronService = new CronService(prismaService, facturasService, mailService, whatsappRemindersService, metricsService, responsibilityNotifierService, altaClienteService, onlinePaymentsService, portalPagosService, ordenAlPagarService, mikrotikService, vlanEquiposService);
 export const dataService = new DataService(prismaService);
 export const einvoiceEmitService = new EinvoiceEmitService(prismaService);
 export const extrasService = new ExtrasService(prismaService);
@@ -280,7 +283,7 @@ export const manualsService = new ManualsService();
 export const networkWriteService = new NetworkWriteService(prismaService, signatureOtpService, whatsappService, notificationsService, onuAlDevolverService);
 export const networkService = new NetworkService(prismaService);
 export const oltPlanProfileService = new OltPlanProfileService(prismaService, oltService);
-export const omniService = new OmniService(prismaService, postingService);
+export const omniService = new OmniService(prismaService, postingService, notificationsService);
 export const paymentImportsService = new PaymentImportsService(prismaService, cobranzasService, reconexionService);
 export const playhubClient = new PlayhubClient();
 export const playhubService = new PlayhubService(prismaService, playhubClient);
@@ -293,7 +296,7 @@ export const subscriberFilesService = new SubscriberFilesService(prismaService);
 export const subscriberGeoService = new SubscriberGeoService(prismaService);
 export const subscriberNotesService = new SubscriberNotesService(prismaService);
 export const equipoReservaService = new EquipoReservaService(prismaService, onuAlDevolverService);
-export const onuProvisionService = new OnuProvisionService(prismaService, oltService, oltPlanProfileService, mikrotikService, equipoReservaService, subscribersService);
+export const onuProvisionService = new OnuProvisionService(prismaService, oltService, oltPlanProfileService, mikrotikService, equipoReservaService, subscribersService, vlanEquiposService);
 export const tasksService = new TasksService(prismaService);
 export const pagosFijosService = new PagosFijosService(prismaService, cobranzasService);
 
@@ -321,6 +324,7 @@ export const todosLosServicios = [
   ipAllocatorService,
   mikrotikService,
   oltService,
+  vlanEquiposService,
   onuAlDevolverService,
   genieacsService,
   reconexionService,

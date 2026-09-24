@@ -125,4 +125,38 @@ describe('reubicar equipo: caja NAP, puerto y VLAN de la OLT', () => {
     const { svc } = armar({ equipo: { ...EQUIPO, subscriberId: 'otro' } });
     await expect(svc.ubicarEquipo(SUB, 'eq-1', { portId: 'p-8' }, user)).rejects.toThrow('no está asignado a este cliente');
   });
+
+  /**
+   * El alcance del técnico de campo (2026-09-18): quien cuelga el equipo es quien
+   * sabe en qué caja y en qué puerto quedó, y las instalaciones no siempre caen en
+   * su sede. "Es mía" le gana a "es de mi sede", igual que en el detalle de la orden
+   * y en la IP remota; al que NO tiene orden con ese cliente le sigue mandando la sede.
+   */
+  describe('alcance del técnico de campo', () => {
+    /** Técnico de Yopal (sede 2) con un cliente de Monterrey (sede 5). */
+    const tecnico: any = { id: 'u-tec', email: 'tec@vestel.com.co', name: 'Omar Téc', permissions: ['area.tecnicos'], sedes: [2] };
+    const conOrden = (suya: boolean) => {
+      const { svc, escrito } = armar();
+      const prisma: any = (svc as any).prisma;
+      prisma.staff.findFirst.mockResolvedValue({ id: 'staff-1', name: 'Omar Téc', username: 'OmarTec', legacyId: 68 });
+      prisma.subscriber.findUnique.mockResolvedValue({ legacyId: 9001, branch: { legacyId: 5 } });
+      // `esClienteDeSuOrden` pregunta por las órdenes del técnico (where.OR); la otra
+      // llamada es la de la traza, que busca la orden ABIERTA del cliente.
+      prisma.ticket.findFirst.mockImplementation(async (a: any) => (a?.where?.OR ? (suya ? { id: 't-1' } : null) : null));
+      return { svc, escrito };
+    };
+
+    it('deja al técnico poner la caja y el puerto de un cliente de otra sede si la orden es suya', async () => {
+      const { svc, escrito } = conOrden(true);
+      const r = await svc.ubicarEquipo(SUB, 'eq-1', { napId: 'nap-1', portId: 'p-8' }, tecnico);
+      expect(escrito.equipment[0].data).toMatchObject({ nat: 241, port: 2393 });
+      expect(r).toMatchObject({ ok: true, napName: 'VICT_02', portNumber: 8 });
+    });
+
+    it('a un cliente de otra sede que no es de sus órdenes le sigue cerrando la sede', async () => {
+      const { svc } = conOrden(false);
+      await expect(svc.ubicarEquipo(SUB, 'eq-1', { napId: 'nap-1', portId: 'p-8' }, tecnico))
+        .rejects.toThrow('No tienes acceso a los datos de esta sede.');
+    });
+  });
 });

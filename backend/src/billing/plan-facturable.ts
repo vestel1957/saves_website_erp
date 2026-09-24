@@ -1,6 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { num, round2 } from '../common/money';
+import { ivaDe, num, round2 } from '../common/money';
 
 /** Un servicio facturable deducido de las facturas del abonado. */
 export type ServicioDerivado = { kind: string; planName: string; price: number; taxRate: number };
@@ -253,7 +253,7 @@ export async function mensualidadesCompletas(
     const renglones: Renglon[] = [...(propios.get(id) ?? []), ...extra.map((d) => ({ ...d, qty: 1 }))];
     const total = renglones.reduce((acc, r) => {
       const subtotal = round2(Math.max(0, Math.round(r.qty)) * round2(r.price));
-      return acc + subtotal + round2((subtotal * round2(r.taxRate)) / 100);
+      return acc + subtotal + ivaDe(subtotal, r.taxRate);
     }, 0);
     out.set(id, round2(total));
   }

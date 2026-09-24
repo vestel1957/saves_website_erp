@@ -16,6 +16,7 @@ import type { OrdenesAutomaticasService } from '../support/ordenes-automaticas.s
 import type { EmisorDeEventos } from '../core/eventos';
 import { ESTADO_SERVICIO_EVENT, type EstadoServicioEvent } from '../subscribers/subscribers.events';
 import { subName } from '../common/subscriber-name';
+import { lecturaMikrotikDeFilas, pasoRouterOsComoTexto, type LecturaMikrotikVlans, type PasoRouterOs } from './vlan-salud';
 
 /**
  * Integración real de corte / reconexión contra los MikroTik de Vestel.
@@ -126,7 +127,9 @@ function distanciaDeEdicion(a: string, b: string): number {
 export type MikrotikAction =
   | 'CUT' | 'RECONNECT' | 'STATUS' | 'TEST' | 'PROVISION' | 'PROFILE' | 'EDIT'
   /** Interruptor manual del legacy: sólo la address-list MOROSOS (ver `toggleMoroso`). */
-  | 'MOROSO_ON' | 'MOROSO_OFF';
+  | 'MOROSO_ON' | 'MOROSO_OFF'
+  /** Alta de interfaz VLAN + servidor PPPoE (`configurarVlanEnRouter`). */
+  | 'VLAN';
 
 /**
  * Datos de conexión del abonado ANTES de guardar la ficha. Es lo que permite
@@ -453,6 +456,89 @@ export class MikrotikService {
     return { listas, errores };
   }
 
+  /**
+   * Interfaces VLAN y servidores PPPoE de los Mikrotik de una sede, para la salud
+   * de VLANs (`vlan-salud.ts`). SOLO LECTURA (`/print`). Routers con la misma
+   * IP:puerto (EPON/EOC de Villanueva) se leen una vez. En dry-run no se lee
+   * nada, como `listasDeCorte`: el que pregunta ve el porqué en `errores`.
+   */
+  async vlansDeRoutersDeSede(branchId: string): Promise<{ routers: LecturaMikrotikVlans[]; errores: string[] }> {
+    await this.syncLive();
+    if (!this.live) return { routers: [], errores: ['Mikrotik en dry-run: no se leyó ningún router.'] };
+    const filas = await this.prisma.mikrotik.findMany({ where: { branchId }, orderBy: [{ isDefault: 'desc' }, { name: 'asc' }] });
+    const vistos = new Set<string>();
+    const routers: LecturaMikrotikVlans[] = [];
+    const errores: string[] = [];
+    for (const r of filas) {
+      const clave = `${r.ip}:${r.port}`;
+      if (vistos.has(clave)) continue;
+      vistos.add(clave);
+      const api = new RouterosClient();
+      try {
+        await api.connect(r.ip, Number(r.port), r.username, decryptSecret(r.password), { timeoutMs: 10000 });
+        const vlans = await api.comm('/interface/vlan/print', {}, 20000);
+        const pppoe = await api.comm('/interface/pppoe-server/server/print', {}, 20000);
+        routers.push(lecturaMikrotikDeFilas(r.id, r.name, vlans, pppoe));
+      } catch (e) {
+        errores.push(`${r.name}: ${(e as Error).message}`);
+      } finally {
+        api.close();
+      }
+    }
+    return { routers, errores };
+  }
+
+  /**
+   * Agrega en UN router la interfaz VLAN y/o el servidor PPPoE que calculó
+   * `planMikrotikParaVlan`. Solo `add` de esos dos menús: cualquier otro paso se
+   * rechaza aquí mismo. Dry-run salvo MIKROTIK_LIVE / interruptor de
+   * Configuración; auditado en `MikrotikActionLog` con el usuario. Corta en el
+   * primer error (si la interfaz no se creó, el PPPoE no tiene dónde ir).
+   */
+  async configurarVlanEnRouter(
+    mikrotikId: string, vlan: number, pasos: PasoRouterOs[], user?: AuthUser, forzarDryRun = false,
+  ): Promise<{ ok: boolean; dryRun: boolean; steps: string[]; error?: string }> {
+    await this.syncLive();
+    const router = await this.prisma.mikrotik.findUnique({ where: { id: mikrotikId } });
+    if (!router) throw new NotFoundException('Mikrotik no encontrado');
+    for (const p of pasos) {
+      if (p.cmd !== '/interface/vlan/add' && p.cmd !== '/interface/pppoe-server/server/add') {
+        throw new BadRequestException(`Paso no permitido en el router: ${p.cmd}`);
+      }
+    }
+    const res: MikrotikActionResult = {
+      ok: true, dryRun: forzarDryRun || !this.live, action: 'VLAN',
+      mikrotik: { id: router.id, name: router.name, host: `${router.ip}:${router.port}`, tech: router.tech },
+      steps: pasos.map(pasoRouterOsComoTexto), message: '',
+    };
+    if (!pasos.length) return { ok: true, dryRun: res.dryRun, steps: [] };
+    if (res.dryRun) {
+      if (!forzarDryRun) {
+        res.steps = res.steps.map((x) => `DRY-RUN ${x}`);
+        await this.audit('VLAN', null, router, res, user);
+      }
+      return { ok: true, dryRun: true, steps: res.steps };
+    }
+    const api = new RouterosClient();
+    let hechos = 0;
+    try {
+      await api.connect(router.ip, Number(router.port), router.username, decryptSecret(router.password), { timeoutMs: 8000 });
+      for (const p of pasos) {
+        await api.comm(p.cmd, p.params);
+        hechos++;
+      }
+    } catch (e) {
+      res.ok = false;
+      res.error = e instanceof RouterosError ? e.message : (e as Error).message;
+    } finally {
+      api.close();
+    }
+    // Qué entró y qué no, paso a paso: un alta a medias tiene que verse tal cual.
+    res.steps = res.steps.map((x, i) => (i < hechos ? x : `NO APLICADO ${x}`));
+    await this.audit('VLAN', null, router, res, user);
+    return { ok: res.ok, dryRun: false, steps: res.steps, error: res.error };
+  }
+
   private async syncLive(): Promise<void> {
     const now = Date.now();
     if (now - this.liveCheckedAt < 15000) return;
@@ -759,6 +845,52 @@ export class MikrotikService {
   // conexión por router → cientos de clientes sin reconectar cada vez).
   // No abren/cierran socket, no auditan, no tocan el estado en BD.
   // ------------------------------------------------------------------
+  /**
+   * Deja la IP en `list` con el comment del abonado, sin chocar con el router.
+   *
+   * RouterOS no admite dos entradas con la MISMA dirección en la misma lista
+   * ("failure: already have such entry"), y aquí se buscaba sólo por comment. Una
+   * IP que antes fue de otro abonado (p. ej. la 80.0.4.59: `activo_9162`, retirado,
+   * seguía en ACTIVOS de Villanueva EPON) tumbaba la reconexión de su dueño actual
+   * DESPUÉS de sacarlo de MOROSOS: el router quedaba bien y nexus lo daba por fallido,
+   * no marcaba la ficha y abría una orden de reconexión que nadie necesitaba
+   * (abonado 510, 21-09-2026). La entrada ajena se ADOPTA: la IP es de quien tiene
+   * hoy el secret, y la pertenencia a la lista es por dirección, no por comment.
+   */
+  private async ponerEnLista(api: RouterosClient, list: string, ip: string, comment: string) {
+    const propias = await api.comm('/ip/firewall/address-list/print', { '?list': list, '?comment': comment });
+    const ajenas = (await api.comm('/ip/firewall/address-list/print', { '?list': list, '?address': ip }))
+      .filter((e) => e['.id'] && e['comment'] !== comment && e['dynamic'] !== 'true');
+    if (propias.length === 0 && ajenas.length) {
+      const [adoptada, ...resto] = ajenas;
+      await api.comm('/ip/firewall/address-list/set', { '.id': adoptada['.id'], comment });
+      for (const e of resto) await api.comm('/ip/firewall/address-list/remove', { '.id': e['.id'] });
+      return;
+    }
+    // Si ya tiene la suya, la ajena con la misma IP sobra (y haría chocar el `set`).
+    for (const e of ajenas) await api.comm('/ip/firewall/address-list/remove', { '.id': e['.id'] });
+    if (propias.length === 0) {
+      await api.comm('/ip/firewall/address-list/add', { address: ip, list, comment });
+    } else {
+      for (const e of propias) if (e['.id']) await api.comm('/ip/firewall/address-list/set', { '.id': e['.id'], address: ip });
+    }
+  }
+
+  /**
+   * Saca al abonado de `list`: su entrada por comment y, si se conoce la IP, cualquier
+   * otra con esa misma dirección —la de un dueño anterior de la IP lo dejaría dentro
+   * de la lista aunque "su" entrada ya no esté—.
+   */
+  private async sacarDeLista(api: RouterosClient, list: string, comment: string, ip?: string) {
+    const entradas = [
+      ...(await api.comm('/ip/firewall/address-list/print', { '?list': list, '?comment': comment })),
+      ...(ip ? await api.comm('/ip/firewall/address-list/print', { '?list': list, '?address': ip }) : []),
+    ];
+    const ids = new Set(entradas.filter((e) => e['dynamic'] !== 'true').map((e) => e['.id']).filter(Boolean));
+    for (const id of ids) await api.comm('/ip/firewall/address-list/remove', { '.id': id });
+    return ids.size;
+  }
+
   private async cutOnApi(api: RouterosClient, sub: SubForNet): Promise<{ ok: boolean; steps: string[]; error?: string }> {
     const name = sub.pppUsername!.replace(/\s+/g, '');
     const comment = this.comment(sub);
@@ -782,14 +914,8 @@ export class MikrotikService {
         // sigue siendo válida y queda bloqueado.
         const ip = secret['remote-address'] || active[0]?.['address'] || sub.ipRemote || '';
         if (ip) {
-          const inAct = await api.comm('/ip/firewall/address-list/print', { '?list': ADDRESS_LIST_ACTIVE, '?comment': comment });
-          for (const e of inAct) if (e['.id']) await api.comm('/ip/firewall/address-list/remove', { '.id': e['.id'] });
-          const inMor = await api.comm('/ip/firewall/address-list/print', { '?list': ADDRESS_LIST_DEBTOR, '?comment': comment });
-          if (inMor.length === 0) {
-            await api.comm('/ip/firewall/address-list/add', { address: ip, list: ADDRESS_LIST_DEBTOR, comment });
-          } else {
-            for (const e of inMor) if (e['.id']) await api.comm('/ip/firewall/address-list/set', { '.id': e['.id'], address: ip });
-          }
+          await this.sacarDeLista(api, ADDRESS_LIST_ACTIVE, comment, ip);
+          await this.ponerEnLista(api, ADDRESS_LIST_DEBTOR, ip, comment);
           steps.push(`IP ${ip}: ${ADDRESS_LIST_ACTIVE} → ${ADDRESS_LIST_DEBTOR}`);
         } else {
           steps.push('sin IP conocida: no se tocaron address-list');
@@ -843,17 +969,11 @@ export class MikrotikService {
         wasCut = true;
       }
 
-      const inMor = await api.comm('/ip/firewall/address-list/print', { '?list': ADDRESS_LIST_DEBTOR, '?comment': comment });
-      for (const e of inMor) if (e['.id']) await api.comm('/ip/firewall/address-list/remove', { '.id': e['.id'] });
-      if (inMor.length) { steps.push(`removido de ${ADDRESS_LIST_DEBTOR}`); wasCut = true; }
+      const fueraDeMorosos = await this.sacarDeLista(api, ADDRESS_LIST_DEBTOR, comment, ip);
+      if (fueraDeMorosos) { steps.push(`removido de ${ADDRESS_LIST_DEBTOR}`); wasCut = true; }
 
       if (ip) {
-        const inAct = await api.comm('/ip/firewall/address-list/print', { '?list': ADDRESS_LIST_ACTIVE, '?comment': comment });
-        if (inAct.length === 0) {
-          await api.comm('/ip/firewall/address-list/add', { address: ip, list: ADDRESS_LIST_ACTIVE, comment });
-        } else {
-          for (const e of inAct) if (e['.id']) await api.comm('/ip/firewall/address-list/set', { '.id': e['.id'], address: ip });
-        }
+        await this.ponerEnLista(api, ADDRESS_LIST_ACTIVE, ip, comment);
         steps.push(`IP ${ip} en ${ADDRESS_LIST_ACTIVE}`);
       }
       return { ok: true, steps, wasCut };
@@ -872,11 +992,8 @@ export class MikrotikService {
     const steps: string[] = [];
     try {
       if (!ip) { steps.push('sin IP conocida: no se marcó moroso'); return { ok: true, steps }; }
-      const inAct = await api.comm('/ip/firewall/address-list/print', { '?list': ADDRESS_LIST_ACTIVE, '?comment': comment });
-      for (const e of inAct) if (e['.id']) await api.comm('/ip/firewall/address-list/remove', { '.id': e['.id'] });
-      const inMor = await api.comm('/ip/firewall/address-list/print', { '?list': ADDRESS_LIST_DEBTOR, '?comment': comment });
-      if (inMor.length === 0) await api.comm('/ip/firewall/address-list/add', { address: ip, list: ADDRESS_LIST_DEBTOR, comment });
-      else for (const e of inMor) if (e['.id']) await api.comm('/ip/firewall/address-list/set', { '.id': e['.id'], address: ip });
+      await this.sacarDeLista(api, ADDRESS_LIST_ACTIVE, comment, ip);
+      await this.ponerEnLista(api, ADDRESS_LIST_DEBTOR, ip, comment);
       steps.push(`IP ${ip} → ${ADDRESS_LIST_DEBTOR}`);
       return { ok: true, steps };
     } catch (e) {
@@ -889,16 +1006,13 @@ export class MikrotikService {
     const comment = this.comment(sub);
     const steps: string[] = [];
     try {
-      const inMor = await api.comm('/ip/firewall/address-list/print', { '?list': ADDRESS_LIST_DEBTOR, '?comment': comment });
-      for (const e of inMor) if (e['.id']) await api.comm('/ip/firewall/address-list/remove', { '.id': e['.id'] });
-      if (inMor.length) steps.push(`removido de ${ADDRESS_LIST_DEBTOR}`);
+      const fueraDeMorosos = await this.sacarDeLista(api, ADDRESS_LIST_DEBTOR, comment, ip);
+      if (fueraDeMorosos) steps.push(`removido de ${ADDRESS_LIST_DEBTOR}`);
       if (ip) {
-        const inAct = await api.comm('/ip/firewall/address-list/print', { '?list': ADDRESS_LIST_ACTIVE, '?comment': comment });
-        if (inAct.length === 0) await api.comm('/ip/firewall/address-list/add', { address: ip, list: ADDRESS_LIST_ACTIVE, comment });
-        else for (const e of inAct) if (e['.id']) await api.comm('/ip/firewall/address-list/set', { '.id': e['.id'], address: ip });
+        await this.ponerEnLista(api, ADDRESS_LIST_ACTIVE, ip, comment);
         steps.push(`IP ${ip} en ${ADDRESS_LIST_ACTIVE}`);
       }
-      return { ok: true, steps, wasCut: inMor.length > 0 };
+      return { ok: true, steps, wasCut: fueraDeMorosos > 0 };
     } catch (e) {
       return { ok: false, steps, error: e instanceof RouterosError ? e.message : (e as Error).message };
     }
@@ -1269,6 +1383,42 @@ export class MikrotikService {
       return ipLocalDeLaRed(filas, ipRemota);
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * Al secret que YA existe sin `local-address` (y cuya ficha tampoco la trae) le
+   * pone la de su red. Es lo único que toca: la autenticación no reescribe un
+   * secret existente, y los creados antes del 2026-09-16 seguían vacíos — en
+   * Monterrey eso es `nas-error` y el cliente no navega. Devuelve la IP puesta, o
+   * null si no hubo nada que hacer. Nunca lanza.
+   */
+  async completarIpLocal(subscriberId: string, user?: AuthUser): Promise<string | null> {
+    if (!this.live) return null;
+    const api = new RouterosClient();
+    try {
+      const sub = await this.loadSubscriber(subscriberId);
+      if (!sub.pppUsername || esIpValida(sub.ipLocal)) return null;
+      const router = await this.resolveRouter(sub);
+      const name = sub.pppUsername.replace(/\s+/g, '');
+      await api.connect(router.ip, Number(router.port), router.username, decryptSecret(router.password), { timeoutMs: 8000 });
+      const [s] = await api.comm('/ppp/secret/getall', { '.proplist': '.id,remote-address,local-address', '?name': name });
+      if (!s?.['.id'] || esIpValida(s['local-address'])) return null;
+      const ip = await this.ipLocalParaAlta(api, s['remote-address'] ?? null);
+      if (!ip) return null;
+      await api.comm('/ppp/secret/set', { '.id': s['.id'], 'local-address': ip });
+      await this.guardarIpLocal(subscriberId, ip);
+      await this.audit('EDIT' as MikrotikAction, sub, router, {
+        ok: true, dryRun: false, action: 'EDIT' as MikrotikAction,
+        message: `IP local ${ip} puesta en el secret existente ${name} (estaba vacía)`,
+        steps: [`local-address vacía → ${ip} (la de su red en ${router.name})`],
+      } as any, user);
+      return ip;
+    } catch (e) {
+      this.logger.warn(`completarIpLocal(${subscriberId}): ${(e as Error).message}`);
+      return null;
+    } finally {
+      api.close();
     }
   }
 
@@ -2367,6 +2517,17 @@ export class MikrotikService {
             { prop: 'local-address' as const, contador: 'ipLocal' as const, omitido: 'ipLocalOmitida' as const },
             { prop: 'remote-address' as const, contador: 'ipRemota' as const, omitido: 'ipOmitida' as const },
           ];
+          /**
+           * Ni el router ni la ficha tienen IP local: la de su red. Sin esto, un
+           * secret que nació vacío (los que creó nexus antes del 2026-09-16) seguía
+           * vacío para siempre, porque aquí sólo se copiaba lo que dijera la ficha
+           * — YAIRHUMBERTOMONTANAURREA en Monterrey, 2026-09-17: `nas-error`.
+           */
+          let ipLocalDeSuRed: string | null = null;
+          if (!set['local-address'] && !norm(enElRouter['local-address']) && !esIpValida(sub.ipLocal)) {
+            ipLocalDeSuRed = ipLocalDeLaRed(filas, enElRouter['remote-address'] ?? null);
+            if (ipLocalDeSuRed) set['local-address'] = ipLocalDeSuRed;
+          }
           for (const { prop, contador, omitido } of direcciones) {
             const nueva = set[prop];
             if (!nueva) continue;
@@ -2383,6 +2544,9 @@ export class MikrotikService {
 
           if (aplicar) {
             await api.comm('/ppp/secret/set', { '.id': enElRouter['.id'], ...seguro });
+            if (ipLocalDeSuRed && seguro['local-address'] === ipLocalDeSuRed) {
+              await this.guardarIpLocal(sub.id, ipLocalDeSuRed);
+            }
             // Si acabamos de darle IP a quien no tenía, las entradas de las
             // address-list que sigan con otra dirección dejarían el corte mirando
             // a la IP equivocada.
@@ -2460,9 +2624,14 @@ export class MikrotikService {
    * segundo no pasaba por ningún filtro. El corte individual de la ficha usa `cut()`
    * y no pasa por aquí: ahí decide una persona, caso por caso.
    */
-  async cutBatch(ids: string[], user?: AuthUser) {
-    const { ids: cortables, protegidos } = await filtrarCortables(this.prisma, ids);
+  async cutBatch(ids: string[], user?: AuthUser, opts: { tanda?: boolean } = {}) {
+    const { ids: cortables, protegidos } = await filtrarCortables(this.prisma, ids, undefined, 'INTERNET');
     if (!cortables.length) {
+      // Un trozo del lote partido por la pantalla en el que todos están protegidos:
+      // no es un error del lote, se contesta vacío con sus contadores.
+      if (opts.tanda) {
+        return { total: 0, ok: 0, results: [], ordenes: 0, protegidos, compromisosProtegidos: protegidos.compromiso };
+      }
       throw new BadRequestException(
         `No se cortó a nadie: los ${ids.length} del lote están protegidos (${fraseProtegidos(protegidos)}).`,
       );

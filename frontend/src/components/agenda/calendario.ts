@@ -26,6 +26,10 @@ export type Evento = {
   allDay: boolean;
   priority: string | null;
   assignedBy: string | null;
+  /** Funcionarios invitados (`User.id`). */
+  attendeeIds?: string[];
+  /** Sólo en «Mi agenda»: `false` = me invitaron, el evento es de otro y no lo edito. */
+  propio?: boolean;
 };
 
 export const MS_DIA = 86_400_000;

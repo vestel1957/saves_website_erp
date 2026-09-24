@@ -14,8 +14,9 @@ import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { Modal } from "@/components/Modal";
 import { useAuth } from "@/context/AuthProvider";
 import { cop, waLink } from "@/lib/subscribers";
-import { esCambioDeMegas, esReconexion, esTecnico, esTraslado, puedeEditarOrdenes, ORIGEN_ORDEN, TICKET_STATUS_LABEL, TICKET_STATUS_TONE, TICKET_PRIORITIES, TICKET_PRIORITY_TONE } from "@/lib/support";
+import { esCambioDeMegas, esCambioTitular, esReconexion, esTecnico, esTraslado, puedeEditarOrdenes, ORIGEN_ORDEN, TICKET_STATUS_LABEL, TICKET_STATUS_TONE, TICKET_PRIORITIES, TICKET_PRIORITY_TONE } from "@/lib/support";
 import { AsignarEquipoModal } from "@/components/soporte/AsignarEquipoModal";
+import { UbicarEquipoModal, type EquipoUbicar } from "@/components/subscribers/UbicarEquipoModal";
 import { AutenticarOnuOrden } from "@/components/soporte/AutenticarOnuOrden";
 import { ConsumirMaterialModal } from "@/components/inventory/ConsumirMaterialModal";
 import { EditarOrdenModal } from "@/components/soporte/EditarOrdenModal";
@@ -25,6 +26,8 @@ import { fmtDate } from "@/lib/format";
 import { ACCEPT_IMAGEN } from "@/lib/adjuntos";
 import { listaJson, mensajeDeError } from "@/lib/errores";
 import { CapturarGps } from "@/components/map/CapturarGps";
+import { DatosDelCliente } from "@/components/soporte/DatosDelCliente";
+import { FotoVivienda, fotosDeVivienda } from "@/components/subscribers/FotoVivienda";
 import { MOTIVO_GEO, distMetros, pedirUbicacion } from "@/lib/geo";
 
 const fmtT = (d: string | null) => (d ? new Date(d).toLocaleString("es-CO") : "—");
@@ -162,6 +165,14 @@ export default function OrdenDetallePage() {
   const { id } = useParams<{ id: string }>();
   const { loading: authLoading, authFetch, user, isSuperadmin } = useAuth();
   const [t, setT] = useState<any | null>(null);
+  /**
+   * Fotos de la VIVIENDA del cliente (`SubscriberFile.kind = VIVIENDA`), las mismas
+   * que enseña su ficha. Se piden aparte porque son del abonado, no de la orden: la
+   * que el técnico toma aquí va a ESE campo y a ningún otro, y verla aquí es lo que
+   * lo demuestra sin salir de la orden (2026-09-18). La foto de la VISITA es otra
+   * cosa y cuelga del seguimiento.
+   */
+  const [fotosCasa, setFotosCasa] = useState<any[]>([]);
   /** El motivo por el que no se pudo cargar, tal cual lo dice el backend. */
   const [err, setErr] = useState("");
   /**
@@ -178,6 +189,8 @@ export default function OrdenDetallePage() {
   const [sig, setSig] = useState<{ name: string; cc: string; rel: string; image?: string | null }>({ name: "", cc: "", rel: "", image: null });
   const [busy, setBusy] = useState(false);
   const [eqModal, setEqModal] = useState(false);
+  /** Equipo al que se le está corrigiendo la caja NAP y el puerto desde la orden. */
+  const [ubicar, setUbicar] = useState<EquipoUbicar | null>(null);
   const [matModal, setMatModal] = useState(false);
   const [editModal, setEditModal] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
@@ -192,6 +205,7 @@ export default function OrdenDetallePage() {
   const [faltaFoto, setFaltaFoto] = useState<string | null>(null);
   /** Bloqueo por IP remota: el cliente se queda sin acceso remoto (2026-09-10). */
   const [faltaIp, setFaltaIp] = useState<string | null>(null);
+  const [faltanDatos, setFaltanDatos] = useState<{ message: string; falta: { ubicacion?: boolean; foto?: boolean } } | null>(null);
 
   /**
    * Deja dicho en el seguimiento que el punto guardado del cliente no corresponde.
@@ -218,6 +232,29 @@ export default function OrdenDetallePage() {
       toast("Aviso registrado en el seguimiento");
       reload();
     } catch (e) { toast(mensajeDeError(e), "alert-triangle"); } finally { setBusy(false); }
+  }
+
+  /**
+   * El técnico corrigió el punto del cliente desde el modal del bloqueo. Mover el
+   * domicilio es lo que le abre la puerta a cerrar, así que no puede pasar en
+   * silencio: queda el renglón en el seguimiento con la distancia que lo frenó, y
+   * el modal se cierra para que reintente con la coordenada buena. La captura ya
+   * quedó auditada aparte como `GeoPing` (`subscriber.capture`).
+   */
+  async function avisarGpsCorregido(p: { lat: number; lng: number }) {
+    const dist = cerca?.distanciaM != null ? `estaba a ${Math.round(cerca.distanciaM)} m` : "estaba fuera del rango";
+    const texto =
+      `📍 Corrigió la ubicación del cliente desde la orden: ${dist} del punto anterior al `
+      + `intentar cerrar. Nuevo punto ${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}.`;
+    try {
+      await authFetch(`/support/tickets/${id}/thread`, {
+        method: "POST",
+        body: JSON.stringify({ message: texto }),
+      });
+    } catch { /* el punto ya quedó guardado: el aviso no puede tumbar la corrección */ }
+    setCerca(null); setMotivo("");
+    toast("Ubicación corregida: vuelve a cerrar la orden", "map-pin");
+    reload();
   }
 
   /**
@@ -269,6 +306,21 @@ export default function OrdenDetallePage() {
       .then((d) => { setT(d); setAssign(d.assigned || ""); })
       .catch((e) => setErr(e?.message || "Orden no encontrada."));
   }, [authFetch, id]);
+
+  /** Las fotos de la vivienda del cliente de esta orden. */
+  const recargarFotosCasa = useCallback(
+    (subId?: string | null) => {
+      if (!subId) { setFotosCasa([]); return; }
+      void authFetch(`/subscribers/${subId}/files`)
+        .then((r) => (r.ok ? r.json() : []))
+        .then((d) => setFotosCasa(fotosDeVivienda(Array.isArray(d) ? d : (d?.items ?? []))))
+        // Sin adjuntos legibles no se rompe la orden: simplemente no hay foto que enseñar.
+        .catch(() => setFotosCasa([]));
+    },
+    [authFetch],
+  );
+
+  useEffect(() => { recargarFotosCasa(t?.subscriber?.id); }, [t?.subscriber?.id, recargarFotosCasa]);
 
   useEffect(() => {
     if (authLoading) return;
@@ -342,6 +394,14 @@ export default function OrdenDetallePage() {
           setFaltaIp(d.message as string);
           return;
         }
+        // 422 con code DATOS_CLIENTE_REQUERIDOS = la visita NO arrancó porque al
+        // cliente le falta la ubicación o la foto de la vivienda (2026-09-18). Es el
+        // único candado del ARRANQUE, y como los de cierre no es un error a secas:
+        // las dos cosas se resuelven aquí mismo, estando en la puerta.
+        if (res.status === 422 && d?.code === "DATOS_CLIENTE_REQUERIDOS") {
+          setFaltanDatos({ message: d.message as string, falta: d.falta ?? {} });
+          return;
+        }
         // 403 con code ORDEN_EN_CURSO = "una orden a la vez" (`support/turno.ts`, la
         // regla del legacy): ya tiene otra EMPEZADA. Como los dos de arriba, no es un
         // error a secas —hay algo concreto que hacer y está en otra orden—, así que se
@@ -355,6 +415,7 @@ export default function OrdenDetallePage() {
       }
       setCerca(null);
       setBloqueo(null);
+      setFaltanDatos(null);
       setMotivo("");
       // Lo que hicieron (o no pudieron hacer) los equipos al cerrar: si la TV no
       // volvió, quien cierra tiene que enterarse aquí y no por la llamada del
@@ -528,6 +589,29 @@ export default function OrdenDetallePage() {
         }
       />
 
+      {/* QUÉ HACE FALTA PARA EMPEZARLA (2026-09-18). Va ANTES del bloque de cierre y
+          sólo mientras la orden está PENDIENTE: son los datos del cliente —su
+          ubicación y la foto de la casa— que hay que dejar al llegar, porque después
+          ya no se pueden tomar. Cada renglón trae su botón: ver `DatosDelCliente`. */}
+      {t.status === "PENDIENTE" && puedeEscribir && t.requisitosInicio?.aplica
+        && (t.requisitosInicio.ubicacion || t.requisitosInicio.foto) && s?.id && (
+        <div className="mb-3 rounded-xl border border-warning bg-warning-soft p-3">
+          <div className="mb-1.5 flex items-center gap-2 text-[12.5px] font-bold text-text-primary">
+            <Icon name="alert-triangle" size={14} className="text-warning-text" /> Para empezar esta visita
+          </div>
+          <p className="mb-2 text-[12px] text-text-tertiary">
+            Esta orden no arranca hasta que el cliente tenga estos datos. Hazlo estando en la
+            puerta: el punto que captures es el que va a comprobar el cierre.
+          </p>
+          <DatosDelCliente
+            subscriberId={s.id}
+            falta={{ ubicacion: t.requisitosInicio.ubicacion, foto: t.requisitosInicio.foto }}
+            gps={s.gpsLat && s.gpsLng ? { lat: Number(s.gpsLat), lng: Number(s.gpsLng) } : null}
+            onHecho={() => { recargarFotosCasa(s.id); reload(); }}
+          />
+        </div>
+      )}
+
       {/* QUÉ HACE FALTA PARA CERRARLA (2026-09-10). Sólo en las visitas a domicilio
           y mientras siga abierta: en un corte o una reconexión no aplica ninguno de
           los dos requisitos y anunciarlos sería ruido en el 85% de las órdenes.
@@ -673,6 +757,32 @@ export default function OrdenDetallePage() {
                 </p>
               </div>
             )}
+            {/* Cambio de titular: quién era y quién quedó. La ficha ya tiene al nuevo. */}
+            {t.cambioTitular && (
+              <div className="mt-3 rounded-lg border border-border-default bg-surface-2 p-3">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-text-tertiary">Cambio de titular</div>
+                <p className="mt-1 text-[13px] text-text-secondary">
+                  De <b className="text-text-primary">{t.cambioTitular.desde || "titular sin registrar"}</b>{" "}
+                  a <b className="text-text-primary">{t.cambioTitular.hasta}</b>
+                </p>
+                <p className="mt-1 text-[12px] text-text-tertiary">La ficha del cliente ya quedó a nombre del nuevo titular.</p>
+              </div>
+            )}
+            {!t.cambioTitular && esCambioTitular(t.type) && (
+              <div className="mt-3 rounded-lg border border-warning-border bg-warning-soft p-3">
+                <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-warning-text">
+                  <Icon name="alert-triangle" size={12} /> Cambio de titular sin datos
+                </div>
+                <p className="mt-1 text-[13px] text-text-secondary">
+                  Esta orden no dice a nombre de quién queda el servicio.
+                </p>
+                {puedeEditar && (
+                  <Button variant="secondary" className="mt-2" onClick={() => setEditModal(true)}>
+                    Registrar el nuevo titular
+                  </Button>
+                )}
+              </div>
+            )}
             {/* Las MEGAS: de cuánto viene y a cuánto va. El cliente sigue en su plan
                 de hoy —y pagando su precio— hasta que la orden se cierre: es ahí
                 donde se le cambia el plan y se le reprecia la factura del mes. Lo
@@ -794,8 +904,15 @@ export default function OrdenDetallePage() {
                     <span className="font-mono font-semibold text-text-primary">{e.mac ?? "sin MAC"}</span>
                     {e.installType && <span className="text-text-secondary">{e.installType}</span>}
                     {e.serial && <span className="text-text-tertiary">S/N {e.serial}</span>}
-                    {e.port != null && <span className="text-text-tertiary">PN:{e.port}</span>}
-                    {e.nat != null && <span className="text-text-tertiary">N:{e.nat}</span>}
+                    {/* La caja y el puerto como están ROTULADOS. Los ids crudos del
+                        legacy (`N:241 · PN:2393`) sólo se enseñan cuando no casan con
+                        ninguna caja de aquí: es la pista de que hay que corregirlos. */}
+                    {e.napName
+                      ? <span className="text-text-secondary">NAP {e.napName}{e.portNumber != null ? ` · pto ${e.portNumber}` : ""}</span>
+                      : <>
+                          {e.nat != null && <span className="text-text-tertiary">N:{e.nat}</span>}
+                          {e.port != null && <span className="text-text-tertiary">PN:{e.port}</span>}
+                        </>}
                     {e.vlan != null && <span className="text-text-tertiary">V:{e.vlan}</span>}
                     {e.status && <Badge label={e.status} tone={e.reservado ? "info" : "default"} />}
                     {/* Apartado en bodega para ESTA orden al abrirla: es el que el
@@ -819,6 +936,22 @@ export default function OrdenDetallePage() {
                           </span>
                         )}
                       </>
+                    )}
+                    {/* Ponerle (o corregirle) la caja NAP y el puerto sin salir de la
+                        orden: es el técnico que acaba de colgar el equipo quien sabe en
+                        qué caja y en qué puerto quedó. Mismo editor que la ficha. */}
+                    {puedeEscribir && t.subscriber?.id && (
+                      <button
+                        type="button"
+                        onClick={() => setUbicar({
+                          id: e.id, code: e.code, mac: e.mac, serial: e.serial, vlan: e.vlan,
+                          napId: e.napId, napName: e.napName, portId: e.portId, portNumber: e.portNumber,
+                          nat: e.nat, port: e.port,
+                        })}
+                        className="ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-semibold text-brand hover:bg-surface-3"
+                      >
+                        <Icon name="pencil" size={12} /> {e.napName ? "Editar caja y puerto" : "Asignar caja y puerto"}
+                      </button>
                     )}
                   </li>
                 ))}
@@ -1054,6 +1187,27 @@ export default function OrdenDetallePage() {
                       />
                     </div>
                   )}
+                  {/* LA FOTO DE LA VIVIENDA, la del campo de la ficha (2026-09-18).
+                      Es el mismo componente que pinta `/clientes/[id]`, a propósito:
+                      lo que el técnico toma desde la orden va a ESE campo y no a un
+                      adjunto suelto ni al seguimiento, y verlo aquí es lo que lo
+                      demuestra. Tomarla otra vez la reemplaza (la anterior queda de
+                      historial). No confundir con la foto de la VISITA, que cuelga
+                      de la orden y va abajo, en el seguimiento. */}
+                  {s.id && (
+                    <div className="mt-2">
+                      <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-text-tertiary">
+                        Foto de la vivienda
+                      </p>
+                      <FotoVivienda
+                        subscriberId={s.id}
+                        fotos={fotosCasa}
+                        variant="miniatura"
+                        puedeEditar={puedeEscribir}
+                        onCambio={() => { recargarFotosCasa(s.id); reload(); }}
+                      />
+                    </div>
+                  )}
                 </div>
               </>
             ) : <p className="text-[12px] text-text-tertiary">Sin cliente asociado.</p>}
@@ -1127,6 +1281,15 @@ export default function OrdenDetallePage() {
           primero el equipo que ya está apartado a su nombre y el stock de SU sede. La
           entrega se sigue anotando en esta orden — eso lo decide `ticketId`. */}
       {puedeEscribir && <AsignarEquipoModal open={eqModal} onClose={() => setEqModal(false)} onDone={reload} ticketId={id} subscriberId={t.subscriber?.id ?? undefined} />}
+      {ubicar && t.subscriber?.id && (
+        <UbicarEquipoModal
+          open
+          subscriberId={t.subscriber.id}
+          equipo={ubicar}
+          onClose={() => setUbicar(null)}
+          onDone={reload}
+        />
+      )}
       {puedeEscribir && <ConsumirMaterialModal open={matModal} onClose={() => setMatModal(false)} onDone={reload} ticketId={id} />}
       {puedeEditar && editModal && (
         <EditarOrdenModal
@@ -1139,6 +1302,7 @@ export default function OrdenDetallePage() {
             status: t.status, graceDays: t.graceDays ?? null, score: t.score ?? null,
             subscriberId: t.subscriber?.id ?? null, moveToText: t.traslado?.hasta ?? null,
             megas: t.megas ?? null,
+            cambioTitular: t.cambioTitular ?? null,
           }}
         />
       )}
@@ -1199,6 +1363,38 @@ export default function OrdenDetallePage() {
         </div>
       </Modal>
 
+      {/* Faltan los datos del cliente: la visita NO arrancó (2026-09-18). El modal
+          repite el MISMO bloque del aviso de arriba —no otro texto— y se cierra solo
+          cuando ya no falta nada, para que el técnico vuelva a pulsar «Empezar». */}
+      <Modal
+        open={!!faltanDatos}
+        onClose={() => setFaltanDatos(null)}
+        title="Faltan datos del cliente"
+        maxWidth="max-w-md"
+      >
+        {faltanDatos && (
+          <div className="space-y-3">
+            <p className="rounded-lg border border-warning bg-warning-soft px-3 py-2 text-[12.5px] leading-relaxed text-text-secondary">
+              {faltanDatos.message}
+            </p>
+            {s?.id && (
+              <DatosDelCliente
+                subscriberId={s.id}
+                falta={faltanDatos.falta}
+                gps={s.gpsLat && s.gpsLng ? { lat: Number(s.gpsLat), lng: Number(s.gpsLng) } : null}
+                onHecho={() => { setFaltanDatos(null); recargarFotosCasa(s.id); reload(); }}
+              />
+            )}
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => setFaltanDatos(null)}>Cerrar</Button>
+              <Button disabled={busy} onClick={() => void cambiarEstado("REALIZANDO")}>
+                Empezar la orden
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
       {/* Geo-cerca: la orden NO se cerró. O se acerca al domicilio, o explica por qué no. */}
       <Modal
         open={!!cerca}
@@ -1242,6 +1438,32 @@ export default function OrdenDetallePage() {
                     El sistema te ubica a {Math.round(cerca.distanciaM).toLocaleString("es-CO")} m del
                     punto guardado del cliente{cerca.radioM ? ` (el máximo es ${cerca.radioM} m)` : ""}.
                   </p>
+                )}
+                {/* La salida del técnico que SÍ está en la puerta. La causa más frecuente
+                    del bloqueo no es que esté lejos: es el punto guardado del cliente
+                    —sembrado por un cierre remoto, o vacío en el legacy—. El botón ya
+                    existía en la tarjeta del cliente, pero el que está frenado por el 422
+                    está mirando ESTE modal y no lo veía: se quedaba esperando al
+                    coordinador con el arreglo a dos dedos. Corregir deja renglón en el
+                    seguimiento (`avisarGpsCorregido`), que es lo que mantiene visible la
+                    válvula: se puede mover el punto, pero no en silencio. */}
+                {s?.id && (
+                  <div className="rounded-lg border border-border-subtle bg-surface-2 px-3 py-2.5">
+                    <p className="text-[12.5px] font-semibold text-text-secondary">
+                      ¿Estás en la casa del cliente y el punto guardado está mal?
+                    </p>
+                    <p className="mt-0.5 text-[12px] text-text-tertiary">
+                      Corrígelo aquí mismo: guarda tu posición como domicilio del cliente y vuelve a
+                      cerrar. No hace falta esperar a nadie.
+                    </p>
+                    <div className="mt-2">
+                      <CapturarGps
+                        subscriberId={s.id}
+                        actual={s.gpsLat && s.gpsLng ? { lat: Number(s.gpsLat), lng: Number(s.gpsLng) } : null}
+                        onGuardado={(p) => void avisarGpsCorregido(p)}
+                      />
+                    </div>
+                  </div>
                 )}
                 <Textarea
                   rows={3}

@@ -11,6 +11,8 @@ import { tipoConArrastre } from '../support/order-types';
 import type { ProrrateoReconexionService, ResultadoProrrateo } from '../billing/prorrateo-reconexion.service';
 import type { EmisorDeEventos } from '../core/eventos';
 import { RECONEXION_APLICADA_EVENT, type ReconexionAplicadaEvent } from './network.events';
+import { esUsuarioPppUtil } from '../subscribers/conexion-alta';
+import { esLineaTv, serviciosContratados, type ServiciosContratados } from '../common/servicios-contratados';
 
 /**
  * Reconexión automática al pagar.
@@ -62,6 +64,7 @@ const ESTADOS_SIN_RECONEXION: SubscriberStatus[] = [
   'RETIRADO', 'DEPURADO', 'POR_RETIRAR', 'INACTIVO', 'SUSPENDIDO',
 ];
 
+
 /**
  * Cuánto espera QUIEN REGISTRA EL PAGO a que terminen los equipos.
  *
@@ -73,6 +76,14 @@ const ESTADOS_SIN_RECONEXION: SubscriberStatus[] = [
  * (termina, escribe su auditoría y actualiza el estado igual).
  */
 const ESPERA_MAX_MS = 15_000;
+
+/**
+ * Lo mismo, en la ventanilla de caja: ahí el recibo se imprime cuando termina esto,
+ * y el cliente está esperando el papel. Alcanza para la comprobación contra el
+ * router (1-3 s) más una reconexión de internet normal; lo que pase de ahí sigue en
+ * segundo plano igual que con el tope largo.
+ */
+export const ESPERA_VENTANILLA_MS = 5_000;
 
 /**
  * Cuántos días hacia atrás vale una orden de corte como prueba de que el servicio
@@ -176,8 +187,13 @@ type SubParaReconectar = {
   pppUsername: string | null;
   services: { id: string; kind: string; status: string }[];
   /** Su última factura recurrente (ver `tvDeFactura`). Vacío = no tiene ninguna. */
-  invoices?: { serviceTv: string | null; estadoTv: string | null }[];
+  invoices?: { serviceTv: string | null; estadoTv: string | null; items?: { productName: string | null }[] }[];
   _count: { oltOnus: number };
+  /**
+   * Qué tiene contratado según sus mensualidades (ver `servicios-contratados.ts`).
+   * `undefined` = no se sabe, y la duda no le quita nada.
+   */
+  contrato?: ServiciosContratados;
 };
 
 /** La última factura recurrente viva del abonado (la que manda). */
@@ -185,7 +201,9 @@ const ULTIMA_RECURRENTE: Prisma.Subscriber$invoicesArgs = {
   where: { kind: 'RECURRENTE', status: { not: 'CANCELED' } },
   orderBy: [{ invoiceDate: 'desc' }, { tid: 'desc' }],
   take: 1,
-  select: { serviceTv: true, estadoTv: true },
+  // Las líneas van porque la cabecera no basta: hay facturas hechas en nexus que
+  // cobran la TV con `serviceTv` en NULL (ver `tvDeFactura`).
+  select: { serviceTv: true, estadoTv: true, items: { select: { productName: true } } },
 };
 
 const SELECT_RECONEXION = {
@@ -263,17 +281,74 @@ export class ReconexionService {
    * La factura sí lo sabe, y es de donde lo leen la ficha y el contrato en PDF:
    * `serviceTv` nombra el plan de televisión ('no'/'-'/vacío = no la tiene) y
    * `estadoTv` sigue la convención del legacy — NULL = al aire, con valor = caída.
+   *
+   * Si la factura trae LÍNEAS, mandan ellas —es lo que se le cobra—: la cabecera
+   * miente en los dos sentidos. ~18 facturas de septiembre hechas en nexus cobran
+   * la TV con `serviceTv` en NULL, y la corrida del 01-09 dejó "Television26" en
+   * la cabecera de 37 que solo cobran internet (entre ellas 56499 y 57459, que
+   * habían suspendido la TV). Sin líneas cargadas, decide la cabecera.
+   *
+   * `dadaDeBaja`: hay factura y no cobra televisión, o la marca SUSPENDIDA (la
+   * suspensión la pide el cliente y no se levanta pagando). Manda sobre todo lo
+   * demás (ver `tvDadaDeBaja`). `cortada` es solo el CORTE por plata.
    */
   private tvDeFactura(sub: SubParaReconectar) {
     const f = sub.invoices?.[0];
     const nombre = (f?.serviceTv ?? '').trim().toLowerCase();
-    const contratada = !!nombre && nombre !== 'no' && nombre !== '-';
-    const estado = f?.estadoTv ?? null;
-    return { contratada, cortada: contratada && !!estado && estado !== 'ACTIVO' };
+    const porCabecera = !!nombre && nombre !== 'no' && nombre !== '-';
+    const contratada = f?.items?.length ? f.items.some((l) => esLineaTv(l.productName)) : porCabecera;
+    return {
+      contratada,
+      cortada: contratada && f?.estadoTv === 'CORTADO',
+      dadaDeBaja: !!f && (!contratada || f.estadoTv === 'SUSPENDIDO'),
+    };
+  }
+
+  /**
+   * ¿El cliente ya NO tiene televisión? Veto sobre cualquier otra señal.
+   *
+   * Casos reales (22-09-2026), clientes que suspendieron la TV en agosto y se
+   * quedaron con solo internet:
+   * - 56993: su factura ya no cobra TV, pero la fila de `SubscriberService` TV
+   *   seguía en CORTADO y `necesitaTv` lo leía como corte por plata: cada pago
+   *   abría una "Reconexion Television2" (que al cerrarse cobraba la TV otra vez).
+   * - 56499: factura con `estadoTv = SUSPENDIDO`, que contaba como "caída": el
+   *   pago en línea del 08-09 le encendió el puerto CATV en la OLT.
+   * Las filas de servicio se desfasan; la factura es lo que se le cobra.
+   */
+  private tvDadaDeBaja(sub: SubParaReconectar) {
+    return sub.contrato?.tv === false || this.tvDeFactura(sub).dadaDeBaja;
+  }
+
+  /**
+   * ¿Tiene internet al que volver? Un usuario PPPoE de verdad (no el "0" de relleno
+   * del legacy) y el internet cobrado en sus mensualidades.
+   *
+   * Antes bastaba con que `pppUsername` no estuviera vacío, y 2.834 fichas traen "0":
+   * los clientes de SoloTelevision que pagaban (4375, 4410, 8013…) salían con una
+   * "Reconexion Internet" pendiente para un técnico, por un servicio que no tienen.
+   * Lo mismo el que tiene un usuario viejo en la ficha pero ya sólo paga TV (8173).
+   */
+  private tieneInternet(sub: SubParaReconectar) {
+    return esUsuarioPppUtil(sub.pppUsername) && sub.contrato?.internet !== false;
+  }
+
+  /** Carga a los abonados con lo que tienen contratado (una consulta para todos). */
+  private async cargar(ids: string[]): Promise<SubParaReconectar[]> {
+    const subs = (await this.prisma.subscriber.findMany({
+      where: { id: { in: ids } }, select: SELECT_RECONEXION,
+    })) as SubParaReconectar[];
+    const contratos = await serviciosContratados(this.prisma, subs.map((x) => x.id)).catch((e: Error) => {
+      this.logger.warn(`No se pudo leer qué tiene contratado cada abonado: ${e.message}`);
+      return new Map<string, ServiciosContratados>();
+    });
+    for (const x of subs) x.contrato = contratos.get(x.id);
+    return subs;
   }
 
   /** ¿Tiene televisión contratada? (por fila de servicio o, si no la hay, por su factura). */
   private tieneTv(sub: SubParaReconectar) {
+    if (this.tvDadaDeBaja(sub)) return false;
     return this.serviciosTv(sub).length > 0 || this.tvDeFactura(sub).contratada;
   }
 
@@ -292,10 +367,12 @@ export class ReconexionService {
     const tv = this.serviciosTv(sub);
     const factura = this.tvDeFactura(sub);
     if (!tv.length && !factura.contratada) return false;
+    if (this.tvDadaDeBaja(sub)) return false;
     // Al dado de baja no se le devuelve la señal aunque su servicio de TV siga
     // marcado como cortado: esa marca es justamente lo que dejó el retiro.
     if (this.sinDerechoAReconexion(sub)) return false;
-    return this.estaCortado(sub) || tv.some((s) => s.status !== 'ACTIVO') || factura.cortada;
+    // Sólo el CORTE cuenta: una TV SUSPENDIDA la pidió el cliente y pagar no la revive.
+    return this.estaCortado(sub) || tv.some((s) => s.status === 'CORTADO') || factura.cortada;
   }
 
   /**
@@ -315,14 +392,15 @@ export class ReconexionService {
    * cortan casi todos (ver `tvDeFactura`).
    */
   private async tvCortadaConPrueba(sub: SubParaReconectar): Promise<boolean> {
-    if (this.serviciosTv(sub).some((s) => s.status !== 'ACTIVO')) return true;
+    if (this.tvDadaDeBaja(sub)) return false;
+    if (this.serviciosTv(sub).some((s) => s.status === 'CORTADO')) return true;
     if (this.tvDeFactura(sub).cortada) return true;
     return (await this.cortesSegunOrdenes(sub)).tv;
   }
 
   /** ¿Hay a qué equipo mandarle la orden? (CPE por PPPoE u ONU en la OLT). */
   private hayEquipoTv(sub: SubParaReconectar) {
-    return !!sub.pppUsername || sub._count.oltOnus > 0;
+    return esUsuarioPppUtil(sub.pppUsername) || sub._count.oltOnus > 0;
   }
 
   private correspondeTv(sub: SubParaReconectar) {
@@ -332,9 +410,9 @@ export class ReconexionService {
     return this.necesitaTv(sub) && this.hayEquipoTv(sub);
   }
 
-  /** ¿Hay que devolverle el internet? Solo si tiene PPPoE y venía cortado. */
+  /** ¿Hay que devolverle el internet? Solo si lo tiene (ver `tieneInternet`) y venía cortado. */
   private correspondeInternet(sub: SubParaReconectar) {
-    return !!sub.pppUsername && this.estaCortado(sub);
+    return this.tieneInternet(sub) && this.estaCortado(sub);
   }
 
   // ------------------------------------------------------------------
@@ -376,7 +454,7 @@ export class ReconexionService {
     if (this.sinDerechoAReconexion(sub)) return nada;
     try {
       // 1. El router, que es la verdad de campo.
-      if (opts.router && sub.pppUsername) {
+      if (opts.router && this.tieneInternet(sub)) {
         const r = await this.mikrotik.liveStatus(sub.id).catch(() => null);
         const live = r?.live as { inMorosos?: boolean; secretDisabled?: boolean } | undefined;
         if (live && (live.inMorosos || live.secretDisabled)) {
@@ -561,17 +639,39 @@ export class ReconexionService {
    * el fallo bien visible (log a nivel error + el detalle en la respuesta) para
    * que quien recibió la plata sepa en el acto que el cliente sigue cortado.
    *
+   * El tope de espera cubre TODO el trabajo, también la comprobación previa contra el
+   * router (`cortadoAunqueDigaActivo`), que se hace en cada pago aunque el cliente
+   * esté al día y tarda 1-3 s. Antes esa parte iba por fuera del tope y el recibo de
+   * caja, que se pide cuando esto responde, se hacía esperar (reporte 2026-09-17).
+   *
    * @param ctx  texto corto para la traza (p. ej. el recibo de caja).
+   * @param opts.esperaMs  cuánto espera quien llama (por defecto `ESPERA_MAX_MS`).
    */
-  async porPago(subscriberId: string, user?: AuthUser, ctx?: string): Promise<ResultadoReconexion> {
+  async porPago(
+    subscriberId: string, user?: AuthUser, ctx?: string, opts: { esperaMs?: number } = {},
+  ): Promise<ResultadoReconexion> {
+    const terminado = await this.conEspera(this.reconectarPorPago(subscriberId, user, ctx), opts.esperaMs ?? ESPERA_MAX_MS);
+    if (terminado.listo) return terminado.valor;
+    this.logger.warn(
+      `Reconexión por pago del abonado ${subscriberId}${ctx ? ` (${ctx})` : ''}: los equipos se están demorando; sigue en segundo plano.`,
+    );
+    return {
+      subscriberId, aplica: true, ok: true, enCurso: true, dryRun: false,
+      servicios: [], ordenes: [], registros: [],
+      mensaje: 'La reconexión está en curso en los equipos; puede tardar un momento en verse. Si algún equipo no responde, quedará una orden de servicio.',
+    };
+  }
+
+  /** El cuerpo de `porPago`, sin tope de espera. */
+  private async reconectarPorPago(subscriberId: string, user?: AuthUser, ctx?: string): Promise<ResultadoReconexion> {
     const base: ResultadoReconexion = {
       subscriberId, aplica: false, ok: true, enCurso: false, dryRun: false,
       servicios: [], ordenes: [], registros: [], mensaje: 'El cliente no estaba cortado: no había nada que reconectar.',
     };
     try {
-      const sub = (await this.prisma.subscriber.findUnique({
-        where: { id: subscriberId }, select: SELECT_RECONEXION,
-      })) as SubParaReconectar | null;
+      // Pagó antes de que fueran a cortarle la TV: se anula ese corte (ver el método).
+      await this.anularCortesTvSinHacer([subscriberId], user);
+      const [sub] = await this.cargar([subscriberId]);
       if (!sub) return base;
 
       let haceInternet = this.correspondeInternet(sub);
@@ -581,15 +681,15 @@ export class ReconexionService {
       // lo hace el legacy y allá el estado no cambia. Se comprueba contra el router y
       // contra el rastro de órdenes antes de dar el pago por "nada que hacer".
       if (!haceInternet || !necesitaTv) {
-        const real = await this.cortadoAunqueDigaActivo(sub, { router: !haceInternet && !!sub.pppUsername });
-        if (real.internet && !haceInternet && sub.pppUsername) {
+        const real = await this.cortadoAunqueDigaActivo(sub, { router: !haceInternet && this.tieneInternet(sub) });
+        if (real.internet && !haceInternet && this.tieneInternet(sub)) {
           haceInternet = true;
           this.logger.warn(
             `Abonado ${sub.abonado}: la ficha dice ${sub.status} pero está cortado (${real.motivo}). ` +
             'Se reconecta igual — el desfase viene del corte del legacy, que no toca el estado.',
           );
         }
-        if (real.tv && !necesitaTv) necesitaTv = true;
+        if (real.tv && !necesitaTv && !this.tvDadaDeBaja(sub)) necesitaTv = true;
       }
 
       const haceTv = necesitaTv && this.hayEquipoTv(sub);
@@ -617,18 +717,7 @@ export class ReconexionService {
 
       // Los dos equipos en paralelo: son independientes y el cliente espera por
       // el más lento, no por la suma.
-      const trabajo = this.ejecutar(sub, haceInternet, haceTv, user, ctx, { ordenSiFallaTv: pruebaTv });
-      const terminado = await this.conEspera(trabajo, ESPERA_MAX_MS);
-      if (!terminado.listo) {
-        this.logger.warn(
-          `Reconexión por pago del abonado ${sub.abonado}${ctx ? ` (${ctx})` : ''}: los equipos se están demorando; sigue en segundo plano.`,
-        );
-        return {
-          ...base, aplica: true, ok: true, enCurso: true,
-          mensaje: 'La reconexión está en curso en los equipos; puede tardar un momento en verse. Si algún equipo no responde, quedará una orden de servicio.',
-        };
-      }
-      return terminado.valor;
+      return await this.ejecutar(sub, haceInternet, haceTv, user, ctx, { ordenSiFallaTv: pruebaTv });
     } catch (e) {
       // Cinturón: aquí no debería llegar nada, pero un recaudo jamás se cae por esto.
       this.logger.error(
@@ -822,7 +911,7 @@ export class ReconexionService {
     // órdenes — preguntarle al router por cada fila del archivo no sale a cuenta.
     const porOrdenes = await this.cortesSegunOrdenesLote(subs);
     const cortadoInternet = (s: SubParaReconectar) =>
-      this.correspondeInternet(s) || (!!s.pppUsername && !!porOrdenes.get(s.id)?.internet);
+      this.correspondeInternet(s) || (this.tieneInternet(s) && !!porOrdenes.get(s.id)?.internet);
     // "Tiene TV" se pregunta a las dos fuentes (fila de servicio y última factura):
     // sin lo segundo, los 2.350 clientes sin fila de servicio nunca entran aquí.
     const necesitaTvReal = (s: SubParaReconectar) =>
@@ -833,9 +922,9 @@ export class ReconexionService {
     // o con un corte reciente). El estado del abonado por sí solo es sospecha, no
     // prueba.
     const pruebaTv = (s: SubParaReconectar) =>
-      this.serviciosTv(s).some((x) => x.status !== 'ACTIVO')
+      !this.tvDadaDeBaja(s) && (this.serviciosTv(s).some((x) => x.status === 'CORTADO')
       || this.tvDeFactura(s).cortada
-      || !!porOrdenes.get(s.id)?.tv;
+      || !!porOrdenes.get(s.id)?.tv);
 
     return {
       /** Los que traen PRUEBA de que la TV estaba caída: solo por ellos se abre visita. */
@@ -861,9 +950,7 @@ export class ReconexionService {
     const ids = [...new Set((subscriberIds || []).filter(Boolean))];
     const vacío = { internet: [], tv: [], tvSinEquipo: [], todos: [] };
     if (!ids.length) return vacío;
-    const subs = (await this.prisma.subscriber.findMany({
-      where: { id: { in: ids } }, select: SELECT_RECONEXION,
-    })) as SubParaReconectar[];
+    const subs = await this.cargar(ids);
     const { conInternet, conTv, tvSinEquipo } = await this.repartirLote(subs);
     const internet = conInternet.map((s) => s.id);
     const tv = conTv.map((s) => s.id);
@@ -876,9 +963,11 @@ export class ReconexionService {
     const vacío = { total: 0, internet: 0, tv: 0, fallidos: 0, ordenes: 0, registros: 0, cobros: 0, cobrado: 0, dryRun: false };
     if (!ids.length) return vacío;
 
-    const subs = (await this.prisma.subscriber.findMany({
-      where: { id: { in: ids } }, select: SELECT_RECONEXION,
-    })) as SubParaReconectar[];
+    // Antes de leer a nadie: a quien pagó con el corte de TV todavía sin hacer se le
+    // anula esa orden y la TV queda activa, así ya no entra como "TV cortada".
+    await this.anularCortesTvSinHacer(ids, user);
+
+    const subs = await this.cargar(ids);
 
     const { conInternet, conTv, tvSinEquipo, conPruebaTv } = await this.repartirLote(subs);
     if (!conInternet.length && !conTv.length && !tvSinEquipo.length) return vacío;
@@ -1147,6 +1236,56 @@ export class ReconexionService {
     await this.prisma.subscriberService
       .updateMany({ where: { id: { in: ids } }, data: { status: status as any } })
       .catch((e) => this.logger.warn(`No se pudo marcar el estado de los servicios: ${e.message}`));
+  }
+
+  /**
+   * El cliente pagó ANTES de que fueran a cortarle la TV: se anula la orden de corte
+   * que seguía PENDIENTE y la TV vuelve a quedar activa en el sistema.
+   *
+   * Con el TR-069 en pausa el corte masivo de TV deja una orden PENDIENTE que cierra
+   * quien corta en sitio (ver `GenieacsService.registrarCorteDeTv`). Mientras nadie la
+   * haya hecho, la señal nunca se cortó: mandar además una «Reconexion Television»
+   * sería una visita para devolver algo que no se quitó, y dejar la de corte abierta
+   * mandaría a alguien a cortarle a un cliente que ya pagó. Sólo las PENDIENTES: una en
+   * REALIZANDO ya tiene a alguien en camino y se deja a su criterio.
+   *
+   * Devuelve a quiénes se les deshizo. NUNCA lanza.
+   */
+  private async anularCortesTvSinHacer(subIds: string[], user?: AuthUser): Promise<Set<string>> {
+    const hechos = new Set<string>();
+    const ids = [...new Set(subIds.filter(Boolean))];
+    if (!ids.length) return hechos;
+    try {
+      const pendientes = await this.prisma.ticket.findMany({
+        where: { subscriberId: { in: ids }, type: 'Corte Television', status: 'PENDIENTE' },
+        select: { id: true, code: true, subscriberId: true, section: true },
+      });
+      if (!pendientes.length) return hechos;
+      const quien = user?.name || user?.email || 'Sistema';
+      const nota = `Anulada por el sistema: el cliente pagó antes de que se hiciera el corte (${quien}).`;
+      for (const o of pendientes) {
+        await this.prisma.ticket.update({
+          where: { id: o.id },
+          data: {
+            status: 'ANULADA',
+            section: [o.section, nota].filter(Boolean).join(' '),
+            // La orden pasa a ser nuestra: sin esto la ida del legacy la reabre.
+            editedAt: new Date(), editedBy: quien,
+          },
+        });
+        if (o.subscriberId) hechos.add(o.subscriberId);
+        this.logger.log(`Orden #${o.code} (Corte Television) anulada: el abonado ${o.subscriberId} pagó antes del corte.`);
+      }
+      const lista = [...hechos];
+      await this.prisma.subscriberService
+        .updateMany({ where: { subscriberId: { in: lista }, kind: { in: ['TV', 'PUNTOS'] }, status: 'CORTADO' }, data: { status: 'ACTIVO' } })
+        .catch((e) => this.logger.warn(`No se pudo devolver la TV a activa: ${e.message}`));
+      await this.levantarCorteDeFactura(lista, ['TV']);
+      this.avisarReconexion(lista, ['TV']);
+    } catch (e) {
+      this.logger.warn(`No se pudieron anular los cortes de TV sin hacer: ${(e as Error).message}`);
+    }
+    return hechos;
   }
 
   // ------------------------------------------------------------------

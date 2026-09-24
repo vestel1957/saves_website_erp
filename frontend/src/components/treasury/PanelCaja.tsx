@@ -17,6 +17,7 @@ import {
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import type { InformeCierreData, MiCaja } from "@/lib/treasury";
+import { useFiltrosEnUrl, useFiltrosRecordados } from "@/lib/useFiltrosUrl";
 
 /**
  * Colores de serie. Son los tokens `--chart-*` de `globals.css`: pasos validados
@@ -90,16 +91,40 @@ function Reparto({ data, centerLabel }: { data: { label: string; value: number; 
  * a un clic, porque son las que el personal lee todos los días.
  */
 export function PanelCaja() {
+  const inicial = useFiltrosRecordados();
+  if (!inicial) return <PageSkeleton />;
+  return <PanelCajaCon inicial={inicial} />;
+}
+
+/**
+ * El día se escribe en la dirección SÓLO si no es hoy, y NO se recupera de la última
+ * visita: la cajera abre su panel para trabajar el día de hoy, y encontrárselo puesto
+ * en un día viejo es justo lo que lleva a cerrar la caja equivocada. Un enlace con
+ * fecha sí manda: sirve para pasarle a alguien el día exacto que se está mirando.
+ */
+function PanelCajaCon({ inicial }: { inicial: { valores: Record<string, string>; recordado: boolean } }) {
   const { authFetch } = useAuth();
   const [mi, setMi] = useState<MiCaja | null>(null);
-  const [fecha, setFecha] = useState(iso(new Date()));
+  const [fecha, setFecha] = useState(
+    () => (!inicial.recordado && inicial.valores.fecha) || iso(new Date()),
+  );
   const [informe, setInforme] = useState<InformeCierreData | null>(null);
   const [serie, setSerie] = useState<Serie | null>(null);
   const [apertura, setApertura] = useState<Apertura | null>(null);
   const [abriendo, setAbriendo] = useState(false);
   const [cargando, setCargando] = useState(true);
   const [err, setErr] = useState("");
-  const [verInforme, setVerInforme] = useState(false);
+  const [verInforme, setVerInforme] = useState(inicial.valores.informe === "1");
+
+  /**
+   * El día y si las tablas están desplegadas, en la dirección: recargar no pierde el
+   * sitio y el enlace lleva al otro a lo mismo que se está mirando. Un solo
+   * `useFiltrosEnUrl` por pantalla — el hook reescribe la query entera.
+   */
+  useFiltrosEnUrl({
+    fecha: fecha === iso(new Date()) ? "" : fecha,
+    informe: verInforme ? "1" : "",
+  });
 
   useEffect(() => {
     void authFetch("/treasury/mi-caja")
@@ -255,17 +280,18 @@ export function PanelCaja() {
    * el documento que se concilia con el sistema viejo.
    */
   const sc = informe?.soloCaja;
-  const enLinea = informe?.formaPago.wompi;
+  const enLinea = informe?.dineroEnCaja.wompi;
 
-  // ── Formas de pago. Sin el saldo anterior: eso es el arrastre del cierre pasado,
-  // no una forma en que alguien pagó hoy; mezclarlo hincha la porción más grande. ──
-  const fp = sc?.formaPago;
-  const pagos = fp
-    ? [
-        { label: "Efectivo", value: fp.efectivo.monto, color: C_VERDE },
-        { label: "Transferencia", value: fp.transferencia.monto, color: C_AZUL },
-      ].filter((s) => s.value > 0)
-    : [];
+  /**
+   * El arqueo del cajón, los cuatro pasos en orden: lo que había, lo que entró, lo que
+   * salió y lo que queda por barrer.
+   *
+   * Antes esto era un donut "Cómo te pagaron" con Efectivo y Transferencia. Se cambió el
+   * 2026-09-18: la transferencia bancaria no pasa por la ventanilla, así que salió del
+   * bloque —sigue en el informe, bajo Bancos— y el donut se quedaba con una sola tajada,
+   * que no es un reparto sino un número con un círculo alrededor.
+   */
+  const dc = sc?.dineroEnCaja;
 
   // ── Qué se cobró: planes, TV, reconexiones y afiliaciones, de mayor a menor. ──
   const servicios = sc
@@ -354,9 +380,14 @@ export function PanelCaja() {
               tone="success"
               hint={a.yaCerrado ? "se arrastró al próximo día hábil" : "es lo que debería haber contado"}
             />
+            {/* Los respaldos (cuando la serie de 14 días no carga) tienen que ser el MISMO
+                número que la tarjeta de abajo. Antes caían en la cobranza —que suma los
+                pagos en línea y se salta el efectivo sin factura— y en el bloque de egresos
+                del legacy —que mete dentro el propio barrido del cierre—, así que al fallar
+                la serie el panel se contradecía solo. */}
             <TrendStat
               label="Recaudo del día"
-              value={cop(hoy?.ingresos ?? informe.soloCaja.cobranza.total.monto)}
+              value={cop(hoy?.ingresos ?? dc?.recaudo.monto ?? 0)}
               icon="trending-up"
               delta={delta}
               deltaLabel={previo ? `vs. ${diaCorto(previo.date)} (${compactCOP(previo.ingresos)})` : undefined}
@@ -364,18 +395,21 @@ export function PanelCaja() {
             />
             <TrendStat
               label="Egresos del día"
-              value={cop(hoy?.egresos ?? informe.egresos.total.monto)}
+              value={cop(hoy?.egresos ?? dc?.egresos.monto ?? 0)}
               icon="trending-down"
               tone="error"
               spark={dias.map((d) => d.egresos)}
             />
+            {/* Pagos, no cargos. `cobranza.total.cantidad` cuenta los renglones prorrateados
+                de las facturas (93 el 16-09 en Villanueva) y se mostraba bajo el rótulo
+                "Pagos recibidos" al lado de un recaudo que eran 52 pagos de verdad. */}
             <TrendStat
               label="Pagos recibidos"
-              value={nfmt(informe.soloCaja.cobranza.total.cantidad)}
+              value={nfmt(dc?.recaudo.cantidad ?? 0)}
               icon="receipt"
               hint={
-                informe.soloCaja.cobranza.total.cantidad
-                  ? `${cop(Math.round(informe.soloCaja.cobranza.total.monto / informe.soloCaja.cobranza.total.cantidad))} por pago`
+                dc && dc.recaudo.cantidad
+                  ? `${cop(Math.round(dc.recaudo.monto / dc.recaudo.cantidad))} por pago`
                   : "sin pagos ese día"
               }
               spark={dias.map((d) => d.pagos)}
@@ -411,24 +445,39 @@ export function PanelCaja() {
           </ChartCard>
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            {/* ── Cómo pagaron ── */}
-            <ChartCard title="Cómo te pagaron" subtitle="Reparto de lo que entró por tu ventanilla" icon="wallet">
-              {pagos.length ? (
-                <Reparto data={pagos} centerLabel="recaudado" />
+            {/* ── El cajón, paso a paso ── */}
+            <ChartCard title="Dinero en caja" subtitle="Lo que hubo en tu cajón ese día" icon="wallet">
+              {dc ? (
+                <dl className="divide-y divide-border-subtle">
+                  {[
+                    { k: "Saldo anterior", h: "arrastre del día anterior", v: dc.saldoAnterior.monto },
+                    { k: "Recaudo del día", h: `${nfmt(dc.recaudo.cantidad)} ${dc.recaudo.cantidad === 1 ? "pago" : "pagos"} por tu ventanilla`, v: dc.recaudo.monto },
+                    { k: "Total en caja", h: null, v: dc.totalEnCaja, fuerte: true },
+                    { k: "Egresos del día", h: `${nfmt(dc.egresos.cantidad)} ${dc.egresos.cantidad === 1 ? "salida" : "salidas"}`, v: -dc.egresos.monto },
+                    { k: "Excedente barrido", h: null, v: dc.excedente, res: true },
+                  ].map((f) => (
+                    <div
+                      key={f.k}
+                      className={`flex items-baseline justify-between gap-3 py-2 ${f.res ? "bg-brand-soft -mx-2 mt-1 rounded-lg px-2" : ""}`}
+                    >
+                      <dt className="min-w-0">
+                        <span className={`text-[13px] ${f.res ? "font-semibold text-brand" : f.fuerte ? "font-semibold text-text-primary" : "text-text-secondary"}`}>
+                          {f.k}
+                        </span>
+                        {f.h && <span className="block text-[11px] text-text-tertiary">{f.h}</span>}
+                      </dt>
+                      <dd className={`shrink-0 tabular-nums ${
+                        f.res ? "text-base font-bold text-brand"
+                        : f.fuerte ? "text-base font-bold text-text-primary"
+                        : "text-[13px] text-text-primary"
+                      }`}>
+                        {cop(f.v)}
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
               ) : (
-                <ChartEmpty
-                  message={
-                    enLinea && enLinea.cantidad > 0
-                      ? "Por tu ventanilla no entró ningún pago ese día."
-                      : "Ese día no entró ningún pago."
-                  }
-                />
-              )}
-              {fp && fp.saldoAnterior.monto > 0 && (
-                <p className="mt-3 text-[11px] text-text-tertiary">
-                  No incluye el saldo anterior ({cop(fp.saldoAnterior.monto)}): ese es el arrastre
-                  del cierre pasado, no un pago de hoy.
-                </p>
+                <ChartEmpty message="Ese día no se movió tu caja." />
               )}
               {/* Los pagos en línea existen y se ven en el informe del legacy; decir aquí
                   que están fuera y cuánto son evita que parezca que se perdieron. */}
@@ -436,7 +485,7 @@ export function PanelCaja() {
                 <p className="mt-1.5 text-[11px] text-text-tertiary">
                   Aparte entraron <strong className="text-text-secondary">{cop(enLinea.monto)}</strong> en{" "}
                   {nfmt(enLinea.cantidad)} {enLinea.cantidad === 1 ? "pago" : "pagos"} en línea de tu sede.
-                  No salen en este panel porque no pasan por tu caja: los tienes en el informe en tablas.
+                  No entran en el arqueo porque no pasan por tu caja: los tienes en el informe en tablas.
                 </p>
               )}
             </ChartCard>

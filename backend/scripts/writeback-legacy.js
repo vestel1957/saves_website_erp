@@ -256,6 +256,54 @@ const BAJAS_DIAS = Number(process.env.LEGACY_WRITEBACK_BAJAS_DIAS || 7);
  * Es idempotente (cuando allá ya dice Activo no queda nada que empujar), así que una
  * pasada perdida se recupera sola en la siguiente.
  */
+/**
+ * Gate SOLO para el CAMBIO MANUAL de estado hecho en la ficha (Acciones ▸ Cambiar
+ * estado, `SubscribersService.changeStatus`).
+ *
+ * Es la CUARTA puerta por la que se mueve `customers.usu_estado`, y la única que hasta
+ * el 18-09-2026 no tenía quien la empujara: las otras tres (reconexión, baja y
+ * activación) sólo llevan al legacy la transición que ellas conocen —a Activo, a
+ * Retirado/Suspendido, y de Instalar a Activo—, así que cualquier otro cambio escrito a
+ * mano moría en la siguiente ida. Concretamente el que preguntó Soporte: un cliente que
+ * se retira DEBIENDO y al que se le quiere devolver el estado (a Cartera, a Cortado, a
+ * Por retirar) para seguirle el cobro. Se escribía, se veía en la ficha, y quince
+ * minutos después volvía a decir RETIRADO sin que nadie hubiera tocado nada — porque
+ * allá seguía diciendo 'Retirado' y el estado es de los `CAMPOS_DE_ALLA`.
+ *
+ * Qué se escribe: lo mismo que el legacy en su propio bloque de cambio de estado
+ * (`Customers.php`): `usu_estado` nuevo, `ultimo_estado` = el que tenía ALLÁ y
+ * `fecha_cambio`. El historial (`estados`) ya lo lleva `pushEstados`.
+ *
+ * Candados, porque esto pisa una columna que en Modo A manda el legacy:
+ *  · sólo cambios MANUALES —la nota del historial que escribe `changeStatus` empieza
+ *    por "Cambio manual"—, nunca los que vinieron de la ida ni los de una cascada;
+ *  · sólo si es la ÚLTIMA fila del historial de ese abonado: si después pasó otra cosa
+ *    (un corte, un retiro, un cierre de orden), esa otra cosa manda y su propio empuje
+ *    la lleva;
+ *  · sólo si el `fecha_cambio` de allá es ANTERIOR: si el legacy lo movió después de
+ *    que aquí se tecleara, manda el legacy;
+ *  · nunca sobre un Depurado, un Anulado o un Dado de Baja del legacy: de ahí no se
+ *    vuelve, y menos desde aquí.
+ * A diferencia de sus hermanas, esta SÍ puede escribir sobre un 'Retirado': que se
+ * pueda deshacer un retiro es justamente lo que se pide, y para llegar aquí hace falta
+ * que una persona lo haya tecleado en la ficha con su motivo.
+ *
+ * Es idempotente (cuando allá ya dice lo mismo no hay nada que empujar), así que una
+ * pasada perdida se recupera sola en la siguiente… mientras el cambio siga dentro de la
+ * ventana de `LEGACY_WRITEBACK_ESTADO_MANUAL_DIAS`.
+ */
+const ESTADO_MANUAL_LIVE = !process.argv.includes('--dry')
+  && (TARGET === 'copy' || LIVE_GATE || process.env.LEGACY_WRITEBACK_ESTADO_MANUAL_LIVE === 'true');
+/** Hasta dónde atrás se miran cambios manuales por empujar. */
+const ESTADO_MANUAL_DIAS = Number(process.env.LEGACY_WRITEBACK_ESTADO_MANUAL_DIAS || 7);
+/**
+ * El sello que deja `changeStatus` en la nota del historial ("Cambio manual por
+ * Fulana: motivo"). Es lo único que distingue el estado que tecleó una persona del que
+ * bajó de la ida o del que escribió una cascada de cierre, que no llevan nota.
+ * Si allí cambia el texto, hay que cambiarlo aquí: sin sello no se empuja nada.
+ */
+const MARCA_CAMBIO_MANUAL = 'Cambio manual';
+
 const ACTIVACION_LIVE = !process.argv.includes('--dry')
   && (TARGET === 'copy' || LIVE_GATE || process.env.LEGACY_WRITEBACK_ACTIVACION_LIVE === 'true');
 /** Hasta dónde atrás se miran instalaciones por empujar. */
@@ -379,6 +427,13 @@ const SOLO_ESTADO_SERVICIO = arg('solo') === 'estado-servicio';
  */
 const SOLO_ACTIVACION = arg('solo') === 'activacion';
 /**
+ * `--solo=estado-manual` — pasada MÍNIMA: sólo el estado que se acaba de teclear en la
+ * ficha. La dispara el propio `changeStatus`, por lo mismo que las otras cortas: si no
+ * llega al legacy antes de la siguiente ida (15 min), el estado escrito a mano se
+ * deshace solo y la ficha vuelve a decir lo que decía.
+ */
+const SOLO_ESTADO_MANUAL = arg('solo') === 'estado-manual';
+/**
  * `--solo=ordenes` — pasada MÍNIMA: sólo las órdenes de servicio. Es la que dispara el
  * backend en cuanto se crea o se reasigna una orden, por lo mismo que la de caja: el
  * técnico trabaja EN el legacy, y una orden que tarda cinco minutos en aparecerle es una
@@ -413,7 +468,7 @@ const {
   mapCustomer, diffKeys,
   invCustomer, CUSTOMER_FIELD2COLS, invInvoice, invItem, invTx, invTicket, sameVal,
   invMaterial, invEquipo, invOrden, invOrdenItem,
-  inv, RON_INV, INV_STATUS_INV, SVC_STATUS_INV, SUB_STATUS_INV, toD, toDT, num, norm,
+  inv, RON_INV, INV_STATUS_INV, SVC_STATUS_INV, SUB_STATUS_INV, subStatus, toD, toDT, num, norm,
   notaConComprobante, tieneComprobante,
 } = require('./lib/vestel-map');
 
@@ -985,9 +1040,18 @@ async function reflejarEnLegacy(my, t, tid) {
     await my.execute('UPDATE accounts SET lastbal = lastbal + ? WHERE id = ?', [credit - debit, t.cashAccountId]);
   }
 
+  return recalcularClienteYFactura(my, t.subscriber?.legacyId ?? 0, tid, { pmethod: t.method ?? '' });
+}
+
+/**
+ * El acumulado del cliente y el pagado de la factura, recalculados desde los movimientos
+ * VIGENTES que hay ahora en el legacy. Idempotente. Lo usan el cobro (`reflejarEnLegacy`)
+ * y la anulación (`pushVoidings`): sin el segundo, anular dejaba `pamnt` contando el pago
+ * anulado y la ida lo traía de vuelta aquí (factura #501378, 15-09).
+ */
+async function recalcularClienteYFactura(my, payerid, tid, { pmethod } = {}) {
   // 2) Acumulado del cliente, con el mismo criterio que `money_details()` del legacy:
   //    sólo movimientos vigentes y de venta (`ext = '0'`).
-  const payerid = t.subscriber?.legacyId ?? 0;
   if (payerid) {
     await my.execute(
       `UPDATE customers SET
@@ -1010,7 +1074,7 @@ async function reflejarEnLegacy(my, t, tid) {
   await updateRow(my, 'invoices', 'id', f.id, {
     pamnt: pagado,
     status: pagado <= 0 ? 'due' : (pagado >= total ? 'paid' : 'partial'),
-    pmethod: t.method ?? '',
+    ...(pmethod !== undefined ? { pmethod } : {}),
   });
   return true;
 }
@@ -1277,6 +1341,9 @@ async function pushVoidings(my, sum) {
     });
     await prisma.voiding.update({ where: { id: v.id }, data: { legacyId: id } });
     await my.execute('UPDATE transactions SET estado = ? WHERE id = ?', ['Anulada', v.transaction.legacyId]);
+    // Sin esto la factura sigue contando el pago anulado allá, y la ida lo repisa aquí.
+    const [[lt]] = await my.query('SELECT tid, payerid FROM transactions WHERE id = ?', [v.transaction.legacyId]);
+    if (lt) await recalcularClienteYFactura(my, lt.payerid, lt.tid);
   }
 }
 
@@ -1636,6 +1703,105 @@ async function pushActivaciones(my, sum) {
   log(`activación: ${plan.length} clientes instalados puestos en Activo en el legacy`);
 }
 
+/**
+ * CAMBIO MANUAL de estado hecho en la ficha → legacy.
+ *
+ * La cuarta hermana de `pushReconexiones`, `pushBajas` y `pushActivaciones`, y la que
+ * cierra el círculo: aquellas llevan cada una SU transición, ésta lleva la que teclea
+ * una persona en Acciones ▸ Cambiar estado, sea cual sea. Ver el gate
+ * `ESTADO_MANUAL_LIVE` para los candados y el porqué.
+ *
+ * El rastro es la fila de `SubscriberStatusHistory` con la nota "Cambio manual …": es
+ * lo único que separa la intención de una persona del estado que bajó de la ida. La
+ * ficha (`Subscriber.status`) NO sirve de rastro aquí, al revés que en `pushBajas`:
+ * cuando esta pasada llega tarde, la ida ya le devolvió el estado viejo y la ficha
+ * miente. Por eso, además de escribir allá, se repara aquí lo que la ida pisó.
+ */
+async function pushEstadoManual(my, sum) {
+  const desde = new Date(Date.now() - ESTADO_MANUAL_DIAS * 24 * 3600 * 1000);
+  const hist = await prisma.subscriberStatusHistory.findMany({
+    where: { date: { gte: desde }, note: { startsWith: MARCA_CAMBIO_MANUAL } },
+    include: { subscriber: { select: { id: true, abonado: true, legacyId: true, status: true } } },
+    orderBy: { date: 'asc' },
+  });
+
+  const porCid = new Map(); // cid del legacy → el cambio manual MÁS RECIENTE
+  for (const h of hist) {
+    const sub = h.subscriber;
+    if (!sub?.legacyId || !h.date || !h.status) continue;
+    const prev = porCid.get(sub.legacyId);
+    if (!prev || h.date >= prev.fecha) porCid.set(sub.legacyId, { fecha: h.date, estado: h.status, sub });
+  }
+
+  sum.estadoManual = { candidatos: porCid.size, clientes: 0, aplicados: 0, reparados: 0, omitidos: [] };
+  if (!porCid.size) return;
+  const omitir = (abonado, motivo) => {
+    if (sum.estadoManual.omitidos.length < 50) sum.estadoManual.omitidos.push({ abonado, motivo });
+  };
+
+  // Lo que pasó DESPUÉS de cada cambio manual: si hay una fila de historial más nueva
+  // (un corte, un retiro, el cierre de una orden), esa manda y la lleva su empuje.
+  const posteriores = await prisma.subscriberStatusHistory.groupBy({
+    by: ['subscriberId'],
+    where: { subscriberId: { in: [...porCid.values()].map((c) => c.sub.id) }, date: { gte: desde } },
+    _max: { date: true },
+  });
+  const ultimaFila = new Map(posteriores.map((p) => [p.subscriberId, p._max.date]));
+
+  const cids = [...porCid.keys()];
+  const [rows] = await my.query(
+    `SELECT id, usu_estado, fecha_cambio FROM customers WHERE id IN (${cids.map(() => '?').join(',')})`, cids);
+
+  const plan = [];
+  for (const r of rows) {
+    const c = porCid.get(r.id);
+    if (!c) continue;
+    const objetivo = inv(SUB_STATUS_INV)(c.estado);
+    if (!objetivo) continue;
+    const ultima = ultimaFila.get(c.sub.id);
+    if (ultima && ultima > c.fecha) { omitir(c.sub.abonado, 'después del cambio manual pasó otra cosa'); continue; }
+    const estadoLegacy = norm(r.usu_estado);
+    if (estadoLegacy === objetivo) continue; // allá ya está: nada que empujar
+    const cambioLegacy = r.fecha_cambio ? new Date(r.fecha_cambio) : null;
+    if (cambioLegacy && cambioLegacy > c.fecha) { omitir(c.sub.abonado, 'el legacy cambió el estado después'); continue; }
+    if (BAJAS_IRREVERSIBLES_LEGACY.has(estadoLegacy)) { omitir(c.sub.abonado, `en el legacy ya está ${estadoLegacy}`); continue; }
+    plan.push({
+      cid: r.id, subId: c.sub.id, abonado: c.sub.abonado, anterior: r.usu_estado ?? '',
+      objetivo, estado: c.estado, fecha: c.fecha, ficha: c.sub.status,
+    });
+  }
+
+  sum.estadoManual.clientes = plan.length;
+  sum.estadoManual.muestra = plan.slice(0, 5).map((p) => ({ abonado: p.abonado, de: p.anterior, a: p.objetivo }));
+  if (!plan.length) return;
+  if (!ESTADO_MANUAL_LIVE) {
+    log(`estado manual: ${plan.length} clientes `
+      + `${DRY ? 'en plan (seco)' : 'RETENIDOS (gate de estado manual cerrado)'}`
+      + ` → ${plan.slice(0, 15).map((p) => `${p.abonado}:${p.anterior || '—'}→${p.objetivo}`).join(', ')}${plan.length > 15 ? '…' : ''}`);
+    return;
+  }
+  for (const p of plan) {
+    await updateRow(my, 'customers', 'id', p.cid, {
+      usu_estado: p.objetivo, ultimo_estado: p.anterior, fecha_cambio: toDT(p.fecha),
+    });
+    // Y de paso se repara la ficha de AQUÍ si la ida ya había devuelto el estado viejo
+    // (pasa cuando esta pasada llega tarde: el empuje inmediato falló o el gate estaba
+    // cerrado). Sin esto el legacy quedaría bien y la ficha mal hasta la siguiente ida.
+    if (p.ficha !== p.estado) {
+      await prisma.subscriber.update({
+        where: { id: p.subId },
+        // `previousStatus` es el `ultimo_estado` que acaba de quedar allá, no el que
+        // tuviera la ficha: si se deja el suyo, el rótulo "estado anterior" repite el
+        // actual hasta que la ida lo corrija.
+        data: { status: p.estado, previousStatus: subStatus(p.anterior) ?? undefined, statusChangedAt: p.fecha },
+      }).then(() => { sum.estadoManual.reparados++; }).catch(() => undefined);
+    }
+  }
+  sum.estadoManual.aplicados = plan.length;
+  log(`estado manual: ${plan.length} clientes con el estado de la ficha escrito en el legacy`
+    + `${sum.estadoManual.reparados ? ` (${sum.estadoManual.reparados} fichas repuestas)` : ''}`);
+}
+
 // ---------- main ----------
 // ---------- borrados (aquí → legacy) ----------
 /**
@@ -1938,11 +2104,19 @@ async function pushInventario(my, sum) {
 
   const poEditadas = await prisma.supplyOrder.findMany({
     where: { editedAt: { not: null }, legacyId: { not: null } },
-    include: { supplier: { select: { legacyId: true } } },
+    include: {
+      supplier: { select: { legacyId: true } },
+      items: { where: { legacyId: { not: null } }, include: { material: { select: { legacyId: true } } } },
+    },
   });
   if (poEditadas.length) {
     const [filas] = await my.query('SELECT * FROM purchase WHERE id IN (?)', [poEditadas.map((o) => o.legacyId)]);
     const allá = new Map(filas.map((r) => [r.id, r]));
+    const idsItems = poEditadas.flatMap((o) => o.items.map((it) => it.legacyId));
+    const [filasItems] = idsItems.length
+      ? await my.query('SELECT id, pid, qty_en_almacen FROM purchase_items WHERE id IN (?)', [idsItems])
+      : [[]];
+    const itemsAllá = new Map(filasItems.map((r) => [r.id, r]));
     for (const o of poEditadas) {
       const r = allá.get(o.legacyId);
       if (!r) continue;
@@ -1951,16 +2125,34 @@ async function pushInventario(my, sum) {
       // no se reescriben: aquí no significan nada y allá sí.
       const fijos = new Set(['tid', 'eid', 'aid', 'a2id', 'discstatus', 'term']);
       const distintos = Object.keys(nuestro).filter((c) => !fijos.has(c) && !sameVal(nuestro[c], r[c]));
-      if (!distintos.length) {
-        if (INVENTARIO_LIVE) await prisma.supplyOrder.update({ where: { id: o.id }, data: { editedAt: null } });
+      // Lo recibido por ítem y el producto al que entró. Sin esto la ida devolvía
+      // `receivedQty` al `qty_en_almacen` de allá (0) en cuanto se soltaba el sello:
+      // la orden #3277, recibida aquí el 14-sep, quedó "recibido" con 0 unidades.
+      // Un ítem cuyo producto aún no existe allá (legacyId null) espera otra pasada.
+      let esperaProducto = false;
+      const itemsDistintos = [];
+      for (const it of o.items) {
+        const ri = itemsAllá.get(it.legacyId);
+        if (!ri) continue;
+        const nota = it.materialLegacy === 0;
+        if (!nota && it.materialId && it.material?.legacyId == null) { esperaProducto = true; continue; }
+        const pid = nota ? 0 : it.material?.legacyId ?? it.materialLegacy ?? 0;
+        const set = {};
+        if (!sameVal(it.receivedQty ?? 0, ri.qty_en_almacen)) set.qty_en_almacen = it.receivedQty ?? 0;
+        if (!sameVal(pid, ri.pid)) set.pid = pid;
+        if (Object.keys(set).length) itemsDistintos.push({ id: it.legacyId, set });
+      }
+      if (!distintos.length && !itemsDistintos.length) {
+        if (INVENTARIO_LIVE && !esperaProducto) await prisma.supplyOrder.update({ where: { id: o.id }, data: { editedAt: null } });
         continue;
       }
       res.ordenes.cambios++;
       if (!INVENTARIO_LIVE) continue;
       const setObj = {};
       for (const c of distintos) setObj[c] = nuestro[c];
-      await updateRow(my, 'purchase', 'id', o.legacyId, setObj);
-      await prisma.supplyOrder.update({ where: { id: o.id }, data: { editedAt: null } });
+      if (distintos.length) await updateRow(my, 'purchase', 'id', o.legacyId, setObj);
+      for (const c of itemsDistintos) await updateRow(my, 'purchase_items', 'id', c.id, c.set);
+      if (!esperaProducto) await prisma.supplyOrder.update({ where: { id: o.id }, data: { editedAt: null } });
       res.ordenes.aplicados++;
     }
   }
@@ -2636,11 +2828,13 @@ async function main() {
     promosPortalEnVivo: PROMOS_LIVE,
     soloBorrados: SOLO_BORRADOS, soloOrdenes: SOLO_ORDENES, soloBajas: SOLO_BAJAS, soloPromos: SOLO_PROMOS,
     soloEstadoServicio: SOLO_ESTADO_SERVICIO, soloActivacion: SOLO_ACTIVACION,
+    soloEstadoManual: SOLO_ESTADO_MANUAL,
   };
-  log(`writeback${SOLO_PROMOS ? ' (sólo promociones del portal)' : SOLO_APERTURAS ? ' (sólo aperturas)' : SOLO_BAJAS ? ' (sólo bajas)' : SOLO_ESTADO_SERVICIO ? ' (sólo estado de servicio)' : SOLO_ACTIVACION ? ' (sólo activación)' : SOLO_RECONEXION ? ' (sólo reconexión)' : SOLO_ORDENES ? ' (sólo órdenes)' : SOLO_CAJA ? ' (sólo caja)' : ''} → ${sum.target} · ${DRY ? 'SECO (plan)' : 'EN VIVO'}`
+  log(`writeback${SOLO_PROMOS ? ' (sólo promociones del portal)' : SOLO_APERTURAS ? ' (sólo aperturas)' : SOLO_BAJAS ? ' (sólo bajas)' : SOLO_ESTADO_SERVICIO ? ' (sólo estado de servicio)' : SOLO_ESTADO_MANUAL ? ' (sólo estado manual)' : SOLO_ACTIVACION ? ' (sólo activación)' : SOLO_RECONEXION ? ' (sólo reconexión)' : SOLO_ORDENES ? ' (sólo órdenes)' : SOLO_CAJA ? ' (sólo caja)' : ''} → ${sum.target} · ${DRY ? 'SECO (plan)' : 'EN VIVO'}`
     + ` · órdenes ${TICKETS_LIVE ? 'EN VIVO' : 'en plan'} · caja ${CAJA_LIVE ? 'EN VIVO' : 'en plan'}`
     + ` · altas ${ALTAS_LIVE ? 'EN VIVO' : 'en plan'} · reconexión ${RECONEXION_LIVE ? 'EN VIVO' : 'en plan'}`
     + ` · bajas ${BAJAS_LIVE ? 'EN VIVO' : 'en plan'} · activación ${ACTIVACION_LIVE ? 'EN VIVO' : 'en plan'}`
+    + ` · estado manual ${ESTADO_MANUAL_LIVE ? 'EN VIVO' : 'en plan'}`
     + ` · inventario ${INVENTARIO_LIVE ? 'EN VIVO' : 'en plan'} · ediciones ${EDITS_LIVE ? 'EN VIVO' : 'en plan'}`
     + ` · servicio ${SERVICIO_LIVE ? 'EN VIVO' : 'en plan'}`
     + ` · borrados ${BORRADOS_LIVE ? 'EN VIVO' : 'en plan'}`
@@ -2668,6 +2862,11 @@ async function main() {
     await pushEstadoServicio(my, sum);
   } else if (SOLO_ESTADO_SERVICIO) {
     await pushEstadoServicio(my, sum);
+  } else if (SOLO_ESTADO_MANUAL) {
+    // Igual que la de activación: la fila de `estados` es la otra mitad del cambio, y
+    // sin ella el legacy se queda con el estado nuevo y sin constancia de cuándo cambió.
+    await pushEstados(my, sum, st);
+    await pushEstadoManual(my, sum);
   } else if (SOLO_ACTIVACION) {
     // El historial va con ella: la fila de `estados` es la otra mitad de lo que el
     // legacy escribe al cerrar una instalación, y sin ella allá queda el estado sin
@@ -2704,6 +2903,9 @@ async function main() {
     await pushActivaciones(my, sum);
     await pushBajas(my, sum);
     await pushEstadoServicio(my, sum);
+    // La última de las cuatro puertas del estado, a propósito: lo que tecleó una
+    // persona en la ficha manda sobre lo que dedujeron las otras tres.
+    await pushEstadoManual(my, sum);
     await pushTickets(my, sum);
     await pushTicketUpdates(my, sum);
     await pushTicketAsignados(my, sum);
@@ -2713,7 +2915,7 @@ async function main() {
     await pushPromosPortal(my, sum);
   }
 
-  if (!DRY || CAJA_LIVE || TICKETS_LIVE || ALTAS_LIVE || RECONEXION_LIVE || BAJAS_LIVE || ACTIVACION_LIVE) await saveState({ lastWritebackAt: new Date().toISOString() });
+  if (!DRY || CAJA_LIVE || TICKETS_LIVE || ALTAS_LIVE || RECONEXION_LIVE || BAJAS_LIVE || ACTIVACION_LIVE || ESTADO_MANUAL_LIVE) await saveState({ lastWritebackAt: new Date().toISOString() });
   sum.ms = Date.now() - t0;
   console.log(JSON.stringify(sum));
   await my.end(); await prisma.$disconnect();

@@ -54,6 +54,24 @@ function required(key) {
 // Leerlo de una sola fuente evita que se desincronicen.
 const AUTH_SECRET = required('AUTH_SECRET');
 
+/**
+ * TODAS las variables `LEGACY_*` de backend/.env, en bloque y tal cual.
+ *
+ * Van así y no enumeradas a mano a propósito: son los gates del puente con el legacy
+ * (`LEGACY_WRITEBACK_*`), la conexión a su MySQL (`LEGACY_DB_*`) y sus adjuntos, y el
+ * backend las lee de `process.env` —no carga ningún .env por su cuenta—. Enumerarlas
+ * dejaba fuera la siguiente que se añadiera, y el fallo es SILENCIOSO: los empujes
+ * inmediatos al legacy (`runLegacyWritebackBajas`, `…Reconexion`, `…Activacion`,
+ * `…EstadoServicio`, `…EstadoManual`) comprueban su gate y, si no está, devuelven "ok"
+ * sin hacer nada. El 18-09-2026 un `pm2 restart ecosystem.config.js --update-env` dejó
+ * el proceso sin una sola de ellas (hasta entonces sobrevivían de un arranque viejo) y
+ * con ellas se apagaron esos empujes, que son justo los que le ganan a la ida de los
+ * 15 minutos.
+ */
+const legacyEnv = Object.fromEntries(
+  Object.entries(env).filter(([clave]) => clave.startsWith('LEGACY_')),
+);
+
 module.exports = {
   apps: [
     {
@@ -71,6 +89,8 @@ module.exports = {
         CORS_ORIGIN: required('CORS_ORIGIN'),
         // Activa los cronjobs programados (facturación recurrente + cartera).
         CRONS_ENABLED: env.CRONS_ENABLED ?? 'false',
+        // El puente con el legacy al completo: gates del writeback, MySQL y adjuntos.
+        ...legacyEnv,
         // Gestión OLT en LIVE: autenticar/reiniciar/eliminar ONU ejecutan por SSH
         // contra las OLT reales (las lecturas siempre son en vivo).
         OLT_LIVE: env.OLT_LIVE ?? 'false',

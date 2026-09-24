@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Modal } from "@/components/Modal";
 import { FirmaOtpModal } from "@/components/FirmaOtpModal";
 import { ConsignacionCampos, consignacionVacia, type Consignacion } from "@/components/orders/ConsignacionCampos";
+import { DestinoCampos, destinoVacio, useDestinos, type Destino } from "@/components/orders/DestinoCampos";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
@@ -46,6 +47,12 @@ export default function OrdenDetallePage() {
   const [order, setOrder] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [receive, setReceive] = useState<Record<string, string>>({});
+  // Bodega a la que entra lo recibido: la de la orden, o la que se escoja al recibir.
+  const [receiveWarehouse, setReceiveWarehouse] = useState("");
+  const destinos = useDestinos();
+  // Productos de esa bodega y a cuál se suma cada ítem ("" = crear el producto en la bodega).
+  const [bodegaMats, setBodegaMats] = useState<{ id: string; name: string; code: string | null; qty: number }[]>([]);
+  const [receiveMat, setReceiveMat] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [payOpen, setPayOpen] = useState(false);
   const [payAmount, setPayAmount] = useState("");
@@ -81,6 +88,7 @@ export default function OrdenDetallePage() {
   const [editNotes, setEditNotes] = useState("");
   const [editStatus, setEditStatus] = useState("");
   const [editConsig, setEditConsig] = useState<Consignacion>(consignacionVacia);
+  const [editDestino, setEditDestino] = useState<Destino>(destinoVacio);
   // Los ítems tal como se abrieron: si nadie los tocó no se mandan, y así cambiar solo
   // el estado no reemplaza las líneas (ni deja un "Ítems reemplazados" falso en la bitácora).
   const [editRowsIniciales, setEditRowsIniciales] = useState("");
@@ -92,15 +100,7 @@ export default function OrdenDetallePage() {
   const [adjuntoPendiente, setAdjuntoPendiente] = useState<File | null>(null);
   const [adjuntoPago, setAdjuntoPago] = useState("");
   const puedeAprobar = can(PERM.PURCHASES_APPROVE);
-  // La CAJERA entra a compras sólo a MIRAR la orden y a ponerle el papel (2026-09-08, a
-  // pedido del usuario): sube la factura del proveedor y el comprobante del pago, que es
-  // lo que tiene en la mano en ventanilla. Todo lo que MUEVE la orden —editarla,
-  // cancelarla, finalizarla, recibir material, registrar el pago, notas/retenciones y
-  // borrar un adjunto— no es suyo y no se le pinta. El freno de verdad está en la API
-  // (esas rutas siguen exigiendo `administracion`); esto evita el botón que muere en 403.
-  const soloAdjunta =
-    !isSuperadmin && can(PERM.AREA_CAJA) &&
-    !can(PERM.AREA_ADMINISTRACION) && !can(PERM.AREA_CONTABILIDAD) && !can(PERM.AREA_GERENCIA);
+  // La CAJERA tiene Compras completo desde 2026-09-17 (antes sólo miraba y adjuntaba).
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -111,6 +111,7 @@ export default function OrdenDetallePage() {
       const init: Record<string, string> = {};
       for (const it of d?.items ?? []) init[it.id] = String(it.received ?? 0);
       setReceive(init);
+      setReceiveWarehouse(d?.warehouse?.id ?? "");
     } finally { setLoading(false); }
   }, [authFetch, id]);
 
@@ -119,14 +120,37 @@ export default function OrdenDetallePage() {
     void load();
   }, [authLoading, id, load]);
 
+  useEffect(() => {
+    if (authLoading || !receiveWarehouse) { setBodegaMats([]); return; }
+    let vivo = true;
+    void authFetch(`/orders/destinations?warehouseId=${encodeURIComponent(receiveWarehouse)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!vivo) return;
+        const mats: { id: string; name: string; code: string | null; qty: number }[] = d?.materials ?? [];
+        setBodegaMats(mats);
+        // Propuesta: el producto ligado al ítem si está en esta bodega, o el del mismo nombre.
+        const norm = (t: string) => t.trim().replace(/\s+/g, " ").toLowerCase();
+        const prop: Record<string, string> = {};
+        for (const it of order?.items ?? []) {
+          const m = mats.find((x) => x.id === it.materialId) ?? mats.find((x) => norm(x.name) === norm(it.product ?? ""));
+          prop[it.id] = m?.id ?? "";
+        }
+        setReceiveMat(prop);
+      })
+      .catch(() => {});
+    return () => { vivo = false; };
+  }, [authLoading, authFetch, receiveWarehouse, order?.items]);
+
+  // Las órdenes de servicio no traen material: no piden bodega ni mueven stock.
+  const llevaBodega = order?.kind !== "servicio";
   const canReceive = useMemo(() => {
     if (!order) return false;
-    if (soloAdjunta) return false; // la cajera no recibe material de compras
     if (["recibido", "finalizado", "cancelado", "anulado"].includes(order.status)) return false;
     // Órdenes del flujo nuevo: recibir solo después de aprobar.
     if (order.approval?.awaiting) return false;
     return true;
-  }, [order, soloAdjunta]);
+  }, [order]);
   const saldo = useMemo(() => order ? Math.max(0, (order.total ?? 0) - (order.paid ?? 0)) : 0, [order]);
 
   function openPay() {
@@ -215,10 +239,13 @@ export default function OrdenDetallePage() {
     setSaving(true);
     try {
       const items = (order?.items ?? []).map((it: any) => ({ itemId: it.id, received: Number(receive[it.id]) || 0 }));
-      const res = await authFetch(`/orders/${id}/receive`, { method: "POST", body: JSON.stringify({ items }) });
+      const sube = (order?.items ?? []).some((it: any) => (Number(receive[it.id]) || 0) > (it.received ?? 0));
+      if (sube && llevaBodega && !receiveWarehouse) { toast("Escoge la bodega a la que llega el material", "alert-triangle"); setSaving(false); return; }
+      const conProducto = items.map((x: any) => (receiveMat[x.itemId] ? { ...x, materialId: receiveMat[x.itemId] } : x));
+      const res = await authFetch(`/orders/${id}/receive`, { method: "POST", body: JSON.stringify({ items: conProducto, warehouseId: receiveWarehouse || undefined }) });
       const d = await res.json();
       if (!res.ok) throw new Error(d?.message || "Error");
-      toast("Recepción registrada");
+      toast(d?.warehouse ? `Recepción registrada · entró a ${d.warehouse}` : "Recepción registrada");
       await load();
     } catch (e) {
       toast(mensajeDeError(e, "No se pudo registrar la recepción"), "alert-triangle");
@@ -292,6 +319,7 @@ export default function OrdenDetallePage() {
     setEditDue(order?.dueDate ? String(order.dueDate).slice(0, 10) : "");
     setEditNotes(order?.notes ?? "");
     const c = order?.consignment;
+    setEditDestino({ warehouseId: order?.warehouse?.id ?? "", branch: order?.branchRef ?? "" });
     setEditConsig({ payBank: c?.bank ?? "", payAccountType: c?.accountType ?? "", payAccount: c?.account ?? "", payHolder: c?.holder ?? "", payHolderDoc: c?.holderDoc ?? "" });
     setEditOpen(true);
   };
@@ -310,6 +338,9 @@ export default function OrdenDetallePage() {
           items: itemsTocados ? items : undefined,
           orderDate: editDate || undefined, dueDate: editDue || undefined, notes: editNotes,
           ...editConsig,
+          // Solo si cambió: una orden vieja sin sede no se obliga a tenerla para editar otra cosa.
+          ...(editDestino.warehouseId !== (order?.warehouse?.id ?? "") ? { warehouseId: editDestino.warehouseId } : {}),
+          ...(editDestino.branch !== (order?.branchRef ?? "") ? { branch: editDestino.branch } : {}),
           status: isSuperadmin && editStatus && editStatus !== order?.status ? editStatus : undefined,
         }),
       });
@@ -428,9 +459,9 @@ export default function OrdenDetallePage() {
           <Badge label={isCompra ? "Compra" : "Servicio"} tone={isCompra ? "brand" : "info"} />
           <Badge label={order.status} tone={statusTone(order.status)} />
           <Button variant="secondary" size="sm" onClick={abrirPdf}><Icon name="file-text" size={14} /> PDF</Button>
-          {!soloAdjunta && (esPendiente || isSuperadmin) && <Button variant="secondary" size="sm" onClick={abrirEditar}><Icon name="pencil" size={14} /> Editar</Button>}
-          {!soloAdjunta && !terminal && <Button variant="secondary" size="sm" onClick={() => setConfirmar({ kind: "cancelar" })}><Icon name="x" size={14} className="text-error-text" /> Cancelar orden</Button>}
-          {!soloAdjunta && !terminal && !esPendiente && saldo <= 0 && (
+          {(esPendiente || isSuperadmin) && <Button variant="secondary" size="sm" onClick={abrirEditar}><Icon name="pencil" size={14} /> Editar</Button>}
+          {!terminal && <Button variant="secondary" size="sm" onClick={() => setConfirmar({ kind: "cancelar" })}><Icon name="x" size={14} className="text-error-text" /> Cancelar orden</Button>}
+          {!terminal && !esPendiente && saldo <= 0 && (
             <Button variant="primary" size="sm" onClick={() => setConfirmar({ kind: "finalizar" })} disabled={flowBusy}><Icon name="check" size={14} /> Finalizar</Button>
           )}
         </div>
@@ -488,6 +519,8 @@ export default function OrdenDetallePage() {
           <div className="flex justify-between text-[13px]"><span className="text-text-tertiary">Orden</span><span className="text-text-secondary">{fmtDate(order.date)}</span></div>
           <div className="flex justify-between text-[13px]"><span className="text-text-tertiary">Vence</span><span className="text-text-secondary">{fmtDate(order.dueDate)}</span></div>
           <div className="flex justify-between text-[13px]"><span className="text-text-tertiary">Recibida</span><span className="text-text-secondary">{fmtDate(order.receivedAt)}</span></div>
+          <div className="mt-2 flex justify-between gap-2 border-t border-border-subtle pt-2 text-[13px]"><span className="text-text-tertiary">Sede</span><span className={order.branchRef ? "text-text-secondary" : "text-warning-text"}>{order.branchRef || "Sin sede"}</span></div>
+          <div className="flex justify-between gap-2 text-[13px]"><span className="text-text-tertiary">Bodega destino</span><span className={order.warehouse || !llevaBodega ? "text-right text-text-secondary" : "text-warning-text"}>{order.warehouse?.title || "Sin bodega"}</span></div>
         </div>
         <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
           <h2 className="mb-2 text-[11px] font-semibold uppercase text-text-tertiary">Totales</h2>
@@ -501,8 +534,8 @@ export default function OrdenDetallePage() {
           <div className="mt-1 flex justify-between border-t border-border-subtle pt-1 text-[14px] font-bold text-text-primary"><span>Total neto</span><span>{cop(order.total ?? 0)}</span></div>
           <div className="mt-1 flex justify-between text-[13px]"><span className="text-text-tertiary">Pagado</span><span className="text-success-text">{cop(order.paid ?? 0)}</span></div>
           <div className="flex justify-between text-[13px]"><span className="text-text-tertiary">Saldo</span><span className={saldo > 0 ? "font-semibold text-error-text" : "text-text-tertiary"}>{cop(saldo)}</span></div>
-          {!soloAdjunta && saldo > 0 && !terminal && !awaiting && <Button variant="secondary" size="sm" className="mt-2 w-full" onClick={openPay}><Icon name="hand-coins" size={14} /> Registrar pago</Button>}
-          {!soloAdjunta && saldo > 0 && awaiting && <p className="mt-2 text-[11px] text-warning-text">El pago se habilita cuando la orden esté aprobada.</p>}
+          {saldo > 0 && !terminal && !awaiting && <Button variant="secondary" size="sm" className="mt-2 w-full" onClick={openPay}><Icon name="hand-coins" size={14} /> Registrar pago</Button>}
+          {saldo > 0 && awaiting && <p className="mt-2 text-[11px] text-warning-text">El pago se habilita cuando la orden esté aprobada.</p>}
         </div>
       </div>
 
@@ -553,7 +586,7 @@ export default function OrdenDetallePage() {
       <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="flex items-center gap-1.5 text-[13px] font-bold text-text-primary"><Icon name="hand-coins" size={16} /> Pagos</h2>
-          {!soloAdjunta && saldo > 0 && !terminal && !awaiting && <Button variant="secondary" size="sm" onClick={openPay}><Icon name="plus" size={14} /> Registrar pago</Button>}
+          {saldo > 0 && !terminal && !awaiting && <Button variant="secondary" size="sm" onClick={openPay}><Icon name="plus" size={14} /> Registrar pago</Button>}
         </div>
         <DataTable
           rows={order.payments ?? []}
@@ -576,13 +609,11 @@ export default function OrdenDetallePage() {
       <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="flex items-center gap-1.5 text-[13px] font-bold text-text-primary"><Icon name="file-text" size={16} /> Notas y retenciones</h2>
-          {!soloAdjunta && <Button variant="secondary" size="sm" onClick={openNote}><Icon name="plus" size={14} /> Agregar nota</Button>}
+          <Button variant="secondary" size="sm" onClick={openNote}><Icon name="plus" size={14} /> Agregar nota</Button>
         </div>
         {(order.noteLines ?? []).length === 0 ? (
           <p className="text-[12px] text-text-tertiary">
-            {soloAdjunta
-              ? "Sin notas ni retenciones."
-              : "Sin notas ni retenciones. Usa «Agregar nota» para registrar una nota crédito/débito o una retención (ReteFuente/ReteICA)."}
+            Sin notas ni retenciones. Usa «Agregar nota» para registrar una nota crédito/débito o una retención (ReteFuente/ReteICA).
           </p>
         ) : (
           <div className="flex flex-col gap-2">
@@ -593,7 +624,7 @@ export default function OrdenDetallePage() {
                   {n.description ? <span className="ml-2 text-[12px] text-text-tertiary">{n.description}</span> : null}
                 </div>
                 <span className={`text-[13px] font-semibold ${n.amount < 0 ? "text-warning-text" : "text-text-secondary"}`}>{n.amount < 0 ? "-" : "+"}{cop(Math.abs(n.amount))}</span>
-                {!soloAdjunta && <button onClick={() => setConfirmar({ kind: "borrar-nota", nota: n })} className="tap text-text-tertiary hover:text-error-text" title="Eliminar nota"><Icon name="trash" size={15} /></button>}
+                {<button onClick={() => setConfirmar({ kind: "borrar-nota", nota: n })} className="tap text-text-tertiary hover:text-error-text" title="Eliminar nota"><Icon name="trash" size={15} /></button>}
               </div>
             ))}
           </div>
@@ -605,10 +636,29 @@ export default function OrdenDetallePage() {
           <h2 className="mb-3 flex items-center gap-1.5 text-[13px] font-bold text-text-primary">
             <Icon name="package" size={16} /> Recibir
           </h2>
+          {llevaBodega && (
+            <div className="mb-3 sm:max-w-sm">
+              <DestinoCampos value={{ warehouseId: receiveWarehouse, branch: order.branchRef ?? "" }} onChange={(v) => setReceiveWarehouse(v.warehouseId)} requireWarehouse destinos={destinos} soloBodega />
+              {!order.warehouse && <p className="mt-1 text-[11px] text-warning-text">La orden no tenía bodega destino: la que escojas queda guardada en ella.</p>}
+            </div>
+          )}
           <div className="flex flex-col gap-2">
             {(order.items ?? []).map((it: any) => (
               <div key={it.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border-subtle px-3 py-2">
-                <span className="min-w-0 flex-1 text-[13px] font-medium text-text-primary">{it.product}</span>
+                <span className="flex min-w-0 flex-1 flex-col gap-1">
+                  <span className="text-[13px] font-medium text-text-primary">{it.product}</span>
+                  {llevaBodega && receiveWarehouse && (Number(receive[it.id]) || 0) > (it.received ?? 0) && (
+                    <Select
+                      className="max-w-md"
+                      aria-label={`Producto de la bodega para ${it.product}`}
+                      value={receiveMat[it.id] ?? ""}
+                      onChange={(e) => setReceiveMat((p) => ({ ...p, [it.id]: e.target.value }))}
+                    >
+                      <option value="">Crear «{it.product}» como producto nuevo</option>
+                      {bodegaMats.map((m) => <option key={m.id} value={m.id}>Sumar a: {m.name}{m.code ? ` · ${m.code}` : ""} (hay {m.qty})</option>)}
+                    </Select>
+                  )}
+                </span>
                 <span className="text-[12px] text-text-tertiary">de {it.qty}</span>
                 <Input
                   type="number"
@@ -648,7 +698,7 @@ export default function OrdenDetallePage() {
               <div key={f.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border-subtle px-3 py-2">
                 <button onClick={() => void verAdjunto(f)} className="min-w-0 flex-1 truncate text-left text-[13px] font-medium text-brand hover:underline">{f.name}</button>
                 <span className="text-[11px] text-text-tertiary">{(f.size / 1024).toFixed(0)} KB · {f.by ?? "—"} · {fmtDate(f.at)}</span>
-                {!soloAdjunta && <button onClick={() => setConfirmar({ kind: "borrar-adjunto", file: f })} className="tap text-text-tertiary hover:text-error-text" title="Eliminar adjunto"><Icon name="trash" size={15} /></button>}
+                {<button onClick={() => setConfirmar({ kind: "borrar-adjunto", file: f })} className="tap text-text-tertiary hover:text-error-text" title="Eliminar adjunto"><Icon name="trash" size={15} /></button>}
               </div>
             ))}
           </div>
@@ -727,6 +777,10 @@ export default function OrdenDetallePage() {
               </div>
             ))}
           </div>
+        </div>
+        <div className="mt-3">
+          <span className="mb-2 block text-[12px] font-semibold text-text-secondary">Destino</span>
+          <DestinoCampos value={editDestino} onChange={setEditDestino} requireWarehouse={llevaBodega} destinos={destinos} />
         </div>
         <div className="mt-3">
           <span className="mb-2 block text-[12px] font-semibold text-text-secondary">Datos de la consignación</span>

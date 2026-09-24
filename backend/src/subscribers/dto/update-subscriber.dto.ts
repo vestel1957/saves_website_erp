@@ -287,6 +287,24 @@ export class CreateSubscriberDto extends UpdateSubscriberDto {
   /** Día para el que se agenda la instalación (YYYY-MM-DD). Exige técnico. */
   @IsOptional() @IsDateString()
   installScheduledFor?: string;
+
+  /**
+   * Tipo de venta (OFICINA | REDES | REFERIDO) y su subtipo. Obligatorios: los valida
+   * `canalVentaValido` (subscribers/canal-venta.ts) para devolver un mensaje claro.
+   */
+  @IsOptional() @IsString() @MaxLength(20)
+  saleChannel?: string;
+
+  @IsOptional() @IsString() @MaxLength(20)
+  saleSubchannel?: string;
+
+  /**
+   * Funcionario que refirió al cliente (`Staff.id`, de `GET /subscribers/afiliadores`).
+   * Sólo cuenta con «Referido → Funcionario», y ahí es obligatorio; si ya no está en
+   * esa lista, el alta se rechaza.
+   */
+  @IsOptional() @IsString() @MaxLength(40)
+  affiliateStaffId?: string;
 }
 
 /** Campos que la pantalla de alta manda para el chequeo previo de duplicados. */

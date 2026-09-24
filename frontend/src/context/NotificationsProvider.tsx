@@ -48,6 +48,7 @@ const SONDEO_MS = 20_000;
 const ICONO: Record<string, string> = {
   "whatsapp.mensaje": "message-circle",
   "whatsapp.asignado": "user-check",
+  "agenda.evento": "calendar-days",
 };
 
 /**

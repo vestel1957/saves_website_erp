@@ -3,6 +3,12 @@
 import { useEffect, useState } from "react";
 import { Icon } from "@/components/Icon";
 
+const CLAVE_RECARGA = "error:recarga-por-despliegue";
+
+/** ¿Falló la descarga de un trozo de JS (build vieja tras un despliegue)? */
+const esTrozoViejo = (e: Error | undefined): boolean =>
+  e?.name === "ChunkLoadError" || /Failed to load chunk|Loading chunk .* failed|dynamically imported module/i.test(e?.message ?? "");
+
 /**
  * Frontera de error de la aplicación.
  *
@@ -27,6 +33,20 @@ export default function Error({
     // Al menos queda en la consola del navegador con su `digest`, que es lo que
     // permite cruzarlo con el log del servidor.
     console.error("Error no controlado en la interfaz:", error);
+
+    // Pestaña abierta desde ANTES de un despliegue: pide los trozos de JS de la build
+    // vieja, que ya no existen (404), y cae aquí aunque la pantalla esté sana — visto
+    // en Agendamiento el 2026-09-22. Recargar trae la build nueva. Una sola vez por
+    // minuto, para no entrar en bucle si el trozo falta de verdad.
+    if (esTrozoViejo(error)) {
+      try {
+        const ultima = Number(sessionStorage.getItem(CLAVE_RECARGA) ?? 0);
+        if (Date.now() - ultima > 60_000) {
+          sessionStorage.setItem(CLAVE_RECARGA, String(Date.now()));
+          window.location.reload();
+        }
+      } catch { /* sin sessionStorage: se queda el aviso con el botón */ }
+    }
   }, [error]);
 
   /**

@@ -46,6 +46,9 @@ export const SETTING_DEFS: SettingDef[] = [
   { key: 'network.oltLive', group: 'red', label: 'Ejecutar aprovisionamiento REAL en OLT', default: 'false', placeholder: 'true | false' },
   { key: 'network.oltAutoProvision', group: 'red', label: 'Auto-autenticar ONUs de la cola cuando aparezcan (requiere OLT en modo real)', default: 'false', placeholder: 'true | false' },
   { key: 'network.genieacsLive', group: 'red', label: 'Ejecutar cortes REALES de TV en GenieACS (TR-069)', default: 'false', placeholder: 'true | false' },
+  // Encendido desde 2026-09-22: el ACS está caído y el corte de TV se hace a mano.
+  // El lote sólo marca la ficha y deja la orden cerrada. `false` = volver al TR-069/OLT.
+  { key: 'network.tvSoloSistema', group: 'red', label: 'TV masiva SOLO en el sistema (TR-069 y OLT en pausa; el corte se hace a mano)', default: 'true', placeholder: 'true | false' },
   { key: 'tickets.cascadeBilling', group: 'soporte', label: 'Al cerrar orden: generar cargos automáticos (reconexión/instalación)', default: 'false', placeholder: 'true | false' },
   // Chatbot de WhatsApp. Se editan desde Configuración → WhatsApp (endpoints
   // /admin/chatbot/switch y /allowlist), pero se declaran aquí para que existan en el

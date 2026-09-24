@@ -23,12 +23,13 @@ const GROUPS: Tab[][] = [
   ],
   [
     { href: "/contabilidad/informes", label: "Balance y estados" },
+    { href: "/contabilidad/resultados-por-sede", label: "Resultados por sede" },
     { href: "/contabilidad/certificados", label: "Certificados de retención" },
     { href: "/contabilidad/exogena", label: "Exógena (DIAN)" },
   ],
   [
     { href: "/contabilidad/plan-de-cuentas", label: "Plan de cuentas" },
-    { href: "/contabilidad/centros-costo", label: "Centros de costo" },
+    { href: "/contabilidad/centros-de-costo", label: "Centros de costo" },
     { href: "/contabilidad/impuestos", label: "Impuestos" },
     { href: "/contabilidad/mapeo-cuentas", label: "Mapeo de cuentas" },
   ],

@@ -330,7 +330,8 @@ export class CargoOrdenService {
     await this.posting
       .postSalesInvoice({
         sourceId: inv.id, date: hoy, number: inv.tid,
-        subtotal: base, tax: iva, createdBy: opts.autor ?? 'Sistema',
+        subtotal: base, tax: iva, costCenterId: await this.posting.centroDeAbonado(sub.id),
+        createdBy: opts.autor ?? 'Sistema',
       })
       .catch((e) => this.logger.warn(`Contabilización del cargo (factura #${inv.tid}): ${(e as Error).message}`));
 

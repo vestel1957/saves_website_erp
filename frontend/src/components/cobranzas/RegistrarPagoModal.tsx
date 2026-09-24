@@ -51,6 +51,9 @@ type Reconexion = {
   mensaje: string;
 };
 
+/** Hoy en Colombia ('YYYY-MM-DD'): la caja cierra en esa hora, no en la del navegador. */
+const hoyColombia = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Bogota" });
+
 const NOMBRE_SERVICIO: Record<string, string> = { INTERNET: "internet", TV: "televisión" };
 
 /** "internet y televisión" / "televisión" — para contarle a la cajera qué volvió. */
@@ -80,6 +83,12 @@ export function RegistrarPagoModal({
   const [elegidas, setElegidas] = useState<string[]>([]);
   const [note, setNote] = useState("");
   /**
+   * Día en que el cliente pagó (2026-09-17, pedido de caja): se cobra hoy lo que se
+   * recibió ayer. Por defecto hoy; el servidor rechaza el futuro, más de un mes atrás
+   * y los días cuya caja ya se cerró.
+   */
+  const [fecha, setFecha] = useState(hoyColombia());
+  /**
    * ¿Se le devuelve el servicio al cobrar? Por defecto SÍ: el cliente que paga se
    * pone al día y vuelve a navegar. Se apaga para el que llega a saldar y RETIRARSE:
    * antes el recaudo lo reconectaba igual y quedaba activo sin haberlo pedido.
@@ -101,6 +110,7 @@ export function RegistrarPagoModal({
   useEffect(() => {
     if (!open) return;
     setDebt(null); setErr(null); setFallo(null); setReciboUrl(null); setAmount(""); setNote(""); setMethod("Cash");
+    setFecha(hoyColombia());
     setElegidas([]); setReconectar(true); setAdelantar(false);
     void authFetch(`/treasury/subscribers/${subscriberId}/debt`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error("No se pudo cargar la deuda"))))
@@ -235,7 +245,9 @@ export function RegistrarPagoModal({
         {isBankMethod(method) && (
           <Field label="Banco">
             <Select value={bank} onChange={(e) => setBank(e.target.value)}>
-              {BANKS.map((b) => <option key={b} value={b}>{b}</option>)}
+              {/* WOMPI: pagos PSE/Nequi que no entraron solos por el portal. El
+                  servidor los manda a la cuenta WOMPI, no a la caja de quien registra. */}
+              {[...BANKS, "WOMPI"].map((b) => <option key={b} value={b}>{b}</option>)}
             </Select>
           </Field>
         )}
@@ -250,6 +262,11 @@ export function RegistrarPagoModal({
             </Select>
           </Field>
         )}
+        <Field label="Fecha del pago" required
+          hint={fecha !== hoyColombia() ? "El pago queda con esta fecha, no con la de hoy." : undefined}>
+          <Input type="date" value={fecha} max={hoyColombia()}
+            onChange={(e) => setFecha(e.target.value)} />
+        </Field>
         <Field label="Nota (opcional)">
           <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Referencia…" />
         </Field>
@@ -293,7 +310,7 @@ export function RegistrarPagoModal({
           ) : (
             <><b className="text-text-primary">{cop(adelanto.neto)}</b> que se suman al monto.</>
           )}{" "}
-          Esa factura todavía no existe: nace el día 1 ya pagada y el mes sale en el recibo.
+          La factura de ese mes se emite en el acto y queda pagada.
         </span>
       </span>
     </label>
@@ -313,13 +330,14 @@ export function RegistrarPagoModal({
     </p>
   );
 
+  const conFecha = fecha === hoyColombia() ? "con la fecha de hoy" : `con fecha ${fecha}`;
   /** En qué caja cae el recaudo. La cajera no elige, así que se le dice. */
   const avisoCaja = !isSuperadmin && (
     <p className="flex items-center gap-1.5 text-[11px] text-text-tertiary">
       <Icon name="wallet" size={13} />
       {mi?.caja
-        ? <>El recaudo entra en tu caja <span className="font-semibold text-text-secondary">{mi.caja.name}</span> con la fecha de hoy.</>
-        : <>El recaudo entra en la caja que tengas asignada, con la fecha de hoy.</>}
+        ? <>El recaudo entra en tu caja <span className="font-semibold text-text-secondary">{mi.caja.name}</span> {conFecha}.</>
+        : <>El recaudo entra en la caja que tengas asignada, {conFecha}.</>}
     </p>
   );
 
@@ -372,6 +390,9 @@ export function RegistrarPagoModal({
     // que marcar, así que la exigencia de marcar una factura no aplica.
     if (!sinFacturas && !seleccionadas.length) { setErr("Marca al menos una factura a pagar."); return; }
     if (amountNum <= 0) { setErr("Ingresa un monto mayor a cero."); return; }
+    const hoy = hoyColombia();
+    if (!fecha) { setErr("Indica la fecha del pago."); return; }
+    if (fecha > hoy) { setErr("La fecha del pago no puede ser posterior a hoy."); return; }
     if (sobraAdelanto > 0) { setErr("Corrige el monto: con el mes adelantado tiene que ser exacto."); return; }
     if (method === "Balance" && amountNum > (debt?.balance ?? 0)) {
       setErr("El saldo a favor del cliente no alcanza para ese monto."); return;
@@ -383,11 +404,13 @@ export function RegistrarPagoModal({
         body: JSON.stringify({
           subscriberId, amount: amountNum, method,
           // Sólo el superusuario elige caja; para el resto la pone el servidor (la
-          // suya). La fecha tampoco se manda: el pago se registra con el día en que
-          // se registra, no con uno escrito a mano.
+          // suya).
           cashAccountId: isSuperadmin && cashAccountId ? Number(cashAccountId) : undefined,
           accountName: isSuperadmin ? accounts.find((a) => String(a.id) === cashAccountId)?.name : undefined,
           bankName: isBankMethod(method) ? bank : undefined,
+          // Sólo si la cajera la cambió: el silencio es "hoy", y el servidor lo
+          // calcula en hora de Colombia.
+          date: fecha !== hoy ? fecha : undefined,
           invoiceIds: elegidas.length ? seleccionadas.map((i) => i.id) : undefined,
           note: note || undefined,
           // Opt-in explícito: el backend sólo acepta un recaudo sin factura pendiente
@@ -430,11 +453,25 @@ export function RegistrarPagoModal({
       // pregunta al salir ("¿entonces ya no vuelvo hasta noviembre?").
       if (data.adelanto?.meses?.length) {
         const a = data.adelanto;
+        // La factura del mes adelantado se emite en el acto y ya pagada. Si no se pudo
+        // (corrida en curso, cliente sin plan…), el pago queda como saldo a favor y la
+        // factura nace pagada el día 1: hay que decirlo, no dar por hecho lo que no pasó.
+        const fa: { emitidas: { tid: number }[]; pendientes: { mes: string; motivo: string }[] } | null =
+          data.facturasAdelantadas ?? null;
+        const nros = fa?.emitidas.map((f) => `#${f.tid}`).join(", ");
         toast(
           `Queda pagado ${listar(a.meses)} por adelantado`
-          + (a.descuento > 0 ? ` con ${cop(a.descuento)} de descuento (${a.pct}%)` : ""),
+          + (a.descuento > 0 ? ` con ${cop(a.descuento)} de descuento (${a.pct}%)` : "")
+          + (nros ? ` · factura ${nros} emitida y pagada` : ""),
           "calendar-plus",
         );
+        if (fa?.pendientes.length) {
+          toast(
+            `No se pudo emitir ya la factura de ${fa.pendientes.map((p) => p.mes).join(", ")} `
+            + `(${fa.pendientes[0].motivo}). El pago queda a favor y la factura nace pagada el día 1.`,
+            "alert-circle",
+          );
+        }
       }
       const premio = data.promo;
       if (premio?.total > 0) {
@@ -481,7 +518,7 @@ export function RegistrarPagoModal({
             .map((o) => `${NOMBRE_SERVICIO[o.servicio] ?? o.servicio.toLowerCase()} → orden #${o.code}`)
             .join(", ");
           toast(`Pago aplicado · queda pendiente de visita: ${texto}`, "clipboard-list");
-        } else if (rec.enCurso) toast("Pago aplicado · reconectando el servicio, puede tardar un momento", "loader");
+        } else if (rec.enCurso) toast("Pago aplicado · los equipos están tardando: si estaba cortado, se reconecta en un momento", "loader");
         else if (rec.dryRun) toast(`Pago aplicado · reconexión de ${listar(volvieron)} SIMULADA (modo pruebas)`, "flask-conical");
         else if (volvieron.length) {
           // El número de orden se dice en el acto: es el registro que queda del

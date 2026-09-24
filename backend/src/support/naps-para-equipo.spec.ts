@@ -12,8 +12,12 @@ describe('cajas NAP para entregar un equipo', () => {
     const prisma: any = {
       subscriber: { findUnique: jest.fn().mockResolvedValue({ branchId }) },
       nap: {
-        findMany: jest.fn(async (a: any) =>
-          a.where?.branchId ? naps.filter((n) => n.branchId === a.where.branchId) : naps),
+        findMany: jest.fn(async (a: any) => {
+          // El servicio pide `{ OR: [{branchId: sede}, {branchId: null}] }` cuando no
+          // hay texto, y sin `where` cuando busca (filtra en JS).
+          const sedes: (string | null)[] | null = a.where?.OR ? a.where.OR.map((o: any) => o.branchId) : null;
+          return sedes ? naps.filter((n) => sedes.includes(n.branchId)) : naps;
+        }),
       },
       port: { groupBy: jest.fn().mockResolvedValue([]) },
     };
@@ -39,10 +43,29 @@ describe('cajas NAP para entregar un equipo', () => {
     expect((await svc.napsParaEquipo('ros 0/0 02', 'sub-1')).map((n) => n.name)).toEqual(['ROS  0/0 _02']);
   });
 
-  it('al buscar trae de todas las sedes, con las del cliente primero y en orden numérico', async () => {
+  /**
+   * 2026-09-18: «aparecen todas las cajas, sale en Yopal y no en la sede que
+   * corresponde». Buscar traía las 1.406 de todas las sedes y Yopal (508) se comía
+   * la lista de un cliente de otra sede, con rótulos que se repiten.
+   */
+  it('al buscar sólo trae las de la sede del cliente, en orden numérico', async () => {
     const { svc } = armar([caja('CENT_10', 'mocoa'), caja('CENT_10'), caja('CENT_2')]);
     const r = await svc.napsParaEquipo('cent', 'sub-1');
-    expect(r.map((n) => `${n.name}@${n.branch}`)).toEqual(['CENT_2@yopal', 'CENT_10@yopal', 'CENT_10@mocoa']);
+    expect(r.map((n) => `${n.name}@${n.branch}`)).toEqual(['CENT_2@yopal', 'CENT_10@yopal']);
+    expect(r.every((n) => n.deSuSede)).toBe(true);
+  });
+
+  it('si en su sede no hay ninguna con ese nombre, abre las demás y las marca', async () => {
+    const { svc } = armar([caja('CENT_10', 'mocoa'), caja('OTRA_1')]);
+    const r = await svc.napsParaEquipo('cent', 'sub-1');
+    expect(r.map((n) => `${n.name}@${n.branch}`)).toEqual(['CENT_10@mocoa']);
+    expect(r.every((n) => n.deSuSede)).toBe(false);
+  });
+
+  it('las cajas sin sede entran con las suyas: el ETL no les puso ninguna', async () => {
+    const { svc } = armar([caja('CENT_1', 'mocoa'), caja('CENT_2'), { ...caja('CENT_3'), branchId: null, branch: null }]);
+    const r = await svc.napsParaEquipo('cent', 'sub-1');
+    expect(r.map((n) => n.name).sort()).toEqual(['CENT_2', 'CENT_3']);
   });
 
   it('cliente sin sede: salen todas', async () => {

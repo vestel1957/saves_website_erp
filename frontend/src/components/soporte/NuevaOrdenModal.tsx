@@ -15,6 +15,7 @@ import { TICKET_ESTADOS_ABIERTOS, TICKET_STATUS_LABEL, TICKET_STATUS_TONE, TICKE
 import { DireccionFields, DIRECCION_VACIA, NOM_KEYS, ZONA_KEYS, direccionArmada, type DireccionValor } from "@/components/subscribers/DireccionFields";
 import { fmtDate, fullCurrency } from "@/lib/format";
 import { type Plan } from "@/lib/plans";
+import { TitularFields, TITULAR_VACIO, faltaEnTitular, titularPayload, titularTexto, type TitularValor } from "@/components/soporte/TitularFields";
 
 /**
  * Lo que el cliente tiene contratado hoy, tal como lo sirve
@@ -121,6 +122,10 @@ export function NuevaOrdenModal({ open, onClose, onDone, fixedSub }: { open: boo
    * el perfil del Mikrotik y el traffic-table de la OLT.
    */
   const [planNuevo, setPlanNuevo] = useState("");
+  /** Los datos del nuevo titular: solo los pide el 'Cambio de titular'. */
+  const [titular, setTitular] = useState<TitularValor>(TITULAR_VACIO);
+  /** Quién figura hoy como titular, para enseñarlo al lado. */
+  const [titularActual, setTitularActual] = useState<string | null>(null);
   /** Los planes de internet que se pueden vender hoy (los ocultos no se ofrecen). */
   const [planes, setPlanes] = useState<Plan[]>([]);
   /** Lo que tiene contratado, para decir de cuánto viene. */
@@ -168,6 +173,7 @@ export function NuevaOrdenModal({ open, onClose, onDone, fixedSub }: { open: boo
     setMotivo("");
     setDir(DIRECCION_VACIA); setDirActual(null);
     setPlanNuevo(""); setServicios([]);
+    setTitular(TITULAR_VACIO); setTitularActual(null);
     setAbiertas([]); setAbiertasTotal(0); setAvisando(false); setAvisado(false);
     setYaFacturadas([]); setYaFacturadaTid(null);
     void authFetch("/support/technicians").then(listaJson).then(setTechs).catch(() => {});
@@ -194,6 +200,8 @@ export function NuevaOrdenModal({ open, onClose, onDone, fixedSub }: { open: boo
    * el equipo dentro de la misma casa, no cambia de dirección ni se cobra.
    */
   const porTraslado = type.trim().toLowerCase() === "traslado";
+  /** El servicio pasa a nombre de otra persona: pide sus datos. */
+  const porTitular = type.trim().toLowerCase() === "cambio de titular";
   /**
    * La baja del cliente. Es la única orden que pregunta POR QUÉ: de esa respuesta
    * sale el informe de por qué se pierden clientes, y solo se sabe hoy —cuando el
@@ -360,6 +368,22 @@ export function NuevaOrdenModal({ open, onClose, onDone, fixedSub }: { open: boo
     return () => { vivo = false; };
   }, [porTraslado, sub, authFetch]);
 
+  // Quién es el titular hoy. Solo en un cambio de titular.
+  useEffect(() => {
+    if (!porTitular || !sub) return;
+    let vivo = true;
+    void authFetch(`/subscribers/${sub.id}/form`)
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then((d) => {
+        if (!vivo) return;
+        const nombre = [d.firstName, d.secondName, d.lastName1, d.lastName2].filter(Boolean).join(" ") || d.companyName || "";
+        const doc = d.docNumber ? `${d.docType ?? ""} ${d.docNumber}`.trim() : "";
+        setTitularActual([nombre, doc].filter(Boolean).join(" · ") || null);
+      })
+      .catch(() => {});
+    return () => { vivo = false; };
+  }, [porTitular, sub, authFetch]);
+
   // Al cambiar de clase, el detalle anterior deja de existir: se elige el primero de
   // la nueva en vez de dejar puesto uno que no pertenece a esa clase.
   useEffect(() => {
@@ -408,6 +432,10 @@ export function NuevaOrdenModal({ open, onClose, onDone, fixedSub }: { open: boo
     if (porTraslado && !direccionNueva) {
       setErr("Escribe la dirección a la que se muda el cliente."); return;
     }
+    if (porTitular) {
+      const falta = faltaEnTitular(titular);
+      if (falta) { setErr(falta); return; }
+    }
     if (abiertas.length && !forzar && !avisado) { setAvisando(true); return; }
     setSaving(true);
     try {
@@ -435,6 +463,7 @@ export function NuevaOrdenModal({ open, onClose, onDone, fixedSub }: { open: boo
           // cargo automático. Sin esto, facturar en ventanilla y abrir la orden
           // después le deja al cliente dos facturas del mismo trabajo.
           yaFacturadaTid: cargoActual && yaFacturadaTid ? yaFacturadaTid : undefined,
+          newHolder: porTitular ? titularPayload(titular) : undefined,
           moveTo: porTraslado
             ? {
                 nomenclature: Object.fromEntries(NOM_KEYS.map((k) => [k, dir[k] || null])),
@@ -451,7 +480,9 @@ export function NuevaOrdenModal({ open, onClose, onDone, fixedSub }: { open: boo
       // ventanilla ahora mismo. En el resto de los trabajos con cargo (agregar
       // internet) basta con el número de la factura.
       toast(
-        d?.traslado
+        d?.cambioTitular
+          ? `Orden #${d.code} creada · el servicio quedó a nombre de ${d.cambioTitular.hasta}`
+          : d?.traslado
           ? `Orden #${d.code} creada · dirección actualizada${d.traslado.factura ? ` · factura #${d.traslado.factura}` : ""}`
           : yaFacturadaTid
             ? `Orden #${d.code} creada · ya estaba cobrada en la factura #${yaFacturadaTid}, no se volvió a facturar`
@@ -775,6 +806,30 @@ export function NuevaOrdenModal({ open, onClose, onDone, fixedSub }: { open: boo
                 o «Apto / casa» y la ficha lo recoge.
               </p>
             )}
+          </div>
+        )}
+
+        {/* Cambio de titular: los datos de la persona que queda con el servicio. Se
+            escriben en la ficha al crear la orden; la cuenta, los servicios y la
+            deuda siguen siendo los mismos. */}
+        {porTitular && (
+          <div className="rounded-lg border border-border-default bg-surface-2 p-3">
+            <div className="mb-1 text-[13px] font-semibold text-text-primary">Datos del nuevo titular</div>
+            <p className="mb-3 text-[12px] text-text-tertiary">
+              {titularActual
+                ? <>Hoy figura a nombre de <span className="text-text-secondary">{titularActual}</span>. </>
+                : !sub ? <>Elige primero el cliente. </> : null}
+              Al crear la orden la ficha queda con estos datos. El número de abonado, los servicios y lo que debe no cambian.
+            </p>
+            <TitularFields value={titular} onChange={(patch) => setTitular((p) => ({ ...p, ...patch }))} />
+            {titularTexto(titular) && (
+              <p className="mt-2 text-[12px] text-text-secondary">
+                Queda a nombre de: <b className="text-text-primary">{titularTexto(titular)}</b>
+              </p>
+            )}
+            <p className="mt-1 text-[11.5px] text-text-tertiary">
+              Sube los documentos firmados en la ficha del cliente, como «Cambio de titular».
+            </p>
           </div>
         )}
 

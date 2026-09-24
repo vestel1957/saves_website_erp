@@ -7,6 +7,8 @@ import { ReconexionService } from '../network/reconexion.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { num, round2 } from '../common/money';
 import { subName } from '../common/subscriber-name';
+import { Logger } from '../core/logger';
+import { pagosAnterioresAlCorte } from '../online-payments/pago-anterior-al-corte';
 
 const dateOnly = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
 
@@ -49,6 +51,8 @@ const claveCuenta = (s: string) =>
   s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/\s+/g, ' ').trim();
 
 export class PaymentImportsService {
+  private readonly logger = new Logger(PaymentImportsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly cobranzas: CobranzasService,
@@ -211,6 +215,8 @@ export class PaymentImportsService {
     // una sola pasada (ver más abajo). Es un Set porque el mismo cliente puede
     // venir en varias filas del archivo.
     const pagaron = new Set<string>();
+    /** Filas aplicadas en esta tanda: llevan la marca de reconexión pendiente hasta el final. */
+    const aplicadas: string[] = [];
 
     for (const row of rows) {
       // Idempotencia: no reaplicar un pago ya cargado con la misma referencia.
@@ -238,8 +244,9 @@ export class PaymentImportsService {
           reference: row.reference ?? undefined,
           note: nota,
         } as any, (user ?? { name: 'Cargue', email: null }) as any, { reconectar: false });
-        await this.mark(row.id, 'Cargado', res.receiptId, `Aplicado ${res.totalApplied}${row.cashAccountId == null ? ` · OJO: la cuenta «${row.method}» no existe en tesorería` : ''}`);
+        await this.mark(row.id, 'Cargado', res.receiptId, `Aplicado ${res.totalApplied}${row.cashAccountId == null ? ` · OJO: la cuenta «${row.method}» no existe en tesorería` : ''}`, true);
         pagaron.add(row.subscriberId);
+        aplicadas.push(row.id);
       } catch (e: any) {
         // Cliente al día que paga por adelantado: el legacy lo abonaba a la última
         // factura y le quedaba saldo a favor. Aquí entra como ingreso ligado al
@@ -248,8 +255,9 @@ export class PaymentImportsService {
         if (/no tiene facturas pendientes|No hay saldo pendiente/i.test(e?.message ?? '')) {
           try {
             const anticipo = await this.registrarAnticipo(row, batch.fileName, user);
-            await this.mark(row.id, 'Cargado', anticipo, 'Sin facturas pendientes: quedó como saldo a favor del cliente');
+            await this.mark(row.id, 'Cargado', anticipo, 'Sin facturas pendientes: quedó como saldo a favor del cliente', true);
             pagaron.add(row.subscriberId);
+            aplicadas.push(row.id);
             continue;
           } catch (e2: any) {
             await this.mark(row.id, 'Error', null, e2?.message || 'No se pudo registrar el saldo a favor');
@@ -267,7 +275,14 @@ export class PaymentImportsService {
     // por fila abriría una conexión al router (y una sesión SSH a la OLT) por pago,
     // y un archivo de corresponsal trae cientos. Best-effort: si los equipos fallan,
     // el cargue igual queda aplicado y el fallo queda en el log y en la auditoría.
+    //
+    // Cada fila aplicada quedó marcada `reconexionPendienteDesde`; la marca se quita
+    // SOLO cuando esto termina. Si el proceso muere antes (un despliegue, un reinicio),
+    // el cron `cargue-reconexion` la encuentra y termina el trabajo.
     const reconexion = await this.reconexion.porPagoLote([...pagaron], user);
+    if (aplicadas.length) {
+      await this.prisma.paymentImportRow.updateMany({ where: { id: { in: aplicadas } }, data: { reconexionPendienteDesde: null } });
+    }
 
     return { ...(await this.detail(batchId, true)), pendientes, reconexion };
   }
@@ -332,8 +347,68 @@ export class PaymentImportsService {
     return { ...(await this.detail(batchId, true)), pendientes, reconexion: null };
   }
 
-  private async mark(rowId: string, status: string, transactionId: string | null, message: string) {
-    await this.prisma.paymentImportRow.update({ where: { id: rowId }, data: { status, transactionId, message } });
+  private async mark(rowId: string, status: string, transactionId: string | null, message: string, reconexionPendiente = false) {
+    await this.prisma.paymentImportRow.update({
+      where: { id: rowId },
+      data: { status, transactionId, message, ...(reconexionPendiente ? { reconexionPendienteDesde: new Date() } : {}) },
+    });
+  }
+
+  /**
+   * Termina la reconexión de las tandas que se quedaron a medias.
+   *
+   * La reconexión del cargue corre al FINAL de cada tanda, dentro de la misma petición.
+   * Si el backend se reinicia entre el último pago aplicado y esa pasada, la plata queda
+   * aplicada y el cliente sigue cortado sin ninguna orden que lo diga (2026-09-22,
+   * 22SEPTIEMBRE2026.xlsx, filas 27–50). Aquí se recogen las filas con la marca puesta
+   * hace más de `margenMin` minutos —menos que eso puede ser una tanda que todavía está
+   * corriendo— y se les pasa `porPagoLote` como habría hecho la tanda.
+   *
+   * No reconecta a quien lo cortaron un día POSTERIOR al pago: ese corte es por otra
+   * deuda (mismo criterio que el portal, ver `pagosAnterioresAlCorte`).
+   */
+  private reconectandoPendientes = false;
+
+  async reconectarPendientes(opts: { margenMin?: number } = {}) {
+    // Una pasada a la vez: los routers pueden tardar más que el intervalo del cron.
+    if (this.reconectandoPendientes) return { filas: 0, abonados: 0, anterioresAlCorte: 0, reconexion: null };
+    this.reconectandoPendientes = true;
+    try {
+      return await this.reconectarPendientesUnaVez(opts.margenMin ?? 5);
+    } finally {
+      this.reconectandoPendientes = false;
+    }
+  }
+
+  private async reconectarPendientesUnaVez(margen: number) {
+    const filas = await this.prisma.paymentImportRow.findMany({
+      where: { status: 'Cargado', subscriberId: { not: null }, reconexionPendienteDesde: { lt: new Date(Date.now() - margen * 60_000) } },
+      select: { id: true, subscriberId: true, reconexionPendienteDesde: true },
+      take: 500,
+    });
+    if (!filas.length) return { filas: 0, abonados: 0, anterioresAlCorte: 0, reconexion: null };
+
+    const diaCol = (d: Date) => d.toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
+    const ordenes = filas.map((f) => ({ id: f.id, subscriberId: f.subscriberId!, diaPago: diaCol(f.reconexionPendienteDesde!) }));
+    const primerDia = ordenes.map((o) => o.diaPago).sort()[0];
+    const cortes = await this.prisma.ticket.findMany({
+      where: {
+        subscriberId: { in: [...new Set(ordenes.map((o) => o.subscriberId))] },
+        status: { not: 'ANULADA' },
+        type: { startsWith: 'Corte' },
+        created: { gt: new Date(`${primerDia}T00:00:00Z`) },
+      },
+      select: { subscriberId: true, created: true },
+    });
+    const anteriores = pagosAnterioresAlCorte(ordenes, cortes);
+    const ids = [...new Set(ordenes.filter((o) => !anteriores.has(o.id)).map((o) => o.subscriberId))];
+
+    const reconexion = ids.length
+      ? await this.reconexion.porPagoLote(ids, { id: 'system', email: 'cron@vestel', name: 'Sistema (cargue de pagos)', roles: [], permissions: [] } as unknown as AuthUser)
+      : null;
+    await this.prisma.paymentImportRow.updateMany({ where: { id: { in: filas.map((f) => f.id) } }, data: { reconexionPendienteDesde: null } });
+    this.logger.log(`Cargue de pagos: ${filas.length} fila(s) con la reconexión sin correr → ${ids.length} abonado(s) revisados, ${anteriores.size} con corte posterior al pago`);
+    return { filas: filas.length, abonados: ids.length, anterioresAlCorte: anteriores.size, reconexion };
   }
 
   /**

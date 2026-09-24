@@ -4,12 +4,13 @@ import { PrismaService } from '../prisma/prisma.service';
 import { orden } from '../common/pagination-params';
 import { AuthUser } from '../auth/current-user.decorator';
 import { AddNoteDto, CategoryNameDto, ConsignacionDto, CreateOrderDto, CreateSupplierDto, OrderItemDto, PayOrderDto, ReceiveOrderDto, UpdateOrderDto } from './dto/orders.dto';
-import { num, round2 } from '../common/money';
+import { ivaDe, num, round2 } from '../common/money';
 import { nextTid, TID_SEQ } from '../common/tid';
 import { ResponsibilityNotifierService } from '../responsibilities/responsibility-notifier.service';
 import { SignatureOtpService } from '../common/signature/signature-otp.service';
 import { anotarBorradoLegacy } from '../common/legacy-deletion';
 import { comprobanteDe } from '../treasury/comprobante-legacy';
+import { exigirCajaDeEscritura } from '../treasury/caja-scope';
 import { SUPERADMIN_PERMISSION } from '../auth/permissions.catalog';
 
 const dateOnly = (s?: string) => { const d = s ? new Date(s) : new Date(); return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())); };
@@ -309,6 +310,14 @@ export class OrdersService {
       for (const k of CAMPOS_CONSIGNACION) {
         if (dto[k] !== undefined) data[k] = dto[k]?.trim() || null;
       }
+      if (dto.warehouseId !== undefined || dto.branch !== undefined) {
+        const bodegaActual = o.warehouseRef != null
+          ? await tx.materialWarehouse.findUnique({ where: { legacyId: o.warehouseRef }, select: { id: true } })
+          : null;
+        const d = await this.destino(tx, dto.warehouseId ?? bodegaActual?.id ?? null, dto.branch ?? o.branchRef);
+        data.warehouseRef = d.warehouseRef;
+        data.branchRef = d.branchRef;
+      }
 
       let totalNuevo: number | null = null;
       if (dto.items) {
@@ -340,7 +349,7 @@ export class OrdersService {
       }
       // El EDITAR solo se escribe si cambió ALGO más que el estado: si no, la bitácora
       // contaría dos veces el mismo movimiento ("Cabecera actualizada" vacía al lado).
-      const tocaCabecera = [dto.orderDate, dto.dueDate, dto.categoryRef, dto.notes, ...CAMPOS_CONSIGNACION.map((k) => dto[k])].some((v) => v !== undefined);
+      const tocaCabecera = [dto.orderDate, dto.dueDate, dto.categoryRef, dto.notes, dto.warehouseId, dto.branch, ...CAMPOS_CONSIGNACION.map((k) => dto[k])].some((v) => v !== undefined);
       if (dto.items || tocaCabecera) {
         const queCambio = dto.items
           ? `Ítems reemplazados (${dto.items.length}); ${fueraDePendiente ? 'firmas y recepción conservadas' : 'firmas reiniciadas'}.`
@@ -482,6 +491,9 @@ export class OrdersService {
       this.pagosDeOrden(id),
     ]);
     if (!o) throw new NotFoundException('Orden no encontrada');
+    const bodega = o.warehouseRef != null
+      ? await this.prisma.materialWarehouse.findUnique({ where: { legacyId: o.warehouseRef }, select: { id: true, title: true } })
+      : null;
     // El total ya está neto de notas/retención; el saldo es total - pagado.
     const total = num(o.total);
     const paid = num(o.paidAmount);
@@ -493,6 +505,7 @@ export class OrdersService {
       subtotal: num(o.subtotal), tax: num(o.tax), discount: num(o.discount), total, paid, balance: round2(total - paid),
       retentionType: o.retentionType, retention: num(o.retention),
       notes: o.notes, branchRef: o.branchRef, receivedAt: o.receivedAt,
+      warehouse: bodega ? { id: bodega.id, title: bodega.title } : null,
       supplier: o.supplier ? { id: o.supplier.id, name: o.supplier.name, nit: o.supplier.nit, phone: o.supplier.phone, category: o.supplier.category } : null,
       // A qué cuenta se paga. Las órdenes anteriores a estos campos (y las del legacy)
       // no los tienen: esas muestran la cuenta que el proveedor tiene hoy.
@@ -603,6 +616,10 @@ export class OrdersService {
   async paySupplyOrder(id: string, dto: PayOrderDto, user: AuthUser) {
     const amount = round2(Number(dto.amount));
     if (amount <= 0) throw new BadRequestException('El monto debe ser mayor a cero');
+    // La cajera paga compras desde SU caja (o un banco): la misma puerta que el
+    // resto de sus egresos. Sin caja elegida se le pone la suya; a quien ve todas
+    // se le respeta lo que mande.
+    const cashAccountId = await exigirCajaDeEscritura(this.prisma, user, dto.cashAccountId);
 
     return this.prisma.$transaction(async (tx) => {
       // La orden se lee DENTRO de la transacción y con la fila bloqueada. Leerla fuera
@@ -627,7 +644,7 @@ export class OrdersService {
         data: {
           type: 'EXPENSE', category: 'Compras', debit: amount, credit: 0,
           method: dto.method ?? 'Cash', date: dateOnly(dto.date),
-          cashAccountId: dto.cashAccountId ?? null, accountName: dto.accountName ?? null,
+          cashAccountId: cashAccountId ?? null, accountName: dto.accountName ?? null,
           bankName: dto.method === 'Bank' ? (dto.bankName ?? null) : null,
           ext: true, status: 'VIGENTE', issuerUserId: null,
           note: concepto,
@@ -648,6 +665,111 @@ export class OrdersService {
       });
       return { ok: true, transactionId: t.id, paidAmount: newPaid, balance: round2(num(order.total) - newPaid) };
     });
+  }
+
+  // --- Destino de la compra: bodega donde entra el material y sede de la orden ---
+
+  /**
+   * Sedes y bodegas a las que puede llegar una compra, para los selectores de crear,
+   * editar y recibir. Solo almacenes generales: la bodega personal de un técnico se
+   * llena por traspaso, no comprándole directo. Y solo los que existen en el legacy
+   * (`warehouseRef` guarda su `legacyId`, que es lo que viaja a `almacen_seleccionado`).
+   */
+  async destinations(warehouseId?: string) {
+    const [branches, warehouses, materials] = await Promise.all([
+      this.prisma.branch.findMany({ select: { legacyId: true, name: true }, orderBy: { name: 'asc' } }),
+      this.prisma.materialWarehouse.findMany({
+        where: { technicianRef: null, legacyId: { not: null } },
+        select: { id: true, title: true, branchLegacy: true, isMain: true },
+        orderBy: { title: 'asc' },
+      }),
+      // Con bodega: sus productos, para escoger a cuál se suma cada ítem al recibir
+      // (los ítems escritos a mano casi nunca se llaman igual que el producto).
+      warehouseId
+        ? this.prisma.material.findMany({
+          where: { warehouseId },
+          select: { id: true, name: true, code: true, qty: true },
+          orderBy: { name: 'asc' },
+        })
+        : Promise.resolve([]),
+    ]);
+    const nombreSede = new Map(branches.map((b) => [b.legacyId, b.name]));
+    return {
+      branches: branches.map((b) => ({ legacyId: b.legacyId, name: b.name })),
+      warehouses: warehouses.map((w) => ({
+        id: w.id, title: w.title, isMain: w.isMain, branchLegacy: w.branchLegacy,
+        branch: w.branchLegacy != null ? nombreSede.get(w.branchLegacy) ?? null : null,
+      })),
+      materials,
+    };
+  }
+
+  /**
+   * Valida la bodega destino y la sede de una orden y las deja como las guarda
+   * `SupplyOrder`: `warehouseRef` = legacyId de la bodega, `branchRef` = nombre de la
+   * sede (lo mismo que el legacy en `almacen_seleccionado` / `refer`). Sin sede
+   * escrita, se toma la de la bodega; la sede se puede escoger aparte porque hay
+   * bodegas sin sede ("Productos de compra") que el legacy usa para todas.
+   */
+  private async destino(db: Prisma.TransactionClient | PrismaService, warehouseId?: string | null, branch?: string | null) {
+    const w = warehouseId
+      ? await db.materialWarehouse.findUnique({ where: { id: warehouseId }, select: { id: true, legacyId: true, title: true, branchLegacy: true, technicianRef: true } })
+      : null;
+    if (warehouseId && !w) throw new NotFoundException('Bodega destino no encontrada');
+    if (w?.technicianRef) throw new BadRequestException('Una compra no entra a la bodega personal de un técnico: escoge un almacén y de ahí se le traspasa.');
+    if (w && w.legacyId == null) throw new BadRequestException(`La bodega «${w.title}» todavía no existe en el legacy; espera la próxima sincronización.`);
+    let branchRef: string | null = null;
+    if (branch?.trim()) {
+      const b = await db.branch.findFirst({ where: { name: { equals: branch.trim(), mode: 'insensitive' } }, select: { name: true } });
+      if (!b) throw new BadRequestException(`La sede «${branch.trim()}» no existe.`);
+      branchRef = b.name;
+    } else if (w?.branchLegacy != null) {
+      branchRef = (await db.branch.findUnique({ where: { legacyId: w.branchLegacy }, select: { name: true } }))?.name ?? null;
+    }
+    return { warehouse: w, warehouseRef: w?.legacyId ?? null, branchRef };
+  }
+
+  /**
+   * La fila de `Material` de ESA bodega donde se suma lo recibido de un ítem.
+   *
+   * `Material` es una fila por producto y bodega (como `products` del legacy), así que
+   * el producto ligado al ítem sirve solo si ya vive en la bodega destino. Si no, se
+   * busca el mismo producto en ella por nombre (o por código); y si la bodega no lo
+   * tiene, se crea ahí copiando la ficha del producto (categoría, código, precio) de
+   * donde exista. Un ítem escrito a mano que no está en ningún lado nace en CONSUMIBLES.
+   */
+  private async materialEnBodega(
+    tx: Prisma.TransactionClient,
+    item: { materialId: string | null; product: string | null; price: Prisma.Decimal; taxRate: Prisma.Decimal },
+    w: { id: string; legacyId: number | null; branchLegacy: number | null },
+  ) {
+    const ligado = item.materialId ? await tx.material.findUnique({ where: { id: item.materialId } }) : null;
+    if (ligado?.warehouseId === w.id) return { mat: ligado, creado: false };
+    const nombre = (ligado?.name ?? item.product ?? '').trim().replace(/\s+/g, ' ');
+    if (!nombre) throw new BadRequestException('Hay un ítem sin nombre de producto: corrígelo antes de recibirlo.');
+    const enBodega = await tx.material.findFirst({
+      where: {
+        warehouseId: w.id,
+        OR: [{ name: { equals: nombre, mode: 'insensitive' } }, ...(ligado?.code ? [{ code: ligado.code }] : [])],
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+    if (enBodega) return { mat: enBodega, creado: false };
+    const modelo = ligado ?? await tx.material.findFirst({ where: { name: { equals: nombre, mode: 'insensitive' } }, orderBy: { updatedAt: 'desc' } });
+    const categoria = modelo?.categoryId
+      ? { id: modelo.categoryId, legacyId: modelo.categoryLegacy }
+      : await tx.materialCategory.findFirst({ where: { title: { equals: 'CONSUMIBLES', mode: 'insensitive' } }, select: { id: true, legacyId: true } });
+    const mat = await tx.material.create({
+      data: {
+        name: nombre, code: modelo?.code ?? null, description: modelo?.description ?? null,
+        categoryId: categoria?.id ?? null, categoryLegacy: categoria?.legacyId ?? null,
+        warehouseId: w.id, warehouseLegacy: w.legacyId, branchRef: w.branchLegacy,
+        price: modelo?.price ?? item.price, cost: item.price, taxRate: modelo?.taxRate ?? item.taxRate,
+        serviceType: modelo?.serviceType ?? null, tvOrNet: modelo?.tvOrNet ?? null, alert: modelo?.alert ?? null,
+        qty: 0, editedAt: new Date(),
+      },
+    });
+    return { mat, creado: true };
   }
 
   // --- Sedes (el nombre vive libre en SupplyOrder.branchRef; se listan las que existen) ---
@@ -723,7 +845,7 @@ export class OrdersService {
   private computeTotals(items: OrderItemDto[]) {
     const rows = items.map((it) => {
       const qty = Math.max(0, Math.round(it.qty)); const price = round2(it.price); const taxRate = round2(it.taxRate ?? 0);
-      const subtotal = round2(qty * price); const taxTotal = round2((subtotal * taxRate) / 100);
+      const subtotal = round2(qty * price); const taxTotal = ivaDe(subtotal, taxRate);
       return { ...it, qty, price, taxRate, subtotal, taxTotal };
     });
     return { rows, subtotal: round2(rows.reduce((s, r) => s + r.subtotal, 0)), tax: round2(rows.reduce((s, r) => s + r.taxTotal, 0)), total: round2(rows.reduce((s, r) => s + r.subtotal + r.taxTotal, 0)) };
@@ -750,7 +872,11 @@ export class OrdersService {
     const supplier = await this.prisma.supplier.findUnique({ where: { id: dto.supplierId } });
     if (!supplier) throw new NotFoundException('Proveedor no encontrado');
     const { rows, subtotal, tax, total } = this.computeTotals(dto.items);
-    const warehouse = dto.warehouseId ? await this.prisma.materialWarehouse.findUnique({ where: { id: dto.warehouseId } }) : null;
+    const kind = supplier.category === 2 ? 'servicio' : 'compra';
+    // Sin bodega destino, recibir la compra no deja el material en ningún inventario.
+    if (kind === 'compra' && !dto.warehouseId) throw new BadRequestException('Escoge la bodega a la que llega el material de la compra.');
+    const destino = await this.destino(this.prisma, dto.warehouseId, dto.branch);
+    if (!destino.branchRef) throw new BadRequestException('Escoge la sede de la orden.');
     const consignacion = this.consignacionAlCrear(dto, supplier);
     const creada = await this.prisma.$transaction(async (tx) => {
       const tid = await this.nextTid(tx);
@@ -771,9 +897,9 @@ export class OrdersService {
         data: {
           tid, supplierId: supplier.id, supplierLegacy: supplier.legacyId ?? null,
           orderDate: dateOnly(dto.orderDate), dueDate: dto.dueDate ? dateOnly(dto.dueDate) : null,
-          subtotal, tax, total, status: 'pendiente', kind: supplier.category === 2 ? 'servicio' : 'compra',
+          subtotal, tax, total, status: 'pendiente', kind,
           categoryRef: dto.categoryRef?.trim() || null, ...consignacion,
-          warehouseRef: warehouse?.legacyId ?? null, notes: dto.notes ?? null, itemsCount: rows.length,
+          warehouseRef: destino.warehouseRef, branchRef: destino.branchRef, notes: dto.notes ?? null, itemsCount: rows.length,
           createdById: user?.id ?? null, createdByName: user?.name ?? user?.email ?? null,
           items: { create: rows.map((r) => ({ materialId: r.materialId ?? null, product: r.product, qty: r.qty, price: r.price, taxRate: r.taxRate, subtotal: r.subtotal, taxTotal: r.taxTotal })) },
         },
@@ -889,32 +1015,85 @@ export class OrdersService {
   }
 
   /** Recibir orden: suma stock al material por ítem (delta), recalcula estado. */
+  /**
+   * Registra lo recibido (cantidades ABSOLUTAS por ítem) y lo mete al inventario de
+   * la bodega destino: la que manda la pantalla o, si no, la de la orden. Una compra
+   * con material que sube y sin bodega se rechaza: antes se marcaba recibida sin que
+   * el stock entrara a ningún lado. Lo que se devuelve (cantidad menor) sale de donde
+   * se había sumado.
+   */
   async receive(id: string, dto: ReceiveOrderDto, user: AuthUser) {
     return this.prisma.$transaction(async (tx) => {
       const o = await tx.supplyOrder.findUnique({ where: { id }, include: { items: true } });
       if (!o) throw new NotFoundException('Orden no encontrada');
       this.exigirAprobada(o, 'recibir material');
-      const targetWarehouseId = dto.warehouseId ?? null;
+      const mueveStock = o.kind !== 'servicio';
+      const bodegaDeLaOrden = o.warehouseRef != null
+        ? await tx.materialWarehouse.findUnique({ where: { legacyId: o.warehouseRef }, select: { id: true } })
+        : null;
+      const warehouseId = dto.warehouseId || bodegaDeLaOrden?.id || null;
+      const sube = dto.items.some((r) => {
+        const it = o.items.find((i) => i.id === r.itemId);
+        return !!it && !isNote(it) && r.received > it.receivedQty;
+      });
+      if (mueveStock && sube && !warehouseId) {
+        throw new BadRequestException('Escoge la bodega a la que llega el material: la orden no tiene bodega destino.');
+      }
+      const dest = warehouseId ? await this.destino(tx, warehouseId, o.branchRef) : null;
+
+      const entradas: string[] = [];
+      let tocoAlgo = false;
       for (const r of dto.items) {
         const item = o.items.find((i) => i.id === r.itemId);
-        if (!item) continue;
+        if (!item || isNote(item)) continue;
         const delta = r.received - item.receivedQty;
-        if (delta !== 0 && item.materialId) {
-          const mat = await tx.material.findUnique({ where: { id: item.materialId } });
-          if (mat) await tx.material.update({ where: { id: mat.id }, data: { qty: Math.max(0, mat.qty + delta), editedAt: new Date() } });
+        if (delta === 0) continue;
+        let materialId = item.materialId;
+        let materialLegacy = item.materialLegacy;
+        if (mueveStock && delta > 0) {
+          let elegido: Awaited<ReturnType<typeof tx.material.findUnique>> = null;
+          if (r.materialId) {
+            elegido = await tx.material.findUnique({ where: { id: r.materialId } });
+            if (!elegido || elegido.warehouseId !== dest!.warehouse!.id) {
+              throw new BadRequestException(`El producto escogido para «${item.product}» no está en ${dest!.warehouse!.title}.`);
+            }
+          }
+          const { mat, creado } = elegido ? { mat: elegido, creado: false } : await this.materialEnBodega(tx, item, dest!.warehouse!);
+          await tx.material.update({ where: { id: mat.id }, data: { qty: { increment: delta }, editedAt: new Date() } });
+          materialId = mat.id;
+          if (mat.legacyId != null) materialLegacy = mat.legacyId;
+          entradas.push(`+${delta} ${mat.name}${creado ? ' (nuevo en la bodega)' : ''}`);
+        } else if (mueveStock && delta < 0 && materialId) {
+          const mat = await tx.material.findUnique({ where: { id: materialId } });
+          if (mat) {
+            await tx.material.update({ where: { id: mat.id }, data: { qty: Math.max(0, mat.qty + delta), editedAt: new Date() } });
+            entradas.push(`${delta} ${mat.name}`);
+          }
         }
-        await tx.supplyOrderItem.update({ where: { id: item.id }, data: { receivedQty: r.received } });
+        await tx.supplyOrderItem.update({ where: { id: item.id }, data: { receivedQty: r.received, materialId, materialLegacy } });
+        tocoAlgo = true;
       }
+      // Nada cambió: no se sella fecha de recibido ni se marca la orden para el legacy.
+      if (!tocoAlgo) return { id, status: o.status, warehouse: null };
       // Recalcular estado (las notas pid=0 no cuentan para la recepción).
       const updated = (await tx.supplyOrderItem.findMany({ where: { orderId: id } })).filter((i) => !isNote(i));
       const allReceived = updated.every((i) => i.receivedQty >= i.qty);
       const anyReceived = updated.some((i) => i.receivedQty > 0);
       const status = allReceived ? 'recibido' : anyReceived ? 'recibido parcial' : o.status;
-      await tx.supplyOrder.update({ where: { id }, data: { status, receivedAt: new Date(), warehouseRef: undefined, editedAt: new Date() } });
-      if (status !== o.status) {
-        await this.logEvent(tx, id, { action: 'RECIBIR', fromStatus: o.status, toStatus: status, user });
+      await tx.supplyOrder.update({
+        where: { id },
+        data: {
+          status, receivedAt: new Date(), editedAt: new Date(),
+          // La bodega que se usó queda como destino de la orden (y viaja al legacy).
+          ...(dest?.warehouseRef != null ? { warehouseRef: dest.warehouseRef } : {}),
+          ...(!o.branchRef && dest?.branchRef ? { branchRef: dest.branchRef } : {}),
+        },
+      });
+      if (status !== o.status || entradas.length) {
+        const detalle = entradas.length && dest?.warehouse ? `Entró a ${dest.warehouse.title}: ${entradas.join(', ')}.` : undefined;
+        await this.logEvent(tx, id, { action: 'RECIBIR', fromStatus: o.status, toStatus: status, detail: detalle, user });
       }
-      return { id, status };
+      return { id, status, warehouse: dest?.warehouse?.title ?? null };
     });
   }
 

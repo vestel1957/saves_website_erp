@@ -1,6 +1,8 @@
 import type { SubInvoiceStatus } from '@prisma/client';
 import type { PrismaService } from '../prisma/prisma.service';
 import { hoyEnColombia } from './fecha-colombia';
+import { deudaPendiente } from './money';
+import { serviciosContratados, tieneServicio } from './servicios-contratados';
 
 /**
  * Candado de los cortes MASIVOS: a quién se puede cortar de verdad.
@@ -37,6 +39,25 @@ import { hoyEnColombia } from './fecha-colombia';
 /** Estados de factura que cuentan como deuda (mismo criterio que la lista de clientes). */
 const IMPAGAS: SubInvoiceStatus[] = ['DUE', 'PARTIAL'];
 
+/**
+ * Deuda VENCIDA mínima, en pesos, para que el lote corte a alguien.
+ *
+ * **El estado de la factura no prueba que se deba plata** (2026-09-21). El candado
+ * miraba sólo `status IN (DUE, PARTIAL)` y el lote masivo de ese día cortó a clientes
+ * al día: la CC 39949681 (abonado 8423) pagó septiembre el 5 con 50 pesos de más, pero
+ * su factura de agosto venía del legacy como `partial` con 74.100 pagados sobre 73.150.
+ * Para el candado eso era "una factura vencida sin pagar". De 567 cortados en el lote,
+ * 16 no debían un peso vencido (y otros 16 debían menos de 10.000: residuos de IVA,
+ * ver [[saldo-fantasma-sobrepago-no-aplicado]]). En la base hay ~340 facturas DUE o
+ * PARTIAL que en plata están saldadas: el estado viene del legacy y miente;
+ * `total − paidAmount` es el dato.
+ *
+ * El piso de 10.000 es el mismo de la revisión de cortes deshechos y el filtro
+ * "más de $10.000" del legacy: por un residuo de céntimos no se le corta el internet a
+ * nadie en lote. Quien de verdad deba menos, se corta desde su ficha.
+ */
+export const DEUDA_MINIMA_CORTE = 10_000;
+
 /** Por qué a este abonado no se le corta en lote. */
 export type MotivoProteccion = 'sin-vencer' | 'compromiso';
 
@@ -46,7 +67,7 @@ export type FilaCandado = {
   status: string | null;
   /** Fecha pactada del acuerdo de pago, si la tiene. */
   promiseExpiry: Date | null;
-  /** ¿Arrastra alguna factura sin pagar YA vencida? */
+  /** ¿Arrastra deuda YA vencida de al menos `DEUDA_MINIMA_CORTE` pesos? */
   tieneVencida: boolean;
 };
 
@@ -67,7 +88,12 @@ export function motivoProteccion(f: FilaCandado, hoy: Date): MotivoProteccion | 
   return null;
 }
 
-export type Protegidos = { compromiso: number; sinVencer: number };
+export type Protegidos = {
+  compromiso: number;
+  sinVencer: number;
+  /** No tienen contratado el servicio que el lote corta (ver `filtrarCortables`). */
+  sinServicio?: number;
+};
 
 export type ResultadoCandado = {
   /** Los que sí se pueden cortar. */
@@ -78,8 +104,11 @@ export type ResultadoCandado = {
 /** Frase para el parte del lote (y para el 400 cuando no queda nadie a quien cortar). */
 export function fraseProtegidos(p: Protegidos): string {
   const partes: string[] = [];
-  if (p.sinVencer) partes.push(`${p.sinVencer} sin ninguna factura vencida (aún están en plazo)`);
+  if (p.sinVencer) {
+    partes.push(`${p.sinVencer} sin ninguna factura vencida o debiendo menos de $${DEUDA_MINIMA_CORTE.toLocaleString('es-CO')} vencidos`);
+  }
   if (p.compromiso) partes.push(`${p.compromiso} con compromiso de pago vigente`);
+  if (p.sinServicio) partes.push(`${p.sinServicio} que no tienen ese servicio contratado`);
   return partes.join(' y ');
 }
 
@@ -88,32 +117,55 @@ export function fraseProtegidos(p: Protegidos): string {
  *
  * Los ids que no existen se dejan pasar tal cual (igual que antes): sin ficha no hay
  * nada que comprobar, y comérselos aquí escondería el error más adelante.
+ *
+ * `servicio`: el que corta el lote. Quien no lo tiene contratado sale también
+ * (2026-09-23): el lote de TV le abría "Corte Television" a quien sólo paga internet
+ * y el de internet cortaba a quien sólo paga TV, porque se marca a los clientes por
+ * deuda, no por lo que tienen. Sin datos de lo que tiene, se deja pasar.
  */
 export async function filtrarCortables(
   prisma: PrismaService,
   ids: string[],
   hoy: Date = hoyEnColombia(),
+  servicio?: 'INTERNET' | 'TV',
 ): Promise<ResultadoCandado> {
-  if (!ids.length) return { ids: [], protegidos: { compromiso: 0, sinVencer: 0 } };
+  if (!ids.length) return { ids: [], protegidos: { compromiso: 0, sinVencer: 0, ...(servicio ? { sinServicio: 0 } : {}) } };
   const rows = await prisma.subscriber.findMany({
     where: { id: { in: ids } },
     select: {
       id: true,
       status: true,
       promiseExpiry: true,
-      // Solo hace falta saber SI hay alguna vencida, no cuáles.
+      // Se trae la PLATA, no sólo si existe alguna: una factura PARTIAL puede estar
+      // pagada de más (ver `DEUDA_MINIMA_CORTE`).
       invoices: {
         where: { status: { in: IMPAGAS }, dueDate: { lt: hoy } },
-        select: { id: true },
-        take: 1,
+        select: { total: true, paidAmount: true },
       },
     },
   });
   const protegidos: Protegidos = { compromiso: 0, sinVencer: 0 };
   const fuera = new Set<string>();
+  if (servicio) {
+    protegidos.sinServicio = 0;
+    // Si no se puede leer qué tiene cada uno, el lote sigue como antes: es un filtro
+    // de más, no una razón para no cortar a nadie.
+    const contratos = await serviciosContratados(prisma, rows.map((r) => r.id)).catch(() => new Map());
+    for (const r of rows) {
+      if (tieneServicio(contratos, r.id, servicio)) continue;
+      fuera.add(r.id);
+      protegidos.sinServicio!++;
+    }
+  }
   for (const r of rows) {
+    if (fuera.has(r.id)) continue;
     const motivo = motivoProteccion(
-      { id: r.id, status: r.status, promiseExpiry: r.promiseExpiry, tieneVencida: r.invoices.length > 0 },
+      {
+        id: r.id,
+        status: r.status,
+        promiseExpiry: r.promiseExpiry,
+        tieneVencida: deudaPendiente(r.invoices) >= DEUDA_MINIMA_CORTE,
+      },
       hoy,
     );
     if (!motivo) continue;

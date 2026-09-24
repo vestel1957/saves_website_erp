@@ -126,7 +126,9 @@ export class AuthService {
     // equipos (`@OrPermission(INV_PERMISSIONS.ADMIN)`): viaja como claim propio para
     // que el edge pueda dejarlo pasar a su pantalla sin regalarle un área entera.
     const inv = perms.includes('inventory.admin');
-    const token = signToken({ id: user.id, email: user.email, name: user.name }, { areas, sa, inv });
+    // Proyectos concedido persona a persona (técnicos autorizados): mismo motivo.
+    const prj = perms.includes('screen.proyectos');
+    const token = signToken({ id: user.id, email: user.email, name: user.name }, { areas, sa, inv, prj });
     return { token, user: resolved };
   }
 

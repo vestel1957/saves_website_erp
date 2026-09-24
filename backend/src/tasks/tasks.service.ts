@@ -4,6 +4,7 @@ import { Prisma, TodoStatus, TodoPriority } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { CreateTaskDto, UpdateTaskDto, TaskFilter, NoteDto, AttachNoteDto } from './dto/tasks.dto';
+import { hoyEnColombia } from '../common/fecha-colombia';
 import { autorDeOrden, autorDeSeguimiento, type FirmaDeSeguimiento, SEGUIMIENTO_DEL_SISTEMA } from '../support/autor-orden';
 
 /** Cómo se nombran los estados y las prioridades cuando el sistema los escribe en
@@ -64,6 +65,9 @@ export class TasksService {
   private static readonly ORDEN_LISTA = {
     name: 'name', status: 'status', priority: 'priority',
     tdate: 'tdate', dueDate: 'dueDate', orderId: 'orderId', assignee: 'assigneeId',
+    // Las heredadas del legacy no tienen fecha de realización (13 mil): al final
+    // siempre, o "más recientes primero" abría con puras celdas vacías.
+    doneDate: (dir: 'asc' | 'desc') => ({ doneDate: { sort: dir, nulls: 'last' as const } }),
     author: 'createdByName',
   };
 
@@ -111,7 +115,7 @@ export class TasksService {
     return {
       items: rows.map((r) => ({
         id: r.id, legacyId: r.legacyId, name: r.name, status: r.status, priority: r.priority,
-        tdate: r.tdate, start: r.start, dueDate: r.dueDate, description: r.description,
+        tdate: r.tdate, start: r.start, dueDate: r.dueDate, doneDate: r.doneDate, description: r.description,
         orderId: r.orderId || null,
         // El nombre sellado manda; el `eid` es sólo el respaldo de lo heredado.
         author: r.createdByName ?? names.get(r.employeeId) ?? null,
@@ -339,6 +343,18 @@ export class TasksService {
     return isNaN(d.getTime()) ? null : d;
   }
 
+  /**
+   * La fecha de realización que pide el usuario, validada: no puede ser futura (la
+   * tarea no se ha hecho mañana) ni, si se da `creada`, anterior al día de creación.
+   */
+  private fechaNoFutura(texto: string, creada?: Date) {
+    const d = this.dOnly(texto);
+    if (!d) throw new BadRequestException('La fecha de realización no es válida.');
+    if (d > hoyEnColombia()) throw new BadRequestException('La fecha de realización no puede ser futura.');
+    if (creada && d < creada) throw new BadRequestException(`La fecha de realización no puede ser anterior a la creación de la tarea (${fechaEs(creada)}).`);
+    return d;
+  }
+
   async create(dto: CreateTaskDto, user?: AuthUser) {
     const me = await this.staffOf(user);
     // Quién la crea se sella aquí, con la misma firma que una orden de servicio: el
@@ -350,12 +366,17 @@ export class TasksService {
     // así no chocan con una reejecución del ETL sobre el histórico.
     const max = await this.prisma.todoTask.aggregate({ _max: { legacyId: true } });
     const legacyId = (max._max.legacyId ?? 0) + 1;
+    const hoy = hoyEnColombia();
+    const status = (dto.status as TodoStatus) ?? 'DUE';
     const creada = await this.prisma.todoTask.create({
       data: {
         legacyId,
-        tdate: new Date(new Date().toISOString().slice(0, 10)),
+        tdate: hoy,
         name: dto.name.trim(),
-        status: (dto.status as TodoStatus) ?? 'DUE',
+        status,
+        // Nace Hecha (se apunta algo que ya se hizo): se realizó hoy salvo que diga otra
+        // cosa. No se valida contra la creación: es justo el caso de apuntarla tarde.
+        doneDate: status === 'DONE' ? (dto.doneDate ? this.fechaNoFutura(dto.doneDate) : hoy) : null,
         priority: (dto.priority as TodoPriority) ?? 'MEDIUM',
         start: this.dOnly(dto.start),
         dueDate: this.dOnly(dto.dueDate),
@@ -391,6 +412,27 @@ export class TasksService {
     if (dto.status !== undefined) {
       data.status = dto.status as TodoStatus;
       if (data.status !== t.status) cambios.push(`estado: ${ESTADO_ES[t.status] ?? t.status} → ${ESTADO_ES[data.status] ?? data.status}`);
+    }
+    // Fecha de realización: se sella sola al pasar a Hecha y se borra al reabrirla.
+    // Quien la cierra puede corregirla (la hizo ayer y la marca hoy); sólo tiene
+    // sentido en una tarea Hecha.
+    const estadoFinal = (data.status as TodoStatus | undefined) ?? t.status;
+    let doneDate: Date | null = t.doneDate;
+    if (estadoFinal !== 'DONE') {
+      if (dto.doneDate) throw new BadRequestException('Solo una tarea Hecha tiene fecha de realización.');
+      doneDate = null;
+    } else if (dto.doneDate) {
+      doneDate = this.fechaNoFutura(dto.doneDate, t.tdate);
+    } else if (t.status !== 'DONE') {
+      // Recién cerrada: hoy. Una heredada ya Hecha sin fecha no se inventa al editar
+      // otra cosa: sigue en blanco hasta que alguien la escriba.
+      doneDate = hoyEnColombia();
+    }
+    if (fechaEs(doneDate) !== fechaEs(t.doneDate)) {
+      data.doneDate = doneDate;
+      // Al cerrar/reabrir el cambio de estado ya lo dice; sólo se anota aparte la corrección.
+      if (t.status === 'DONE' && estadoFinal === 'DONE') cambios.push(`realizada: ${fechaEs(t.doneDate)} → ${fechaEs(doneDate)}`);
+      else if (doneDate) cambios.push(`realizada el ${fechaEs(doneDate)}`);
     }
     if (dto.priority !== undefined) {
       data.priority = dto.priority as TodoPriority;

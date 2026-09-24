@@ -54,7 +54,7 @@ function armarFacturas() {
       }),
     ),
   };
-  const posting = { postSalesInvoice: jest.fn().mockResolvedValue(undefined) };
+  const posting = { postSalesInvoice: jest.fn().mockResolvedValue(undefined), centroDeAbonado: jest.fn().mockResolvedValue('cc-sede') };
   const srv = new FacturasService(prisma as any, posting as any, {} as any, {} as any);
   return { srv, prisma, facturas, pendientes };
 }

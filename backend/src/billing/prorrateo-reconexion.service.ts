@@ -3,7 +3,7 @@ import { Logger } from '../core/logger';
 import { PrismaService } from '../prisma/prisma.service';
 import { PostingService } from '../accounting/posting.service';
 import { nextTid, TID_SEQ } from '../common/tid';
-import { num, round2 } from '../common/money';
+import { ivaDe, num, round2 } from '../common/money';
 import { hoyEnColombia } from '../common/fecha-colombia';
 import {
   cabeceraDeProrrateo, etiquetaProrrateo, valorProrrateado, ventanaProrrateo, VentanaProrrateo,
@@ -393,7 +393,7 @@ export class ProrrateoReconexionService {
       const ivaPct = svc.taxRate;
       // El IVA también al peso: el renglón entero tiene que ser entero o el
       // writeback y el sync verían totales distintos cada 15 minutos.
-      const iva = Math.round((base * ivaPct) / 100);
+      const iva = ivaDe(base, ivaPct);
       lineas.push({ kind: svc.kind as LineaProrrateo['kind'], concepto, qty, base, ivaPct, iva, total: round2(base + iva) });
     }
 
@@ -520,7 +520,7 @@ export class ProrrateoReconexionService {
     const inv = await this.prisma.subInvoice.findUnique({
       where: { id: invoiceId },
       select: {
-        id: true, tid: true, status: true, subtotal: true, tax: true, total: true, paidAmount: true,
+        id: true, tid: true, subscriberId: true, status: true, subtotal: true, tax: true, total: true, paidAmount: true,
         serviceCombo: true, serviceTv: true, puntos: true,
         items: { select: { productName: true, description: true, price: true } },
         electronicInvoices: { select: { type: true, dianNumber: true } },
@@ -593,6 +593,7 @@ export class ProrrateoReconexionService {
         sourceId: inv.id, date: v.desde, number: inv.tid,
         edit: Number(v.desde.toISOString().slice(0, 10).replace(/-/g, '')),
         deltaSubtotal: r.base, deltaTax: r.iva,
+        costCenterId: await this.posting.centroDeAbonado(inv.subscriberId),
         createdBy: opts.autor ?? 'Sistema',
       })
       .catch((e) => this.logger.warn(`Contabilización del prorrateo (factura #${inv.tid}): ${(e as Error).message}`));
@@ -659,7 +660,8 @@ export class ProrrateoReconexionService {
     await this.posting
       .postSalesInvoice({
         sourceId: inv.id, date: v.desde, number: inv.tid,
-        subtotal: r.base, tax: r.iva, createdBy: opts.autor ?? 'Sistema',
+        subtotal: r.base, tax: r.iva, costCenterId: await this.posting.centroDeAbonado(subscriberId),
+        createdBy: opts.autor ?? 'Sistema',
       })
       .catch((e) => this.logger.warn(`Contabilización del prorrateo (factura #${inv.tid}): ${(e as Error).message}`));
     return { tid: inv.tid, nueva: true };

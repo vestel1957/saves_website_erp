@@ -96,7 +96,7 @@ export function ReportView({ rep }: { rep: string }) {
           {filtros.map((f) => (
             <Field key={f.param} label={f.label}>
               <Select value={extra[f.param] ?? ""} onChange={(e) => setExtra((s) => ({ ...s, [f.param]: e.target.value }))}>
-                <option value="">Todos</option>
+                <option value="">{f.todos ?? "Todos"}</option>
                 {f.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
               </Select>
             </Field>

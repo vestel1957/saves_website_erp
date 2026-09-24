@@ -33,6 +33,10 @@ export const ALLOWED_EXT = new Set(['.pdf', '.jpg', '.jpeg', '.png', '.gif', '.w
 // finalizar, recibir, pagar, notas, borrar la orden o un adjunto— sigue exigiendo
 // `administracion`, así que la pantalla puede esconderle botones sin que eso sea el
 // único freno.
+//
+// 2026-09-17 (a pedido del usuario): la cajera tiene COMPRAS completo —crear, editar,
+// cancelar, finalizar, recibir, pagar, notas, categorías y proveedores—. Aprobar sigue
+// pidiendo además `purchases.approve`, que es una firma nominal y no viene con el área.
 export class OrdersController {
   constructor(private readonly orders: OrdersService) {}
 
@@ -47,6 +51,7 @@ export class OrdersController {
   deleteSupplier(id: string) { return this.orders.deleteSupplier(id); }
 
   branches() { return this.orders.branches(); }
+  destinations(warehouseId?: string) { return this.orders.destinations(warehouseId); }
 
   categories() { return this.orders.categories(); }
   createCategory(dto: CategoryNameDto) { return this.orders.createCategory(dto); }

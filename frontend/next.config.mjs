@@ -28,6 +28,16 @@ const nextConfig = {
       { source: "/configuracion/documentos", destination: "/documentos", permanent: true },
     ];
   },
+  // Metabase (análisis de datos, pm2 `saves-metabase`, solo escucha en 127.0.0.1:3125)
+  // se sirve por aquí para que herede el HTTPS del dominio sin tocar Apache. Pasa
+  // primero por el middleware: solo entra quien tenga sesión con área de gerencia, y
+  // después Metabase pide su propio login. MB_SITE_URL = https://app.saves.com.co/analitica.
+  async rewrites() {
+    return [
+      { source: "/analitica", destination: "http://127.0.0.1:3125/" },
+      { source: "/analitica/:path*", destination: "http://127.0.0.1:3125/:path*" },
+    ];
+  },
 };
 
 export default nextConfig;

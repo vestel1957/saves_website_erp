@@ -40,6 +40,9 @@ export const EMPRESA = {
   nit: 'NIT 813.001.768-1',
 };
 
+/** NIT que imprimen los recibos de caja (rollo y hoja); las facturas siguen con el de EMPRESA. */
+export const NIT_RECIBO = '844004979';
+
 // El logo vive en el frontend; se lee una sola vez y se cachea. Si no aparece
 // (despliegue solo-backend), el membrete cae al texto y el PDF sale igual.
 let logoCache: Buffer | null | undefined;
@@ -94,7 +97,7 @@ export function newDoc(PDFDocument: any) {
 export function docHeader(
   doc: PDFKit.PDFDocument,
   title: string,
-  opts: { right?: string; chip?: string } = {},
+  opts: { right?: string; chip?: string; nit?: string } = {},
 ) {
   // Cinta superior con el degradado del logo.
   const g = doc.linearGradient(0, 0, 595, 0);
@@ -106,11 +109,11 @@ export function docHeader(
     // 200 px de ancho original: a 118 pt queda nítido en impresión.
     doc.image(img, M, 26, { width: 118 });
     doc.fillColor(INK_3).fontSize(7.5).font('Helvetica')
-      .text(`${EMPRESA.nombre} · ${EMPRESA.nit}`, M, 62, { width: 300 });
+      .text(`${EMPRESA.nombre} · ${opts.nit ?? EMPRESA.nit}`, M, 62, { width: 300 });
   } else {
     doc.fillColor(NAVY).fontSize(20).font('Helvetica-Bold').text(EMPRESA.marca, M, 30);
     doc.fillColor(INK_3).fontSize(8.5).font('Helvetica').text(EMPRESA.bajada, M, 54);
-    doc.fillColor(INK_3).fontSize(7.5).text(`${EMPRESA.nombre} · ${EMPRESA.nit}`, M, 66);
+    doc.fillColor(INK_3).fontSize(7.5).text(`${EMPRESA.nombre} · ${opts.nit ?? EMPRESA.nit}`, M, 66);
   }
 
   if (opts.right) {

@@ -26,7 +26,7 @@ const abonado = (p: Partial<any> = {}) => ({
    * (`serviceTv` la nombra, `estadoTv` con valor = caída). Es la que vale para los
    * 2.350 clientes que se quedaron sin filas de servicio en la migración.
    */
-  invoices: (p.factura ? [p.factura] : []) as { serviceTv: string | null; estadoTv: string | null }[],
+  invoices: (p.factura ? [p.factura] : []) as { serviceTv: string | null; estadoTv: string | null; items?: { productName: string | null }[] }[],
   _count: { oltOnus: p.onus ?? 0 },
 });
 
@@ -37,7 +37,7 @@ function armar(
     /** Lo que el router responde sobre el abonado (vacío = no contestó / dry-run). */
     live?: { inMorosos?: boolean; secretDisabled?: boolean };
     /** Órdenes del abonado, de la más nueva a la más vieja. */
-    ordenes?: { type: string; subscriberId?: string }[];
+    ordenes?: { type: string; subscriberId?: string; status?: string }[];
   } = {},
 ) {
   const { internetOk = true, tvOk = true, dryRun = false } = opts;
@@ -47,6 +47,7 @@ function armar(
     servicios: [] as any[],
     facturas: [] as any[],
     avisos: [] as any[],
+    ordenes: [] as any[],
   };
   const prisma = {
     subscriber: {
@@ -71,9 +72,13 @@ function armar(
     // Rastro de cortes/reconexiones: la red de seguridad para los cortes del legacy,
     // que no tocan el estado del abonado.
     ticket: {
-      findMany: jest.fn().mockResolvedValue(
-        (opts.ordenes ?? []).map((o) => ({ subscriberId: o.subscriberId ?? sub?.id, type: o.type })),
-      ),
+      // Filtra lo justo que preguntan: el tipo exacto y el estado PENDIENTE (lo usa
+      // `anularCortesTvSinHacer`); el rastro de órdenes pide todas.
+      findMany: jest.fn(async (args: any) => (opts.ordenes ?? [])
+        .map((o, i) => ({ id: `o-${i}`, code: 600_000 + i, subscriberId: o.subscriberId ?? sub?.id, type: o.type, status: o.status ?? 'RESUELTO', section: null }))
+        .filter((o) => typeof args?.where?.type !== 'string' || o.type === args.where.type)
+        .filter((o) => typeof args?.where?.status !== 'string' || o.status === args.where.status)),
+      update: jest.fn((args: any) => { escrituras.ordenes.push(args); return Promise.resolve({}); }),
     },
   };
   const mikrotik = {
@@ -211,6 +216,60 @@ describe('a quién le corresponde reconectar', () => {
     const r = await srv.porPago('sub-1');
     expect(genieacs.tvBatchBySubscribers).not.toHaveBeenCalled();
     expect(r.servicios.map((s) => s.servicio)).toEqual(['INTERNET']);
+  });
+
+  it('no le revive la TV al que la dio de baja aunque su fila siga en CORTADO', async () => {
+    // Abonado 56993 (22-09-2026): suspendió la TV en agosto, su factura ya solo cobra
+    // internet, pero la fila de servicio TV quedó en CORTADO. Cada pago le abría una
+    // "Reconexion Television2" que al cerrarse le volvía a cobrar la TV.
+    const { srv, genieacs, ordenes } = armar(
+      abonado({
+        pppUsername: '', onus: 0,
+        services: [
+          { id: 'sv-1', kind: 'INTERNET', status: 'ACTIVO' },
+          { id: 'sv-2', kind: 'TV', status: 'CORTADO' },
+        ],
+        factura: { serviceTv: '', estadoTv: null, items: [{ productName: '100 Megas FS-26' }] },
+      }),
+      { ordenes: [{ type: 'Corte Combo' }] },
+    );
+    await srv.porPago('sub-1');
+    expect(genieacs.tvBatchBySubscribers).not.toHaveBeenCalled();
+    expect(ordenes.abrirSiNoHay).not.toHaveBeenCalledWith(expect.objectContaining({ type: expect.stringMatching(/Television/) }));
+  });
+
+  it('la TV SUSPENDIDA (pedida por el cliente) no se devuelve pagando', async () => {
+    const { srv, genieacs } = armar(
+      abonado({
+        status: 'ACTIVO',
+        services: [
+          { id: 'sv-1', kind: 'INTERNET', status: 'ACTIVO' },
+          { id: 'sv-2', kind: 'TV', status: 'SUSPENDIDO' },
+        ],
+        factura: { serviceTv: 'Television26', estadoTv: 'SUSPENDIDO' },
+      }),
+    );
+    await srv.porPago('sub-1');
+    expect(genieacs.tvBatchBySubscribers).not.toHaveBeenCalled();
+  });
+
+  it('manda lo COBRADO: cabecera con "Television26" pero sólo la línea de internet = sin TV', async () => {
+    // Abonado 56499: suspendió la TV, la corrida del 01-09 dejó la cabecera nombrándola
+    // y el pago en línea le encendió el puerto CATV.
+    const { srv, genieacs } = armar(
+      abonado({ services: [], factura: { serviceTv: 'Television26', estadoTv: null, items: [{ productName: '100 Megas FS-26' }] } }),
+    );
+    await srv.porPago('sub-1');
+    expect(genieacs.tvBatchBySubscribers).not.toHaveBeenCalled();
+  });
+
+  it('la TV cobrada en una LÍNEA cuenta aunque la cabecera de la factura venga vacía', async () => {
+    // Facturas de nexus con `serviceTv` en NULL pero la línea "Television26" adentro.
+    const { srv, genieacs } = armar(
+      abonado({ services: [], factura: { serviceTv: null, estadoTv: null, items: [{ productName: 'Television26' }] } }),
+    );
+    await srv.porPago('sub-1');
+    expect(genieacs.tvBatchBySubscribers).toHaveBeenCalled();
   });
 
   it('no hace nada con el que ya estaba al día', async () => {
@@ -658,6 +717,29 @@ describe('la cajera no se queda esperando a la OLT', () => {
       jest.useRealTimers();
     }
   });
+
+  // Reporte 2026-09-17: el recibo tardaba en salir. La consulta previa al router se
+  // hace en cada pago y quedaba por fuera del tope.
+  it('el tope también cubre la consulta previa al router, y la ventanilla pasa el suyo', async () => {
+    jest.useFakeTimers();
+    try {
+      const { srv, mikrotik } = armar(
+        abonado({ status: 'ACTIVO', services: [{ id: 'sv-1', kind: 'INTERNET', status: 'ACTIVO' }] }),
+      );
+      mikrotik.liveStatus.mockReturnValue(new Promise(() => undefined)); // el router no contesta
+      let listo = false;
+      const promesa = srv.porPago('sub-1', undefined, undefined, { esperaMs: 5_000 }).finally(() => { listo = true; });
+      await jest.advanceTimersByTimeAsync(4_900);
+      expect(listo).toBe(false);
+      await jest.advanceTimersByTimeAsync(200);
+      const r = await promesa;
+
+      expect(r.enCurso).toBe(true);
+      expect(r.ok).toBe(true);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 });
 
 /**
@@ -723,5 +805,107 @@ describe('aviso para que el legacy se entere en el acto', () => {
       await srv.porPago('sub-1');
       expect(escrituras.avisos.filter((a) => a.nombre === 'network.reconexion.aplicada')).toHaveLength(0);
     }
+  });
+});
+
+describe('pagó antes de que fueran a cortarle la TV (corte a mano pendiente)', () => {
+  // 2026-09-23: con el TR-069 en pausa el corte masivo deja la orden PENDIENTE y la
+  // cierra quien corta en sitio. Si el cliente paga antes, nadie le quitó la señal.
+  const tvCortadaEnSistema = () => abonado({
+    status: 'ACTIVO',
+    services: [{ id: 'sv-1', kind: 'INTERNET', status: 'ACTIVO' }, { id: 'sv-2', kind: 'TV', status: 'CORTADO' }],
+  });
+
+  it('en el cargue: anula el corte pendiente, devuelve la TV en el sistema y no manda visita', async () => {
+    const { srv, prisma, ordenes, escrituras } = armar(tvCortadaEnSistema(), {
+      ordenes: [{ type: 'Corte Television', status: 'PENDIENTE' }],
+    });
+    // Tras anular, la ficha ya dice TV activa (lo que leería la base).
+    prisma.subscriber.findMany.mockResolvedValue([abonado({ status: 'ACTIVO' })]);
+    await srv.porPagoLote(['sub-1'], { name: 'Paula' } as any);
+
+    expect(escrituras.ordenes).toHaveLength(1);
+    expect(escrituras.ordenes[0].data.status).toBe('ANULADA');
+    expect(escrituras.ordenes[0].data.section).toMatch(/pagó antes/i);
+    expect(escrituras.servicios[0]).toMatchObject({ data: { status: 'ACTIVO' } });
+    expect(ordenes.abrirSiNoHay).not.toHaveBeenCalledWith(expect.objectContaining({ type: expect.stringMatching(/Television/) }));
+  });
+
+  it('en ventanilla igual', async () => {
+    const { srv, escrituras } = armar(tvCortadaEnSistema(), {
+      ordenes: [{ type: 'Corte Television', status: 'PENDIENTE' }],
+    });
+    await srv.porPago('sub-1');
+    expect(escrituras.ordenes[0]?.data.status).toBe('ANULADA');
+  });
+
+  it('si el corte ya se hizo (orden cerrada) no se anula nada: toca la visita de reconexión', async () => {
+    const { srv, escrituras } = armar(tvCortadaEnSistema(), {
+      ordenes: [{ type: 'Corte Television', status: 'RESUELTO' }],
+    });
+    await srv.porPagoLote(['sub-1']);
+    expect(escrituras.ordenes).toHaveLength(0);
+  });
+});
+
+describe('sólo se reconecta lo que el cliente tiene contratado', () => {
+  /** Las líneas de sus mensualidades: de ahí sale qué tiene (ver `servicios-contratados.ts`). */
+  const conLineas = (prisma: any, lineas: string[]) => {
+    prisma.$queryRaw.mockImplementation(async (partes: TemplateStringsArray) =>
+      partes.join('').includes('"SubInvoiceItem"')
+        ? lineas.map((nombre) => ({ subscriberId: 'sub-1', nombre }))
+        : [{ id: 'inv-vigente' }]);
+  };
+
+  it('al de SoloTelevision con el "0" de relleno no le abre "Reconexion Internet"', async () => {
+    const sub = abonado({ pppUsername: '0', services: [{ id: 'sv-2', kind: 'TV', status: 'CORTADO' }] });
+    const { srv, prisma, mikrotik, ordenes } = armar(sub);
+    conLineas(prisma, ['SoloTelevision22']);
+    const r = await srv.porPago('sub-1');
+
+    expect(mikrotik.reconnect).not.toHaveBeenCalled();
+    expect(mikrotik.liveStatus).not.toHaveBeenCalled();
+    const tipos = [...ordenes.abrirSiNoHay.mock.calls, ...ordenes.registrarResuelta.mock.calls].map((c) => c[0].type);
+    expect(tipos.some((t) => /internet/i.test(t))).toBe(false);
+    expect(r.servicios.map((s) => s.servicio)).not.toContain('INTERNET');
+  });
+
+  it('aunque tenga un usuario PPPoE viejo en la ficha, si sólo paga TV no toca el router', async () => {
+    const { srv, prisma, mikrotik } = armar(abonado({ pppUsername: 'ELIZABETHACEVEDO' }));
+    conLineas(prisma, ['SoloTelevision']);
+    await srv.porPago('sub-1');
+
+    expect(mikrotik.reconnect).not.toHaveBeenCalled();
+  });
+
+  it('al que sólo paga internet no le abre orden de TV, aunque su fila de TV diga CORTADO', async () => {
+    const sub = abonado({
+      pppUsername: '0',
+      services: [{ id: 'sv-1', kind: 'INTERNET', status: 'CORTADO' }, { id: 'sv-2', kind: 'TV', status: 'CORTADO' }],
+    });
+    const { srv, prisma, genieacs, ordenes } = armar(sub);
+    conLineas(prisma, ['100 Megas F-26']);
+    await srv.porPago('sub-1');
+
+    expect(genieacs.tvBatchBySubscribers).not.toHaveBeenCalled();
+    expect(ordenes.abrirSiNoHay.mock.calls.map((c) => c[0].type).some((t) => /television/i.test(t))).toBe(false);
+  });
+
+  it('en el cargue de pagos tampoco', async () => {
+    const sub = abonado({ pppUsername: '0', services: [{ id: 'sv-2', kind: 'TV', status: 'ACTIVO' }] });
+    const { srv, prisma, mikrotik } = armar(sub, { ordenes: [{ type: 'Corte Internet' }] });
+    conLineas(prisma, ['SoloTelevision22', 'Punto Adicional']);
+    await srv.porPagoLote(['sub-1']);
+
+    expect(mikrotik.reconnectBatch).not.toHaveBeenCalled();
+  });
+
+  it('el combo sigue recibiendo las dos cosas', async () => {
+    const { srv, prisma, mikrotik, genieacs } = armar(abonado());
+    conLineas(prisma, ['100 Megas F-26', 'Television26']);
+    await srv.porPago('sub-1');
+
+    expect(mikrotik.reconnect).toHaveBeenCalled();
+    expect(genieacs.tvBatchBySubscribers).toHaveBeenCalled();
   });
 });

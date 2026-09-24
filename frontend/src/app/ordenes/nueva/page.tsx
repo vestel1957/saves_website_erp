@@ -14,6 +14,7 @@ import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
 import { mensajeDeError } from "@/lib/errores";
 import { ConsignacionCampos, consignacionVacia, type Consignacion } from "@/components/orders/ConsignacionCampos";
+import { DestinoCampos, destinoVacio, useDestinos, type Destino } from "@/components/orders/DestinoCampos";
 
 type Row = { product: string; qty: string; price: string; taxRate: string };
 
@@ -52,6 +53,9 @@ export default function NuevaOrdenPage() {
   const [retention, setRetention] = useState("");
   // Datos de la consignación: se llenan con la cuenta del proveedor y se pueden corregir.
   const [consig, setConsig] = useState<Consignacion>(consignacionVacia);
+  // Sede y bodega destino: sin bodega, la compra se "recibe" sin entrar a ningún inventario.
+  const [destino, setDestino] = useState<Destino>(destinoVacio);
+  const destinos = useDestinos();
   const [saving, setSaving] = useState(false);
 
   const elegirProveedor = (s: any) => {
@@ -95,6 +99,8 @@ export default function NuevaOrdenPage() {
     }
     return { subtotal, tax, total: subtotal + tax };
   }, [rows]);
+  // Mismo criterio que el servidor: todo lo que no es proveedor de servicios trae material.
+  const llevaBodega = !!supplier && supplier.category !== 2;
   const retentionValue = retentionType ? Math.max(0, Number(retention) || 0) : 0;
 
   const setRow = (i: number, patch: Partial<Row>) =>
@@ -104,6 +110,8 @@ export default function NuevaOrdenPage() {
 
   const create = async () => {
     if (!supplier) { toast("Selecciona un proveedor", "alert-triangle"); return; }
+    if (!destino.branch) { toast("Escoge la sede de la orden", "alert-triangle"); return; }
+    if (llevaBodega && !destino.warehouseId) { toast("Escoge la bodega a la que llega el material", "alert-triangle"); return; }
     const items = rows
       .filter((r) => r.product.trim() && Number(r.qty) > 0)
       .map((r) => ({ product: r.product.trim(), qty: Number(r.qty), price: Number(r.price) || 0, taxRate: Number(r.taxRate) || 0 }));
@@ -115,7 +123,7 @@ export default function NuevaOrdenPage() {
       const res = await authFetch("/orders", {
         method: "POST",
         body: JSON.stringify({
-          supplierId: supplier.id, orderDate, categoryRef: category || undefined, notes: notes.trim() || undefined, items,
+          supplierId: supplier.id, orderDate, branch: destino.branch, warehouseId: destino.warehouseId || undefined, categoryRef: category || undefined, notes: notes.trim() || undefined, items,
           ...consig,
           // El servidor la vuelve una nota de retención que descuenta del total.
           ...(retentionValue > 0 ? { retentionType, retention: retentionValue } : {}),
@@ -191,6 +199,12 @@ export default function NuevaOrdenPage() {
             <Input type="date" value={orderDate} onChange={(e) => setOrderDate(e.target.value)} />
           </Field>
         </div>
+      </div>
+
+      <div className="rounded-xl border border-border-subtle bg-surface p-4 shadow-sm">
+        <h2 className="text-[13px] font-bold text-text-primary">Destino</h2>
+        <p className="mb-3 text-[12px] text-text-tertiary">A qué sede pertenece la orden y a qué bodega entra el material cuando se reciba.</p>
+        <DestinoCampos value={destino} onChange={setDestino} requireWarehouse={!supplier || llevaBodega} destinos={destinos} />
       </div>
 
       {supplier && (

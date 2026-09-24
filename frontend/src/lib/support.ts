@@ -143,7 +143,7 @@ export const SERVICIOS_CONTRATADOS: readonly ServicioContratado[] = ["TV", "INTE
 export const TICKET_TYPES = [
   "Instalacion", "Reconexion Internet", "Reconexion Television", "Reconexion Combo",
   "Corte Internet", "Corte Television", "Revision de Internet", "Revision de television",
-  "Revision tv e internet", "Traslado", "Retiro voluntario", "Cambio de equipo",
+  "Revision tv e internet", "Traslado", "Retiro voluntario", "Cambio de equipo", "Cambio de titular",
   "Migracion", "Subir megas", "Bajar megas", "Cambio de clave", "Servicio Adicional",
 ];
 
@@ -169,6 +169,10 @@ export const esReconexion = (tipo?: string | null): boolean =>
  */
 export const esTraslado = (tipo?: string | null): boolean =>
   (tipo ?? "").trim().toLowerCase() === "traslado";
+
+/** ¿La orden pasa el servicio a nombre de otra persona? Espejo del backend. */
+export const esCambioTitular = (tipo?: string | null): boolean =>
+  (tipo ?? "").trim().toLowerCase() === "cambio de titular";
 
 /**
  * ¿La orden cambia la velocidad contratada? Espejo de `esCambioDeMegas` del backend.

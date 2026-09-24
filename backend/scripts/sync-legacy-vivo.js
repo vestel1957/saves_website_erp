@@ -91,6 +91,7 @@ const log = (...a) => console.error(new Date().toISOString().slice(11, 19), ...a
 
 // Mapeo y comparación compartidos con writeback-legacy.js (una sola fuente de reglas)
 const { mapObservacion, mimeDe, nombreVisible, nombreEnDisco, traductorDeNombres } = require('./lib/observaciones-legacy');
+const { mapLlamada, COLUMNAS_LLAMADAS } = require('./lib/llamadas-legacy');
 const { traerArchivo, UPLOAD_ROOT } = require('./lib/archivos-legacy');
 // Fecha/hora de Colombia: la misma fuente que usa el writeback para hablarle al legacy.
 const { FECHA_CO, INSTANTE_CO, DIA_UTC } = require('./lib/hora-co');
@@ -251,6 +252,7 @@ async function initWatermarks(st, my) {
   await init('tickets', 'ticket');
   await init('ticketsTh', 'ticketThread');
   await init('observaciones', 'subscriberNote');
+  await init('llamadas', 'callLog');
   await init('archivos', 'subscriberFile');
   await init('cargues', 'paymentImportBatch');
   if (st.estados == null) {
@@ -287,6 +289,7 @@ async function drift(my) {
       recibos_de_pago: await pair('recibos_de_pago', 'paymentReceipt'),
       anulaciones: await pair('anulaciones', 'voiding', 'id_anulacion'),
       tickets: await pair('tickets', 'ticket', 'idt'),
+      llamadas: await pair('llamadas', 'callLog'),
     },
     watermarks: st,
   };
@@ -421,7 +424,7 @@ async function syncInvoices(my, st, sum, subMap, lapidas) {
   // 2) modificadas por huella (los pagos NO tocan fecha_actualizacion)
   const [fpMy] = await my.query('SELECT id,status,pamnt,total,ron,estado_tv,estado_combo,rec,promo,promo2,television,combo,puntos FROM invoices WHERE id <= ?', [st.invoices]);
   const fpPg = await prisma.subInvoice.findMany({ where: { legacyId: { not: null } },
-    select: { id: true, legacyId: true, status: true, paidAmount: true, total: true, ron: true, estadoTv: true, estadoCombo: true, rec: true, promo: true, promo2: true, editedAt: true, serviceAssignedAt: true, serviceStatusAt: true, serviceTv: true, serviceCombo: true, puntos: true } });
+    select: { id: true, legacyId: true, status: true, paidAmount: true, total: true, ron: true, estadoTv: true, estadoCombo: true, rec: true, promo: true, promo2: true, editedAt: true, serviceAssignedAt: true, serviceStatusAt: true, serviceTv: true, serviceCombo: true, puntos: true, updatedAt: true } });
   const pgFp = new Map(fpPg.map((r) => [r.legacyId, r]));
 
   /**
@@ -556,6 +559,21 @@ async function syncInvoices(my, st, sum, subMap, lapidas) {
   };
   if (DRY) return planes;
   await createMany('subInvoice', inserts);
+  /*
+    LA FOTO SE HIZO AL EMPEZAR LA PASADA (2026-09-23). Entre leer la factura y escribirla
+    pasan ~30 s, y si en ese hueco la cajera cobra aquí, escribir lo leído le borra el
+    pago: factura #503165 cobrada a las 15:15:05 (internet ya reconectado), y la pasada
+    que había arrancado a las 15:15:00 la dejó en DUE con `paidAmount` 0 a las 15:15:30.
+    Por eso se escribe sólo si la fila sigue como estaba en la foto (`updatedAt`); si
+    alguien la movió entretanto se salta, y la siguiente pasada compara contra lo nuevo.
+  */
+  let movidasEnMedio = 0;
+  const escribirSiSigueIgual = async (legacyId, data, etiqueta) => {
+    const antes = pgFp.get(legacyId)?.updatedAt;
+    const r = await prisma.subInvoice.updateMany({ where: { legacyId, ...(antes ? { updatedAt: antes } : {}) }, data })
+      .catch((e) => { log(`⚠️ ${etiqueta} ${legacyId}: ${e.message}`); return { count: 1 }; });
+    if (!r.count) movidasEnMedio++;
+  };
   await pooled(cambiadasRows, 5, async (r) => {
     const sid = subMap.get(r.csd);
     if (!sid) return;
@@ -584,15 +602,18 @@ async function syncInvoices(my, st, sum, subMap, lapidas) {
     // puede entrar por esta vía por CUALQUIER otra diferencia (un cambio de `ron`) y el
     // `mapInvoice` completo le devolvería el `due` del legacy. Ver `cobroPendienteDeBajar`.
     if (cobroPendienteDeBajar(r, pgf)) { delete data.paidAmount; delete data.status; }
-    await prisma.subInvoice.update({ where: { legacyId: r.id }, data }).catch((e) => log(`⚠️ invoice ${r.id}: ${e.message}`));
+    await escribirSiSigueIgual(r.id, data, 'invoice');
   });
 
   // Facturas editadas aquí: actualización PARCIAL (sólo el cobro y el estado de
   // servicio que se movieron en el legacy). Los montos y los renglones son los de
   // este sistema y no se tocan.
   await pooled(editadas, 5, async ({ r, pg, plan }) => {
-    // Lo de aquí manda cuando la única diferencia es la truncación del legacy.
-    const paid = mismoDinero(r.pamnt, pg.paidAmount) ? num(pg.paidAmount) : num(r.pamnt);
+    // Lo de aquí manda cuando la única diferencia es la truncación del legacy, y
+    // también cuando el cobro lo hizo esta caja y aún no ha bajado (el mismo candado
+    // que en las no editadas: sin él, editar la factura antes de cobrarla la dejaba
+    // expuesta a que el `pamnt` viejo de allá le borrara el pago).
+    const paid = mismoDinero(r.pamnt, pg.paidAmount) || cobroPendienteDeBajar(r, pg) ? num(pg.paidAmount) : num(r.pamnt);
     const total = num(pg.total);
     const data = {
       // El plan de la cabecera no es ni monto ni renglón: editar la factura aquí no lo
@@ -605,9 +626,11 @@ async function syncInvoices(my, st, sum, subMap, lapidas) {
       status: invStatus(r.status) === 'CANCELED' ? 'CANCELED'
         : mismoDinero(paid, total) || paid >= total ? 'PAID' : paid > 0 ? 'PARTIAL' : 'DUE',
     };
-    await prisma.subInvoice.update({ where: { legacyId: r.id }, data }).catch((e) => log(`⚠️ invoice editada ${r.id}: ${e.message}`));
+    await escribirSiSigueIgual(r.id, data, 'invoice editada');
   });
   if (editadas.length) log(`invoices: ${editadas.length} editadas aquí → sólo se refrescó el cobro (montos y renglones se respetan)`);
+  if (movidasEnMedio) log(`invoices: ${movidasEnMedio} se movieron aquí durante la pasada → se dejan para la siguiente`);
+  sum.invoices.movidasEnMedio = movidasEnMedio;
   st.invoices = maxId; await saveState(st);
 
   // ítems de las facturas nuevas y modificadas (las editadas aquí quedan fuera:
@@ -989,6 +1012,72 @@ async function syncBorradas(my, sum) {
       data: { status: 'CANCELED', notes: `Anulada por sincronización: borrada en el legacy (${sello}).` },
     });
   });
+}
+
+/**
+ * Movimientos (`transactions`) BORRADOS en el legacy → se BORRAN aquí también.
+ *
+ * Pedido expresamente el 2026-09-21: si allá se elimina un movimiento, aquí tiene que
+ * desaparecer, no quedar anulado. A diferencia de `syncBorradas` (facturas), esto sí
+ * borra la fila:
+ *  · `Voiding` tiene ON DELETE RESTRICT → su anulación se borra antes;
+ *  · `ReceiptTransaction` cae en cascada (el recibo queda, sin ese renglón);
+ *  · `CustomerAdvance` / `CustomerAdvanceApplication` quedan con `transactionId` en null.
+ * Antes de borrar se vuelca cada fila (con su anulación y enlaces) a
+ * `/home/dev/backups/tx-borradas-legacy/` para poder reponerla a mano.
+ *
+ * Orden de las lecturas: primero los candidatos de AQUÍ y después los ids del legacy.
+ * El writeback inserta allá ANTES de poner `legacyId` aquí, así que todo candidato ya
+ * existía en el legacy cuando se leyó la lista: un movimiento recién empujado no
+ * puede salir como "borrado". Y justo antes de borrar se reconfirma uno por uno.
+ *
+ * Mismo freno que las facturas: una lectura incompleta del legacy parecería un borrado
+ * masivo, así que por encima del tope no se toca nada y se avisa.
+ */
+const MAX_TX_BORRADAS = 500;
+const DIR_RESPALDO_TX = '/home/dev/backups/tx-borradas-legacy';
+
+async function syncTxBorradas(my, sum) {
+  const vivas = await prisma.transaction.findMany({ where: { legacyId: { not: null } }, select: { id: true, legacyId: true } });
+  const [filas] = await my.query('SELECT id FROM transactions');
+  const enLegacy = new Set(filas.map((r) => r.id));
+  if (enLegacy.size < vivas.length * 0.9) {
+    sum.txBorradas = { abortado: `el legacy devolvió ${enLegacy.size} movimientos para ${vivas.length} en PG: lectura sospechosa` };
+    return;
+  }
+  let candidatas = vivas.filter((r) => !enLegacy.has(r.legacyId));
+  if (candidatas.length > MAX_TX_BORRADAS) {
+    sum.txBorradas = { abortado: `${candidatas.length} candidatas superan el tope de ${MAX_TX_BORRADAS}`, candidatas: candidatas.length };
+    return;
+  }
+  // Reconfirmación puntual: que de verdad no estén allá ahora mismo.
+  if (candidatas.length) {
+    const siguen = await mysqlIn(my, 'SELECT id FROM transactions WHERE id IN (??IDS??)', candidatas.map((r) => r.legacyId));
+    const vuelven = new Set(siguen.map((r) => r.id));
+    candidatas = candidatas.filter((r) => !vuelven.has(r.legacyId));
+  }
+  sum.txBorradas = { borradas: candidatas.length };
+  if (DRY || !candidatas.length) {
+    if (candidatas.length) sum.txBorradas.legacyIds = candidatas.map((r) => r.legacyId).slice(0, 50);
+    return;
+  }
+
+  const ids = candidatas.map((r) => r.id);
+  const respaldo = await prisma.transaction.findMany({
+    where: { id: { in: ids } },
+    include: { voiding: true, receiptLinks: true, advance: { select: { id: true } }, advanceUses: { select: { id: true } } },
+  });
+  const fs = require('fs');
+  fs.mkdirSync(DIR_RESPALDO_TX, { recursive: true });
+  const archivo = `${DIR_RESPALDO_TX}/${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+  fs.writeFileSync(archivo, JSON.stringify(respaldo, null, 1));
+
+  await prisma.$transaction([
+    prisma.voiding.deleteMany({ where: { transactionId: { in: ids } } }),
+    prisma.transaction.deleteMany({ where: { id: { in: ids } } }),
+  ]);
+  sum.txBorradas.respaldo = archivo;
+  log(`movimientos borrados en el legacy: ${ids.length} borrados aquí (legacy #${candidatas.map((r) => r.legacyId).join(', #')}) · respaldo ${archivo}`);
 }
 
 async function syncAddSvc(my, st, sum) {
@@ -1849,6 +1938,7 @@ async function syncTickets(my, st, sum, subMap) {
     if (agendadas) log(`tickets: ${agendadas} agendadas aquí → se respetó el técnico de la agenda`);
     st.tickets = maxId; await saveState(st);
   }
+  await levantarCortePorReconexionDelLegacy(inserts, cambios, sum);
 
   // 3) hilo de la orden (tickets_th): el historial de mensajes y las fotos.
   const [thRows] = await my.query('SELECT * FROM tickets_th WHERE id > ? ORDER BY id', [st.ticketsTh]);
@@ -1871,6 +1961,48 @@ async function syncTickets(my, st, sum, subMap) {
   // 5) y a cuántas megas pasa al cliente una orden de megas, que el legacy guarda en
   // la misma cesta y en otra columna.
   await syncPlanDeMegas(my, sum);
+}
+
+/**
+ * La reconexión que se CIERRA EN EL LEGACY no limpiaba la línea de servicio de aquí.
+ *
+ * Cerrarla en nexus pasa por la cascada (`levantarCorteEnServicio` / `aplicarTv`), que
+ * deja `SubscriberService` en ACTIVO. Cerrarla allá sólo llega por esta ida, que
+ * copiaba el estado de la orden y nada más: el legacy reconectaba el router, el
+ * abonado volvía a ACTIVO por `estados`… y la línea de servicio seguía en CORTADO,
+ * que es lo que manda en el chip de la ficha (`conEstadoDeServicio`). Caso: abonado
+ * 510 (NELFA TORREZ), orden #507893 cerrada en el legacy el 23-09-2026 10:23.
+ *
+ * Misma regla que la cascada: sólo lo CORTADO (una suspensión la pidió el cliente) y
+ * sólo el servicio que la orden nombra. `estado_combo`/`estado_tv` de la factura no
+ * se tocan: esos los escribe el legacy y bajan por `invoices`.
+ */
+function serviciosDeReconexionLegacy(tipo) {
+  const t = sinTildes(String(tipo || ''));
+  if (!t.startsWith('reconexion')) return [];
+  if (t.includes('combo')) return ['INTERNET', 'TV'];
+  if (t.includes('televi')) return ['TV'];
+  if (t.includes('internet')) return ['INTERNET'];
+  return ['INTERNET', 'TV'];
+}
+
+async function levantarCortePorReconexionDelLegacy(inserts, cambios, sum) {
+  const hace3d = new Date(Date.now() - 3 * 864e5);
+  const cerradas = [
+    ...inserts.filter((t) => t.status === 'RESUELTO' && t.created >= hace3d),
+    ...cambios.filter((c) => c.keys.includes('status') && c.mapped.status === 'RESUELTO'),
+  ].map((t) => t.mapped ?? t)
+    .filter((t) => t.subscriberId && serviciosDeReconexionLegacy(t.type).length);
+  if (!cerradas.length) return;
+  const kinds = (servicios) => servicios.flatMap((s) => (s === 'TV' ? ['TV', 'PUNTOS'] : ['INTERNET']));
+  let lineas = 0;
+  for (const t of cerradas) {
+    const where = { subscriberId: t.subscriberId, kind: { in: kinds(serviciosDeReconexionLegacy(t.type)) }, status: 'CORTADO' };
+    if (DRY) { lineas += await prisma.subscriberService.count({ where }); continue; }
+    lineas += (await prisma.subscriberService.updateMany({ where, data: { status: 'ACTIVO' } })).count;
+  }
+  sum.reconexionesDelLegacy = { ordenes: cerradas.length, lineasLevantadas: lineas };
+  if (lineas) log(`tickets: ${lineas} línea(s) de servicio CORTADO → ACTIVO por reconexiones cerradas en el legacy`);
 }
 
 // ---------- destino de los traslados (tabla `temporales`) ----------
@@ -2117,6 +2249,32 @@ async function syncObservaciones(my, st, sum, subMap) {
   if (DRY) return;
   await createMany('subscriberNote', data, 2000);
   st.observaciones = maxId; await saveState(st);
+}
+
+/**
+ * BITÁCORA DE LLAMADAS de cobranza (`llamadas` → `CallLog`), la pestaña Cobranza
+ * del cliente. Altas por marca de agua (`id`); el histórico lo trajo
+ * `etl-llamadas-legacy.js`. Sin eco: las llamadas registradas en nexus no viajan al
+ * legacy. Tampoco dispara nada: el COMPROMISO de un Acuerdo de Pago hecho allá ya
+ * baja por la ficha del cliente (`syncCustomers`).
+ */
+async function syncLlamadas(my, st, sum, subMap) {
+  const [rows] = await my.query(
+    `SELECT ${COLUMNAS_LLAMADAS} FROM llamadas WHERE id > ? ORDER BY id`, [st.llamadas]);
+  const nombreDe = await traductorDeNombres(prisma);
+  let maxId = st.llamadas, sinCliente = 0;
+  const data = [];
+  for (const r of rows) {
+    maxId = Math.max(maxId, r.id);
+    const sid = subMap.get(r.iduser);
+    if (!sid) { sinCliente++; continue; }
+    const fila = mapLlamada(r, sid, nombreDe);
+    if (fila) data.push(fila);
+  }
+  sum.llamadas = { nuevas: data.length, sinCliente };
+  if (DRY) return;
+  await createMany('callLog', data, 2000);
+  st.llamadas = maxId; await saveState(st);
 }
 
 /** Tope de adjuntos por pasada: cada uno puede ser una descarga al legacy vivo. */
@@ -2752,6 +2910,15 @@ async function main() {
     return;
   }
 
+  // Sólo los movimientos borrados en el legacy, sin esperar a la pasada completa.
+  if (MODE === 'tx-borradas') {
+    const sum = { ok: true, mode: MODE, dry: DRY };
+    await syncTxBorradas(my, sum);
+    console.log(JSON.stringify(sum));
+    await my.end(); await prisma.$disconnect();
+    return;
+  }
+
   // Sólo el censo de personal. Sirve para la puesta al día de una vez (los 3 técnicos
   // que el legacy contrató después del ETL) y para comprobarlo en seco sin arrastrar
   // una pasada entera.
@@ -2818,6 +2985,7 @@ async function main() {
   await syncRecibos(my, st, sum);
   await syncAnulaciones(my, st, sum);
   await syncBorradas(my, sum);
+  await syncTxBorradas(my, sum);
   await syncAperturas(my, sum);
   await syncAddSvc(my, st, sum);
   await syncEventos(my, st, sum);
@@ -2830,6 +2998,7 @@ async function main() {
   await syncEInvoice(my, st, sum, subMap);
   await syncTickets(my, st, sum, subMap);
   await syncObservaciones(my, st, sum, subMap);
+  await syncLlamadas(my, st, sum, subMap);
   await syncArchivos(my, st, sum, subMap);
   await syncCargues(my, st, sum, subMap);
   sum.inventario = await syncInventario(my, st, sum, subMap, lapidas);

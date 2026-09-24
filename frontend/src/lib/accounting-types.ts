@@ -99,6 +99,56 @@ export interface IncomeStatement {
   };
 }
 
+export interface CostCenterRow {
+  id: string;
+  code: string;
+  name: string;
+  parentId: string | null;
+  isActive: boolean;
+  kind: "SEDE" | "GENERAL" | "OTRO";
+  branch: { legacyId: number; name: string } | null;
+}
+
+export interface CostCenterBranch {
+  legacyId: number;
+  name: string;
+  costCenter: { id: string; code: string; name: string } | null;
+}
+
+export type IncomeStatementTotals = IncomeStatement["totals"];
+
+/** Una cuenta de resultado repartida por columna (`amounts[columna.key]`). */
+export interface IncomeByCenterRow {
+  accountId: string;
+  code: string;
+  name: string;
+  amounts: Record<string, number>;
+  total: number;
+}
+
+export interface IncomeStatementByCenter {
+  range: { from: string | null; to: string | null };
+  /** Sedes, Administración general, otros centros con movimiento y «Sin asignar» (key `SIN_ASIGNAR`). */
+  columns: {
+    key: string;
+    code: string;
+    name: string;
+    kind: "SEDE" | "GENERAL" | "OTRO" | "SIN_ASIGNAR";
+    isActive: boolean;
+    branch: { legacyId: number; name: string } | null;
+  }[];
+  income: IncomeByCenterRow[];
+  costs: IncomeByCenterRow[];
+  expenses: IncomeByCenterRow[];
+  totalsByColumn: Record<string, IncomeStatementTotals>;
+  totals: IncomeStatementTotals;
+  /** Columnas sumadas = total del informe = estado de resultados sin filtro. */
+  cuadre: {
+    ok: boolean;
+    detalle: { campo: string; columnas: number; total: number; estadoDeResultados: number; ok: boolean }[];
+  };
+}
+
 export interface BalanceSheet {
   assets: StatementLine[];
   liabilities: StatementLine[];

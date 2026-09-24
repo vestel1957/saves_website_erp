@@ -5,7 +5,8 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { OltDriver } from './olt/olt-ssh.client';
-import { OltHuawei } from './olt/olt-huawei.driver';
+import { OltHuawei, comandosOltParaVlan } from './olt/olt-huawei.driver';
+import type { LecturaOltVlans } from './vlan-salud';
 import { createOltDriver, OLT_BRANDS } from './olt/olt-factory';
 import type { OltTransporte } from './olt/olt-ssh.client';
 import { decryptSecret, encryptSecret } from '../common/secret-box';
@@ -28,7 +29,9 @@ import { formaHex } from '../common/serial-onu';
 
 export type OltAction =
   | 'TEST' | 'BOARDS' | 'ONUS' | 'AUTOFIND' | 'PROFILES' | 'SYSTEM'
-  | 'DETAIL' | 'FIND' | 'PROVISION' | 'ADOPTAR' | 'REBOOT' | 'DELETE' | 'SYNC' | 'LINK' | 'DESC' | 'CATV';
+  | 'DETAIL' | 'FIND' | 'PROVISION' | 'ADOPTAR' | 'REBOOT' | 'DELETE' | 'SYNC' | 'LINK' | 'DESC' | 'CATV'
+  /** Crear una VLAN / ponerla en el uplink (`VlanEquiposService`). */
+  | 'VLAN';
 
 interface AuditMeta {
   sn?: string | null;
@@ -479,15 +482,179 @@ export class OltService {
    * Qué VLAN / perfil / velocidad usan los abonados que ya están en ese puerto.
    * Sirve para precargar el alta sin que el técnico se sepa la planta de memoria.
    */
-  async sugerencia(id: string, frame: number, slot: number, port: number, _model?: string) {
-    // OJO: NO se elige el srv-profile por el nombre del modelo. Se probó y en esta
-    // planta el perfil "del modelo" (F680V9.0) deja la ONU en `config: failed`; el
-    // que sí aplica es el que usan las ONTs que están en `config: normal`. Por eso
-    // el srv-profile sugerido lo calcula `sugerenciaDePuerto` a partir de lo que
-    // YA funciona en el puerto, no del EquipmentID del autofind.
+  async sugerencia(id: string, frame: number, slot: number, port: number, model?: string | null) {
+    // OJO: con vecinas NO se elige el srv-profile por el nombre del modelo. Se
+    // probó y en esta planta el perfil "del modelo" (F680V9.0) deja la ONU en
+    // `config: failed`; el que sí aplica es el que usan las ONTs que están en
+    // `config: normal`. Por eso el srv-profile sugerido lo calcula
+    // `sugerenciaDePuerto` a partir de lo que YA funciona en el puerto. El modelo
+    // y el catálogo de VLANs solo entran cuando el puerto está VACÍO.
     const olt = await this.resolveOlt(id);
-    const r = await this.withDriver(olt, (d) => d.sugerenciaDePuerto(frame, slot, port));
+    const vlanCatalogo = await this.vlansDeCatalogo(olt, slot, port);
+    const r = await this.withDriver(olt, (d) =>
+      d.sugerenciaDePuerto(frame, slot, port, { model: model || null, vlanCatalogo }),
+    );
     return { ok: r.ok, error: r.error, sugerencia: r.data ?? null };
+  }
+
+  /**
+   * El mapa de la(s) OLT de una sede para el catálogo de VLANs: sus tarjetas
+   * GPON/EPON, cuántos puertos tiene cada una y qué VLAN usa HOY cada puerto
+   * según sus service-ports. Con esto `/red/vlans` deja de pedir que se teclee
+   * la OLT, la bandeja y el puerto: se eligen de lo que el equipo tiene, y cada
+   * fila del catálogo se puede contrastar con la planta.
+   * Cacheado 10 min: leer todos los service-ports cuesta ~20 s por OLT.
+   */
+  async mapaVlansDeSede(branchId: string, refresh = false) {
+    if (!branchId) throw new BadRequestException('Falta la sede.');
+    const olts = await this.prisma.olt.findMany({
+      where: { branchId },
+      orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
+    });
+    const salida = [];
+    for (const olt of olts) {
+      const r = await this.mapaDeOlt(olt, refresh);
+      const tarjetas = (r.data?.tarjetas ?? [])
+        .filter((b: any) => b.gpon || b.epon)
+        .map((b: any) => {
+          const slot = Number(b.slot);
+          const n = puertosDeTarjeta(b.board);
+          return {
+            slot, board: b.board, status: b.status, tech: b.gpon ? 'GPON' : 'EPON',
+            puertos: Array.from({ length: n }, (_, port) => {
+              const p = (r.data?.puertos ?? []).find((q: any) => q.frame === 0 && q.slot === slot && q.port === port);
+              return { port, servicios: p?.servicios ?? 0, vlans: p?.vlans ?? [] };
+            }),
+          };
+        });
+      salida.push({
+        id: olt.id, name: olt.name, ok: r.ok, error: r.ok ? null : r.error,
+        leidoEn: (r as any).leidoEn ?? null, cached: !!(r as any).cached, tarjetas,
+      });
+    }
+    return { olts: salida };
+  }
+
+  /** Tarjetas + VLANs por PON de una OLT (caché 10 min, compartida con la salud de VLANs). */
+  private mapaDeOlt(olt: Parameters<OltService['withDriver']>[0] & { id: string }, refresh: boolean) {
+    return this.conCache(`${olt.id}:mapa-vlans`, refresh, async () => {
+      const x = await this.withDriver(olt, async (d) => {
+        const tarjetas = await d.getBoards(0);
+        const puertos = await d.vlansPorPuerto();
+        return { tarjetas: tarjetas || [], puertos: puertos || [] };
+      });
+      return { ok: x.ok, error: x.error, data: x.data, leidoEn: new Date().toISOString() };
+    });
+  }
+
+  /**
+   * Lo que la OLT dice de sus VLANs para `vlan-salud.ts`: cuáles existen, por
+   * qué uplink sale cada una y qué VLAN lleva cada PON. SOLO LECTURA (`display`).
+   * Caché 10 min como el mapa; `refresh` la salta (y relee también el mapa).
+   * `'vlans'` relee solo las VLANs y deja los service-ports cacheados (~20 s):
+   * es lo que hace falta justo antes de configurar.
+   */
+  async lecturaVlansDeOlt(oltId: string, refresh: boolean | 'vlans' = false): Promise<{
+    ok: boolean; error: string; leidoEn: string | null; cached?: boolean; data: LecturaOltVlans | null;
+  }> {
+    const olt = await this.resolveOlt(oltId);
+    const mapa = await this.mapaDeOlt(olt, refresh === true);
+    if (!mapa.ok) return { ok: false, error: mapa.error, leidoEn: null, data: null };
+    const r = await this.conCache(`${olt.id}:salud-vlans`, !!refresh, async () => {
+      const x = await this.withDriver(olt, (d) => d.leerVlans());
+      return { ok: x.ok && !!x.data, error: x.error, data: x.data || null, leidoEn: new Date().toISOString() };
+    });
+    if (!r.ok || !r.data) return { ok: false, error: r.error || 'No se pudieron leer las VLANs de la OLT.', leidoEn: null, data: null };
+    return {
+      ok: true, error: '', leidoEn: r.leidoEn, cached: !!(r as any).cached,
+      data: { ...r.data, puertos: mapa.data?.puertos ?? [] },
+    };
+  }
+
+  /**
+   * Chequeo RÁPIDO de la VLAN de un PON, para avisar antes de autenticar: qué
+   * VLAN lleva el puerto (la forzada, la principal de sus service-ports —del mapa
+   * si está en caché, si no `display service-port port`— o la del catálogo) y
+   * qué dice `display vlan N`. Una sola sesión, dos comandos. SOLO LECTURA.
+   */
+  async vlanDePuerto(oltId: string, frame: number, slot: number, port: number, vlanForzada?: number | null): Promise<{
+    ok: boolean; error: string; vlan: number | null; origen: 'PLAN' | 'PUERTO' | 'CATALOGO' | null;
+    detalle: { existe: boolean; uplinks: { fsp: string; estado: string }[] } | null;
+  }> {
+    const olt = await this.resolveOlt(oltId);
+    const mapa = OltService.cacheLecturas.get(`${olt.id}:mapa-vlans`);
+    const enMapa = mapa && Date.now() - mapa.at < OltService.CACHE_TTL_MS
+      ? (mapa.data?.data?.puertos ?? []).find((q: any) => q.frame === frame && q.slot === slot && q.port === port)
+      : undefined;
+    const catalogo = await this.vlansDeCatalogo(olt, slot, port);
+    const r = await this.withDriver(olt, async (d) => {
+      let vlan: number | null = vlanForzada ?? null;
+      let origen: 'PLAN' | 'PUERTO' | 'CATALOGO' | null = vlan ? 'PLAN' : null;
+      if (!vlan) {
+        let principal: number | null = enMapa?.vlans?.[0]?.vlan ?? null;
+        if (!principal && !mapa) {
+          const cuenta = new Map<number, number>();
+          for (const f of await d.servicePortsDePuerto(frame, slot, port)) {
+            const n = Number(f.vlan);
+            if (n > 0) cuenta.set(n, (cuenta.get(n) ?? 0) + 1);
+          }
+          principal = [...cuenta.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+        }
+        if (principal) { vlan = principal; origen = 'PUERTO'; }
+        else if (catalogo.length === 1) { vlan = catalogo[0]; origen = 'CATALOGO'; }
+      }
+      if (!vlan) return { vlan: null, origen: null, detalle: null };
+      const det = await d.detalleVlan(vlan);
+      return { vlan, origen, detalle: det ? { existe: det.existe, uplinks: det.uplinks.map((u) => ({ fsp: u.fsp, estado: u.estado })) } : null };
+    });
+    return { ok: r.ok && !!r.data, error: r.error, vlan: r.data?.vlan ?? null, origen: r.data?.origen ?? null, detalle: r.data?.detalle ?? null };
+  }
+
+  /**
+   * Crea una VLAN en la OLT y/o la pone en el uplink. Lo decide y lo pide
+   * `VlanEquiposService` tras leer qué falta; aquí solo se ejecuta, con el mismo
+   * gate que todas las escrituras de OLT (dry-run salvo OLT_LIVE / interruptor) y
+   * quedando en `OltActionLog` con el usuario. Tras escribir se olvida la caché
+   * para que la relectura vea el cambio.
+   */
+  async configurarVlanEnOlt(
+    oltId: string, p: { vlan: number; crear: boolean; uplink: string | null }, user?: AuthUser, forzarDryRun = false,
+  ): Promise<{ ok: boolean; dryRun: boolean; commands: string[]; respuestas?: { cmd: string; out: string }[]; error?: string }> {
+    await this.syncLive();
+    const olt = await this.resolveOlt(oltId);
+    const commands = comandosOltParaVlan(p);
+    if (!commands.length) return { ok: true, dryRun: forzarDryRun || !this.live, commands };
+    if (forzarDryRun || !this.live) {
+      if (!forzarDryRun) {
+        await this.audit('VLAN', olt, true, true, `DRY-RUN VLAN ${p.vlan}: ` + commands.join(' · '), { fsp: p.uplink, user });
+      }
+      return { ok: true, dryRun: true, commands };
+    }
+    const r = await this.withDriver(olt, (d) => d.configurarVlan(p));
+    const res = r.data || null;
+    const ok = r.ok && !!res && res.ok;
+    const error = ok ? undefined : (res && res.error) || r.error || 'La OLT no confirmó la configuración.';
+    await this.audit('VLAN', olt, ok, false,
+      `VLAN ${p.vlan}: ` + (res?.respuestas ?? commands.map((cmd) => ({ cmd, out: '' })))
+        .map((x) => `${x.cmd} → ${x.out || '(sin respuesta)'}`).join(' · ') + (error ? ` | ERROR: ${error}` : ''),
+      { fsp: p.uplink, user });
+    OltService.cacheLecturas.delete(`${olt.id}:salud-vlans`);
+    return { ok, dryRun: false, commands, respuestas: res?.respuestas, error };
+  }
+
+  /**
+   * VLAN(s) que el catálogo de la sede (`/red/vlans`) apunta a esa bandeja y
+   * puerto de OLT. Es lo único que dice qué VLAN lleva un PON que aún no tiene
+   * ningún abonado. El catálogo no guarda el frame (todas las OLT son frame 0).
+   */
+  private async vlansDeCatalogo(olt: { id: string; branchId: string | null }, slot: number, port: number): Promise<number[]> {
+    if (!olt.branchId || !Number.isFinite(slot) || !Number.isFinite(port)) return [];
+    // Las heredadas del legacy no tienen OLT ligada: valen si son de la sede.
+    const filas = await this.prisma.vlan.findMany({
+      where: { branchId: olt.branchId, tray: slot, oltPort: port, OR: [{ oltId: olt.id }, { oltId: null }] },
+      select: { vlan: true },
+    });
+    return [...new Set(filas.map((f) => f.vlan).filter((v) => v > 0))];
   }
 
   /**
@@ -1558,4 +1725,12 @@ export class OltService {
     });
     return rows;
   }
+}
+
+/**
+ * Puertos PON de una tarjeta Huawei por su modelo. Las GPBD/EPBD son de 8; las
+ * GPFD/GPHF/GPSF/GPUF (las de esta planta) y el resto, de 16.
+ */
+export function puertosDeTarjeta(board: string): number {
+  return /GPBD|EPBD|GPBH/i.test(board) ? 8 : 16;
 }

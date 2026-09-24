@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { fmtFechaCon } from "@/lib/format";
 import { Modal } from "@/components/Modal";
 import { Icon } from "@/components/Icon";
 import { Button } from "@/components/ui/Button";
@@ -42,7 +43,7 @@ export function CerrarCajaBoton({ cashAccountId, caja, fecha, excedente, proximo
   const [err, setErr] = useState("");
 
   const fechaLarga = (d?: string) =>
-    d ? new Date(d).toLocaleDateString("es-CO", { weekday: "long", day: "2-digit", month: "long" }) : "—";
+    fmtFechaCon(d, { weekday: "long", day: "2-digit", month: "long" });
 
   // El backend no escribe nada si el cajón está vacío o en negativo (el legacy sólo
   // arrastra saldos positivos), así que se dice ANTES de pulsar y no después.

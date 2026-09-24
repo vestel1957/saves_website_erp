@@ -29,7 +29,7 @@ import {
 import { ACTIVACION_APLICADA_EVENT, BAJA_APLICADA_EVENT, RECONEXION_APLICADA_ORDEN_EVENT, TICKET_ANULADA_EVENT, TICKET_ASIGNADO_EVENT, TICKET_DESASIGNADO_EVENT, TICKET_CREADO_EVENT, TICKET_RESUELTO_EVENT } from '../support/support.events';
 import { CAJA_ABIERTA_EVENT, PAGO_APLICADO_EVENT } from '../treasury/treasury.events';
 import { RECONEXION_APLICADA_EVENT } from '../network/network.events';
-import { ESTADO_SERVICIO_EVENT } from '../subscribers/subscribers.events';
+import { ESTADO_SERVICIO_EVENT, ESTADO_ABONADO_EVENT } from '../subscribers/subscribers.events';
 import {
   INTERNAL_ALERT_EVENT,
   WHATSAPP_INBOUND_EVENT,
@@ -112,6 +112,10 @@ export function registrarSuscripciones(): void {
   // `invoices.estado_tv`/`estado_combo` los trae la ida cada 15 minutos, así que lo que
   // no llegue antes al legacy se borra solo y el servicio vuelve a pintarse al aire.
   eventos.on(ESTADO_SERVICIO_EVENT, () => cronService.empujarEstadoServicioAlLegacy(), 'writebackEstadoServicio');
+  // Y el estado del ABONADO, que es la cuarta puerta por la que se mueve
+  // `customers.usu_estado` y la única que no tenía empuje: sin esto, el estado que se
+  // teclea en la ficha dura lo que tarde la siguiente ida (15 min).
+  eventos.on(ESTADO_ABONADO_EVENT, () => cronService.empujarEstadoManualAlLegacy(), 'writebackEstadoManual');
 
   // --- WhatsApp --------------------------------------------------------------
   // Un mensaje entrante tiene DOS destinos, y los dos importan: el bot que lo

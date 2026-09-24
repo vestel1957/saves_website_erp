@@ -12,6 +12,7 @@ import { cop } from "@/lib/subscribers";
 import { type CashAccount, PAY_METHODS, BANKS, isBankMethod } from "@/lib/cobranzas";
 import { SubscriberPicker, type PickedSub } from "@/components/cobranzas/SubscriberPicker";
 import { BeneficiarioPicker, type Beneficiario } from "@/components/cobranzas/BeneficiarioPicker";
+import { CentroCostoField, useCentrosCosto } from "@/components/cobranzas/CentroCostoField";
 import { mensajeDeError } from "@/lib/errores";
 import { useMiCaja } from "@/lib/useMiCaja";
 import { ACCEPT_IMAGEN_PDF } from "@/lib/adjuntos";
@@ -47,6 +48,9 @@ export default function NuevaTransaccionPage() {
   const [method, setMethod] = useState("Cash");
   const [bank, setBank] = useState(BANKS[0]);
   const [cashAccountId, setCashAccountId] = useState("");
+  // Opcional: vacío = el centro de la caja (lo resuelve el backend). La cajera no lo ve.
+  const centros = useCentrosCosto(!authLoading);
+  const [costCenterId, setCostCenterId] = useState("");
   const [sub, setSub] = useState<PickedSub | null>(null);
   const [payerName, setPayerName] = useState("");
   // Egresos: a quién se le paga sale del directorio (proveedores y terceros).
@@ -147,6 +151,7 @@ export default function NuevaTransaccionPage() {
         cashAccountId: cashAccountId ? Number(cashAccountId) : undefined,
         accountName: accounts.find((a) => String(a.id) === cashAccountId)?.name,
         bankName: isBankMethod(method) ? bank : undefined,
+        costCenterId: costCenterId || undefined,
         note: note.trim() || undefined,
       };
       if (type === "Income") {
@@ -207,7 +212,7 @@ export default function NuevaTransaccionPage() {
     } finally {
       setSaving(false);
     }
-  }, [v, amount, category, method, date, cashAccountId, accounts, bank, sub, payerName, beneficiario, destino,
+  }, [v, amount, category, method, date, cashAccountId, costCenterId, accounts, bank, sub, payerName, beneficiario, destino,
       otroNombre, otroDoc, guardarOtro, puedeGuardarEnDirectorio, note, type, file, authFetch, router]);
 
   const esIngreso = type === "Income";
@@ -457,6 +462,12 @@ export default function NuevaTransaccionPage() {
                 </Select>
               </Field>
             ) : <div className="hidden sm:block" />}
+            <CentroCostoField
+              centros={centros}
+              caja={bloqueada ?? accounts.find((a) => String(a.id) === cashAccountId)}
+              value={costCenterId}
+              onChange={setCostCenterId}
+            />
 
             <div className="sm:col-span-2">
               <Field label="Nota">

@@ -107,6 +107,10 @@ export async function bodegasConMaterial(
   ]);
   const ids = grupos.map((g) => g.warehouseId!).filter(Boolean);
   if (!ids.length) return [];
+  // "Tu bodega" no es sólo cosa del técnico de campo: a quien entra con un rol de
+  // mando (ve todas) y además tiene almacén propio, esa bodega le quedaba escondida
+  // entre las "personales" y el material que acababa de recibir no aparecía.
+  const propia = acotada ?? (await bodegaMaterialDelTecnico(prisma, user))?.id;
 
   const s = search?.trim();
   const bodegas = await prisma.materialWarehouse.findMany({
@@ -131,7 +135,7 @@ export async function bodegasConMaterial(
       value: valorPorId.get(w.id) ?? 0,
       isMain: w.isMain,
       personal: Boolean(w.technicianRef),
-      mine: acotada === w.id,
+      mine: propia === w.id,
     }))
     // Son 57 bodegas y 35 de ellas son el almacén personal de un técnico: quien
     // carga material a una obra busca el almacén de la sede, no el de Miguel.

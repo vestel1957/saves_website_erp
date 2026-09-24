@@ -5,7 +5,7 @@
  * controlador. Cablea HTTP -> método: extrae los argumentos de `req` y llama.
  * La lógica sigue viviendo en AccountingController, que ya no lleva decoradores.
  *
- * Endpoints: 28
+ * Endpoints: 31
  */
 import { crearRouter, manejar } from '../core/http/ruta';
 import { validar } from '../core/http/validar';
@@ -76,11 +76,25 @@ accountingRouter.post(
   manejar((req) => accounting.createCostCenter(req.body)),
 );
 
+accountingRouter.get(
+  '/cost-centers/sedes',
+  autenticar,
+  exigirArea('administracion', 'contabilidad', 'gerencia'),
+  manejar((req) => accounting.listCostCenterBranches()),
+);
+
 accountingRouter.delete(
   '/cost-centers/:id',
   autenticar,
   exigirArea('administracion', 'contabilidad'),
   manejar((req) => accounting.deactivateCostCenter(req.params.id)),
+);
+
+accountingRouter.patch(
+  '/cost-centers/:id',
+  autenticar,
+  exigirArea('administracion', 'contabilidad'),
+  manejar((req) => accounting.updateCostCenter(req.params.id, req.body)),
 );
 
 accountingRouter.get(
@@ -206,7 +220,14 @@ accountingRouter.get(
   '/reports/income-statement',
   autenticar,
   exigirArea('administracion', 'contabilidad', 'gerencia'),
-  manejar((req) => accounting.incomeStatement(req.query.from as string, req.query.to as string)),
+  manejar((req) => accounting.incomeStatement(req.query.from as string, req.query.to as string, req.query.costCenterId as string)),
+);
+
+accountingRouter.get(
+  '/reports/income-statement-by-center',
+  autenticar,
+  exigirArea('administracion', 'contabilidad', 'gerencia'),
+  manejar((req) => accounting.incomeStatementByCenter(req.query.from as string, req.query.to as string)),
 );
 
 accountingRouter.get(

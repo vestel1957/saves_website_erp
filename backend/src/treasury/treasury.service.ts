@@ -6,8 +6,8 @@ import { scopeDate } from '../common/date-scope';
 import {
   aporteEfectivo, esNotaSaldo, notaSaldo, proximoDiaHabil, rangoDia, SQL_NOTA_SALDO,
 } from './cierre-legacy';
-import { informeCierre, WOMPI_ID } from './cierre-informe';
-import { alcanceDe, cajasPermitidas, esCajera, exigirAcceso, exigirAccesoAlMovimiento } from './caja-scope';
+import { informeCierre, norm, sedeDelMovimiento, WOMPI_ID } from './cierre-informe';
+import { alcanceDe, cajasPermitidas, esCajera, exigirAcceso, exigirAccesoAlMovimiento, SEDE_BANCO } from './caja-scope';
 import { hoyEnColombia, inicioDelDiaColombia } from '../common/fecha-colombia';
 import { AuthUser } from '../auth/current-user.decorator';
 import { num, round2 } from '../common/money';
@@ -42,23 +42,42 @@ export class TreasuryService {
    * viniera filtrada a la caja de la cajera, así que el total de otras sedes se
    * leía en la primera línea. Sin `user` (procesos internos) no se acota.
    */
-  async stats(params: { from?: string; to?: string; all?: string }, user?: AuthUser) {
+  async stats(params: { from?: string; to?: string; all?: string; sede?: string }, user?: AuthUser) {
     // Mismo alcance que `list`: a la cajera la cifra le habla de SU caja y de HOY,
     // no de los bancos de la empresa ni del año entero.
     const cajera = user ? esCajera(user) : false;
-    let cajaWhere: Prisma.TransactionWhereInput = {};
+    let cajas: number[] | null = null;
     if (cajera) {
       const a = await alcanceDe(this.prisma, user!);
-      cajaWhere = { cashAccountId: a.caja != null ? a.caja : { in: [] } };
-    } else {
-      const permitidas = user ? await cajasPermitidas(this.prisma, user) : null;
-      if (permitidas) cajaWhere = { cashAccountId: { in: permitidas } };
+      cajas = a.caja != null ? [a.caja] : [];
+    } else if (user) {
+      cajas = await cajasPermitidas(this.prisma, user);
     }
+    // Sede, igual que `list` y el panel ejecutivo: las cajas de esa sede, intersecadas
+    // con lo permitido. Antes la cifra de arriba era la de toda la empresa aunque la
+    // tabla estuviera filtrada a una sede.
+    if (params.sede && /^\d+$/.test(params.sede)) {
+      const deSede = (await this.prisma.cashAccount.findMany({
+        where: { branchLegacy: Number(params.sede) }, select: { legacyId: true },
+      })).map((c) => c.legacyId).filter((id): id is number => id != null);
+      cajas = cajas === null ? deSede : cajas.filter((id) => deSede.includes(id));
+    }
+    const cajaWhere: Prisma.TransactionWhereInput = cajas !== null ? { cashAccountId: { in: cajas } } : {};
     const dateWhere: Prisma.TransactionWhereInput = { status: 'VIGENTE', ...cajaWhere };
     const period = cajera && !params.from && !params.to && params.all !== '1'
       ? rangoDia(hoyEnColombia())
       : scopeDate(params.from, params.to, params.all);
     if (period) dateWhere.date = period;
+    // Mismo recaudo que el panel ejecutivo (`SIN_MOVIMIENTO_INTERNO` en
+    // dashboard.service.ts): fuera el arrastre de caja ("Saldo AAAA-MM-DD", el mismo
+    // efectivo que vuelve al cajón cada mañana) y las consignaciones caja→banco
+    // (categoría 'Transferencia', siempre en pares). El tablero decía 212 M de recaudo
+    // en septiembre y el clic traía aquí 486 M. Los movimientos siguen en la lista.
+    const notasArrastre = await this.notasDeArrastre();
+    dateWhere.AND = [
+      { OR: [{ note: null }, { note: { notIn: notasArrastre } }] },
+      { category: { not: 'Transferencia' } },
+    ];
     const [income, expense, anuladas, byCat] = await Promise.all([
       this.prisma.transaction.aggregate({ _sum: { credit: true }, _count: { _all: true }, where: { ...dateWhere, type: 'INCOME' } }),
       this.prisma.transaction.aggregate({ _sum: { debit: true }, _count: { _all: true }, where: { ...dateWhere, type: 'EXPENSE' } }),
@@ -175,6 +194,9 @@ export class TreasuryService {
         // hay ninguna nota nula, pero el schema las permite y un egreso puede nacer sin
         // nota — el día que pase, la plata desaparecería de la suma sin avisar.
         { OR: [{ note: null }, { note: { notIn: notasArrastre } }] },
+        // Las consignaciones caja→banco tampoco son plata que entre o salga (igual que
+        // en `stats` y el panel ejecutivo)... salvo que se estén mirando a propósito.
+        ...(params.category === 'Transferencia' ? [] : [{ category: { not: 'Transferencia' } }]),
       ],
     };
     const [rows, total, sumas, arrastres] = await Promise.all([
@@ -694,7 +716,22 @@ export class TreasuryService {
                 // `monthlyNet` es lo que valió cada mes adelantado YA REBAJADO: sin él
                 // el papel partiría el adelanto al precio de lista y saldría un renglón
                 // de más con el resto suelto.
-                advance: { select: { id: true, monthlyNet: true } },
+                advance: {
+                  select: {
+                    id: true, monthlyNet: true,
+                    // Lo que el anticipo YA pagó: desde 2026-09-16 el mes adelantado se
+                    // factura en el acto, y el papel tiene que nombrar esa factura. Sin
+                    // esto `mesesCubiertos` contaría desde ella y diría "noviembre".
+                    applications: {
+                      where: { revertedAt: null },
+                      orderBy: { createdAt: 'asc' },
+                      select: {
+                        amount: true,
+                        invoice: { select: { tid: true, invoiceDate: true, items: { select: { productName: true } } } },
+                      },
+                    },
+                  },
+                },
                 // De los `items` sólo se mira si el cargo es una AFILIACIÓN, que es el
                 // único renglón que NO se rotula por mes (ver `conceptoFactura`); el
                 // plan de una mensualidad sigue sin salir en el papel.
@@ -738,8 +775,16 @@ export class TreasuryService {
         items.push({ tid: t.invoice.tid, concept: conceptoFactura(t.invoice), amount, method: t.method });
         continue;
       }
+      // Lo del anticipo que todavía no ha pagado ninguna factura.
+      let queda = amount;
       if (t.advance && t.subscriberId) {
-        const meses = await mesesCubiertos(this.prisma, t.subscriberId, amount, {
+        for (const ap of t.advance.applications) {
+          const monto = num(ap.amount);
+          items.push({ tid: ap.invoice.tid, concept: conceptoFactura(ap.invoice), amount: monto, method: t.method });
+          queda = round2(queda - monto);
+        }
+        if (t.advance.applications.length && queda < 1) continue;
+        const meses = await mesesCubiertos(this.prisma, t.subscriberId, queda, {
           mensualidad: t.advance.monthlyNet != null ? num(t.advance.monthlyNet) : undefined,
         });
         if (meses.length) {
@@ -755,6 +800,10 @@ export class TreasuryService {
           }
           continue;
         }
+      }
+      if (t.advance?.applications.length) {
+        items.push({ tid: null, concept: 'Saldo a favor (pago adelantado)', amount: queda, method: t.method });
+        continue;
       }
       items.push({
         tid: null,
@@ -852,11 +901,156 @@ export class TreasuryService {
       arqueo,
       soloCaja: {
         cobranza: soloCaja.cobranza,
-        formaPago: soloCaja.formaPago,
+        dineroEnCaja: soloCaja.dineroEnCaja,
         servicios: soloCaja.servicios,
         tipoServicio: soloCaja.tipoServicio,
         meses: soloCaja.meses,
       },
+    };
+  }
+
+  /**
+   * Los pagos por WOMPI de un día, uno a uno, de la sede de la caja.
+   *
+   * Es el desglose de la fila "WOMPI" de «Bancos», que sólo da cantidad y monto. Usa la
+   * misma regla de sede (`sedeDelMovimiento`) para que el monto cuadre al peso. La
+   * cantidad NO coincide y se devuelven las dos: la fila cuenta movimientos (uno por
+   * factura) y aquí se cuentan pagos (`total.cantidad`) y movimientos (`total.movimientos`).
+   *
+   * La sede y no la caja: Wompi no pasa por ninguna ventanilla, así que no es de
+   * "Yopal2" ni de "Caja Virtual" sino de la sede. Todas las cajas de una sede ven la
+   * misma lista.
+   *
+   * Un pago que salda dos facturas son dos movimientos con la misma referencia: se
+   * agrupan y se cuenta UN pago, que es lo que el cliente hizo.
+   */
+  async cashCloseWompi(cashAccountId: number, date: string, user: AuthUser) {
+    await exigirAcceso(this.prisma, user, cashAccountId);
+    const d = new Date(`${date}T00:00:00.000Z`);
+    if (Number.isNaN(d.getTime())) throw new NotFoundException('Fecha inválida');
+
+    const caja = await this.prisma.cashAccount.findUnique({
+      where: { legacyId: cashAccountId },
+      select: { branchLegacy: true },
+    });
+    const sedeId = caja?.branchLegacy && caja.branchLegacy !== SEDE_BANCO ? caja.branchLegacy : null;
+    const sede = sedeId
+      ? await this.prisma.branch.findUnique({ where: { legacyId: sedeId }, select: { legacyId: true, name: true } })
+      : null;
+    const vacio = {
+      sede: sede ? { id: sede.legacyId, nombre: sede.name } : null,
+      fecha: d,
+      total: { cantidad: 0, movimientos: 0, monto: 0 },
+      anulados: { cantidad: 0, monto: 0 },
+      porMedio: [] as { medio: string | null; cantidad: number; monto: number }[],
+      pagos: [] as unknown[],
+    };
+    if (!sede) return vacio;
+
+    // La MISMA regla de sede que la fila WOMPI de «Bancos» (`sedeDelMovimiento`: la de
+    // la factura y, si viene vacía, la del cliente), para que lista y fila cuadren al
+    // peso. Se filtra en memoria: son los Wompi de UN día (~200 filas) y la regla mira
+    // dos campos de dos tablas con un "si no, el otro" que Prisma no expresa.
+    const delDia = await this.prisma.transaction.findMany({
+      where: { cashAccountId: WOMPI_ID, date: rangoDia(d), noShow: false },
+      select: {
+        id: true, credit: true, status: true, payuOrderId: true, createdAt: true,
+        subscriberId: true,
+        subscriber: { select: { ...SUB_SELECT, branch: { select: { name: true } } } },
+        invoice: { select: { id: true, tid: true, branchRef: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    const movs = delDia.filter((m) => sedeDelMovimiento(m) === norm(sede.name));
+
+    const refs = [...new Set(movs.map((m) => m.payuOrderId).filter((r): r is string => !!r))];
+    const ordenes = refs.length
+      ? await this.prisma.paymentOrder.findMany({
+          where: { reference: { in: refs } },
+          select: {
+            id: true, reference: true, method: true, gatewayTxId: true,
+            appliedAt: true, appliedBy: true, amount: true,
+          },
+        })
+      : [];
+    const ordenDe = new Map(ordenes.map((o) => [o.reference, o]));
+
+    type Pago = {
+      clave: string;
+      referencia: string | null;
+      paymentOrderId: string | null;
+      medio: string | null;
+      gatewayTxId: string | null;
+      /**
+       * Cuándo se aplicó. Sólo se da cuando lo aplicó ESTE sistema: el portal le pregunta
+       * en el mismo instante en que Wompi aprueba, así que es la hora del pago. La fecha
+       * que trae la orden del portal va corrida unas 7 h (hora local de su servidor) y la
+       * del movimiento de un pago del legacy es la hora del sync, así que ninguna sirve.
+       */
+      hora: Date | null;
+      aplico: 'nexus' | 'legacy' | null;
+      subscriberId: string | null;
+      cliente: string | null;
+      abonado: number | null;
+      facturas: { id: string; tid: number }[];
+      monto: number;
+      anulado: boolean;
+    };
+    const porClave = new Map<string, Pago>();
+    for (const m of movs) {
+      const clave = m.payuOrderId ?? m.id;
+      const o = m.payuOrderId ? ordenDe.get(m.payuOrderId) : undefined;
+      const p = porClave.get(clave) ?? {
+        clave,
+        referencia: m.payuOrderId,
+        paymentOrderId: o?.id ?? null,
+        medio: o?.method ?? null,
+        gatewayTxId: o?.gatewayTxId ?? null,
+        hora: o?.appliedBy === 'NEXUS' ? o.appliedAt : null,
+        aplico: o?.appliedBy === 'NEXUS' ? 'nexus' : o ? 'legacy' : null,
+        subscriberId: m.subscriberId,
+        cliente: subName(m.subscriber),
+        abonado: m.subscriber?.abonado ?? null,
+        facturas: [],
+        monto: 0,
+        anulado: true,
+      } as Pago;
+      if (m.invoice?.tid && !p.facturas.some((f) => f.id === m.invoice!.id)) {
+        p.facturas.push({ id: m.invoice.id, tid: m.invoice.tid });
+      }
+      // Un pago está anulado sólo si TODOS sus movimientos lo están; el monto que cuenta
+      // es el vigente, y el de uno anulado entero se enseña aparte.
+      if (m.status !== 'ANULADA') { p.anulado = false; p.monto = round2(p.monto + num(m.credit)); }
+      porClave.set(clave, p);
+    }
+    // Lo anulado entero se muestra con el monto que tuvo, para que se vea qué se cayó.
+    for (const m of movs) {
+      const p = porClave.get(m.payuOrderId ?? m.id)!;
+      if (p.anulado) p.monto = round2(p.monto + num(m.credit));
+    }
+
+    const pagos = [...porClave.values()].sort((a, b) =>
+      (a.hora?.getTime() ?? Number.MAX_SAFE_INTEGER) - (b.hora?.getTime() ?? Number.MAX_SAFE_INTEGER));
+    const vigentes = pagos.filter((p) => !p.anulado);
+    const medios = new Map<string | null, { medio: string | null; cantidad: number; monto: number }>();
+    for (const p of vigentes) {
+      const b = medios.get(p.medio) ?? { medio: p.medio, cantidad: 0, monto: 0 };
+      b.cantidad++; b.monto = round2(b.monto + p.monto);
+      medios.set(p.medio, b);
+    }
+    const anulados = pagos.filter((p) => p.anulado);
+
+    return {
+      ...vacio,
+      total: {
+        cantidad: vigentes.length,
+        // Lo que cuenta la fila WOMPI de «Bancos»: un movimiento por factura saldada.
+        movimientos: movs.filter((m) => m.status !== 'ANULADA').length,
+        monto: round2(vigentes.reduce((s, p) => s + p.monto, 0)),
+      },
+      anulados: { cantidad: anulados.length, monto: round2(anulados.reduce((s, p) => s + p.monto, 0)) },
+      porMedio: [...medios.values()].sort((a, b) => b.monto - a.monto),
+      pagos: pagos.map(({ clave: _c, ...p }) => p),
     };
   }
 

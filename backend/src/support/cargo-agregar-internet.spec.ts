@@ -192,7 +192,7 @@ function armarCobro(material: any = null, ajuste: string | null = null) {
       }),
     ),
   };
-  const posting = { postSalesInvoice: jest.fn().mockResolvedValue({}) };
+  const posting = { postSalesInvoice: jest.fn().mockResolvedValue({}), centroDeAbonado: jest.fn().mockResolvedValue('cc-sede') };
   return { srv: new CargoOrdenService(prisma as any, posting as any), prisma, posting, facturas };
 }
 

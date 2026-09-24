@@ -9,6 +9,7 @@ import { useAuth } from "@/context/AuthProvider";
 import { listaJson, mensajeDeError } from "@/lib/errores";
 import { fullCurrency } from "@/lib/format";
 import { type Plan } from "@/lib/plans";
+import { TitularFields, faltaEnTitular, titularDesde, titularPayload, titularTexto, type TitularValor } from "@/components/soporte/TitularFields";
 import { DireccionFields, DIRECCION_VACIA, NOM_KEYS, ZONA_KEYS, direccionArmada, type DireccionValor } from "@/components/subscribers/DireccionFields";
 
 /** Una clase de orden con sus detalles, tal como la sirve `/support/order-catalog`. */
@@ -36,6 +37,8 @@ export type OrdenEditable = {
    * `temporales`) y las que abre el chatbot con el plan por confirmar.
    */
   megas?: { planId: string | null; plan: string | null; a: number | null; de: number | null } | null;
+  /** El cambio de titular que la orden ya tiene registrado, si tiene alguno. */
+  cambioTitular?: { desde: string | null; hasta: string; datos: Record<string, unknown> | null } | null;
 };
 
 /** El plan de internet que el cliente tiene HOY (`/subscribers/:id/plan`). */
@@ -109,6 +112,9 @@ export function EditarOrdenModal({
   const [planes, setPlanes] = useState<Plan[]>([]);
   const [servicios, setServicios] = useState<ServicioActual[]>([]);
   const [planNuevo, setPlanNuevo] = useState(orden.megas?.planId ?? "");
+  /** Los datos del nuevo titular, desde los que la orden ya tenga. */
+  const [titularInicial] = useState(() => titularDesde(orden.cambioTitular?.datos));
+  const [titular, setTitular] = useState<TitularValor>(titularInicial);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -165,6 +171,12 @@ export function EditarOrdenModal({
   const porTraslado = type.trim().toLowerCase() === "traslado";
   /** La baja del cliente: su "falla reportada" es el motivo del retiro. */
   const porRetiro = type.trim().toLowerCase() === "retiro voluntario";
+  /**
+   * El cambio de titular: las que abre el chatbot nacen sin los datos (por chat
+   * solo se dicta el nombre) y se completan aquí.
+   */
+  const porTitular = type.trim().toLowerCase() === "cambio de titular";
+  const titularTocado = JSON.stringify(titular) !== JSON.stringify(titularInicial);
   /**
    * 'Subir megas' / 'Bajar megas': las únicas órdenes que dicen a CUÁNTAS. Se
    * corrige aquí por lo mismo que el destino de un traslado — hay órdenes que nacen
@@ -301,6 +313,10 @@ export function EditarOrdenModal({
       setErr(`«${planElegido?.name}» ${subeMegas ? "no sube" : "no baja"} nada: el cliente venía de ${origenMegas.megas} Megas.`);
       return;
     }
+    if (porTitular && titularTocado) {
+      const falta = faltaEnTitular(titular);
+      if (falta) { setErr(falta); return; }
+    }
     setSaving(true);
     try {
       const res = await authFetch(`/support/tickets/${orden.id}`, {
@@ -318,6 +334,9 @@ export function EditarOrdenModal({
           ...(conPlanInternet && planNuevo && planNuevo !== (orden.megas?.planId ?? "")
             ? { planToId: planNuevo }
             : {}),
+          // El titular solo viaja si se tocó: guardar la observación no puede
+          // reescribirle la ficha al cliente.
+          ...(porTitular && titularTocado ? { newHolder: titularPayload(titular) } : {}),
           // El destino solo viaja si se escribió algo: abrir este modal en una orden
           // de traslado y guardar la observación no puede reescribir la dirección.
           ...(porTraslado && destinoNuevo
@@ -496,6 +515,27 @@ export function EditarOrdenModal({
               Si es distinta a la que tiene la ficha, el cliente queda registrado ahí. El cobro del traslado no se
               toca: esta orden ya nació con su factura (o sin ella).
             </p>
+          </div>
+        )}
+
+        {porTitular && (
+          <div className="rounded-lg border border-border-default bg-surface-2 p-3">
+            <div className="mb-1 text-[13px] font-semibold text-text-primary">
+              {orden.cambioTitular ? "Corregir los datos del nuevo titular" : "Datos del nuevo titular"}
+            </div>
+            <p className="mb-3 text-[12px] text-text-tertiary">
+              {orden.cambioTitular
+                ? <>La orden dice <span className="text-text-secondary">{orden.cambioTitular.hasta}</span>
+                    {orden.cambioTitular.desde ? <> (antes: {orden.cambioTitular.desde})</> : null}. </>
+                : <>Esta orden todavía no dice a nombre de quién queda el servicio. </>}
+              Al guardar, la ficha del cliente queda con estos datos.
+            </p>
+            <TitularFields value={titular} onChange={(patch) => setTitular((p) => ({ ...p, ...patch }))} />
+            {titularTocado && titularTexto(titular) && (
+              <p className="mt-2 text-[12px] text-text-secondary">
+                Queda a nombre de: <b className="text-text-primary">{titularTexto(titular)}</b>
+              </p>
+            )}
           </div>
         )}
 

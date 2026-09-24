@@ -291,17 +291,28 @@ model Account {
 
 /// Cost centers — hierarchical, optional on every journal line
 model CostCenter {
-  id       String       @id @default(cuid())
-  code     String       @unique
+  id       String         @id @default(cuid())
+  code     String         @unique
   name     String
   parentId String?
-  parent   CostCenter?  @relation("CostCenterTree", fields: [parentId], references: [id])
-  children CostCenter[] @relation("CostCenterTree")
-  isActive Boolean      @default(true)
+  parent   CostCenter?    @relation("CostCenterTree", fields: [parentId], references: [id])
+  children CostCenter[]   @relation("CostCenterTree")
+  isActive Boolean        @default(true)
+  /// SEDE = centro de una sede (enlazado desde Branch.costCenterId), GENERAL = «Administración
+  /// general» (gastos compartidos sin repartir), OTRO = cualquier otro. Ver scripts/sembrar-centros-costo.ts.
+  kind     CostCenterKind @default(OTRO)
+  /// Sede a la que pertenece este centro (lado inverso de Branch.costCenterId).
+  branch   Branch?
 
   lines              JournalLine[]
   inventoryMovements InventoryMovement[] // salidas de inventario imputadas a este centro de costo
   createdAt          DateTime            @default(now())
+}
+
+enum CostCenterKind {
+  SEDE
+  GENERAL
+  OTRO
 }
 
 /// Fiscal periods drive the accounting close (monthly + annual)
@@ -2854,20 +2865,23 @@ enum EInvoicePayMethod {
 
 /// Sede / grupo (`customers_group`, gid). Determina Mikrotik y catálogos por ciudad.
 model Branch {
-  id          String               @id @default(cuid())
-  legacyId    Int                  @unique // customers_group.id (gid)
-  name        String // title (Yopal, Villanueva, Monterrey, Mocoa, Aguazul, Tauramena, Villavicencio)
-  summary     String?
-  dir         String?
-  subscribers Subscriber[]
-  mikrotiks   Mikrotik[]
-  olts        Olt[]
-  naps        Nap[]
-  vlans       Vlan[]
-  genieacs    GenieacsConnection[]
+  id           String               @id @default(cuid())
+  legacyId     Int                  @unique // customers_group.id (gid)
+  name         String // title (Yopal, Villanueva, Monterrey, Mocoa, Aguazul, Tauramena, Villavicencio)
+  summary      String?
+  dir          String?
+  subscribers  Subscriber[]
+  mikrotiks    Mikrotik[]
+  olts         Olt[]
+  naps         Nap[]
+  vlans        Vlan[]
+  genieacs     GenieacsConnection[]
   /// Promociones cuyo público se definió por esta sede.
-  promotions  Promotion[]          @relation("PromotionBranches")
-  createdAt   DateTime             @default(now())
+  promotions   Promotion[]          @relation("PromotionBranches")
+  /// Centro de costo de la sede (contabilidad de gestión: estado de resultados por sede).
+  costCenterId String?              @unique
+  costCenter   CostCenter?          @relation(fields: [costCenterId], references: [id])
+  createdAt    DateTime             @default(now())
 }
 
 /// Suscriptor / abonado ISP. Núcleo del legacy `customers` (65 cols) normalizado.
@@ -2918,6 +2932,22 @@ model Subscriber {
   // --- Sede ---
   branchId String?
   branch   Branch? @relation(fields: [branchId], references: [id])
+
+  // --- Código de afiliado (funcionario que trajo al cliente) ---
+  // Se fija SOLO en el alta (`SubscribersService.create`) y no lo toca el sync del
+  // legacy, que no tiene esta columna. `affiliateCode` guarda el código tal como se
+  // digitó; `affiliateBy` es quién hizo el alta (lo que deja ver si alguien pone su
+  // propio código a todo el que entra por ventanilla).
+  affiliateStaffId String?
+  affiliateStaff   Staff?    @relation("AfiliadosDelFuncionario", fields: [affiliateStaffId], references: [id])
+  affiliateCode    String?
+  affiliateAt      DateTime?
+  affiliateBy      String?
+  // Tipo de venta del alta (ver `subscribers/canal-venta.ts`): OFICINA | REDES | REFERIDO,
+  // y el subtipo (FACEBOOK/INSTAGRAM/TIKTOK, FAMILIAR/AMIGO/FUNCIONARIO). Sólo lo fija el
+  // alta de nexus; los clientes del legacy y los anteriores al 2026-09-23 lo tienen null.
+  saleChannel      String?
+  saleSubchannel   String?
 
   // --- Red (PPPoE / Mikrotik) ---
   pppUsername String? // name_s (secret PPP; vacío ⇒ sin conectividad)
@@ -3026,6 +3056,8 @@ model Subscriber {
   @@index([phone1])
   @@index([status])
   @@index([branchId])
+  @@index([affiliateStaffId, affiliateAt])
+  @@index([saleChannel, saleSubchannel])
   /// Fichas editadas aquí: el writeback las relee en cada pasada.
   @@index([editedAt])
   // Rotación de los recordatorios por WhatsApp: se recorren los morosos por
@@ -4181,9 +4213,13 @@ model CalendarEvent {
   rid         Int? // id relacionado
   assignedBy  String? // asigno
   priority    String    @default("Media") // Baja / Media / Alta / Urgente — mismo vocabulario que Ticket
+  /// Funcionarios invitados (`User.id`), 2026-09-23. A cada uno le suena la campanita
+  /// al invitarlo y el evento le aparece en su «Mi agenda».
+  attendeeIds String[]  @default([])
 
   @@index([start])
   @@index([orderNo])
+  @@index([attendeeIds], type: Gin)
 }
 
 /// Pago fijo programado (2026-07-31): arriendo, servicios, vigilancia… Lo define
@@ -4275,40 +4311,46 @@ model StaffArea {
 
 /// Empleado / usuario del sistema (legacy `employee_profile` 1:1 con `aauth_users`).
 model Staff {
-  id          String     @id @default(cuid())
-  legacyId    Int?       @unique // employee_profile.id = aauth_users.id
-  name        String
-  docNumber   String? // dto
-  username    String? // aauth_users.username
-  email       String? // aauth_users.email
-  role        Int? // aauth_users.roleid (2..5)
-  entryDate   DateTime?  @db.Date // ingreso
-  rh          String? // grupo sanguíneo
-  eps         String? // salud
-  pension     String? // pensiones
-  address     String?
-  city        String?
-  region      String?
-  country     String?
-  areaId      String?
-  area        StaffArea? @relation(fields: [areaId], references: [id])
-  areaLegacy  Int?
-  phone       String?
-  phoneAlt    String? // phonealt
-  picture     String?
-  sign        String?
-  banned      Boolean    @default(false)
-  lastLogin   DateTime?
-  sedeAccede  String? // CSV de sedes
+  id            String     @id @default(cuid())
+  legacyId      Int?       @unique // employee_profile.id = aauth_users.id
+  name          String
+  docNumber     String? // dto
+  username      String? // aauth_users.username
+  email         String? // aauth_users.email
+  role          Int? // aauth_users.roleid (2..5)
+  entryDate     DateTime?  @db.Date // ingreso
+  rh            String? // grupo sanguíneo
+  eps           String? // salud
+  pension       String? // pensiones
+  address       String?
+  city          String?
+  region        String?
+  country       String?
+  areaId        String?
+  area          StaffArea? @relation(fields: [areaId], references: [id])
+  areaLegacy    Int?
+  phone         String?
+  phoneAlt      String? // phonealt
+  picture       String?
+  sign          String?
+  banned        Boolean    @default(false)
+  lastLogin     DateTime?
+  sedeAccede    String? // CSV de sedes
   /// Excepción al turno obligatorio del técnico: ve y abre TODA su agenda del día en
   /// vez de una visita a la vez (2026-09-02, a pedido del usuario, para Oscar
   /// Rodríguez Fonseca). Ver `src/support/turno.ts`.
-  agendaLibre Boolean    @default(false)
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  agendaLibre   Boolean    @default(false)
+  /// Código de afiliado que el funcionario repartía (`VES-K7M2`). RETIRADO el 2026-09-23:
+  /// el alta elige al funcionario de una lista (`staff/afiliadores.ts`). Queda sin uso.
+  affiliateCode String?    @unique
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
 
   /// Órdenes de servicio asignadas a este funcionario (base del tablero de rendimiento).
   tickets Ticket[] @relation("StaffTickets")
+
+  /// Clientes que se dieron de alta con su código de afiliado.
+  afiliados Subscriber[] @relation("AfiliadosDelFuncionario")
 
   /// Hoja de vida, cédula, contrato y certificados de este funcionario.
   documents StaffDocument[]
@@ -5036,31 +5078,37 @@ model PaymentImportBatch {
 
 /// Fila del cargue (una por pago). estado: Inicial | Cargado | Error | Usuario No Existe | Duplicado.
 model PaymentImportRow {
-  id             String             @id @default(cuid())
+  id                       String             @id @default(cuid())
   /// `datos_archivo_excel_cargue.id` del legacy (ver PaymentImportBatch.legacyId).
-  legacyId       Int?               @unique
-  batchId        String
-  batch          PaymentImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
-  rowNumber      Int // fila en el archivo
-  documento      String // columna B (id/abonado/documento del cliente)
-  amount         Decimal            @db.Decimal(18, 2) // columna C (monto)
-  method         String             @default("EFECTY") // columna D (medio de pago)
-  reference      String? // ref_efecty, columna E (idempotencia)
-  date           DateTime?          @db.Date // columna A (fecha del pago)
-  status         String             @default("Inicial")
-  subscriberId   String? // cliente emparejado
+  legacyId                 Int?               @unique
+  batchId                  String
+  batch                    PaymentImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  rowNumber                Int // fila en el archivo
+  documento                String // columna B (id/abonado/documento del cliente)
+  amount                   Decimal            @db.Decimal(18, 2) // columna C (monto)
+  method                   String             @default("EFECTY") // columna D (medio de pago)
+  reference                String? // ref_efecty, columna E (idempotencia)
+  date                     DateTime?          @db.Date // columna A (fecha del pago)
+  status                   String             @default("Inicial")
+  subscriberId             String? // cliente emparejado
   /// Nombre del cliente emparejado (se resuelve al cargar, para poder revisar el
   /// archivo ANTES de aplicarlo).
-  subscriberName String?
+  subscriberName           String?
   /// Cuenta de tesorería a la que entra la plata, resuelta desde el método de la
   /// columna D. En el legacy esto es `accounts.holder = metodo_pago`: sin esto el
   /// recaudo no cae en BANCOLOMBIA TV / TELECOMUNICACIONES y no cuadra el banco.
-  cashAccountId  Int?
-  message        String? // detalle del resultado
-  transactionId  String? // primera transacción de recaudo generada
-  createdAt      DateTime           @default(now())
+  cashAccountId            Int?
+  message                  String? // detalle del resultado
+  transactionId            String? // primera transacción de recaudo generada
+  /// Pago aplicado cuya reconexión TODAVÍA no corrió. Se pone al aplicar la fila y se
+  /// borra cuando `porPagoLote` termina su tanda. Si el backend se reinicia en medio
+  /// (pasó el 2026-09-22 con 22SEPTIEMBRE2026.xlsx: 7 abonados pagaron y siguieron
+  /// cortados), el cron `cargue-reconexion` la recoge a los pocos minutos.
+  reconexionPendienteDesde DateTime?
+  createdAt                DateTime           @default(now())
 
   @@index([batchId])
+  @@index([reconexionPendienteDesde])
   @@index([reference])
   @@index([status])
 }
@@ -5242,6 +5290,7 @@ model Olt {
   onus               OltOnu[]
   planProfiles       PlanOltProfile[]
   provisionRequests  OltProvisionRequest[]
+  vlans              Vlan[]
   createdAt          DateTime              @default(now())
 
   @@index([branchId])
@@ -5368,13 +5417,18 @@ model Vlan {
   branch     Branch? @relation(fields: [branchId], references: [id])
   sedeLegacy Int
   vlan       Int
+  /// Texto libre heredado del legacy ("Duitama", "Hub local"). Desde 2026-09-22
+  /// la OLT se elige de las registradas (`oltId`) y este campo lleva su nombre.
   olt        String?
+  oltId      String?
+  oltRef     Olt?    @relation(fields: [oltId], references: [id], onDelete: SetNull)
   tray       Int? // bandeja
   oltPort    Int? // puertolt
   detail     String // det_vlan
   naps       Nap[]
 
   @@index([branchId])
+  @@index([oltId])
 }
 
 /// Caja NAP (legacy `naps`).
@@ -5784,6 +5838,22 @@ model Ticket {
   /// Cuándo se escribió la dirección nueva en la ficha del abonado.
   moveAppliedAt  DateTime?
 
+  // --- Cambio de titular (2026-09-17) ---
+  // El servicio pasa a nombre de otra persona. La orden pide sus datos, los escribe
+  // en la ficha al abrirse y guarda la foto del titular anterior: la ficha solo sabe
+  // quién es el titular HOY.
+  //
+  /// Datos del nuevo titular: `{ customerType, firstName, …, docType, docNumber,
+  /// phone1, phone2, email }`, las mismas columnas de `Subscriber`.
+  holderTo        Json?
+  /// 'Nombre · CC 123' del nuevo titular, para leerlo sin abrir el JSON.
+  holderToText    String?
+  /// Foto del titular que tenía la ficha al registrarse el cambio.
+  holderFrom      Json?
+  holderFromText  String?
+  /// Cuándo se escribieron los datos nuevos en la ficha.
+  holderAppliedAt DateTime?
+
   // --- Cambio de megas (2026-09-02) ---
   // 'Subir megas' / 'Bajar megas' son órdenes que no decían CUÁNTAS: la cascada de
   // cierre dejaba la nota "aplica el nuevo plan desde su ficha" y el dato vivía en
@@ -5986,6 +6056,10 @@ model TodoTask {
   priority    TodoPriority @default(MEDIUM)
   rid         Int?
   score       Int? // puntuacion
+  /// Fecha en que se REALIZÓ la tarea (2026-09-17). Se sella sola al pasarla a Hecha y
+  /// se borra si se reabre; quien la cierra puede corregirla si la hizo otro día. El
+  /// `todolist` del legacy no guardaba este dato: lo heredado ya hecho queda en null.
+  doneDate    DateTime?    @db.Date
 
   // --- Quién la creó (2026-09-01, ver support/autor-orden.ts) ---
   /// El nombre de quien creó la tarea, congelado al crearla. `employeeId` es el `eid`
@@ -6575,4 +6649,40 @@ model CustomerAdvanceApplication {
 
   @@index([advanceId])
   @@index([invoiceId])
+}
+
+/// Seguimiento mensual de la cartera (pestaña /reportes/cartera-seguimiento).
+///
+/// Una fila por abonado que estaba en CARTERA el día 1 del mes (`mes`). La cohorte se
+/// FOTOGRAFÍA ese día porque el estado pasado no se puede reconstruir: el historial de
+/// estados pierde ~12% de los cambios (ver metrics.service.ts). Mientras el mes está
+/// abierto el reporte calcula el resto en vivo; al abrir el mes siguiente se congelan
+/// los campos de cierre y el mes ya no se mueve, para poder comparar mes a mes.
+/// Sin relación a Subscriber a propósito: la foto no debe caerse si se borra la ficha.
+model CarteraSeguimiento {
+  id              String           @id @default(cuid())
+  /// Primer día del mes seguido.
+  mes             DateTime         @db.Date
+  subscriberId    String
+  branchId        String?
+  estadoInicial   SubscriberStatus
+  deudaInicial    Decimal          @db.Decimal(18, 2)
+  facturasInicial Int              @default(0)
+  /// true = la cohorte no se fotografió el día 1 sino que se armó después (sep-2026).
+  reconstruido    Boolean          @default(false)
+
+  // --- Cierre (NULL mientras el mes está abierto) ---
+  pagado      Decimal?          @db.Decimal(18, 2)
+  pagos       Int?
+  deudaFinal  Decimal?          @db.Decimal(18, 2)
+  estadoFinal SubscriberStatus?
+  /// RETIRADO | ACTIVADO | PARCIAL | PAGO_SIN_ACTIVAR | SIN_PAGO
+  categoria   String?
+  cerradoEn   DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@unique([mes, subscriberId])
+  @@index([mes, categoria])
+  @@index([subscriberId])
 }

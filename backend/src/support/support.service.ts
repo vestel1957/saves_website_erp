@@ -8,6 +8,7 @@ import { clavesDe, esTecnicoDeCampo, fichaDelUsuario } from '../common/tecnico-s
 import { hoyEnColombia } from '../common/fecha-colombia';
 import { textoPlano } from '../common/texto-legacy';
 import { orden, paginacion } from '../common/pagination-params';
+import { traductorDeCajas } from '../common/nap-legacy';
 import { variosDeQuery } from '../common/filtros-query';
 import { traductorDeTecnicos } from '../staff/nombre-tecnico';
 import { formasDeSerial } from './onu-provision.service';
@@ -18,6 +19,8 @@ import { ORDEN_CRONOLOGICO, porFecha } from './orden-cronologico';
 import { DIAS_REZAGO, whereTrabajoDelDia } from './agenda-dia';
 import { GeofenceService } from './geofence.service';
 import { esOrdenDeCampo } from './geofence.policy';
+import { datosQueFaltan } from './datos-cliente.policy';
+import { KIND_VIVIENDA } from '../subscribers/subscriber-file-kinds';
 import { esIpRemotaUtil, faltaLaIpRemota } from './ip-remota.policy';
 import { esUsuarioPppUtil } from '../subscribers/conexion-alta';
 import { esOrdenDeServicio, esReconexion } from './order-types';
@@ -479,7 +482,11 @@ export class SupportService {
     // El plan de internet vigente: el ACTIVO manda si hay varios.
     const internetes = services.filter((s) => s.kind === 'INTERNET');
     const internet = internetes.find((s) => s.status === 'ACTIVO') ?? internetes[0] ?? null;
-    const equipment = sub ? await this.prisma.equipment.findMany({ where: { subscriberId: sub.id }, select: { code: true, mac: true, serial: true, installType: true, port: true, vlan: true, nat: true, status: true, reservedTicketId: true, warehouse: { select: { name: true } } } }) : [];
+    const equipment = sub ? await this.prisma.equipment.findMany({ where: { subscriberId: sub.id }, select: { id: true, code: true, mac: true, serial: true, installType: true, port: true, vlan: true, nat: true, status: true, reservedTicketId: true, warehouse: { select: { name: true } } } }) : [];
+    // La caja NAP y el puerto ROTULADOS de cada equipo (`equipos.nat`/`puerto` son ids
+    // legacy, ver `nap-legacy`): la orden enseñaba "N:241 · PN:2393", que no es lo que
+    // el técnico lee en el poste, y desde aquí se corrigen sin salir de la orden.
+    const cajaDe = await traductorDeCajas(this.prisma, equipment);
     // ONUs del abonado en la OLT: sirve para señalar CUÁL de sus equipos es el
     // que está autenticado y con qué plan quedó, sin abrir otra pantalla.
     const onus = sub ? await this.prisma.oltOnu.findMany({ where: { subscriberId: sub.id }, select: { sn: true, runState: true } }) : [];
@@ -551,8 +558,51 @@ export class SupportService {
       tieneInternet: esUsuarioPppUtil(sub?.pppUsername),
     };
 
+    /**
+     * Y QUÉ HACE FALTA PARA EMPEZARLA (2026-09-18). Mismo principio que el bloque de
+     * arriba —lo dice el servidor, con la misma función que frena el arranque
+     * (`datosQueFaltan`)— pero es otro momento: esto se lee ANTES de tocar nada, para
+     * que el técnico tome la foto y capture el GPS al llegar y no descubra el candado
+     * pulsando «Empezar» con el cliente delante.
+     *
+     * `aplica` viaja aparte de los dos: sirve para que la pantalla sepa que la orden
+     * está sujeta al requisito aunque ya esté todo cumplido (y pueda decir «listo»
+     * en vez de callar).
+     */
+    const fotosVivienda = sub?.id
+      ? await this.prisma.subscriberFile.count({ where: { subscriberId: sub.id, kind: KIND_VIVIENDA } })
+      : 0;
+    const faltanDatos = datosQueFaltan({
+      activo: process.env.TICKET_REQUIRE_CLIENT_DATA !== 'false',
+      tipoOrden: t.type,
+      tiposCampo: await this.geofence.tiposCampo(),
+      permisosUsuario: user?.permissions,
+      hayUsuario: Boolean(user?.id),
+      esTecnicoDeCampo: esTecnicoDeCampo(user),
+      hayCliente: Boolean(sub?.id),
+      tieneUbicacion: Boolean(sub?.gpsLat && sub?.gpsLng),
+      tieneFotoVivienda: fotosVivienda > 0,
+    });
+    const requisitosInicio = {
+      /**
+       * ¿Esta orden está sujeta al requisito? De campo, con cliente, encendido — y
+       * quien mira es un técnico de campo: a sistemas y administración no se les pide
+       * (2026-09-18), así que tampoco se les anuncia.
+       */
+      aplica:
+        deCampo
+        && Boolean(sub?.id)
+        && esTecnicoDeCampo(user)
+        && process.env.TICKET_REQUIRE_CLIENT_DATA !== 'false',
+      /** `true` = FALTA (mismo criterio que los de cierre: lo que se enseña es lo que falta). */
+      ubicacion: faltanDatos.ubicacion,
+      foto: faltanDatos.foto,
+      fotosVivienda,
+    };
+
     return {
       requisitosCierre,
+      requisitosInicio,
       id: t.id, code: t.code, subject: t.subject, type: t.type, created: t.created, finalDate: t.finalDate,
       // `problem` y `section` vienen del WYSIWYG del legacy: salen ya en texto plano.
       status: t.status, priority: t.priority, problem: textoPlano(t.problem), section: textoPlano(t.section),
@@ -574,6 +624,13 @@ export class SupportService {
        */
       traslado: t.moveToText
         ? { desde: t.moveFromText, hasta: t.moveToText, aplicado: t.moveAppliedAt, factura: t.moveInvoiceTid }
+        : null,
+      /**
+       * El CAMBIO DE TITULAR que porta la orden: quién era y quién quedó. `null` en
+       * todo lo demás y en los que nacieron sin datos (los del chatbot).
+       */
+      cambioTitular: t.holderToText
+        ? { desde: t.holderFromText, hasta: t.holderToText, datos: t.holderTo, aplicado: t.holderAppliedAt }
         : null,
       /**
        * A CUÁNTAS MEGAS pasa la orden al cliente: de cuánto venía, a cuánto va y si
@@ -647,9 +704,13 @@ export class SupportService {
         // de la etiqueta: GPON120278E5 ↔ 47504F4E120278E5).
         const formas = new Set(formasDeSerial(e.serial));
         const onu = onus.find((o) => formasDeSerial(o.sn).some((f) => formas.has(f))) ?? null;
+        const caja = cajaDe(e);
         return {
+          // El id va para poder editarle la caja y el puerto desde la propia orden.
+          id: e.id,
           code: e.code, mac: e.mac, serial: e.serial, installType: e.installType,
           port: e.port, vlan: e.vlan, nat: e.nat, status: e.status,
+          napId: caja.napId, napName: caja.napName, portId: caja.portId, portNumber: caja.portNumber,
           // Apartado en bodega PARA ESTA orden al abrirla: el técnico tiene que
           // saber cuál llevarse (ver `EquipoReservaService`).
           reservado: e.reservedTicketId === t.id,

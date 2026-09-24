@@ -166,7 +166,7 @@ export default function ClientesPage() {
       <ListToolbar
         search={search}
         onSearch={setSearch}
-        searchPlaceholder="Buscar por nombre, documento, celular o abonado…"
+        searchPlaceholder="Buscar por nombre, documento, celular, abonado o ID…"
         actions={
           <>
             {/* Se apaga mientras no hay nada que bajar: un Excel con la cabecera

@@ -4,19 +4,39 @@ import * as B from './brand';
 
 const cop = (n: number) =>
   '$ ' + new Intl.NumberFormat('es-CO', { maximumFractionDigits: 0 }).format(Math.round(n || 0));
-const fmt = (d: Date | string | null) => (d ? new Date(d).toLocaleDateString('es-CO') : '—');
+/**
+ * Medianoche UTC exacta = valor "solo fecha" (así serializa el backend sus columnas de
+ * día). Esas se pintan en UTC o se corren un día: hoy el servidor va en Europe/Berlin
+ * (+2) y por eso salen bien de pura suerte — en un huso negativo, como el de Colombia,
+ * el cierre del 16 se imprimiría con fecha del 15. Un `createdAt` real casi nunca cae en
+ * la medianoche UTC exacta, así que ésos siguen en hora local, que es lo que se espera.
+ */
+const soloFecha = (f: Date) =>
+  f.getUTCHours() === 0 && f.getUTCMinutes() === 0 && f.getUTCSeconds() === 0 && f.getUTCMilliseconds() === 0;
+
+const opcionesDia = (f: Date, opts: Intl.DateTimeFormatOptions = {}): Intl.DateTimeFormatOptions =>
+  soloFecha(f) ? { ...opts, timeZone: 'UTC' } : opts;
+
+const fmt = (d: Date | string | null) => {
+  if (!d) return '—';
+  const f = new Date(d);
+  return f.toLocaleDateString('es-CO', opcionesDia(f));
+};
 // Alias hacia el kit de marca: el resto del archivo ya hablaba en estos términos.
 const BRAND = B.NAVY;
 const GRAY = B.INK_3;
 
-const brandHeader = (doc: PDFKit.PDFDocument, title: string, opts?: { right?: string; chip?: string }) =>
+const brandHeader = (doc: PDFKit.PDFDocument, title: string, opts?: { right?: string; chip?: string; nit?: string }) =>
   B.docHeader(doc, title, opts ?? {});
 
 const kv = (doc: PDFKit.PDFDocument, l: string, v: string) => B.kv(doc, l.replace(/:$/, ''), v);
 
 // ---------------------------------------------------------------------------
-const fmtLargo = (d: Date | string | null) =>
-  d ? new Date(d).toLocaleDateString('es-CO', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' }) : '—';
+const fmtLargo = (d: Date | string | null) => {
+  if (!d) return '—';
+  const f = new Date(d);
+  return f.toLocaleDateString('es-CO', opcionesDia(f, { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' }));
+};
 
 type Bucket = { cantidad: number; monto: number };
 
@@ -25,7 +45,10 @@ export type CashCloseInforme = {
   cobranza: { excento: Bucket; base: Bucket; iva: Bucket; total: Bucket };
   porBanco: { nombre: string; cantidad: number; monto: number }[];
   cajaVirtual: { nombre: string; cantidad: number; monto: number };
-  formaPago: { saldoAnterior: Bucket; efectivo: Bucket; transferencia: Bucket; wompi: Bucket };
+  dineroEnCaja: {
+    saldoAnterior: Bucket; recaudo: Bucket; sinFactura: Bucket; totalEnCaja: number;
+    egresos: Bucket; excedente: number; wompi: Bucket;
+  };
   servicios: {
     planes: { clave: string; megas: number; cantidad: number; monto: number }[];
     television: Bucket;
@@ -140,14 +163,20 @@ export function cashClosePdf(res: Response, d: CashCloseData) {
     ['Egresos del día', cop(inf.egresos.total.monto)],
   ]);
 
-  sectionTitle(doc, 'Cómo entró la plata');
-  const fpFilas: [string, number, number][] = [
-    ['Saldo anterior', inf.formaPago.saldoAnterior.cantidad, inf.formaPago.saldoAnterior.monto],
-    ['Efectivo', inf.formaPago.efectivo.cantidad, inf.formaPago.efectivo.monto],
-    ['Transferencia', inf.formaPago.transferencia.cantidad, inf.formaPago.transferencia.monto],
-    ['WOMPI', inf.formaPago.wompi.cantidad, inf.formaPago.wompi.monto],
-  ];
-  tablaRica(doc, fpFilas, 'Total forma de pago');
+  /**
+   * El arqueo, en el orden en que se cuenta la plata a mano: lo que había + lo que entró
+   * = lo que hubo; menos lo que salió = lo que se barre. Sin barra de composición: estas
+   * filas no son partes de un todo, son los pasos de una resta.
+   */
+  const dc = inf.dineroEnCaja;
+  sectionTitle(doc, 'Dinero en caja');
+  tablaRica(doc, [
+    ['Saldo anterior (arrastre)', dc.saldoAnterior.cantidad, dc.saldoAnterior.monto],
+    ['Recaudo del día', dc.recaudo.cantidad, dc.recaudo.monto],
+  ], 'Total en caja', ['', dc.totalEnCaja], { composicion: false });
+  tablaRica(doc, [
+    ['Egresos del día', dc.egresos.cantidad, -dc.egresos.monto],
+  ], 'Excedente barrido', ['', dc.excedente], { composicion: false });
 
   if (d.porCategoria.length) {
     sectionTitle(doc, 'De dónde entró y de dónde salió');
@@ -191,11 +220,12 @@ export function cashClosePdf(res: Response, d: CashCloseData) {
     'Total banco', [inf.porBanco.reduce((s, b) => s + b.cantidad, 0), inf.porBanco.reduce((s, b) => s + b.monto, 0)],
   );
 
-  sectionTitle(doc, 'Resumen por Forma de pago');
-  tablaRica(doc, fpFilas, 'Total forma de pago', [
-    inf.formaPago.saldoAnterior.cantidad + inf.formaPago.efectivo.cantidad + inf.formaPago.transferencia.cantidad + inf.formaPago.wompi.cantidad,
-    inf.formaPago.saldoAnterior.monto + inf.formaPago.efectivo.monto + inf.formaPago.transferencia.monto + inf.formaPago.wompi.monto,
-  ]);
+  sectionTitle(doc, 'Dinero en caja');
+  tablaRica(doc, [
+    ['Saldo anterior (arrastre)', dc.saldoAnterior.cantidad, dc.saldoAnterior.monto],
+    ['Recaudo del día', dc.recaudo.cantidad, dc.recaudo.monto],
+    ['Egresos del día', dc.egresos.cantidad, -dc.egresos.monto],
+  ], 'Excedente barrido', ['', dc.excedente], { composicion: false });
 
   sectionTitle(doc, 'Resumen por Servicios');
   tablaRica(doc, [
@@ -220,7 +250,9 @@ export function cashClosePdf(res: Response, d: CashCloseData) {
   const mesLabel = (base: Date | string, delta: number) => {
     const dd = new Date(base);
     const x = new Date(Date.UTC(dd.getUTCFullYear(), dd.getUTCMonth() + delta, 1));
-    return x.toLocaleDateString('es-CO', { month: 'long', year: 'numeric' });
+    // `Date.UTC` da medianoche UTC del día 1: sin `timeZone` se pinta en la hora del
+    // servidor y en un huso negativo cae al último día del mes anterior.
+    return x.toLocaleDateString('es-CO', { month: 'long', year: 'numeric', timeZone: 'UTC' });
   };
   sectionTitle(doc, 'Resumen de cargos cobrados por meses');
   tablaRica(doc, [
@@ -496,6 +528,7 @@ export function receiptPdf(res: Response, d: ReceiptData) {
   brandHeader(doc, `Recibo de caja N° ${d.number}`, {
     right: 'Comprobante de pago',
     chip: d.method ?? undefined,
+    nit: `NIT ${B.NIT_RECIBO}`,
   });
 
   const s = d.subscriber;
@@ -525,7 +558,7 @@ export function receiptPdf(res: Response, d: ReceiptData) {
     { rotulo: 'Firma / sello de caja', nombre: d.cashier ?? undefined },
     { rotulo: 'Recibí conforme', nota: 'Nombre y cédula' },
   ]);
-  B.finish(doc);
+  B.finish(doc, `${B.EMPRESA.nombre} · NIT ${B.NIT_RECIBO} · Generado por SAVES`);
 }
 
 // ---------------------------------------------------------------------------
@@ -690,6 +723,8 @@ export type PurchaseOrderPdfData = {
   date: Date | string | null;
   dueDate: Date | string | null;
   branchRef: string | null;
+  /** Bodega a la que entra el material (`SupplyOrder.warehouseRef`). */
+  warehouse?: { title: string } | null;
   categoryRef?: string | null;
   notes: string | null;
   supplier: { name: string; nit: string | null; phone: string | null } | null;
@@ -717,6 +752,8 @@ export function purchaseOrderPdf(res: Response, d: PurchaseOrderPdfData) {
     ['Vence', d.dueDate ? fmt(d.dueDate) : '—'],
     ['Categoría', d.categoryRef ?? '—'],
     ['Elaboró', d.createdByName ?? '—'],
+    ['Sede', d.branchRef ?? '—'],
+    ['Bodega destino', d.warehouse?.title ?? '—'],
   ]);
 
   if (d.supplier) {

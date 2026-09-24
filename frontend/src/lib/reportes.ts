@@ -25,6 +25,8 @@ export type ReportFilter = {
   label: string;
   /** De dónde salen las opciones dentro de la respuesta. */
   from: (data: any) => { value: string; label: string }[];
+  /** Texto de la opción vacía. Por defecto "Todos". */
+  todos?: string;
 };
 
 export type ReportMeta = {
@@ -67,6 +69,12 @@ export const REPORTS: ReportMeta[] = [
   { key: "cartera", label: "Cartera / deudores", icon: "alert-triangle", dated: false, group: "gerencia",
     desc: "Los clientes que más deben y cuántas facturas tienen en mora", endpoint: "/reports/top-deudores",
     filters: [{ param: "sede", label: "Sede", from: opciones((d) => d?.opciones?.sedes, (x) => x.id, (x) => x.nombre) }] },
+  { key: "cartera-seguimiento", label: "Seguimiento de cartera", icon: "hand-coins", dated: false, group: "gerencia",
+    desc: "Cuánto de la cartera del día 1 se recuperó en el mes, qué pasó con cada usuario (se reactivó, se retiró, abonó, no pagó) y si la cartera baja o sube mes a mes",
+    filters: [
+      { param: "mes", label: "Mes", todos: "Último mes", from: (d) => d?.opciones?.meses ?? [] },
+      { param: "sede", label: "Sede", from: opciones((d) => d?.opciones?.sedes, (x) => x.id, (x) => x.nombre) },
+    ] },
   { key: "iva", label: "Reporte de IVA", icon: "calculator", dated: true, group: "gerencia",
     desc: "Base gravable, exenta e IVA por documento, para la declaración",
     filters: [
@@ -120,6 +128,12 @@ export const REPORTS: ReportMeta[] = [
     filters: [
       { param: "metodo", label: "Método", from: opciones((d) => d?.porMetodo, (x) => x.metodo, (x) => x.metodo) },
       { param: "caja", label: "Caja", from: opciones((d) => d?.porCaja, (x) => x.caja, (x) => x.caja) },
+    ] },
+  { key: "afiliados", label: "Afiliados por funcionario", icon: "user-plus", dated: true, group: "personal",
+    desc: "Qué clientes quedaron a nombre de cada funcionario en el alta",
+    filters: [
+      { param: "funcionario", label: "Funcionario", from: opciones((d) => d?.opciones?.funcionarios, (x) => x.id, (x) => x.nombre) },
+      { param: "sede", label: "Sede", from: opciones((d) => d?.opciones?.sedes, (x) => x.id, (x) => x.nombre) },
     ] },
   { key: "anulaciones", label: "Anulaciones (control)", icon: "ban", dated: true, group: "personal",
     desc: "Quién anuló qué, por cuánto y cuántos días después del cobro",
@@ -296,6 +310,43 @@ export function buildExportDoc(rep: string, label: string, data: any, from: stri
         rows: (data.porCaja ?? []).map((r: any) => ({ cells: [r.caja, r.movimientos, r.total] })),
       });
       break;
+    case "afiliados":
+      doc.subtitle = `${periodo} · ${data.total ?? 0} clientes afiliados`;
+      doc.tables.push({
+        heading: "Por funcionario",
+        columns: [
+          { label: "Funcionario" },
+          { label: "Código" },
+          { label: "Clientes", align: "right" },
+          { label: "Activos hoy", align: "right" },
+        ],
+        rows: [
+          ...(data.funcionarios ?? []).map((r: any) => ({ cells: [r.nombre, r.codigo ?? "—", r.clientes, r.activos] })),
+          { cells: ["TOTAL", "", data.total ?? 0, data.activos ?? 0], bold: true },
+        ],
+      });
+      doc.tables.push({
+        heading: "Clientes",
+        columns: [
+          { label: "Fecha y hora del alta" },
+          { label: "Abonado", align: "right" },
+          { label: "Cliente" },
+          { label: "Documento" },
+          { label: "Sede" },
+          { label: "Estado" },
+          { label: "Funcionario" },
+          { label: "Código" },
+          { label: "Registró el alta" },
+        ],
+        rows: (data.clientes ?? []).map((r: any) => ({
+          cells: [
+            new Date(r.fecha).toLocaleString("es-CO", { timeZone: "America/Bogota", dateStyle: "short", timeStyle: "short" }),
+            r.abonado, r.nombre ?? "—", r.documento ?? "—", r.sede ?? "—", r.estado ?? "—",
+            r.funcionario ?? "—", r.codigo ?? "—", r.registradoPor ?? "—",
+          ],
+        })),
+      });
+      break;
     case "anulaciones":
       doc.subtitle = `${periodo} · ${data.total ?? 0} anulaciones (${data.tasaPct ?? 0}% de ${data.movimientosPeriodo ?? 0} movimientos)`;
       doc.tables.push({
@@ -394,6 +445,59 @@ export function buildExportDoc(rep: string, label: string, data: any, from: stri
         rows: (data.items ?? []).map((r: any) => ({ cells: [r.abonado, r.name, r.facturas, r.balance] })),
       });
       break;
+    case "cartera-seguimiento": {
+      const r = data.resumen;
+      if (!r) break;
+      const etiqueta: Record<string, string> = Object.fromEntries((data.categorias ?? []).map((c: any) => [c.key, c.label]));
+      doc.subtitle = `${data.mesLabel}${data.sede ? ` · ${data.sede}` : ""}${data.abierto ? ` · en curso, cifras al ${data.corteAl}` : " · cerrado"}`;
+      doc.tables.push({
+        heading: "Balance del mes",
+        columns: [{ label: "Concepto" }, { label: "Valor", align: "right", money: true }],
+        rows: [
+          { cells: ["Cartera inicial", r.carteraInicial] },
+          { cells: ["− Pagaron y se reactivaron", -r.recuperadoActivados] },
+          { cells: ["− Pagaron, pero siguen cortados", -r.recuperadoSinActivar] },
+          { cells: ["− Pagaron y se retiraron", -r.recuperadoRetirados] },
+          { cells: ["− Abonaron una parte", -r.recuperadoParciales] },
+          { cells: ["Valor recuperado en el mes", r.recuperado], bold: true },
+          { cells: ["= Deuda vieja que sigue sin pagar", r.deudaViejaPendiente] },
+          { cells: ["+ Facturas nuevas del mes sin pagar (menos notas y depuraciones)", r.otrosMovimientos] },
+          { cells: [data.abierto ? "= Cartera pendiente hoy" : "= Cartera pendiente al cierre", r.carteraFinal], bold: true },
+          { cells: ["Diferencia (inicial − final)", r.diferencia], bold: true },
+        ],
+      });
+      doc.tables.push({
+        heading: "Usuarios",
+        columns: [{ label: "Resultado" }, { label: "Usuarios", align: "right" }, { label: "Recuperado", align: "right", money: true }, { label: "Deuda vieja pendiente", align: "right", money: true }, { label: "Pendiente total", align: "right", money: true }],
+        rows: [
+          ...(data.categorias ?? []).map((c: any) => ({ cells: [c.label, c.usuarios, c.recuperado, c.deudaVieja, c.deudaFinal] })),
+          { cells: ["Total (pagaron: " + r.usuariosPagaron + ")", r.usuariosInicial, r.recuperado, r.deudaViejaPendiente, r.carteraFinal], bold: true },
+        ],
+      });
+      doc.tables.push({
+        heading: "Detalle por usuario",
+        columns: [
+          { label: "Abonado" }, { label: "Cliente" }, { label: "Sede" }, { label: "Resultado" }, { label: "Estado" },
+          { label: "Debía el día 1", align: "right", money: true }, { label: "Pagó en el mes", align: "right", money: true },
+          { label: "Queda de lo viejo", align: "right", money: true }, { label: "Factura nueva", align: "right", money: true },
+          { label: "Pendiente total", align: "right", money: true },
+        ],
+        rows: (data.items ?? []).map((x: any) => ({
+          cells: [x.abonado, x.nombre, x.sede, etiqueta[x.categoria] ?? x.categoria, x.estadoFinal ?? "", x.deudaInicial, x.pagado, x.deudaVieja, x.deudaNueva, x.deudaFinal],
+        })),
+      });
+      doc.tables.push({
+        heading: "Mes a mes",
+        columns: [
+          { label: "Mes" }, { label: "Cartera inicial", align: "right", money: true }, { label: "Recuperado", align: "right", money: true },
+          { label: "Pagaron", align: "right" }, { label: "Cartera final", align: "right", money: true }, { label: "Diferencia", align: "right", money: true },
+        ],
+        rows: (data.comparativo ?? []).map((m: any) => ({
+          cells: [m.label + (m.abierto ? " (en curso)" : ""), m.carteraInicial, m.recuperado, m.usuariosPagaron, m.carteraFinal, m.diferencia],
+        })),
+      });
+      break;
+    }
     case "iva": {
       const t = data.totales ?? {};
       doc.subtitle = `${periodo} · ${data.tipo === "compras" ? "Compras" : "Ventas"}`;

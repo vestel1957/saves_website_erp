@@ -126,8 +126,10 @@ const contabilidad: NavItem[] = [
   { icon: "list-tree", label: "Plan de cuentas", href: "/contabilidad/plan-de-cuentas" },
   { icon: "book-open", label: "Libro diario y mayor", href: "/contabilidad/libros" },
   { icon: "bar-chart-3", label: "Balance y estados", href: "/contabilidad/informes" },
+  { icon: "bar-chart-3", label: "Resultados por sede", href: "/contabilidad/resultados-por-sede" },
   { icon: "calendar", label: "Cierre de mes", href: "/contabilidad/cierres" },
   { icon: "settings", label: "Mapeo de cuentas", href: "/contabilidad/mapeo-cuentas" },
+  { icon: "list-tree", label: "Centros de costo", href: "/contabilidad/centros-de-costo" },
 ];
 
 // RED / ISP — operación de red que NO es Mikrotik (ese tiene módulo propio).
@@ -217,6 +219,9 @@ const crm: NavItem[] = [
 const personas: NavItem[] = [
   { icon: "folder", label: "Documentos", href: "/documentos" },
   { icon: "layers", label: "Proyectos", href: "/proyectos" },
+  // Cada funcionario con los clientes que trajo (2026-09-23; sin código desde ese día:
+  // el alta elige al funcionario de una lista).
+  { icon: "user-plus", label: "Afiliados", href: "/afiliados" },
   { icon: "list-checks", label: "Tareas / Pendientes", href: "/tareas" },
   // /agenda es el calendario de eventos (omni/events), no un listado de tareas:
   // se renombró al añadir /tareas, que sí es el to-do heredado del legacy.
@@ -241,6 +246,7 @@ const reportes: NavItem[] = [
       { icon: "landmark", label: "Ventas por sede", href: "/reportes/ventas-sede" },
       { icon: "trending-up", label: "Ingresos y egresos", href: "/reportes/ingresos-egresos" },
       { icon: "alert-triangle", label: "Cartera / deudores", href: "/reportes/cartera" },
+      { icon: "hand-coins", label: "Seguimiento de cartera", href: "/reportes/cartera-seguimiento" },
       { icon: "calculator", label: "Reporte de IVA", href: "/reportes/iva" },
     ],
   },
@@ -260,6 +266,7 @@ const reportes: NavItem[] = [
     children: [
       { icon: "hard-hat", label: "Rendimiento de técnicos", href: "/reportes/tecnicos" },
       { icon: "hand-coins", label: "Recaudo por funcionario", href: "/reportes/recaudo-funcionario" },
+      { icon: "user-plus", label: "Afiliados por funcionario", href: "/reportes/afiliados" },
       { icon: "ban", label: "Anulaciones (control)", href: "/reportes/anulaciones" },
       { icon: "history", label: "Actividad en el sistema", href: "/reportes/actividad" },
     ],

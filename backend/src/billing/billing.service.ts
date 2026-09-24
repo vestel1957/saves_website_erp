@@ -325,6 +325,10 @@ export class BillingService {
       })),
       payments: i.transactions.map((t) => ({
         id: t.id, date: t.date, amount: num(t.credit), method: t.method,
+        // Código de la transacción (el consecutivo del legacy, el mismo que Tesorería
+        // muestra como "Código"): contabilidad cruza la factura contra el movimiento
+        // con ese número. null = pago nacido aquí que aún no ha viajado al legacy.
+        codigo: t.legacyId,
         category: t.category, status: t.status, note: t.note,
       })),
       electronic: i.electronicInvoices.map((e) => ({

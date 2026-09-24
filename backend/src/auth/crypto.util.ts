@@ -76,11 +76,17 @@ export interface TokenPayload {
    * equipos), que es justo la que él y nadie más puede armar.
    */
   inv?: boolean;
+  /**
+   * Tiene la pantalla Proyectos concedida a título personal (`screen.proyectos`).
+   * Es el caso de los técnicos autorizados uno a uno (2026-09-21): su área no es la
+   * dueña de /proyectos y el edge los rebotaba aunque la API ya los dejara pasar.
+   */
+  prj?: boolean;
 }
 
 export function signToken(
   user: { id: string; email: string; name: string },
-  claims?: { areas?: string[]; sa?: boolean; inv?: boolean },
+  claims?: { areas?: string[]; sa?: boolean; inv?: boolean; prj?: boolean },
 ): string {
   const header = b64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
   const now = Math.floor(Date.now() / 1000);
@@ -93,7 +99,7 @@ export function signToken(
       exp: now + TOKEN_TTL_SECONDS,
       // Si se pasan claims, `areas` se emite SIEMPRE (aunque sea []) para que el
       // middleware distinga un token nuevo (enforce) de uno viejo sin el claim.
-      ...(claims ? { areas: claims.areas ?? [], sa: !!claims.sa, inv: !!claims.inv } : {}),
+      ...(claims ? { areas: claims.areas ?? [], sa: !!claims.sa, inv: !!claims.inv, prj: !!claims.prj } : {}),
     }),
   );
   const signature = createHmac('sha256', getSecret())

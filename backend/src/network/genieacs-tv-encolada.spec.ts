@@ -16,7 +16,11 @@ describe('GenieacsService · TV: la tarea encolada no es una TV restaurada', () 
 
   const armar = (respuestas: Record<string, { ok: boolean; status: number; queued: boolean }>) => {
     const prisma: any = {
-      appSetting: { findUnique: jest.fn().mockResolvedValue({ value: 'true' }) },
+      appSetting: {
+        // La TV "sólo en el sistema" se apaga aquí: estas pruebas van por la red.
+        findUnique: jest.fn(async ({ where }: any) =>
+          where?.key === 'network.tvSoloSistema' ? { value: 'false' } : { value: 'true' }),
+      },
       genieacsServer: { findFirst: jest.fn().mockResolvedValue(server) },
       genieacsActionLog: { create: jest.fn().mockResolvedValue({}) },
       subscriber: { findMany: jest.fn() },

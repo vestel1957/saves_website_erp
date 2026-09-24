@@ -48,6 +48,25 @@ export function fmtDate(d: string | Date | null | undefined): string {
 }
 
 /**
+ * Fecha con opciones a medida, respetando la regla de "solo fecha".
+ *
+ * Para las pantallas que necesitan un formato propio (día de la semana abreviado, mes sin
+ * año, sólo mes y año…) y que si no acaban escribiendo su `toLocaleDateString` suelto, sin
+ * `timeZone`, que es como vuelve a colarse el desfase de un día. En el cierre de caja
+ * llegó a pintar el informe del 16 de septiembre rotulado "agosto de 2026".
+ */
+export function fmtFechaCon(
+  d: string | Date | null | undefined,
+  opts: Intl.DateTimeFormatOptions,
+  vacio = "—",
+): string {
+  if (!d) return vacio;
+  const fecha = d instanceof Date ? d : new Date(d);
+  if (Number.isNaN(fecha.getTime())) return vacio;
+  return fecha.toLocaleDateString("es-CO", { ...opts, ...(esSoloFecha(fecha) ? { timeZone: "UTC" } : {}) });
+}
+
+/**
  * Día largo con su nombre: "martes, 25 de agosto de 2026".
  *
  * Para encabezar agrupaciones por día, donde la fecha corta se lee como un dato más

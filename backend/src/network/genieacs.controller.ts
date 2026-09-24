@@ -1,4 +1,4 @@
-import { ArrayNotEmpty, Allow, IsArray, IsOptional, IsString } from 'class-validator';
+import { ArrayNotEmpty, Allow, IsArray, IsBoolean, IsOptional, IsString } from 'class-validator';
 import { GenieacsService } from './genieacs.service';
 import { APP_PERMISSIONS } from '../auth/permissions.catalog';
 import { AuthUser } from '../auth/current-user.decorator';
@@ -13,6 +13,8 @@ export class ServerUpsertDto {
 export class BatchDto {
   @IsArray() @ArrayNotEmpty() @IsString({ each: true }) ids!: string[];
   @IsOptional() @IsString() serverId?: string;
+  /** Trozo de un lote que la pantalla parte para enseñar el avance. */
+  @IsOptional() @IsBoolean() tanda?: boolean;
 }
 /**
  * Cambio del WiFi de un abonado. La clave llega en claro por HTTPS y NO se guarda
@@ -73,9 +75,11 @@ export class GenieacsController {
   // Con candado: es el botón "cortar la TV de los que marqué" de la pantalla masiva,
   // así que se le aplica la misma regla que al corte por filtro (`corte.policy.ts`).
   tvCutSubs(dto: BatchDto, user: AuthUser) {
-    return this.acs.tvBatchBySubscribers(dto.ids, false, user, { candadoDeuda: true });
+    return this.acs.tvBatchBySubscribers(dto.ids, false, user, { candadoDeuda: true, tanda: dto.tanda });
   }
+  // `marcarSinRed`: la reconexión de la pantalla la decide una persona; con el TR-069
+  // en pausa es ella quien devuelve la señal y la ficha tiene que decirlo.
   tvRestoreSubs(dto: BatchDto, user: AuthUser) {
-    return this.acs.tvBatchBySubscribers(dto.ids, true, user);
+    return this.acs.tvBatchBySubscribers(dto.ids, true, user, { tanda: dto.tanda, marcarSinRed: true });
   }
 }

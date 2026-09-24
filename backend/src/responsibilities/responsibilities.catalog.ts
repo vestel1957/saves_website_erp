@@ -87,7 +87,11 @@ export const POSTS: PostDef[] = [
     label: 'Red / ISP (NOC)',
     group: 'Operación técnica',
     purpose: 'Salud de la red: OLTs, routers, NAPs y cortes masivos.',
-    alerts: [],
+    alerts: ['Revisión diaria: una VLAN con clientes no llega al PPPoE (falta uplink, interfaz o servidor en el Mikrotik)'],
+    // Sin titular el aviso no le llegaba a nadie. Respaldo: quien ve Red › VLANs
+    // (administración y redes, 5 personas en sep-2026), que es donde se arregla.
+    // NO el permiso de OLT: lo tienen también los técnicos de campo.
+    fallbackPermission: 'screen.red.vlans',
   },
   {
     slug: 'instalaciones',

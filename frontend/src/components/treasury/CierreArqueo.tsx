@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { fmtFechaCon } from "@/lib/format";
 import { Icon } from "@/components/Icon";
 import { Badge } from "@/components/ui/Badge";
 import { cop } from "@/lib/subscribers";
@@ -204,16 +205,31 @@ function CodigoCell({ codigo, fecha }: { codigo: number | null; fecha: string })
  * un resumen por categoría que no se podía tocar, y al lado un checkbox suelto que filtraba
  * por otro camino. Dos cortes bastan: el pie dice siempre qué queda seleccionado.
  */
-export function CierreArqueo({ d, maxMovimientos = "max-h-80" }: {
+export function CierreArqueo({ d, maxMovimientos = "max-h-80", dir, onDir }: {
   d: CierreDetalle;
   /** Clase de alto máximo de la tabla de movimientos (el modal la acota; la página no). */
   maxMovimientos?: string;
+  /**
+   * El corte Entró/Salió cuando lo manda la pantalla de afuera (Cierre de caja lo lleva en
+   * la dirección, `mov=in|out`, para que las tarjetas del informe aterricen ya filtradas).
+   * Sin estas dos props el filtro vive aquí dentro, como siempre.
+   */
+  dir?: "in" | "out" | "";
+  onDir?: (d: "in" | "out" | "") => void;
 }) {
-  const [dirs, setDirs] = useState<Set<"in" | "out">>(new Set());
+  const [dirsLocal, setDirsLocal] = useState<Set<"in" | "out">>(new Set());
+  const dirs = useMemo(
+    () => (onDir ? new Set<"in" | "out">(dir ? [dir] : []) : dirsLocal),
+    [onDir, dir, dirsLocal],
+  );
+  // Controlado desde afuera el corte es uno solo (la dirección guarda `in` u `out`):
+  // pulsar el otro botón cambia de corte en vez de sumar los dos, que es ver todo.
+  const setDirs = (s: Set<"in" | "out">) => (onDir ? onDir("") : setDirsLocal(s));
   const [soloEfectivo, setSoloEfectivo] = useState(false);
   const [busca, setBusca] = useState("");
 
   const alternarDir = (k: "in" | "out") => {
+    if (onDir) return onDir(dir === k ? "" : k);
     const copia = new Set(dirs);
     copia.has(k) ? copia.delete(k) : copia.add(k);
     setDirs(copia);
@@ -306,7 +322,7 @@ export function CierreArqueo({ d, maxMovimientos = "max-h-80" }: {
         <p className="mt-1.5 text-[12px] text-text-tertiary">
           La base es cero: al cerrar se lleva el efectivo entero y se arrastra al{" "}
           <strong className="text-text-secondary">
-            {new Date(d.proximoDiaHabil).toLocaleDateString("es-CO", { weekday: "long", day: "2-digit", month: "long" })}
+            {fmtFechaCon(d.proximoDiaHabil, { weekday: "long", day: "2-digit", month: "long" })}
           </strong>{" "}
           (próximo día hábil; el sábado también lo es).
           {d.cajero && <> Cerró <strong className="text-text-secondary">{d.cajero}</strong>.</>}

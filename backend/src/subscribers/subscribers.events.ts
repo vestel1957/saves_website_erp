@@ -20,3 +20,22 @@ export interface EstadoServicioEvent {
   /** Estado que quedó ('ACTIVO' | 'CORTADO' | 'SUSPENDIDO'). */
   estado: string;
 }
+
+/**
+ * A un abonado se le cambió A MANO el estado desde la ficha (Acciones ▸ Cambiar estado).
+ *
+ * Lo escucha el writeback por lo mismo que sus hermanos, y es el que faltaba:
+ * `customers.usu_estado` es de los campos que la ida vuelve a traer cada 15 minutos, y
+ * hasta el 18-09-2026 sólo viajaban al legacy tres transiciones concretas (reconexión,
+ * baja y activación por instalación). Cualquier otro estado escrito a mano —devolver a
+ * Cartera a quien se retiró debiendo, por ejemplo— duraba un cuarto de hora.
+ */
+export const ESTADO_ABONADO_EVENT = 'subscribers.estado.cambiado';
+
+export interface EstadoAbonadoEvent {
+  subscriberId: string;
+  /** El estado que queda (enum `SubscriberStatus`). */
+  estado: string;
+  /** El que tenía, para el log. */
+  anterior?: string | null;
+}

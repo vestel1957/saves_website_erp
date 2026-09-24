@@ -1,4 +1,4 @@
-import { filtrarCortables, fraseProtegidos } from '../common/corte.policy';
+import { filtrarCortables, fraseProtegidos, type Protegidos } from '../common/corte.policy';
 import { BadRequestException, NotFoundException } from '../core/http/errores';
 import { Logger } from '../core/logger';
 import { Prisma } from '@prisma/client';
@@ -149,9 +149,25 @@ export class GenieacsService {
       : process.env.GENIEACS_LIVE === 'true';
   }
 
+  /**
+   * `network.tvSoloSistema` (por defecto ENCENDIDO desde 2026-09-22): la TV del lote
+   * no se toca por red —ni TR-069 ni OLT—, sólo se anota en el sistema. El ACS lleva
+   * caído desde el 21-sep (túnel 2222) y ninguno de los cortados tenía ONU vinculada:
+   * el corte real lo hace el operador a mano y esto deja la ficha y la orden cerrada.
+   * Para volver al TR-069, poner el ajuste en `false`.
+   */
+  private async tvSoloSistema(): Promise<boolean> {
+    const row = await this.prisma.appSetting.findUnique({ where: { key: 'network.tvSoloSistema' } }).catch(() => null);
+    return row?.value !== 'false';
+  }
+
   async mode() {
     await this.syncLive();
-    return { live: this.live, mode: this.live ? 'LIVE' : 'DRY_RUN', tvTag: TV_TAG, tvParam: TV_PARAM };
+    return {
+      live: this.live, mode: this.live ? 'LIVE' : 'DRY_RUN', tvTag: TV_TAG, tvParam: TV_PARAM,
+      // La pantalla masiva lo dice en la confirmación: con esto encendido no se toca la red.
+      tvSoloSistema: await this.tvSoloSistema(),
+    };
   }
 
   // ------------------------------------------------------------------ //
@@ -589,16 +605,62 @@ export class GenieacsService {
     subscriberIds: string[],
     enable: boolean,
     user?: AuthUser,
-    opts: { candadoDeuda?: boolean } = {},
+    /**
+     * `desdeOrden`: lo pide el CIERRE de una orden de corte. Esa orden ya es el registro
+     * del trabajo, así que no se abre otra (con el corte a mano la nueva nacería
+     * PENDIENTE y cada cierre abriría la siguiente, sin fin).
+     */
+    opts: { candadoDeuda?: boolean; tanda?: boolean; marcarSinRed?: boolean; desdeOrden?: boolean } = {},
   ) {
     let ids = [...new Set((subscriberIds || []).filter(Boolean))];
+    /**
+     * `tanda`: la pantalla masiva parte el lote en trozos para enseñar el avance. Un
+     * trozo en el que no quedó nadie (todos EOC o protegidos) no es un error del lote
+     * entero: se contesta vacío, con sus contadores, y la pantalla sigue con el otro.
+     */
+    const vacio = (eocs: typeof eoc, prot: typeof protegidos) => ({
+      ok: false, dryRun: false, total: 0, done: 0, failed: 0, sinEquipo: 0, ordenes: 0, marcados: 0,
+      results: [], protegidos: prot, compromisosProtegidos: prot.compromiso, eoc: eocs, acsCaido: null, soloSistema: false,
+    });
     if (!ids.length) throw new BadRequestException('No se indicaron clientes.');
-    let protegidos = { compromiso: 0, sinVencer: 0 };
+    let protegidos: Protegidos = { compromiso: 0, sinVencer: 0, sinServicio: 0 };
+    /**
+     * La TV por EOC (cobre / coaxial) NO se corta desde aquí: no hay ONU ni CPE que
+     * tocar, se corta en el POSTE. Si el lote los dejara pasar, `marcados` les pondría
+     * la TV como CORTADO y les cerraría una orden de "Corte Television" diciendo que se
+     * hizo a mano, sin que nadie haya subido al poste: el cliente seguiría viendo
+     * televisión y el sistema diría lo contrario. Se sacan del lote y se cuentan aparte.
+     * Mismo alcance que el candado de deuda: sólo la pantalla masiva; el cierre de una
+     * orden de corte ya abierta (el técnico que sí fue al poste) no pasa por aquí.
+     */
+    let eoc: Array<{ subscriberId: string; abonado: number; name: string | null }> = [];
+    // Con la red en pausa el corte lo hace a mano quien manda el lote —poste incluido—,
+    // así que los EOC entran como cualquiera.
+    const soloSistema = await this.tvSoloSistema();
+    if (opts.candadoDeuda && !enable && !soloSistema) {
+      eoc = (
+        await this.prisma.subscriber.findMany({
+          where: { id: { in: ids }, installTech: 'EOC' },
+          select: { id: true, abonado: true, fullName: true },
+        })
+      ).map((r) => ({ subscriberId: r.id, abonado: r.abonado, name: r.fullName }));
+      if (eoc.length) {
+        const fuera = new Set(eoc.map((r) => r.subscriberId));
+        ids = ids.filter((id) => !fuera.has(id));
+        if (!ids.length) {
+          if (opts.tanda) return vacio(eoc, protegidos);
+          throw new BadRequestException(
+            `No se cortó la TV a nadie: ${eoc.length === 1 ? 'el cliente es' : `los ${eoc.length} clientes son`} de tecnología EOC y la TV se corta en el poste.`,
+          );
+        }
+      }
+    }
     // Sólo al CORTAR: devolver la TV no necesita candado ninguno.
     if (opts.candadoDeuda && !enable) {
-      const filtrado = await filtrarCortables(this.prisma, ids);
+      const filtrado = await filtrarCortables(this.prisma, ids, undefined, 'TV');
       protegidos = filtrado.protegidos;
       if (!filtrado.ids.length) {
+        if (opts.tanda) return vacio(eoc, protegidos);
         throw new BadRequestException(
           `No se cortó la TV a nadie: los ${ids.length} del lote están protegidos (${fraseProtegidos(protegidos)}).`,
         );
@@ -610,8 +672,19 @@ export class GenieacsService {
       where: { id: { in: ids } },
       select: { id: true, abonado: true, fullName: true, pppUsername: true },
     });
+    if (soloSistema) return this.tvSoloEnSistema(subs, ids, enable, user, { ...opts, protegidos, eoc });
+
     const s = await this.resolveServer(undefined);
-    const devices = await this.devicesOf(s);
+    // Si el ACS no contesta (el túnel se cae), el lote NO se aborta: los que tienen
+    // ONU van por la OLT y al resto se le reporta sin equipo. Antes un `fetch failed`
+    // aquí tumbaba la petición entera con un 500 y, al CORTAR, nadie quedaba marcado
+    // en la ficha aunque el operador fuera a cortarlos a mano (ver `marcados`).
+    let acsCaido: string | null = null;
+    const devices = await this.devicesOf(s).catch((e: Error) => {
+      acsCaido = e.message;
+      this.logger.warn(`TV MASIVO: el ACS no contesta (${e.message}); se sigue sin TR-069.`);
+      return [] as NbiDevice[];
+    });
     const byUser = new Map<string, NbiDevice>();
     for (const d of devices) {
       const u = (d.pppUser || '').trim().toUpperCase();
@@ -638,7 +711,9 @@ export class GenieacsService {
       if (onu?.sn && onu.oltId) { oltTargets.push({ sub, sn: onu.sn, oltId: onu.oltId }); continue; }
       results.push({
         subscriberId: sub.id, abonado: sub.abonado, name: sub.fullName, via: null, ok: false,
-        detail: 'Sin equipo identificado: ni CPE en el ACS (usuario PPPoE) ni ONU vinculada en la OLT.',
+        detail: acsCaido
+          ? `El servidor TR-069 (ACS) no respondió y no tiene ONU vinculada en la OLT: no se tocó el equipo (${acsCaido}).`
+          : 'Sin equipo identificado: ni CPE en el ACS (usuario PPPoE) ni ONU vinculada en la OLT.',
       });
     }
     const encontrados = new Set(subs.map((x) => x.id));
@@ -710,13 +785,13 @@ export class GenieacsService {
     }
     // El corte hecho a mano se anota como lo que es —en la factura, que es de donde lo
     // lee la ficha— y deja su orden ya cerrada.
-    const ordenesCerradas = !enable && marcados.length ? await this.registrarCorteDeTv(marcados, results, user) : 0;
+    const ordenesCerradas = !enable && marcados.length ? await this.registrarCorteDeTv(marcados, results, user, { conOrden: !opts.desdeOrden }) : 0;
 
     const done = results.filter((r) => r.ok && r.via).length;
     const failed = results.filter((r) => !r.ok && r.via).length;
     const sinEquipo = results.filter((r) => !r.via).length;
     const dryRun = results.some((r) => r.dryRun);
-    this.logger.log(`TV MASIVO por abonado (${enable ? 'ALTA' : 'CORTE'}): ${ids.length} pedidos → TR069=${acsTargets.length} OLT=${oltTargets.length} sinEquipo=${sinEquipo} · ok=${done} fallidos=${failed}${dryRun ? ' (dry-run)' : ''}`);
+    this.logger.log(`TV MASIVO por abonado (${enable ? 'ALTA' : 'CORTE'}): ${ids.length} pedidos → TR069=${acsTargets.length} OLT=${oltTargets.length} sinEquipo=${sinEquipo} · ok=${done} fallidos=${failed}${dryRun ? ' (dry-run)' : ''}${acsCaido ? ' · ACS CAÍDO' : ''}`);
     // `ok` significa "se hizo lo que se pidió", no "no explotó nada". Un lote en el que
     // los 16 abonados salieron sin equipo identificado devolvía ok:true (porque `failed`
     // solo cuenta los que TENÍAN vía y fallaron), y la pantalla lo pintaba de verde
@@ -725,9 +800,70 @@ export class GenieacsService {
     // en un lote donde la red no pudo con ninguno es lo ÚNICO que quedó del trabajo.
     return {
       ok: failed === 0 && sinEquipo === 0 && done > 0, dryRun, total: ids.length,
-      done, failed, sinEquipo, ordenes: ordenesCerradas, results,
+      done, failed, sinEquipo, ordenes: ordenesCerradas, marcados: marcados.length, results, soloSistema: false,
       // A cuántos NO se les tocó la TV y por qué (ver `corte.policy.ts`).
       protegidos, compromisosProtegidos: protegidos.compromiso,
+      // Los de EOC que se sacaron del lote: su TV se corta en el poste.
+      eoc,
+      // Si el ACS no contestó, la pantalla lo dice: el TR-069 no se intentó.
+      acsCaido,
+    };
+  }
+
+  /**
+   * El lote de TV con la red en pausa (`network.tvSoloSistema`): no se toca ni el ACS
+   * ni la OLT, sólo el sistema.
+   *
+   * · CORTE: la ficha queda con la TV CORTADO y la orden "Corte Television" nace
+   *   PENDIENTE (desde 2026-09-23): el corte físico lo hace un técnico y la cierra él.
+   * · ALTA desde la pantalla masiva (`marcarSinRed`): la decide una persona que ya
+   *   devolvió la señal a mano, así que la ficha pasa a ACTIVO.
+   * · ALTA automática (pago, cierre de orden): NO se marca. Cada fila sale sin vía y
+   *   quien llama abre la orden de "Reconexion Television" para que alguien vaya: la
+   *   señal se quitó a mano y a mano hay que devolverla.
+   */
+  private async tvSoloEnSistema(
+    subs: Array<{ id: string; abonado: number; fullName: string | null }>,
+    ids: string[],
+    enable: boolean,
+    user: AuthUser | undefined,
+    opts: {
+      marcarSinRed?: boolean;
+      desdeOrden?: boolean;
+      protegidos: Protegidos;
+      eoc: Array<{ subscriberId: string; abonado: number; name: string | null }>;
+    },
+  ) {
+    const marcar = !enable || !!opts.marcarSinRed;
+    const detalle = enable
+      ? marcar
+        ? 'TV marcada como activa en el sistema (TR-069 en pausa: la señal se devuelve a mano).'
+        : 'TR-069 en pausa: la TV no se devuelve por red, queda para un técnico.'
+      : 'TV marcada como cortada en el sistema (TR-069 en pausa: el corte se hace a mano).';
+    const results = subs.map((sub) => ({
+      subscriberId: sub.id, abonado: sub.abonado, name: sub.fullName,
+      via: null as 'TR069' | 'OLT' | null, ok: false, dryRun: false as boolean | undefined, detail: detalle,
+    }));
+    const encontrados = new Set(subs.map((x) => x.id));
+    for (const id of ids) {
+      if (!encontrados.has(id)) results.push({ subscriberId: id, via: null, ok: false, dryRun: false, detail: 'Cliente no encontrado.' } as any);
+    }
+    const marcados = marcar ? subs.map((x) => x.id) : [];
+    if (marcados.length) {
+      await this.prisma.subscriberService
+        .updateMany({
+          where: { subscriberId: { in: marcados }, kind: { in: ['TV', 'PUNTOS'] } },
+          data: { status: enable ? 'ACTIVO' : 'CORTADO' },
+        })
+        .catch((e) => this.logger.warn(`No se pudo marcar el estado del servicio de TV: ${e.message}`));
+    }
+    const ordenes = !enable && marcados.length ? await this.registrarCorteDeTv(marcados, results, user, { conOrden: !opts.desdeOrden }) : 0;
+    this.logger.log(`TV MASIVO por abonado (${enable ? 'ALTA' : 'CORTE'}) SOLO SISTEMA: ${ids.length} pedidos → marcados=${marcados.length} órdenes=${ordenes}`);
+    return {
+      ok: marcados.length > 0, dryRun: false, total: ids.length,
+      done: 0, failed: 0, sinEquipo: results.length, ordenes, marcados: marcados.length, results,
+      protegidos: opts.protegidos, compromisosProtegidos: opts.protegidos.compromiso,
+      eoc: opts.eoc, acsCaido: null as string | null, soloSistema: true,
     };
   }
 
@@ -744,9 +880,10 @@ export class GenieacsService {
    * en la ficha, ni en los informes de campo, ni en el legacy, que es donde se
    * consulta el historial del abonado.
    *
-   * Nacen RESUELTAS: no hay visita que repartir, el trabajo ya está hecho. Y si el
-   * abonado ya tenía abierta su "Corte Television" —la del corte masivo anterior que
-   * esperaba técnico—, se cierra ESA en vez de abrir otra.
+   * Si la red lo aplicó (TR-069/OLT), la orden nace RESUELTA: es constancia. Si no
+   * —TR-069 en pausa o sin equipo—, nace PENDIENTE: es el trabajo de quien va a cortar
+   * en sitio, y la cierra él (2026-09-23). En ninguno de los dos casos se duplica: si
+   * el abonado ya tenía abierta su "Corte Television", se reusa (o se cierra) ESA.
    *
    * `serviceStatusAt` es lo que hace que el corte SOBREVIVA: sin esa marca la ida del
    * legacy devuelve el valor viejo a los 15 minutos y el corte se deshace solo (ver
@@ -759,6 +896,7 @@ export class GenieacsService {
     ids: string[],
     results: Array<{ subscriberId: string; via: 'TR069' | 'OLT' | null; ok: boolean; detail: string }>,
     user?: AuthUser,
+    opts: { conOrden?: boolean } = {},
   ): Promise<number> {
     const quien = user?.name || user?.email || null;
     try {
@@ -797,27 +935,34 @@ export class GenieacsService {
       this.logger.warn(`No se pudo anotar el corte de TV en la factura: ${(e as Error).message}`);
     }
 
-    if (!this.ordenes) return 0;
+    if (!this.ordenes || opts.conOrden === false) return 0;
     const detalles = new Map(results.map((r) => [r.subscriberId, r]));
     let abiertas = 0;
     for (const id of ids) {
       const r = detalles.get(id);
       // Cómo se hizo, en la propia orden: es lo primero que pregunta quien la mire y no
       // vea rastro de los equipos.
-      const comoSeHizo = r?.ok && r.via
-        ? `Aplicado por ${r.via === 'TR069' ? 'TR-069' : 'la OLT'}.`
-        : 'Hecho manualmente: la red no pudo aplicarlo.';
-      const orden = await this.ordenes.registrarResuelta({
+      const porRed = !!(r?.ok && r.via);
+      const comoSeHizo = porRed
+        ? `Aplicado por ${r!.via === 'TR069' ? 'TR-069' : 'la OLT'}.`
+        : 'Hay que hacerlo en sitio: la red no lo aplica (TR-069 en pausa o sin equipo).';
+      const input = {
         subscriberId: id,
         type: 'Corte Television',
         subject: 'servicio',
-        problem: 'Corte de televisión.',
+        problem: porRed ? 'Corte de televisión.' : 'Corte de televisión: hacerlo manualmente y cerrar la orden.',
         section: [comoSeHizo, r?.detail || null, quien ? `Lo registró ${quien}.` : null].filter(Boolean).join(' '),
         autor: quien || 'Sistema',
-      });
+      };
+      // Lo que hizo la red es constancia (nace cerrada). Lo que NO hizo es trabajo:
+      // la orden queda PENDIENTE y la cierra quien corta en sitio (2026-09-23, pedido
+      // del usuario: la TV se hace a mano mientras el TR-069 no funcione).
+      const orden = porRed
+        ? await this.ordenes.registrarResuelta(input)
+        : await this.ordenes.abrirSiNoHay(input);
       if (orden) abiertas++;
     }
-    this.logger.log(`Corte de TV: ${abiertas}/${ids.length} órdenes registradas y cerradas.`);
+    this.logger.log(`Corte de TV: ${abiertas}/${ids.length} órdenes registradas.`);
     return abiertas;
   }
 

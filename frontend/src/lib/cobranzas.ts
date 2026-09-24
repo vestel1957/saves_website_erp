@@ -50,6 +50,8 @@ export type CashAccount = {
   code?: string | null; persisted?: boolean;
   /** Fondo fijo de la caja: no entra en el excedente del arqueo. */
   fixedFund?: number;
+  /** Sólo si se pidió con `from`/`to`: lo que se movió en ese rango (movimientos vigentes). */
+  periodo?: { saldoInicial: number; ingresos: number; egresos: number; saldoFinal: number; movimientos: number };
 };
 
 export const PAY_METHODS: { value: string; label: string }[] = [

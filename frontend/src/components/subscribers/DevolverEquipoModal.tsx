@@ -7,6 +7,7 @@ import { Field, Input, Select, Textarea } from "@/components/ui/Field";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { mensajeDeError, listaJson } from "@/lib/errores";
+import { cop } from "@/lib/format";
 
 /** Los tres estados con los que vuelve un equipo, igual que en el legacy. */
 const ESTADOS = [
@@ -16,6 +17,13 @@ const ESTADOS = [
 ];
 
 type Bodega = { id: string; name: string; branchName?: string | null };
+
+/**
+ * Lo que el cliente debe, leído del MISMO sitio que la pestaña Cuenta de la ficha
+ * (`GET /subscribers/:id/statement`), para que el aviso y el estado de cuenta no
+ * puedan decir cifras distintas. `alDia` ya trae la tolerancia del peso.
+ */
+type Saldo = { balance: number; alDia: boolean };
 
 /**
  * Hoy en la hora DEL NAVEGADOR (en-CA da el `YYYY-MM-DD` que pide un <input type=date>).
@@ -100,6 +108,7 @@ export function DevolverEquipoModal({
   const [reason, setReason] = useState("");
   const [warehouseId, setWarehouseId] = useState("");
   const [bodegas, setBodegas] = useState<Bodega[]>([]);
+  const [saldo, setSaldo] = useState<Saldo | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -113,6 +122,7 @@ export function DevolverEquipoModal({
     // Por defecto no se elige bodega: el servidor la manda a la de la sede del
     // cliente, que es lo que pasa el 99% de las veces.
     setWarehouseId("");
+    setSaldo(null);
     void authFetch("/network/warehouses")
       .then(listaJson)
       .then(setBodegas)
@@ -122,6 +132,25 @@ export function DevolverEquipoModal({
   const depurado = status === "Depurado";
   const retiro = tipo === "retiro";
   const equipo = equipos.find((e) => e.id === equipoId) ?? null;
+
+  // El saldo se pregunta SÓLO al elegir "Retiro": es la devolución que pasa al cliente
+  // a RETIRADO, y desde ahí deja de facturarse y el cron de cartera ya no lo mira
+  // (RETIRADO está fuera de `ESTADOS_QUE_CAEN_EN_CARTERA`). Quien recibe el equipo en
+  // la ventanilla tiene que ver la deuda ANTES de dar la baja, no después.
+  // Una sola vez por apertura; si la ruta no le deja (área sin cuenta) se calla.
+  useEffect(() => {
+    if (!open || !retiro || saldo) return;
+    let vivo = true;
+    void authFetch(`/subscribers/${subscriberId}/statement`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (vivo && d) setSaldo({ balance: Number(d.balance) || 0, alDia: d.alDia !== false });
+      })
+      .catch(() => undefined);
+    return () => {
+      vivo = false;
+    };
+  }, [open, retiro, saldo, authFetch, subscriberId]);
 
   // En un retiro el motivo lo pone el desplegable y el texto libre es el detalle;
   // en los demás casos el texto libre ES el motivo, como hasta ahora.
@@ -200,6 +229,16 @@ export function DevolverEquipoModal({
           <div className="rounded-lg border border-warning-border bg-warning-soft px-3 py-2 text-[11px] text-text-secondary">
             Además de recoger el equipo, el cliente queda en <b>Retirado</b> y se le corta
             la conexión en el router. Si le quedan más equipos instalados, hay que devolverlos aparte.
+          </div>
+        )}
+
+        {retiro && saldo && !saldo.alDia && (
+          <div className="rounded-lg border border-error-border bg-error-soft px-3 py-2 text-[11px] text-error-text">
+            <b>Este cliente debe {cop(saldo.balance)}.</b> El retiro no borra la deuda: las
+            facturas siguen vivas y se pueden cobrar en ventanilla, y el paz y salvo seguirá
+            bloqueado hasta que pague. Pero deja de facturársele el mes y el sistema ya no lo
+            pasará a Cartera. Si se le va a seguir gestionando el cobro, recoge el equipo
+            como <b>Cambio</b> y da el retiro cuando esté a paz y salvo.
           </div>
         )}
 

@@ -158,11 +158,15 @@ export class GeofenceService {
 
       /**
        * Fuera de rango: la orden NO se cierra, y ya no hay motivo que lo permita
-       * (2026-09-10). El mensaje tiene que decir las DOS salidas reales, porque un
-       * bloqueo sin salida se convierte en una orden abierta para siempre: acercarse
-       * al domicilio, o —si el punto guardado del cliente está mal, que es la causa
-       * más frecuente— avisarlo en el seguimiento para que se corrija la coordenada
-       * y la cierre su coordinador.
+       * (2026-09-10). El mensaje tiene que decir las salidas REALES, porque un
+       * bloqueo sin salida se convierte en una orden abierta para siempre.
+       *
+       * Y la primera de esas salidas es del propio técnico (2026-09-18): la causa
+       * más frecuente del bloqueo no es que esté lejos, es que el punto guardado
+       * del cliente esté mal —sembrado por un cierre remoto, o heredado vacío del
+       * legacy—. Quien está en la puerta lo corrige con «Actualizar GPS aquí» y
+       * cierra. Antes el mensaje sólo nombraba al coordinador, así que el técnico
+       * se quedaba esperando a alguien teniendo el arreglo en la misma pantalla.
        */
       case 'exigir-presencia':
         throw new GeofenceException({
@@ -172,8 +176,9 @@ export class GeofenceService {
           message:
             `Estás a ${Math.round(veredicto.distanciaM)} m del domicilio del cliente y el máximo `
             + `para cerrar es ${veredicto.radioM} m: esta orden se cierra desde la casa del cliente. `
-            + 'Si ya estás allí y lo que está mal es la dirección guardada, déjalo dicho en el '
-            + 'seguimiento para que se corrija y la cierre tu coordinador.',
+            + 'Si ya estás allí y lo que está mal es el punto guardado del cliente, corrígelo tú '
+            + 'mismo con «Actualizar GPS aquí» y vuelve a cerrar; queda dicho en el seguimiento. '
+            + 'Si no puedes, déjalo escrito ahí y lo cierra tu coordinador.',
         });
 
       case 'permitir-y-georreferenciar':

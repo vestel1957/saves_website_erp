@@ -160,3 +160,73 @@ describe('PostingService.retryPending', () => {
     });
   });
 });
+
+/**
+ * Centro de costo (docs/centros-de-costo, fase 3): viaja a TODAS las líneas del asiento
+ * y nunca puede impedir que se contabilice.
+ */
+describe('PostingService · centro de costo', () => {
+  const lineas = (journal: { post: jest.Mock }, llamada = 0) =>
+    (journal.post.mock.calls[llamada][0] as { lines: { costCenterId?: string | null }[] }).lines;
+
+  it('recaudo, ingreso y egreso de tesorería llevan el centro en todas sus líneas', async () => {
+    const { svc, journal } = armar(() => Promise.resolve({ id: 'asiento' }));
+    const base = { date: new Date('2026-09-24'), amount: 50_000, costCenterId: 'cc-yopal' };
+    await svc.postCustomerPayment({ ...base, sourceId: 'rec-1' });
+    await svc.postTreasuryIncome({ ...base, sourceId: 'tx-1' });
+    await svc.postTreasuryExpense({ ...base, sourceId: 'tx-2' });
+    for (const i of [0, 1, 2]) {
+      expect(lineas(journal, i)).toHaveLength(2);
+      expect(lineas(journal, i).every((l) => l.costCenterId === 'cc-yopal')).toBe(true);
+    }
+  });
+
+  it('sin centro, las líneas quedan en null («Sin asignar»)', async () => {
+    const { svc, journal } = armar(() => Promise.resolve({ id: 'asiento' }));
+    await svc.postTreasuryExpense({ sourceId: 'tx-3', date: new Date('2026-09-24'), amount: 10 });
+    expect(lineas(journal).every((l) => l.costCenterId === null)).toBe(true);
+  });
+
+  it('si la base rechaza el centro (FK), se contabiliza igual sin centro y sin pendiente', async () => {
+    let intento = 0;
+    const { svc, journal, pendingPosting } = armar(() =>
+      ++intento === 1 ? Promise.reject(Object.assign(new Error('FK'), { code: 'P2003' })) : Promise.resolve({ id: 'asiento' }),
+    );
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = await svc.postSalesInvoice({ ...factura, costCenterId: 'cc-borrado' });
+    expect(res).toEqual({ id: 'asiento' });
+    expect(journal.post).toHaveBeenCalledTimes(2);
+    expect(lineas(journal, 1).every((l) => l.costCenterId === null)).toBe(true);
+    expect(pendingPosting.upsert).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('un P2003 sin centro de por medio sigue siendo un pendiente, no se reintenta', async () => {
+    const { svc, journal, pendingPosting } = armar(() =>
+      Promise.reject(Object.assign(new Error('FK'), { code: 'P2003' })),
+    );
+    expect(await svc.postSalesInvoice(factura)).toBeNull();
+    expect(journal.post).toHaveBeenCalledTimes(1);
+    expect(pendingPosting.upsert).toHaveBeenCalledTimes(1);
+  });
+
+  it('centroDeTesoreria: manda el elegido a mano, sin consultar nada', async () => {
+    const { svc } = armar(() => Promise.resolve(null));
+    expect(await svc.centroDeTesoreria(11, 'cc-elegido')).toBe('cc-elegido');
+  });
+
+  it('los resolutores no lanzan: si la base falla, null y aviso', async () => {
+    const roto = jest.fn().mockRejectedValue(new Error('base caída'));
+    const prisma = {
+      subscriber: { findUnique: roto }, cashAccount: { findUnique: roto },
+      branch: { findMany: roto }, costCenter: { findMany: roto },
+    };
+    const svc = new PostingService({} as never, {} as never, prisma as never);
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await svc.centroDeAbonado('sub-1')).toBeNull();
+    expect(await svc.centroDeTesoreria(11)).toBeNull();
+    expect(warn).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
+  });
+});

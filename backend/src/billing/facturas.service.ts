@@ -10,7 +10,7 @@ import {
   RETENTION_LABEL_TO_ENUM, UpdateInvoiceDto, VoidInvoiceDto,
 } from './dto/facturas.dto';
 import type { SubscribersService } from '../subscribers/subscribers.service';
-import { num, round2 } from '../common/money';
+import { ivaDe, num, round2 } from '../common/money';
 import { aplicarAnticipos } from './anticipos';
 import { aplicarNotaEnTx } from './nota-en-tx';
 import { exigirEmisorDeNotas } from './emisor-de-notas';
@@ -117,7 +117,7 @@ export class FacturasService {
       const price = round2(it.price);
       const taxRate = round2(it.taxRate ?? 0);
       const subtotal = round2(qty * price);
-      const taxTotal = round2((subtotal * taxRate) / 100);
+      const taxTotal = ivaDe(subtotal, taxRate); // al peso: ver `ivaDe`
       return { ...it, qty, price, taxRate, subtotal, taxTotal };
     });
     const subtotal = round2(rows.reduce((s, r) => s + r.subtotal, 0));
@@ -284,7 +284,9 @@ export class FacturasService {
     // Contabilización automática (DR cartera, CR ingreso + IVA). Idempotente; no rompe el flujo.
     await this.posting.postSalesInvoice({
       sourceId: result.id, date: invoiceDate, number: result.tid,
-      subtotal: result.subtotal, tax: result.tax, createdBy: user?.name ?? user?.email ?? null,
+      subtotal: result.subtotal, tax: result.tax,
+      costCenterId: await this.posting.centroDeAbonado(subscriber.id),
+      createdBy: user?.name ?? user?.email ?? null,
     });
     return {
       ...result,
@@ -408,7 +410,7 @@ export class FacturasService {
       })),
     };
 
-    await this.prisma.$transaction(async (tx) => {
+    const final = await this.prisma.$transaction(async (tx) => {
       // Fuera los conceptos viejos (las notas se quedan) y entran los nuevos, igual
       // que hace el legacy al editar. Los que venían del legacy se van con su
       // `legacyId`: por eso el sync tiene que saltarse esta factura.
@@ -453,6 +455,13 @@ export class FacturasService {
           },
         },
       });
+
+      // Si la edición sube el total y el cliente tiene saldo a favor, se le imputa ya.
+      // Sin esto el anticipo se quedaba ABIERTO hasta el próximo recaudo o la corrida
+      // del mes, y la factura salía debiendo lo que el cliente ya había pagado (abonado
+      // 3504, 17-09: septiembre subió de 35.000 a 85.000 con 50.000 a favor).
+      await aplicarAnticipos(tx, inv.subscriberId, { editedBy: user?.name ?? user?.email ?? null });
+      return tx.subInvoice.findUniqueOrThrow({ where: { id }, select: { status: true, paidAmount: true } });
     });
 
     // Ajuste contable por la diferencia. Sólo mueve el mayor si la factura tenía
@@ -461,12 +470,13 @@ export class FacturasService {
       sourceId: id, date: invoiceDate, number: inv.tid, edit,
       deltaSubtotal: round2(subtotal - num(inv.subtotal)),
       deltaTax: round2(tax - num(inv.tax)),
+      costCenterId: await this.posting.centroDeAbonado(inv.subscriberId),
       createdBy: user?.name ?? user?.email ?? null,
     });
 
     return {
-      id, tid: inv.tid, subtotal, tax, total, status,
-      balance: round2(total - paid),
+      id, tid: inv.tid, subtotal, tax, total, status: final.status,
+      balance: Math.max(0, round2(total - num(final.paidAmount))),
       itemsCount: rows.length + notas.length,
       notesKept: notas.length,
       previousTotal: num(inv.total),
@@ -482,7 +492,7 @@ export class FacturasService {
    * Con `dto.dryRun` no escribe nada y devuelve `plan` (la decisión y el motivo por
    * abonado); con `dto.asIfUnbilled` además re-simula un mes ya facturado.
    */
-  async generate(dto: GenerateInvoicesDto, user: AuthUser) {
+  async generate(dto: GenerateInvoicesDto, user: AuthUser, opts: { conPlan?: boolean } = {}) {
     const dryRun = dto.dryRun === true;
     const asIfUnbilled = dto.asIfUnbilled === true;
     // asIfUnbilled desactiva el anti-duplicado: fuera de una simulación volvería a
@@ -501,7 +511,7 @@ export class FacturasService {
       this.billingRunning = true;
     }
     try {
-      return await this.generateLocked(dto, user, { dryRun, asIfUnbilled });
+      return await this.generateLocked(dto, user, { dryRun, asIfUnbilled, conPlan: !!opts.conPlan });
     } finally {
       if (!dryRun) this.billingRunning = false;
     }
@@ -522,7 +532,7 @@ export class FacturasService {
   private async generateLocked(
     dto: GenerateInvoicesDto,
     user: AuthUser,
-    { dryRun, asIfUnbilled }: { dryRun: boolean; asIfUnbilled: boolean },
+    { dryRun, asIfUnbilled, conPlan = false }: { dryRun: boolean; asIfUnbilled: boolean; conPlan?: boolean },
   ) {
     const invoiceDate = dateOnly(dto.invoiceDate);
     const dueDate = dto.dueDays ? addDays(invoiceDate, dto.dueDays) : dueOnDay(invoiceDate, await this.billingDueDay());
@@ -756,7 +766,8 @@ export class FacturasService {
         // Contabilización automática de la factura recurrente (idempotente; no rompe el lote).
         await this.posting.postSalesInvoice({
           sourceId: inv.creada.id, date: invoiceDate, number: inv.creada.tid,
-          subtotal, tax, createdBy: user?.name ?? user?.email ?? null,
+          subtotal, tax, costCenterId: await this.posting.centroDeAbonado(s.id),
+          createdBy: user?.name ?? user?.email ?? null,
         });
       } catch (e) {
         // Un fallo NO es una omisión: se cuenta y se nombra aparte. Antes caía en el
@@ -770,8 +781,62 @@ export class FacturasService {
       targeted: subs.length, generated, skipped, failed,
       // Cuántas nacieron ya pagadas (del todo o en parte) con saldo a favor del cliente.
       anticipos: anticiposAplicados, anticiposMonto,
-      ...(dryRun ? { dryRun: true, asIfUnbilled, invoiceDate, dueDate, plan } : {}),
+      ...(dryRun ? { dryRun: true, asIfUnbilled, invoiceDate, dueDate, plan } : conPlan ? { plan } : {}),
     };
+  }
+
+  /**
+   * El MES ADELANTADO se factura en el acto (2026-09-16, decisión del usuario): la
+   * cajera cobra "pagar también octubre" y el cliente se va con la factura de octubre
+   * emitida y PAGADA, no con un "saldo a favor" que sólo se convertía en factura el
+   * día 1 (caso 22093, que volvía a preguntar por qué le salía saldo a favor).
+   *
+   * Es la corrida del mes, acotada a un cliente y a esa fecha: mismos ítems, mismo
+   * `ron`, mismo asiento, y dentro de su transacción `aplicarAnticipos` concede el
+   * descuento prometido y la deja pagada con el anticipo. El día 1 la corrida la ve en
+   * `alreadyBilled` y no la duplica.
+   *
+   * Se llama DESPUÉS de que el recaudo quedó confirmado y nunca lo tumba: si el mes no
+   * se puede facturar (corrida en curso, cliente sin plan, cortado…) el anticipo sigue
+   * abierto y se aplica el día 1 como antes. Por eso devuelve el motivo en vez de lanzar.
+   */
+  async emitirMesesAdelantados(subscriberId: string, meses: Date[], user: AuthUser) {
+    const emitidas: { mes: string; tid: number; total: number; status: string }[] = [];
+    const pendientes: { mes: string; motivo: string }[] = [];
+    for (const mes of meses) {
+      const invoiceDate = new Date(Date.UTC(mes.getUTCFullYear(), mes.getUTCMonth(), 1));
+      const etiqueta = invoiceDate.toISOString().slice(0, 7);
+      let motivo: string | null = null;
+      try {
+        const r: any = await this.generate(
+          { subscriberIds: [subscriberId], invoiceDate: invoiceDate.toISOString() },
+          user,
+          { conPlan: true },
+        );
+        const fila = r.plan?.[0];
+        // ALREADY_BILLED no es un fallo: el mes ya existía (p. ej. pre-generado por el
+        // legacy) y el recaudo ya le aplicó el anticipo. Se informa como las demás.
+        if (!r.generated && fila?.reason !== 'ALREADY_BILLED') {
+          motivo = fila?.error ?? fila?.reason ?? (r.targeted ? 'no se generó' : 'el cliente no está activo');
+        }
+      } catch (e) {
+        motivo = (e as Error).message;
+      }
+      if (motivo) {
+        pendientes.push({ mes: etiqueta, motivo });
+        continue;
+      }
+      const inv = await this.prisma.subInvoice.findFirst({
+        where: {
+          subscriberId,
+          invoiceDate: { gte: invoiceDate, lt: new Date(Date.UTC(invoiceDate.getUTCFullYear(), invoiceDate.getUTCMonth() + 1, 1)) },
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { tid: true, total: true, status: true },
+      });
+      if (inv) emitidas.push({ mes: etiqueta, tid: inv.tid, total: num(inv.total), status: inv.status });
+    }
+    return { emitidas, pendientes };
   }
 
   /**

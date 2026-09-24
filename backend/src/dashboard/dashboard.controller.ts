@@ -12,4 +12,9 @@ export class DashboardController {
   summary(from?: string, to?: string, sede?: string, user?: AuthUser) {
     return this.dashboard.summary(from, to, sede, user);
   }
+
+  /** Listado detrás de las cards "Abonados nuevos" / "Retiros" (`tipo` = nuevos | retiros). */
+  movimientoAbonados(tipo?: string, from?: string, to?: string, sede?: string, user?: AuthUser) {
+    return this.dashboard.movimientoAbonados(tipo, from, to, sede, user);
+  }
 }

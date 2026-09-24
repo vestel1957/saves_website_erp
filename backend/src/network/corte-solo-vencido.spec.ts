@@ -47,13 +47,31 @@ describe('corte.policy · a quién deja cortar el lote', () => {
     expect(motivoProteccion(fila({ status: 'COMPROMISO' }), hoy)).toBeNull();
   });
 
+  it('no corta por una factura PARTIAL vencida que en plata está saldada (CC 39949681, 2026-09-21)', async () => {
+    const prisma: any = {
+      subscriber: {
+        findMany: jest.fn().mockResolvedValue([
+          // Agosto: 74.100 pagados sobre 73.150 y el legacy la dejó en `partial`.
+          { id: 'sobrepagada', status: 'ACTIVO', promiseExpiry: null, invoices: [{ total: 73150, paidAmount: 74100 }] },
+          // Residuo de IVA: 200 pesos vencidos no son un corte.
+          { id: 'residuo', status: 'ACTIVO', promiseExpiry: null, invoices: [{ total: 73150, paidAmount: 72950 }] },
+          // El sobrepago de una factura no tapa la deuda de otra.
+          { id: 'debe-otra', status: 'ACTIVO', promiseExpiry: null, invoices: [{ total: 73150, paidAmount: 74100 }, { total: 73150, paidAmount: 0 }] },
+        ]),
+      },
+    };
+    const r = await filtrarCortables(prisma, ['sobrepagada', 'residuo', 'debe-otra'], hoy);
+    expect(r.ids).toEqual(['debe-otra']);
+    expect(r.protegidos).toEqual({ sinVencer: 2, compromiso: 0 });
+  });
+
   it('separa el lote y cuenta por qué quedó cada uno fuera', async () => {
     const prisma: any = {
       subscriber: {
         findMany: jest.fn().mockResolvedValue([
           { id: 'al-dia', status: 'ACTIVO', promiseExpiry: null, invoices: [] },
-          { id: 'moroso', status: 'ACTIVO', promiseExpiry: null, invoices: [{ id: 'f1' }] },
-          { id: 'con-acuerdo', status: 'COMPROMISO', promiseExpiry: new Date(Date.UTC(2026, 8, 30)), invoices: [{ id: 'f2' }] },
+          { id: 'moroso', status: 'ACTIVO', promiseExpiry: null, invoices: [{ total: 73150, paidAmount: 0 }] },
+          { id: 'con-acuerdo', status: 'COMPROMISO', promiseExpiry: new Date(Date.UTC(2026, 8, 30)), invoices: [{ total: 73150, paidAmount: 0 }] },
         ]),
       },
     };
@@ -64,6 +82,46 @@ describe('corte.policy · a quién deja cortar el lote', () => {
     // Sólo se miran las facturas YA vencidas: el filtro va en la consulta.
     expect(prisma.subscriber.findMany.mock.calls[0][0].select.invoices.where.dueDate).toEqual({ lt: hoy });
     expect(fraseProtegidos(r.protegidos)).toMatch(/sin ninguna factura vencida/);
+  });
+});
+
+describe('el lote sólo corta el servicio que el cliente tiene (2026-09-23)', () => {
+  const debe = [{ total: 73150, paidAmount: 0 }];
+  const armar = (lineas: Record<string, string[]>) => ({
+    subscriber: {
+      findMany: jest.fn().mockResolvedValue(
+        Object.keys(lineas).map((id) => ({ id, status: 'ACTIVO', promiseExpiry: null, invoices: debe })),
+      ),
+    },
+    // Las líneas de sus mensualidades: de ahí sale qué tiene cada uno.
+    $queryRaw: jest.fn().mockResolvedValue(
+      Object.entries(lineas).flatMap(([subscriberId, ns]) => ns.map((nombre) => ({ subscriberId, nombre }))),
+    ),
+    subscriberService: { findMany: jest.fn().mockResolvedValue([]) },
+  });
+
+  it('el corte de TV deja fuera a quien sólo paga internet', async () => {
+    const prisma: any = armar({ combo: ['100 Megas F-26', 'Television26'], soloNet: ['100 Megas FS-26'], soloTv: ['SoloTelevision22'] });
+    const r = await filtrarCortables(prisma, ['combo', 'soloNet', 'soloTv'], hoy, 'TV');
+
+    expect(r.ids).toEqual(['combo', 'soloTv']);
+    expect(r.protegidos.sinServicio).toBe(1);
+    expect(fraseProtegidos(r.protegidos)).toMatch(/1 que no tienen ese servicio/);
+  });
+
+  it('el corte de internet deja fuera a quien sólo paga TV', async () => {
+    const prisma: any = armar({ combo: ['5MegasV', 'Television24'], soloTv: ['SoloTelevision', 'Punto Adicional'] });
+    const r = await filtrarCortables(prisma, ['combo', 'soloTv'], hoy, 'INTERNET');
+
+    expect(r.ids).toEqual(['combo']);
+    expect(r.protegidos.sinServicio).toBe(1);
+  });
+
+  it('sin datos de lo que tiene, lo deja pasar (como antes)', async () => {
+    const prisma: any = armar({ nuevo: [] });
+    const r = await filtrarCortables(prisma, ['nuevo'], hoy, 'TV');
+
+    expect(r.ids).toEqual(['nuevo']);
   });
 });
 
@@ -86,17 +144,21 @@ describe('el lote de corte de internet no toca el router de quien está en plazo
   });
 
   it('con una factura vencida: el lote sigue su curso', async () => {
-    const { svc } = armar([{ id: 'f1' }]);
+    const { svc } = armar([{ total: 73150, paidAmount: 0 }]);
     const r: any = await svc.cutBatch(['sub-1']);
     expect((svc as any).batchByRouter).toHaveBeenCalledWith(['sub-1'], 'CUT', undefined);
-    expect(r.protegidos).toEqual({ sinVencer: 0, compromiso: 0 });
+    expect(r.protegidos).toEqual({ sinVencer: 0, compromiso: 0, sinServicio: 0 });
   });
 });
 
 describe('el lote de corte de TV usa el mismo candado (y sólo al cortar)', () => {
   const armar = (invoices: any[]) => {
     const prisma: any = {
-      appSetting: { findUnique: jest.fn().mockResolvedValue({ value: 'false' }) },
+      appSetting: {
+        // La TV "sólo en el sistema" se apaga aquí: estas pruebas van por la red.
+        findUnique: jest.fn(async ({ where }: any) =>
+          where?.key === 'network.tvSoloSistema' ? { value: 'false' } : { value: 'false' }),
+      },
       genieacsServer: { findFirst: jest.fn().mockResolvedValue({ id: 's1', name: 'ACS', nbiUrl: 'http://acs', username: '', password: '' }) },
       genieacsActionLog: { create: jest.fn().mockResolvedValue({}) },
       subscriber: {
@@ -104,7 +166,10 @@ describe('el lote de corte de TV usa el mismo candado (y sólo al cortar)', () =
           // El candado pregunta por el acuerdo de pago; el lote, por el equipo.
           args?.select?.promiseExpiry
             ? Promise.resolve([{ id: 'sub-1', status: 'ACTIVO', promiseExpiry: null, invoices }])
-            : Promise.resolve([{ id: 'sub-1', abonado: 4321, fullName: 'Cliente', pppUsername: null }]),
+            // No es EOC: el lote no lo saca antes del candado.
+            : args?.where?.installTech === 'EOC'
+              ? Promise.resolve([])
+              : Promise.resolve([{ id: 'sub-1', abonado: 4321, fullName: 'Cliente', pppUsername: null }]),
         ),
       },
       oltOnu: { findMany: jest.fn().mockResolvedValue([]) },
@@ -112,7 +177,10 @@ describe('el lote de corte de TV usa el mismo candado (y sólo al cortar)', () =
       subInvoice: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       $queryRaw: jest.fn().mockResolvedValue([]),
     };
-    const ordenes: any = { registrarResuelta: jest.fn().mockResolvedValue({ id: 'o1', code: 1, nueva: true }) };
+    const ordenes: any = {
+      registrarResuelta: jest.fn().mockResolvedValue({ id: 'o1', code: 1, nueva: true }),
+      abrirSiNoHay: jest.fn().mockResolvedValue({ id: 'o1', code: 1, nueva: true }),
+    };
     const svc = new GenieacsService(prisma, {} as any, ordenes);
     (svc as any).devicesOf = async () => [];
     return { svc, ordenes };
@@ -123,6 +191,7 @@ describe('el lote de corte de TV usa el mismo candado (y sólo al cortar)', () =
     await expect(svc.tvBatchBySubscribers(['sub-1'], false, undefined, { candadoDeuda: true }))
       .rejects.toThrow(/sin ninguna factura vencida/i);
     expect(ordenes.registrarResuelta).not.toHaveBeenCalled();
+    expect(ordenes.abrirSiNoHay).not.toHaveBeenCalled();
   });
 
   it('devolver la TV nunca pasa por el candado', async () => {

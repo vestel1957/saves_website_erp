@@ -9,6 +9,8 @@ import { TreasuryService } from './treasury.service';
 import { cashClosePdf, receiptPdf } from '../common/pdf/pdf-docs';
 import { reciboRolloPdf } from '../common/pdf/recibo-rollo';
 import { CobranzasService } from './cobranzas.service';
+import { FacturasService } from '../billing/facturas.service';
+import { ESPERA_VENTANILLA_MS } from '../network/reconexion.service';
 import { EjecutarPagoFijoDto, PagoFijoDto, PagosFijosService, UpdatePagoFijoDto } from './pagos-fijos.service';
 import {
   BeneficiaryDto, CashAccountDto, CashCloseDto, CashOpenDto, CollectDto, EditTxDto, ExpenseDto,
@@ -29,6 +31,7 @@ export class TreasuryController {
     private readonly treasury: TreasuryService,
     private readonly cobranzas: CobranzasService,
     private readonly pagosFijos: PagosFijosService,
+    private readonly facturas: FacturasService,
   ) {}
 
   // ── Pagos fijos programados (2026-07-31) ──────────────────────────────────
@@ -64,10 +67,11 @@ export class TreasuryController {
     from?: string,
     to?: string,
     all?: string,
+    sede?: string,
     user?: AuthUser,
   ) {
     // Con usuario: acotado a sus cajas, igual que el listado que resume.
-    return this.treasury.stats({ from, to, all }, user);
+    return this.treasury.stats({ from, to, all, sede }, user);
   }
 
   categories() {
@@ -135,6 +139,18 @@ export class TreasuryController {
     user: AuthUser,
   ) {
     return this.treasury.cashCloseReport(Number(cashAccountId), date, user);
+  }
+
+  /**
+   * Los pagos por WOMPI del día, uno a uno (cliente, medio, facturas, referencia), de
+   * los clientes de la sede de la caja. El informe sólo trae la fila con el total.
+   */
+  cashCloseWompi(
+    cashAccountId: string,
+    date: string,
+    user: AuthUser,
+  ) {
+    return this.treasury.cashCloseWompi(Number(cashAccountId), date, user);
   }
 
   /**
@@ -271,9 +287,10 @@ export class TreasuryController {
   // --- Cobranzas (escritura) ---
 
   /** Cajas disponibles (para selectores de recaudo/egreso/cierre). */
-  cashAccounts(user: AuthUser) {
+  cashAccounts(user: AuthUser, from?: string, to?: string) {
     // Acotada a lo que este usuario puede ver: la cajera sólo su caja + los bancos.
-    return this.cobranzas.cashAccounts(user);
+    // Con `from`/`to`, cada caja trae además lo que se movió en ese rango.
+    return this.cobranzas.cashAccounts(user, { from, to });
   }
 
   /**
@@ -353,10 +370,23 @@ export class TreasuryController {
   }
 
   /** Registrar un recaudo/pago (multipago en cascada + recibo). */
-  collect(dto: CollectDto, user: AuthUser) {
+  async collect(dto: CollectDto, user: AuthUser) {
     // `cajaPropiaSiFalta`: la pantalla sólo le enseña el selector de caja al
     // superusuario, así que el resto recauda contra la caja que tenga asignada.
-    return this.cobranzas.collect(dto, user, { cajaPropiaSiFalta: true });
+    // `esperaReconexionMs`: el recibo se imprime cuando esto responde; la cajera no
+    // puede tener al cliente esperando el papel por un equipo lento (ver
+    // `ESPERA_VENTANILLA_MS`). La reconexión sigue sola si se pasa.
+    const res = await this.cobranzas.collect(dto, user, {
+      cajaPropiaSiFalta: true, fechaDeVentanilla: true, esperaReconexionMs: ESPERA_VENTANILLA_MS,
+    });
+    // "Pagar también <mes>": la factura de ese mes se emite ya y queda pagada con el
+    // anticipo (ver `FacturasService.emitirMesesAdelantados`). Va después del recaudo
+    // confirmado; si no se puede, el anticipo queda abierto para la corrida del día 1.
+    const fechas = res.adelanto?.fechas ?? [];
+    const facturasAdelantadas = fechas.length
+      ? await this.facturas.emitirMesesAdelantados(dto.subscriberId, fechas, user)
+      : null;
+    return { ...res, facturasAdelantadas };
   }
 
   /** Registrar un egreso/gasto de caja. */

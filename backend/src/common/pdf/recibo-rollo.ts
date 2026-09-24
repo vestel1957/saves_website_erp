@@ -25,6 +25,7 @@
  */
 import PDFDocument from 'pdfkit';
 import type { Response } from 'express';
+import { NIT_RECIBO } from './brand';
 
 const MM = 72 / 25.4;
 
@@ -382,7 +383,7 @@ const ESTADO: Record<string, string> = {
 const EMPRESA = {
   nombre: 'VESTEL S.A.S',
   direccion: 'Dig 34 n 31B - 87',
-  nit: '813001768-1',
+  nit: NIT_RECIBO,
   web: 'www.vestel.com.co',
   convenio: '93477',
   pbx: '300 9135141',

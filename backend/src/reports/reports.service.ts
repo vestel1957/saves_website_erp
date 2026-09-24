@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { num, round2 } from '../common/money';
 import { traductorDeTecnicos } from '../staff/nombre-tecnico';
+import { seguimientoCartera } from './cartera-seguimiento';
 
 
 /** Fila cruda del reporte de IVA (una por documento). */
@@ -378,6 +379,11 @@ export class ReportsService {
   }
 
   /** Top clientes deudores. */
+  /** Seguimiento mensual de la cartera: qué pasó con cada abonado tras la gestión de cobro. */
+  carteraSeguimiento(mes?: string, sede?: string, categoria?: string) {
+    return seguimientoCartera(this.prisma, { mes, sede, categoria });
+  }
+
   async topDeudores(sede?: string) {
     const fSede = sede ? Prisma.sql`AND s."branchId" = ${sede}` : Prisma.empty;
     const [rows, sedes, nombre] = await Promise.all([

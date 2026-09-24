@@ -9,6 +9,7 @@ import { MailService } from '../common/mail/mail.service';
 import { WhatsappRemindersService } from '../common/whatsapp/whatsapp-reminders.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { MetricsService } from '../reports/metrics.service';
+import { pasoMensual } from '../reports/cartera-seguimiento';
 import { ResponsibilityNotifierService } from '../responsibilities/responsibility-notifier.service';
 import { OnlinePaymentsService } from '../online-payments/online-payments.service';
 import { PortalPagosService } from '../portal-pagos/portal-pagos.service';
@@ -20,6 +21,7 @@ import { arrastrarAlDiaDeHoy } from '../support/agenda-arrastre';
 import { hoyEnColombia } from '../common/fecha-colombia';
 import { barrerDescuentosDelPortal, PORTAL_PRECONCEDER_LIVE } from '../promotions/descuento-portal';
 import { candidatosDeCorte, cortesDeshechos, ESTADOS_FUERA, TIPOS_CORTE, TIPOS_RECONEXION } from '../network/cortes-deshechos';
+import type { VlanEquiposService } from '../network/vlan-equipos.service';
 
 const cop = (n: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(n || 0);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -72,6 +74,8 @@ export class CronService {
     private portalPagos: PortalPagosService,
     private ordenAlPagar: OrdenAlPagarService,
     private mikrotik: MikrotikService,
+    /** Revisión diaria de VLANs en los equipos. Opcional: sin él esa tarea se omite. */
+    private vlanEquipos?: VlanEquiposService,
   ) {}
 
   get isEnabled() {
@@ -160,6 +164,41 @@ export class CronService {
         where: { id: run.id }, data: { ok: false, detail, finishedAt: new Date() },
       });
       this.logger.error(`[metrics] falló: ${detail}`);
+      throw e;
+    }
+  }
+
+  /**
+   * Diario 00:40 — seguimiento mensual de la cartera (/reportes/cartera-seguimiento).
+   * El primer día del mes cierra el mes anterior y fotografía quién está en CARTERA;
+   * los demás días no hace nada (es idempotente) y sólo sirve de red si el día 1 se
+   * cayó el servidor. Corre ANTES del paso a Cartera de las 03:00, para que la foto sea
+   * la del día que empieza, y aunque `CRONS_ENABLED=false`: sólo escribe su tabla.
+   */
+  async scheduledCarteraSeguimiento() {
+    await this.runCarteraSeguimiento({ manual: false });
+  }
+
+  async runCarteraSeguimiento(opts: { manual: boolean; user?: AuthUser }) {
+    const run = await this.prisma.cronRun.create({
+      data: { job: 'CARTERA_SEGUIMIENTO', ok: false, manual: opts.manual, userName: opts.user?.name ?? 'Cron' },
+    });
+    try {
+      const r = await pasoMensual(this.prisma);
+      const detail = [
+        ...r.cerrados.map((c) => `cerrado ${c.mes}: ${c.cerrados}`),
+        r.abierto.yaAbierto ? `${r.abierto.mes} ya abierto` : `abierto ${r.abierto.mes}: ${r.abierto.creados} abonados`,
+      ].join(' · ');
+      await this.prisma.cronRun.update({
+        where: { id: run.id },
+        data: { ok: true, count: r.abierto.creados, detail, finishedAt: new Date() },
+      });
+      if (!r.abierto.yaAbierto || r.cerrados.length) this.logger.log(`[cartera-seguimiento] ${detail}`);
+      return { ok: true, ...r };
+    } catch (e) {
+      const detail = (e as Error).message;
+      await this.prisma.cronRun.update({ where: { id: run.id }, data: { ok: false, detail, finishedAt: new Date() } });
+      this.logger.error(`[cartera-seguimiento] falló: ${detail}`);
       throw e;
     }
   }
@@ -350,6 +389,82 @@ export class CronService {
         },
       }).catch(() => undefined);
       this.logger.error(`[cortes-deshechos] ${msg}`);
+      throw e;
+    }
+  }
+
+  /** Diario 06:30 — VLANs con clientes a las que les falta un tramo en los equipos. */
+  async scheduledRevisionVlans() {
+    if (!this.enabled) return this.logger.log('[revision-vlans] omitido (CRONS_ENABLED != true)');
+    if (!this.mikrotik.isLive) return this.logger.log('[revision-vlans] omitido (Mikrotik en dry-run)');
+    await this.runRevisionVlans({ manual: false });
+  }
+
+  /**
+   * Lee (solo `display` y `/print`) las VLANs de cada OLT alcanzable y de los
+   * Mikrotik de su sede, y avisa al cargo `red-isp` de las VLANs CON CLIENTES que
+   * no salen por el uplink, no existen o no tienen PPPoE en el router: esos
+   * clientes tienen la ONU en línea y no navegan (la 590 de Villanueva,
+   * 2026-09-22). NUNCA corrige: arreglarlo es "Configurar en equipos" en Red ›
+   * VLANs, con una persona confirmando. `avisar: false` deja el informe sin aviso.
+   */
+  async runRevisionVlans(opts: { manual: boolean; user?: AuthUser; avisar?: boolean }) {
+    const inicio = new Date();
+    try {
+      if (!this.vlanEquipos) throw new Error('El servicio de VLANs no está cableado en el cron.');
+      const hoy = new Date().toLocaleDateString('en-CA', { timeZone: TZ });
+      const sedes = await this.prisma.branch.findMany({
+        where: { olts: { some: {} } }, select: { id: true, name: true }, orderBy: { name: 'asc' },
+      });
+      const rotas: string[] = [];
+      const sinLeer: string[] = [];
+      let revisadas = 0;
+      for (const sede of sedes) {
+        const r = await this.vlanEquipos.salud(sede.id, true).catch((e) => {
+          sinLeer.push(`${sede.name}: ${(e as Error).message}`);
+          return null;
+        });
+        for (const o of r?.olts ?? []) {
+          if (!o.ok) { sinLeer.push(`${o.name}: ${o.error}`); continue; }
+          revisadas++;
+          for (const f of o.filas.filter((x) => x.estado === 'ROTA')) {
+            rotas.push(`${sede.name} VLAN ${f.vlan} (${f.servicePorts} service-port${f.servicePorts === 1 ? '' : 's'}): ${f.falta.join('; ')}`);
+          }
+        }
+        if (r?.mikrotikErrores.length) sinLeer.push(`${sede.name} Mikrotik: ${r.mikrotikErrores.join('; ')}`);
+      }
+      const detalle = `${revisadas} OLT revisadas · ${rotas.length} VLAN con clientes y un tramo roto`
+        + (rotas.length ? `: ${rotas.join(' | ')}` : '')
+        + (sinLeer.length ? ` · sin leer: ${sinLeer.join('; ')}` : '');
+
+      if (rotas.length && opts.avisar !== false) {
+        await this.notifier.notifyPost('red-isp', {
+          kind: 'red.vlans-rotas',
+          title: `${rotas.length} VLAN${rotas.length === 1 ? '' : 's'} con clientes no llega${rotas.length === 1 ? '' : 'n'} al PPPoE`,
+          body: 'A estas VLANs les falta un tramo en los equipos (OLT, uplink o Mikrotik): sus clientes quedan con la ONU '
+            + `en línea y sin internet. ${rotas.slice(0, 15).join(' · ')}${rotas.length > 15 ? ` y ${rotas.length - 15} más` : ''}. `
+            + 'Revíselas en Red › VLANs (columna "En equipos").',
+          link: '/red/vlans',
+          groupKey: `red.vlans-rotas.${hoy}`,
+        });
+      }
+      await this.prisma.cronRun.create({
+        data: {
+          job: 'REVISION_VLANS', ok: !sinLeer.length, manual: opts.manual, count: rotas.length,
+          detail: detalle.slice(0, 1900), userName: opts.user?.name ?? 'Cron', startedAt: inicio, finishedAt: new Date(),
+        },
+      });
+      this.logger.log(`[revision-vlans] ${detalle}`);
+      return { ok: true, revisadas, rotas, sinLeer };
+    } catch (e) {
+      const msg = (e as Error).message;
+      await this.prisma.cronRun.create({
+        data: {
+          job: 'REVISION_VLANS', ok: false, manual: opts.manual, count: 0,
+          detail: `ERROR: ${msg}`.slice(0, 1900), userName: opts.user?.name ?? 'Cron', startedAt: inicio, finishedAt: new Date(),
+        },
+      }).catch(() => undefined);
+      this.logger.error(`[revision-vlans] ${msg}`);
       throw e;
     }
   }
@@ -1407,6 +1522,58 @@ export class CronService {
     } finally {
       this.wbEstadoServicioRunning = false;
       if (this.wbEstadoServicioPendiente) { this.wbEstadoServicioPendiente = false; this.empujarEstadoServicioAlLegacy(); }
+    }
+  }
+
+  // ── Empuje INMEDIATO del CAMBIO MANUAL de estado al legacy ────────────────
+  //
+  // La cuarta puerta del estado del abonado y la que faltaba: la ficha
+  // (Acciones ▸ Cambiar estado) escribe cualquier estado, y hasta el 18-09-2026 sólo
+  // viajaban al legacy las tres transiciones que conocen sus hermanas —reconexión, baja
+  // y activación por instalación—. Todo lo demás lo deshacía la ida a los 15 minutos:
+  // el caso que lo destapó es el del cliente que se retira DEBIENDO y al que Cartera le
+  // devuelve el estado para seguirle el cobro.
+  private wbEstadoManualTimer: NodeJS.Timeout | null = null;
+  private wbEstadoManualRunning = false;
+  private wbEstadoManualPendiente = false;
+
+  /** Pide un empuje del estado tecleado en la ficha. Agrupa ráfagas como los demás. */
+  empujarEstadoManualAlLegacy(): void {
+    if (this.wbEstadoManualTimer) return;
+    this.wbEstadoManualTimer = setTimeout(() => {
+      this.wbEstadoManualTimer = null;
+      void this.runLegacyWritebackEstadoManual();
+    }, 2000);
+  }
+
+  async runLegacyWritebackEstadoManual(): Promise<{ ok: boolean; error?: string }> {
+    const abierto = process.env.LEGACY_WRITEBACK_LIVE === 'true'
+      || process.env.LEGACY_WRITEBACK_ESTADO_MANUAL_LIVE === 'true';
+    if (!abierto) return { ok: true };
+    if (this.legacyWritebackRunning || this.wbEstadoManualRunning) { this.wbEstadoManualPendiente = true; return { ok: true }; }
+    this.wbEstadoManualRunning = true;
+    try {
+      const res = await this.execLegacyScript(['--solo=estado-manual'], 'writeback-legacy.js');
+      if (!res.ok) throw new Error(res.error || 'fallo sin detalle');
+      const n = res.estadoManual?.aplicados ?? 0;
+      // Como las otras cortas: sólo deja rastro cuando movió algo.
+      if (n > 0) {
+        const detail = `clientes ${n}`
+          + (res.estadoManual?.reparados ? ` · ${res.estadoManual.reparados} fichas repuestas` : '')
+          + ` · ${Math.round((res.ms ?? 0) / 1000)}s`;
+        await this.prisma.cronRun.create({
+          data: { job: 'LEGACY_WRITEBACK_ESTADO_MANUAL', ok: true, manual: false, userName: 'Cambio de estado', count: n, detail, finishedAt: new Date() },
+        });
+        this.logger.log(`[legacy-writeback-estado-manual] ${detail}`);
+      }
+      return { ok: true };
+    } catch (e) {
+      const msg = (e as Error).message;
+      this.logger.error(`[legacy-writeback-estado-manual] ${msg}`);
+      return { ok: false, error: msg };
+    } finally {
+      this.wbEstadoManualRunning = false;
+      if (this.wbEstadoManualPendiente) { this.wbEstadoManualPendiente = false; this.empujarEstadoManualAlLegacy(); }
     }
   }
 

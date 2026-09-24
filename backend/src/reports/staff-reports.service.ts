@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { moduloDe, normalizarRuta } from './audit-normalize';
 import { describir, fraseSinNombres } from '../common/audit/bitacora-descripcion';
+import { afiliadoresDisponibles } from '../staff/afiliadores';
 
 /**
  * Reportes de personal: qué hizo cada funcionario con la plata y con el sistema.
@@ -326,6 +327,82 @@ export class StaffReportsService {
         ip: e.ipAddress,
         usuario: nombreUsuario(e),
       })),
+    };
+  }
+
+  /**
+   * Afiliados: qué clientes quedaron a nombre de cada funcionario en el alta.
+   *
+   * La fecha es la del ALTA (`affiliateAt`), leída en hora de Bogotá: es
+   * un timestamp, y cortarlo en UTC pasaría al día siguiente las altas de después de
+   * las 7 p. m. La sede es la del cliente. El funcionario inhabilitado SIGUE saliendo:
+   * lo que se mide aquí es a quién se le debe cada cliente, y eso no cambia porque la
+   * persona se haya ido (ver `solo-funcionarios-activos` para los listados de gente).
+   */
+  async afiliados(from?: string, to?: string, funcionario?: string, sede?: string) {
+    const hasta = to ? new Date(`${to}T23:59:59.999-05:00`) : new Date();
+    const desde = from ? new Date(`${from}T00:00:00.000-05:00`) : new Date(hasta.getTime() - DIAS_POR_DEFECTO * 86400_000);
+
+    const where: Prisma.SubscriberWhereInput = {
+      affiliateStaffId: funcionario ? funcionario : { not: null },
+      affiliateAt: { gte: desde, lte: hasta },
+    };
+    if (sede) where.branchId = sede;
+
+    const [filas, afiliadores, sedes] = await Promise.all([
+      this.prisma.subscriber.findMany({
+        where,
+        orderBy: { affiliateAt: 'desc' },
+        select: {
+          id: true, abonado: true, fullName: true, docNumber: true, phone1: true, status: true,
+          affiliateAt: true, affiliateBy: true,
+          branch: { select: { id: true, name: true } },
+          affiliateStaff: { select: { id: true, name: true, banned: true } },
+        },
+      }),
+      afiliadoresDisponibles(this.prisma),
+      this.prisma.branch.findMany({ select: { id: true, name: true }, orderBy: { name: 'asc' } }),
+    ]);
+
+    const clientes = filas.map((c) => ({
+      id: c.id,
+      abonado: c.abonado,
+      nombre: c.fullName,
+      documento: c.docNumber,
+      celular: c.phone1,
+      estado: c.status,
+      sede: c.branch?.name ?? null,
+      fecha: c.affiliateAt,
+      funcionarioId: c.affiliateStaff?.id ?? null,
+      funcionario: c.affiliateStaff?.name ?? null,
+      registradoPor: c.affiliateBy,
+    }));
+
+    const porFuncionario = new Map<string, { staffId: string; nombre: string; inhabilitado: boolean; clientes: number; activos: number }>();
+    for (const c of filas) {
+      const f = c.affiliateStaff;
+      if (!f) continue;
+      const fila = porFuncionario.get(f.id) ?? { staffId: f.id, nombre: f.name, inhabilitado: f.banned, clientes: 0, activos: 0 };
+      fila.clientes++;
+      if (c.status === 'ACTIVO') fila.activos++;
+      porFuncionario.set(f.id, fila);
+    }
+    const funcionarios = [...porFuncionario.values()].sort((a, b) => b.clientes - a.clientes || a.nombre.localeCompare(b.nombre));
+
+    // El filtro ofrece a todos los que afilian aunque aún no hayan traído a nadie, más
+    // los que sí salen en el periodo sin estar ya en la lista (inhabilitados).
+    const opcionesFuncionarios = afiliadores.map((s) => ({ id: s.id, nombre: s.name }));
+    for (const f of funcionarios) {
+      if (!opcionesFuncionarios.some((o) => o.id === f.staffId)) opcionesFuncionarios.push({ id: f.staffId, nombre: f.nombre });
+    }
+
+    return {
+      desde, hasta,
+      total: clientes.length,
+      activos: clientes.filter((c) => c.estado === 'ACTIVO').length,
+      funcionarios,
+      clientes,
+      opciones: { funcionarios: opcionesFuncionarios, sedes: sedes.map((b) => ({ id: b.id, nombre: b.name })) },
     };
   }
 

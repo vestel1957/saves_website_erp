@@ -1,5 +1,5 @@
 import { PrismaService } from '../prisma/prisma.service';
-import { rangoDia } from './cierre-legacy';
+import { rangoDia, CASH, esNotaSaldo } from './cierre-legacy';
 import { num } from '../common/money';
 
 /**
@@ -20,6 +20,14 @@ import { num } from '../common/money';
  *
  * Tampoco se replican: la división por cero de las ramas sin guarda, el `$cuenta3`
  * pisado (que tira la cuenta 8) ni el `$cuenta4` indefinido de `statements_para_pdf()`.
+ *
+ * DESVIACIONES DELIBERADAS (las únicas cifras que a propósito NO cuadran con el legacy):
+ *
+ *  · 2026-09-18: la fila "Efectivo" de Forma de pago muestra el efectivo que entró de
+ *    verdad al cajón, incluido el que no tiene factura (anticipos, `tid = 0`), que el
+ *    legacy dejaba fuera. Ver el bloque para el detalle.
+ *  · 2026-09-23: un pago de BANCO cuya factura no trae sede (`refer` vacío) se consolida
+ *    por la sede de la FICHA del cliente. Ver `sedeDelMovimiento`.
  */
 
 
@@ -46,7 +54,31 @@ const CAJA_VIRTUAL_ID = 11;
 const CAJA_VIRTUAL = 'Caja Virtual';
 
 /** `refer` normalizado: sin espacios y en minúsculas (legacy: `str_replace(" ","") + strtolower`). */
-const norm = (s: string | null | undefined) => (s ?? '').replace(/ /g, '').toLowerCase();
+export const norm = (s: string | null | undefined) => (s ?? '').replace(/ /g, '').toLowerCase();
+
+/**
+ * A qué sede pertenece un movimiento de banco, para consolidarlo en su caja.
+ *
+ * El legacy mira SÓLO el `refer` de la factura. Pero su corrida del 1-sep-2026 generó
+ * las facturas de septiembre sin `refer` (27 de 5.134; julio y agosto lo tenían casi
+ * todas), y desde entonces la plata de banco y de Wompi no caía en ninguna caja: en
+ * Villanueva el 22-sep «Bancos» decía 4 movimientos por $600 cuando entraron 54 por
+ * $2,9 M, y el hueco se arrastraba a Servicios, Tipo de servicio y Meses.
+ *
+ * Así que: si la factura trae sede, manda la factura (igual que el legacy); si viene
+ * vacía, la sede de la ficha del cliente. `Branch.name` coincide con el `holder` de la
+ * caja principal de cada sede (Yopal, Villanueva, Monterrey…), así que cae ahí, que es
+ * donde el legacy lo pondría si el `refer` estuviera lleno. Decidido con el usuario el
+ * 2026-09-23: estos días dejan de cuadrar con el legacy, que sigue con el hueco.
+ */
+export function sedeDelMovimiento(t: {
+  invoice?: { branchRef?: string | null } | null;
+  subscriber?: { branch?: { name: string } | null } | null;
+}): string {
+  // Sin factura no hay `refer` que se haya perdido: se queda como en el legacy (fuera).
+  if (!t.invoice) return '';
+  return norm(t.invoice.branchRef) || norm(t.subscriber?.branch?.name);
+}
 
 type Fila = {
   id: string;
@@ -93,9 +125,18 @@ function normalizarPlan(producto: string): string {
 }
 
 /** "10megasf" -> 10. El legacy usa FILTER_SANITIZE_NUMBER_INT + (int). */
+/**
+ * "10megasf" -> 10. El PRIMER número del nombre, que es la velocidad.
+ *
+ * El legacy hace `FILTER_SANITIZE_NUMBER_INT` + `(int)`, que pega TODOS los dígitos del
+ * nombre: un plan llamado "300 Megas 26 F" salía como 30.026 megas, y "600 Megas 26 F"
+ * como 60.026. No es una cifra de dinero —`megas` sólo rotula y ordena la fila— pero la
+ * pantalla de la cajera lo pinta tal cual ("Internet 30026MG"), así que se corrige: en
+ * septiembre de 2026 afectaba a 6 de las 34 claves y a 61 cobros.
+ */
 const megasDe = (clave: string): number => {
-  const soloNumeros = clave.replace(/[^0-9-]/g, '');
-  return parseInt(soloNumeros, 10) || 0;
+  const primero = clave.match(/\d+/);
+  return primero ? parseInt(primero[0], 10) : 0;
 };
 
 export type InformeCierre = Awaited<ReturnType<typeof informeCierre>>;
@@ -147,9 +188,10 @@ export async function informeCierre(
     select: {
       id: true, type: true, category: true, method: true, credit: true, debit: true,
       note: true, status: true, cashAccountId: true, invoice: incluirFactura,
+      subscriber: { select: { branch: { select: { name: true } } } },
     },
   });
-  const bancoDeLaCaja = deBanco.filter((t) => norm(t.invoice?.branchRef) === norm(holder));
+  const bancoDeLaCaja = deBanco.filter((t) => sedeDelMovimiento(t) === norm(holder));
 
   // 3. Caso especial del legacy: si la caja ES "Caja Virtual", la cuenta 11 aporta
   //    SÓLO sus anuladas.
@@ -178,6 +220,16 @@ export async function informeCierre(
   const todas = [...propias, ...bancoDeLaCaja, ...virtuales];
   const lista = todas.filter((t) => t.status !== 'ANULADA').map(aFila);
   const anuladas = todas.filter((t) => t.status === 'ANULADA').map(aFila);
+
+  /**
+   * Sólo los movimientos de la PROPIA caja, vigentes: el cajón físico.
+   *
+   * Se separa de `lista` porque ahí dentro también van las filas consolidadas de los
+   * bancos (por `refer` de la factura), y esas NO pasaron por la ventanilla. Importa:
+   * hay 23 movimientos de 2026 en BANCOLOMBIA TV/TELECOMUNICACIONES con `method='Cash'`
+   * que, contados desde `lista`, se colarían en el efectivo del cajón.
+   */
+  const deLaCaja = propias.filter((t) => t.status !== 'ANULADA').map(aFila);
 
   // ── Prorrateo (legacy, vista L27-174) ────────────────────────────────────────
   // Cada ítem de la factura recibe la parte del pago que le toca:
@@ -254,23 +306,99 @@ export async function informeCierre(
   const cajaVirtual = { nombre: CAJA_VIRTUAL, cantidad: 0, monto: 0 };
 
   // ── Bloque: Forma de pago ────────────────────────────────────────────────────
-  // Efectivo: sólo `method='Cash'` y sólo dentro de facturas con total != 0 (legacy).
-  const efectivo = bucket();
-  for (const f of lista) {
-    if (!f.invoice || Math.trunc(f.invoice.total) === 0) continue;
-    if (f.method === 'Cash') { efectivo.cantidad++; efectivo.monto += f.credit; }
+  /**
+   * Efectivo = el dinero que ENTRÓ en efectivo a la ventanilla ese día. Sin más.
+   *
+   * DESVIACIÓN DELIBERADA DEL LEGACY (2026-09-18). El legacy contaba el efectivo dentro
+   * del guard `if($invoice->total != 0)` (ver `statement_list.php`, el bloque que cierra
+   * en `}//end invoice->total !=0`): un pago sin factura —`tid = 0`, los anticipos que
+   * quedan a favor— nunca llegaba al contador. Esa plata SÍ está en el cajón, así que la
+   * pantalla no podía cuadrarse nunca contra el arqueo. En Villanueva el 16-09-2026 eran
+   * $48.890 invisibles, y en lo que va de septiembre hay efectivo sin factura en cuatro
+   * cajas (Monterrey, Yopal, Villanueva y Tauramena).
+   *
+   * Ahora la fila cuadra: `Saldo anterior + Efectivo` = el efectivo disponible del arqueo.
+   *
+   * El criterio es EL MISMO de `whereEfectivo` (el del arqueo), a propósito: que haya una
+   * sola definición de "efectivo" en todo el módulo es lo que impide que la pantalla y el
+   * arqueo vuelvan a divergir. Los filtros, y por qué:
+   *   - `deLaCaja`      → sólo la propia caja; los bancos consolidados no son el cajón.
+   *   - `Cash` o TRANSFER → igual que `whereEfectivo`. El traslado que llega de otra caja
+   *                       es efectivo que entra (en 2026 sólo ha pasado una vez, Tauramena
+   *                       $77.000, pero el arqueo lo cuenta y aquí también).
+   *   - `credit > 0`    → es lo que ENTRÓ; un egreso o una consignación tienen `debit`.
+   *   - `!esNotaSaldo`  → el arrastre ya tiene su propia fila ("Saldo anterior"); contarlo
+   *                       aquí lo duplicaría.
+   * Se cuenta tenga factura o no, y sin mirar `invoice.total`: el efectivo es efectivo.
+   *
+   * Resultado: `Saldo anterior + Efectivo` = el efectivo disponible del arqueo. Verificado
+   * en las 6 cajas x 17 días de septiembre de 2026: la fila Efectivo cuadra con el libro en
+   * los 102 casos. Los 9 días en que el TOTAL no cuadra son culpa de `saldoAnterior`, no de
+   * esta fila — ver su bloque, justo abajo.
+   */
+  const recaudo = bucket();
+  for (const f of deLaCaja) {
+    if (esNotaSaldo(f.note)) continue;
+    if (!CASH.includes(f.method ?? '') && f.type !== 'TRANSFER') continue;
+    if (f.credit <= 0) continue;
+    recaudo.cantidad++;
+    recaudo.monto += f.credit;
   }
 
-  // Saldo anterior: la pata INCOME del arrastre más reciente hasta esa fecha.
-  const saldoRow = await prisma.transaction.findFirst({
-    where: {
-      accountName: holder, type: 'INCOME', status: 'VIGENTE',
-      note: { startsWith: 'Saldo ' }, date: { lte: d },
-    },
-    orderBy: { date: 'desc' },
-    select: { credit: true },
-  });
-  const saldoAnterior = saldoRow ? num(saldoRow.credit) : 0;
+  /**
+   * El espejo del recaudo: el efectivo que SALIÓ del cajón. Mismo criterio, `debit`.
+   *
+   * Incluye la consignación al banco (`TRANSFER` con débito), que es plata que se fue de
+   * la ventanilla de verdad — en Villanueva van 246 M así en 2026. Excluye el barrido del
+   * cierre (`Saldo <fecha>`): ése no es un gasto del día, es el excedente yéndose a
+   * dormir, y contarlo dejaría el excedente siempre en cero.
+   *
+   * Ojo: NO es el bloque `egresos` de más abajo, que es el del legacy (cuenta también las
+   * filas de banco consolidadas y mete el barrido dentro de "Pago Orden de Compra").
+   */
+  /**
+   * La parte del recaudo que NO tiene factura (anticipos que quedan a favor, `tid = 0`).
+   *
+   * Va aparte sólo para poder explicarla en pantalla: es la mitad de por qué "Cobrado a
+   * facturas" y "Recaudo en efectivo" nunca dan igual. La otra mitad es `porBanco` — plata
+   * cobrada a facturas que entró por banco o por la pasarela y nunca tocó el cajón.
+   */
+  const sinFactura = bucket();
+  for (const f of deLaCaja) {
+    if (esNotaSaldo(f.note)) continue;
+    if (!CASH.includes(f.method ?? '') && f.type !== 'TRANSFER') continue;
+    if (f.credit <= 0) continue;
+    if (f.invoice && Math.trunc(f.invoice.total) !== 0) continue;
+    sinFactura.cantidad++;
+    sinFactura.monto += f.credit;
+  }
+
+  const egresosCaja = bucket();
+  for (const f of deLaCaja) {
+    if (esNotaSaldo(f.note)) continue;
+    if (!CASH.includes(f.method ?? '') && f.type !== 'TRANSFER') continue;
+    if (f.debit <= 0) continue;
+    egresosCaja.cantidad++;
+    egresosCaja.monto += f.debit;
+  }
+
+  /**
+   * Saldo anterior: el arrastre que el cierre pasado dejó EN ESTE DÍA — la pata INCOME
+   * `Saldo <fecha>` que aparece en el libro de hoy.
+   *
+   * Antes esto era un `findFirst` con `date: { lte: d }`, que no exigía que el arrastre
+   * fuera de ese día y por tanto traía el último que encontrara hacia atrás. Dos formas de
+   * mentir, las dos reales (medidas el 2026-09-18 sobre septiembre): un domingo sin
+   * movimientos enseñaba un saldo que no existe en el libro (8 veces), y una caja que no
+   * cerró el día hábil anterior enseñaba uno viejo (Tauramena el 02-09: $1.648.671 en
+   * pantalla contra $0 en el libro). Con eso, `Saldo anterior + Recaudo` no daba el
+   * efectivo del cajón en 9 de 102 casos.
+   *
+   * Leyéndolo del libro de hoy, como hace el arqueo, la identidad se cumple siempre.
+   */
+  const saldoAnterior = deLaCaja
+    .filter((f) => f.type === 'INCOME' && esNotaSaldo(f.note))
+    .reduce((s, f) => s + f.credit, 0);
 
   // ── Bloque: tipo de servicio (2ª pasada del legacy, clasificación más simple) ──
   // Aquí el `else` cae en INTERNET (no en afiliaciones): reconexiones, afiliaciones,
@@ -420,14 +548,34 @@ export async function informeCierre(
     },
     porBanco,
     cajaVirtual,
-    formaPago: {
+    /**
+     * El arqueo del cajón, en el orden en que se cuenta la plata a mano:
+     *
+     *     arrastre de ayer + recaudo de hoy = total en caja
+     *     total en caja - egresos           = excedente que se barre
+     *
+     * Antes esto era "Forma de pago" y listaba los canales (efectivo, transferencia,
+     * WOMPI) sumados en un total que mezclaba plata del cajón con plata que nunca pasó
+     * por la ventanilla. Se cambió el 2026-09-18: la fila "Transferencia" (pagos de
+     * abonados a las cuentas Bancolombia, consolidados por el `refer` de la factura) se
+     * quitó de aquí —esa misma plata sigue en "Resumen por Banco", no se pierde— y el
+     * bloque quedó siendo lo que la cajera necesita cuadrar contra el cajón físico.
+     *
+     * `wompi` se conserva en el payload aunque NO sea una fila del arqueo: el panel de la
+     * cajera lo pinta aparte, rotulado como recaudo en línea.
+     *
+     * No se llama `arqueo` a propósito: `treasury.service.cashCloseReport` ya devuelve un
+     * `arqueo` propio (el de `cashCloseDetail`, con sus movimientos y su desglose) y hace
+     * `{ ...informe, arqueo }`, así que un `arqueo` aquí quedaría pisado en silencio.
+     */
+    dineroEnCaja: {
       saldoAnterior: { cantidad: saldoAnterior === 0 ? 0 : 1, monto: saldoAnterior },
-      efectivo,
-      // El legacy suma aquí Caja Virtual + los 3 Bancolombia (sin WOMPI).
-      transferencia: {
-        cantidad: cajaVirtual.cantidad + porBanco.filter((b) => b.nombre !== 'WOMPI').reduce((s, b) => s + b.cantidad, 0),
-        monto: cajaVirtual.monto + porBanco.filter((b) => b.nombre !== 'WOMPI').reduce((s, b) => s + b.monto, 0),
-      },
+      recaudo,
+      /** Parte de `recaudo` que entró sin factura. Informativo: ya está dentro. */
+      sinFactura,
+      totalEnCaja: saldoAnterior + recaudo.monto,
+      egresos: egresosCaja,
+      excedente: saldoAnterior + recaudo.monto - egresosCaja.monto,
       wompi: porBanco.find((b) => b.nombre === 'WOMPI') ?? bucket(),
     },
     servicios: {

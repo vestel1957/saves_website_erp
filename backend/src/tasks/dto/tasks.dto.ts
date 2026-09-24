@@ -9,6 +9,8 @@ export class CreateTaskDto {
   @IsOptional() @IsIn(TODO_PRIORITY) priority?: string;
   @IsOptional() @IsString() start?: string;
   @IsOptional() @IsString() dueDate?: string;
+  /** Fecha en que se realizó (YYYY-MM-DD). Sólo cuenta si nace Hecha; sin ella, hoy. */
+  @IsOptional() @IsString() doneDate?: string;
   @IsOptional() @IsString() description?: string;
   /** Orden asociada (`idorden`). 0 / ausente = nota suelta. */
   @IsOptional() @IsInt() @Min(0) orderId?: number;
@@ -23,6 +25,8 @@ export class UpdateTaskDto {
   @IsOptional() @IsIn(TODO_PRIORITY) priority?: string;
   @IsOptional() @IsString() start?: string;
   @IsOptional() @IsString() dueDate?: string;
+  /** Fecha en que se realizó (YYYY-MM-DD), para corregirla si se hizo otro día. */
+  @IsOptional() @IsString() doneDate?: string;
   @IsOptional() @IsString() description?: string;
   @IsOptional() @IsInt() @Min(0) orderId?: number;
   @IsOptional() @IsInt() assigneeId?: number;

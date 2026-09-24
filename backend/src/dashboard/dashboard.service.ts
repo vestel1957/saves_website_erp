@@ -6,6 +6,8 @@ import { AuthUser } from '../auth/current-user.decorator';
 import { BadRequestException, ForbiddenException } from '../core/http/errores';
 import { sedesDe, whereSedePorSuscriptor, whereSedeSuscriptor } from '../common/sede-scope';
 import { SQL_NOTA_SALDO } from '../treasury/cierre-legacy';
+import { FIN_IMPORTACION, whereAbonadoNuevo } from '../common/abonado-nuevo';
+import { whereRetiro } from '../common/abonado-retirado';
 
 /**
  * Lo que NO es plata que entre o salga de la empresa, y por eso no cuenta como recaudo
@@ -269,9 +271,11 @@ export class DashboardService implements OnModuleInit {
                COALESCE(SUM(bal) FILTER (WHERE d > 90),0)::float d90
         FROM (SELECT (i.total-i."paidAmount") bal, (CURRENT_DATE-i."dueDate") d FROM "SubInvoice" i ${joinSedeFactura} WHERE i.status IN ('DUE','PARTIAL')) t`,
       // La sede del equipo es la de su bodega (`EquipmentWarehouse.branchLegacy`), y la
-      // del puerto la trae él mismo (`Port.sedeLegacy`).
+      // del puerto la de SU CAJA: el `Port.sedeLegacy` que trae a pelo no es la sede
+      // sino la bodega del legacy (`almacen_equipos`), otro catálogo — contaba los
+      // puertos de la sede de al lado. Ver `migrate-sede-naps-almacen-2026-09.ts`.
       this.prisma.equipment.count({ where: sedes ? { warehouse: { branchLegacy: { in: sedes } } } : {} }),
-      this.prisma.port.groupBy({ by: ['status'], _count: { _all: true }, where: sedes ? { sedeLegacy: { in: sedes } } : {} }),
+      this.prisma.port.groupBy({ by: ['status'], _count: { _all: true }, where: sedes ? { nap: { is: { branch: { is: { legacyId: { in: sedes } } } } } } : {} }),
       this.prisma.$queryRaw<{ v: number }[]>`SELECT COALESCE(SUM(price*qty),0)::float v FROM "Material" WHERE qty < 100000 ${filtroMaterial}`,
       this.prisma.$queryRaw<{ id: string; name: string; bal: number }[]>`
         SELECT s.id, COALESCE(NULLIF(TRIM(s."fullName"),''), TRIM(CONCAT(s."firstName",' ',s."lastName1")), s."companyName",'—') name,
@@ -340,7 +344,7 @@ export class DashboardService implements OnModuleInit {
       ? Prisma.sql`JOIN "Branch" b ON b.id = s."branchId" AND ${enLista(Prisma.sql`b."legacyId"`, permitidas)}`
       : Prisma.sql`LEFT JOIN "Branch" b ON b.id = s."branchId"`;
 
-    const [facturado, byInvStatus, caja, supportByStatus, ordersAgg, series, topTypes, nuevos, ventasSede] = await Promise.all([
+    const [facturado, byInvStatus, caja, supportByStatus, ordersAgg, series, topTypes, nuevos, ventasSede, retiros] = await Promise.all([
       // Lo FACTURADO excluye las anuladas. El sync marca CANCELED las facturas que el
       // legacy borró (2.847 solo en agosto, 197 M COP): contarlas inflaba el panel un
       // 57% contra el legacy, y descuadraba contra /reportes, que sí las filtra.
@@ -368,7 +372,8 @@ export class DashboardService implements OnModuleInit {
         WHERE status='VIGENTE' AND "date" BETWEEN ${desde}::date AND ${hasta}::date ${filtroCaja} ${SIN_MOVIMIENTO_INTERNO}
         GROUP BY 1 ORDER BY 1`,
       this.prisma.ticket.groupBy({ by: ['type'], _count: { _all: true }, where: { created: enRango, ...deSede }, orderBy: { _count: { type: 'desc' } }, take: 8 }),
-      this.prisma.subscriber.count({ where: { entryDate: enRango, ...whereSedeSuscriptor(sedes) } }),
+      // Ver `whereAbonadoNuevo`: con `entryDate` septiembre daba 2 altas; fueron 48.
+      this.prisma.subscriber.count({ where: { AND: [whereAbonadoNuevo(desde, hasta), whereSedeSuscriptor(sedes)] } }),
       // El ranking va sobre TODAS las sedes del usuario (ver el comentario de arriba).
       this.prisma.$queryRaw<{ sede: string; legacy: number | null; total: number; abonados: number }[]>`
         SELECT COALESCE(b.name,'Sin sede') sede, b."legacyId" legacy, COALESCE(SUM(i.total),0)::float total, COUNT(DISTINCT s.id)::int abonados
@@ -377,6 +382,8 @@ export class DashboardService implements OnModuleInit {
         ${joinSedeRanking}
         WHERE i.status <> 'CANCELED' AND i."invoiceDate" BETWEEN ${desde}::date AND ${hasta}::date
         GROUP BY b.name, b."legacyId" ORDER BY total DESC LIMIT 8`,
+      // Ver `whereRetiro`: sale de la ficha, no del historial de estados.
+      this.prisma.subscriber.count({ where: { AND: [whereRetiro(desde, hasta), whereSedeSuscriptor(sedes)] } }),
     ]);
 
     const invStatus: Record<string, number> = {};
@@ -386,6 +393,7 @@ export class DashboardService implements OnModuleInit {
 
     return {
       nuevosAbonados: nuevos,
+      retirosAbonados: retiros,
       facturacion: {
         total: num(facturado._sum.total), facturas: facturado._count._all,
         pagadas: invStatus['PAID'] ?? 0, pendientes: (invStatus['DUE'] ?? 0) + (invStatus['PARTIAL'] ?? 0),
@@ -405,6 +413,59 @@ export class DashboardService implements OnModuleInit {
       // `id` = `Branch.legacyId`, para que la pantalla resalte la sede filtrada.
       ventasPorSede: ventasSede.map((r) => ({ id: r.legacy ?? null, sede: r.sede, total: Number(r.total), abonados: Number(r.abonados) })),
     };
+  }
+
+  /**
+   * Quiénes son los "Abonados nuevos" o los "Retiros" que cuenta el panel. Usa las
+   * MISMAS definiciones (`whereAbonadoNuevo` / `whereRetiro`), el mismo rango y el
+   * mismo alcance de sede que `summary`: el largo de la lista es la cifra de la card.
+   * Sin caché: es una consulta indexada de decenas de filas y se abre a demanda.
+   */
+  async movimientoAbonados(tipo?: string, from?: string, to?: string, sede?: string, user?: AuthUser) {
+    if (tipo !== 'nuevos' && tipo !== 'retiros') throw new BadRequestException('tipo debe ser "nuevos" o "retiros".');
+    const rango = normalizarRango(from, to);
+    const permitidas = await sedesDe(this.prisma, user);
+    const catalogo = await this.sedesCacheado(permitidas);
+    const sedes = filtroDeSede(permitidas, catalogo.map((b) => b.id), sede);
+    const def = tipo === 'nuevos' ? whereAbonadoNuevo(rango.desde, rango.hasta) : whereRetiro(rango.desde, rango.hasta);
+
+    const filas = await this.prisma.subscriber.findMany({
+      where: { AND: [def, whereSedeSuscriptor(sedes)] },
+      select: {
+        id: true, legacyId: true, abonado: true, fullName: true, firstName: true, lastName1: true, companyName: true,
+        docNumber: true, phone1: true, addressLine: true, status: true,
+        createdAt: true, entryDate: true, contractDate: true, statusChangedAt: true,
+        branch: { select: { name: true } },
+        // El motivo del retiro vive en la nota del historial (ver `motivo-cambio-estado`).
+        ...(tipo === 'retiros'
+          ? { statusHistory: { where: { status: 'RETIRADO' as const }, orderBy: { date: 'desc' as const }, take: 1, select: { note: true, originTicketId: true } } }
+          : {}),
+      },
+    });
+
+    const lista = filas.map((s) => {
+      // La fecha que hace contar al abonado en ESTE rango (ver las definiciones).
+      const fecha = tipo === 'retiros'
+        ? s.statusChangedAt
+        : s.createdAt >= FIN_IMPORTACION ? s.createdAt : s.entryDate ?? s.contractDate;
+      const hist = (s as { statusHistory?: { note: string | null; originTicketId: number | null }[] }).statusHistory?.[0];
+      return {
+        id: s.id,
+        legacyId: s.legacyId,
+        abonado: s.abonado,
+        nombre: (s.fullName?.trim() || [s.firstName, s.lastName1].filter(Boolean).join(' ').trim() || s.companyName?.trim() || '—'),
+        documento: s.docNumber,
+        celular: s.phone1,
+        direccion: s.addressLine,
+        sede: s.branch?.name ?? null,
+        estado: s.status,
+        fecha: fecha ? fecha.toISOString() : null,
+        motivo: hist?.note ?? null,
+        orden: hist?.originTicketId ?? null,
+      };
+    });
+    lista.sort((a, b) => (b.fecha ?? '').localeCompare(a.fecha ?? ''));
+    return { tipo, rango, sede: sedes && sedes.length === 1 ? sedes[0] : null, total: lista.length, abonados: lista };
   }
 }
 

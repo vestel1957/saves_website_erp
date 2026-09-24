@@ -81,10 +81,13 @@ export function Dropdown({
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") setOpen(false);
     }
-    document.addEventListener("mousedown", onDown);
+    // En CAPTURA: dentro de un `Modal` el panel corta el `mousedown` y en fase de
+    // burbuja nunca llegaría a `document` — el desplegable no se cerraría al pulsar
+    // fuera de él.
+    document.addEventListener("mousedown", onDown, true);
     document.addEventListener("keydown", onKey);
     return () => {
-      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("mousedown", onDown, true);
       document.removeEventListener("keydown", onKey);
     };
   }, [open]);

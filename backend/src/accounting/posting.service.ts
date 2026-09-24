@@ -1,10 +1,11 @@
 import { NotFoundException } from '../core/http/errores';
 import { Logger } from '../core/logger';
 import { Prisma } from '@prisma/client';
-import { JournalService } from './journal.service';
+import { JournalService, type PostEntryInput } from './journal.service';
 import { MappingsService } from './mappings.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { round2 } from '../common/money';
+import { centroDeAbonado, centroDeTesoreria, centroSinFallar } from '../common/centro-costo';
 
 type SalesInvoiceArgs = {
   sourceId: string; date: Date; number: string | number; subtotal: number; tax?: number;
@@ -16,7 +17,8 @@ type SalesInvoiceAdjustmentArgs = {
   costCenterId?: string | null; createdBy?: string | null;
 };
 type CustomerPaymentArgs = {
-  sourceId: string; date: Date; amount: number; toBank?: boolean; createdBy?: string | null;
+  sourceId: string; date: Date; amount: number; toBank?: boolean;
+  costCenterId?: string | null; createdBy?: string | null;
 };
 type PurchaseBillArgs = {
   sourceId: string; date: Date; number: string | number; subtotal: number; tax?: number;
@@ -26,10 +28,12 @@ type SupplierPaymentArgs = {
   sourceId: string; date: Date; amount: number; fromBank?: boolean; createdBy?: string | null;
 };
 type TreasuryExpenseArgs = {
-  sourceId: string; date: Date; amount: number; category?: string | null; fromBank?: boolean; createdBy?: string | null;
+  sourceId: string; date: Date; amount: number; category?: string | null; fromBank?: boolean;
+  costCenterId?: string | null; createdBy?: string | null;
 };
 type TreasuryIncomeArgs = {
-  sourceId: string; date: Date; amount: number; category?: string | null; toBank?: boolean; createdBy?: string | null;
+  sourceId: string; date: Date; amount: number; category?: string | null; toBank?: boolean;
+  costCenterId?: string | null; createdBy?: string | null;
 };
 
 /**
@@ -108,6 +112,43 @@ export class PostingService {
     }
   }
 
+  // --- Centro de costo (docs/centros-de-costo/PLAN.md, fase 3) ---
+  //
+  // Quien contabiliza pide aquí el centro y lo pasa en `costCenterId`. Ninguno de los dos
+  // lanza: si el resolver falla, el asiento sale igual con null («Sin asignar») y un aviso.
+
+  /** Centro de la sede del abonado (facturas, ajustes y recaudos). */
+  centroDeAbonado(subscriberId: string | null | undefined): Promise<string | null> {
+    return centroSinFallar(() => centroDeAbonado(this.prisma, subscriberId), `abonado ${subscriberId}`);
+  }
+
+  /**
+   * Ingreso o egreso de tesorería: el centro que eligió el usuario (validado antes por quien
+   * llama) o, si no eligió, el de la sede de la caja; la caja de banco va a Administración general.
+   */
+  async centroDeTesoreria(cashAccountLegacyId: number | null | undefined, elegido?: string | null): Promise<string | null> {
+    if (elegido) return elegido;
+    return centroSinFallar(() => centroDeTesoreria(this.prisma, cashAccountLegacyId), `caja ${cashAccountLegacyId}`);
+  }
+
+  /**
+   * `journal.post` con red: si el asiento lleva centro y la base lo rechaza por clave
+   * foránea (un centro que ya no existe, p. ej. al reintentar un pendiente viejo), se
+   * contabiliza igual sin centro. Contabilizar nunca debe fallar por el centro de costo.
+   */
+  private async asentar(input: PostEntryInput) {
+    try {
+      return await this.journal.post(input);
+    } catch (e) {
+      const conCentro = input.lines.some((l) => l.costCenterId);
+      if (!conCentro || (e as { code?: string })?.code !== 'P2003') throw e;
+      console.warn(
+        `[centro-costo] ${input.sourceType}/${input.sourceId}: la base rechazó el centro de costo; se contabiliza sin centro.`,
+      );
+      return this.journal.post({ ...input, lines: input.lines.map((l) => ({ ...l, costCenterId: null })) });
+    }
+  }
+
   // --- Consulta y reintento de pendientes ---
 
   /** Documentos que quedaron sin asiento. Por defecto sólo los no resueltos. */
@@ -172,7 +213,7 @@ export class PostingService {
         { accountId: m['SALES_REVENUE'], debit: 0, credit: subtotal, costCenterId: p.costCenterId ?? null },
       ];
       if (tax > 0) lines.push({ accountId: m['SALES_TAX'], debit: 0, credit: tax, costCenterId: p.costCenterId ?? null });
-      return this.journal.post({
+      return this.asentar({
         date: p.date, description: `Factura de venta ${p.number}`, reference: String(p.number),
         type: 'AUTOMATIC', sourceType: 'SALES_INVOICE', sourceId: p.sourceId, createdBy: p.createdBy ?? null, lines,
       });
@@ -220,7 +261,7 @@ export class PostingService {
         { accountId: m['SALES_REVENUE'], ...lado(-dSubtotal), costCenterId: p.costCenterId ?? null },
       ];
       if (dTax !== 0) lines.push({ accountId: m['SALES_TAX'], ...lado(-dTax), costCenterId: p.costCenterId ?? null });
-      return this.journal.post({
+      return this.asentar({
         date: p.date, description: `Ajuste por edición de la factura ${p.number}`, reference: String(p.number),
         type: 'AUTOMATIC', sourceType: 'SALES_INVOICE_ADJ', sourceId,
         createdBy: p.createdBy ?? null,
@@ -238,12 +279,12 @@ export class PostingService {
       if (amount <= 0) return null;
       const cashKey = p.toBank === false ? 'CASH_DEFAULT' : 'BANK_DEFAULT';
       const m = await this.mappings.resolveMany([cashKey, 'SALES_AR']);
-      return this.journal.post({
+      return this.asentar({
         date: p.date, description: `Recaudo de cliente`, type: 'AUTOMATIC',
         sourceType: 'CUSTOMER_PAYMENT', sourceId: p.sourceId, createdBy: p.createdBy ?? null,
         lines: [
-          { accountId: m[cashKey], debit: amount, credit: 0 },
-          { accountId: m['SALES_AR'], debit: 0, credit: amount },
+          { accountId: m[cashKey], debit: amount, credit: 0, costCenterId: p.costCenterId ?? null },
+          { accountId: m['SALES_AR'], debit: 0, credit: amount, costCenterId: p.costCenterId ?? null },
         ],
       });
     });
@@ -264,7 +305,7 @@ export class PostingService {
       ];
       if (tax > 0) lines.push({ accountId: m['PURCHASE_TAX'], debit: tax, credit: 0, costCenterId: p.costCenterId ?? null });
       lines.push({ accountId: m['PURCHASE_AP'], debit: 0, credit: total, costCenterId: p.costCenterId ?? null });
-      return this.journal.post({
+      return this.asentar({
         date: p.date, description: `Factura de compra ${p.number}`, reference: String(p.number),
         type: 'AUTOMATIC', sourceType: 'PURCHASE_BILL', sourceId: p.sourceId, createdBy: p.createdBy ?? null, lines,
       });
@@ -280,7 +321,7 @@ export class PostingService {
       if (amount <= 0) return null;
       const cashKey = p.fromBank === false ? 'CASH_DEFAULT' : 'BANK_DEFAULT';
       const m = await this.mappings.resolveMany([cashKey, 'PURCHASE_AP']);
-      return this.journal.post({
+      return this.asentar({
         date: p.date, description: `Pago a proveedor`, type: 'AUTOMATIC',
         sourceType: 'SUPPLIER_PAYMENT', sourceId: p.sourceId, createdBy: p.createdBy ?? null,
         lines: [
@@ -302,12 +343,12 @@ export class PostingService {
       if (amount <= 0) return null;
       const cashKey = p.fromBank === false ? 'CASH_DEFAULT' : 'BANK_DEFAULT';
       const m = await this.mappings.resolveMany(['PURCHASE_EXPENSE', cashKey]);
-      return this.journal.post({
+      return this.asentar({
         date: p.date, description: p.category ? `Egreso — ${p.category}` : 'Egreso de tesorería',
         type: 'AUTOMATIC', sourceType: 'TREASURY_EXPENSE', sourceId: p.sourceId, createdBy: p.createdBy ?? null,
         lines: [
-          { accountId: m['PURCHASE_EXPENSE'], debit: amount, credit: 0 },
-          { accountId: m[cashKey], debit: 0, credit: amount },
+          { accountId: m['PURCHASE_EXPENSE'], debit: amount, credit: 0, costCenterId: p.costCenterId ?? null },
+          { accountId: m[cashKey], debit: 0, credit: amount, costCenterId: p.costCenterId ?? null },
         ],
       });
     });
@@ -324,12 +365,12 @@ export class PostingService {
       if (amount <= 0) return null;
       const cashKey = p.toBank === false ? 'CASH_DEFAULT' : 'BANK_DEFAULT';
       const m = await this.mappings.resolveMany([cashKey, 'SALES_REVENUE']);
-      return this.journal.post({
+      return this.asentar({
         date: p.date, description: p.category ? `Ingreso — ${p.category}` : 'Ingreso de tesorería',
         type: 'AUTOMATIC', sourceType: 'TREASURY_INCOME', sourceId: p.sourceId, createdBy: p.createdBy ?? null,
         lines: [
-          { accountId: m[cashKey], debit: amount, credit: 0 },
-          { accountId: m['SALES_REVENUE'], debit: 0, credit: amount },
+          { accountId: m[cashKey], debit: amount, credit: 0, costCenterId: p.costCenterId ?? null },
+          { accountId: m['SALES_REVENUE'], debit: 0, credit: amount, costCenterId: p.costCenterId ?? null },
         ],
       });
     });

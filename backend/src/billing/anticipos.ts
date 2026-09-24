@@ -1,5 +1,5 @@
 import { Prisma } from '@prisma/client';
-import { num, round2 } from '../common/money';
+import { ivaDe, num, round2 } from '../common/money';
 import { hoyEnColombia } from '../common/fecha-colombia';
 import { conceptoMesAdelantado } from '../common/concepto-factura';
 import { aplicarNotaEnTx } from './nota-en-tx';
@@ -338,7 +338,9 @@ export async function aplicarAnticipos(
   for (const r of reparto) {
     const inv = saldoDe.get(r.invoiceId)!;
     const nuevoPagado = round2(inv.paid + r.amount);
-    const status: 'PAID' | 'PARTIAL' = nuevoPagado >= inv.total ? 'PAID' : 'PARTIAL';
+    // Menos de un peso de diferencia es el redondeo del IVA por renglón (85.000,11 contra
+    // 85.000 cobrados), no deuda: mismo criterio que `mismoDinero` en el sync.
+    const status: 'PAID' | 'PARTIAL' = inv.total - nuevoPagado < 1 ? 'PAID' : 'PARTIAL';
 
     // Crédito contra la factura: es el pago que la deja saldada (y el que el writeback
     // lleva al legacy si la factura también vive allá).
@@ -588,7 +590,7 @@ export async function baseDelAdelanto(
   });
   let mensualidad = round2(servicios.reduce((s, x) => {
     const base = round2(num(x.price) * (x.qty ?? 1));
-    return s + base + round2((base * num(x.taxRate)) / 100);
+    return s + base + ivaDe(base, num(x.taxRate));
   }, 0));
   if (mensualidad <= 0) mensualidad = round2(num(ultima.total));
   if (mensualidad <= 0) return null;

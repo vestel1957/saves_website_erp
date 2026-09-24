@@ -262,6 +262,41 @@
     "publico": false
   },
   {
+    "metodo": "GET",
+    "ruta": "/api/accounting/cost-centers/sedes",
+    "controlador": "AccountingController",
+    "fichero": "src/accounting/accounting.controller.ts",
+    "handler": "listCostCenterBranches",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "administracion",
+      "contabilidad",
+      "gerencia"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'administracion'",
+      "'contabilidad'",
+      "'gerencia'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [],
+    "query": [],
+    "parametros": [],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
     "metodo": "POST",
     "ruta": "/api/accounting/cost-centers",
     "controlador": "AccountingController",
@@ -335,6 +370,54 @@
         "llave": "id",
         "tipo": "string",
         "nombre": "id"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "PATCH",
+    "ruta": "/api/accounting/cost-centers/:id",
+    "controlador": "AccountingController",
+    "fichero": "src/accounting/accounting.controller.ts",
+    "handler": "updateCostCenter",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "administracion",
+      "contabilidad"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'administracion'",
+      "'contabilidad'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": "{ name?: string; isActive?: boolean; branchLegacyId?: number | null }",
+    "params": [
+      "id"
+    ],
+    "query": [],
+    "parametros": [
+      {
+        "clase": "Param",
+        "llave": "id",
+        "tipo": "string",
+        "nombre": "id"
+      },
+      {
+        "clase": "Body",
+        "llave": null,
+        "tipo": "{ name?: string; isActive?: boolean; branchLegacyId?: number | null }",
+        "nombre": "body"
       }
     ],
     "usaRes": false,
@@ -1120,6 +1203,64 @@
     "controlador": "AccountingController",
     "fichero": "src/accounting/accounting.controller.ts",
     "handler": "incomeStatement",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "administracion",
+      "contabilidad",
+      "gerencia"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'administracion'",
+      "'contabilidad'",
+      "'gerencia'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [],
+    "query": [
+      "from",
+      "to",
+      "costCenterId"
+    ],
+    "parametros": [
+      {
+        "clase": "Query",
+        "llave": "from",
+        "tipo": "string",
+        "nombre": "from"
+      },
+      {
+        "clase": "Query",
+        "llave": "to",
+        "tipo": "string",
+        "nombre": "to"
+      },
+      {
+        "clase": "Query",
+        "llave": "costCenterId",
+        "tipo": "string",
+        "nombre": "costCenterId"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "GET",
+    "ruta": "/api/accounting/reports/income-statement-by-center",
+    "controlador": "AccountingController",
+    "fichero": "src/accounting/accounting.controller.ts",
+    "handler": "incomeStatementByCenter",
     "guards": [
       "JwtAuthGuard",
       "AreaGuard"
@@ -6228,6 +6369,73 @@
   },
   {
     "metodo": "GET",
+    "ruta": "/api/dashboard/abonados",
+    "controlador": "DashboardController",
+    "fichero": "src/dashboard/dashboard.controller.ts",
+    "handler": "movimientoAbonados",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "gerencia"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'gerencia'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [],
+    "query": [
+      "tipo",
+      "from",
+      "to",
+      "sede"
+    ],
+    "parametros": [
+      {
+        "clase": "Query",
+        "llave": "tipo",
+        "tipo": "string",
+        "nombre": "tipo"
+      },
+      {
+        "clase": "Query",
+        "llave": "from",
+        "tipo": "string",
+        "nombre": "from"
+      },
+      {
+        "clase": "Query",
+        "llave": "to",
+        "tipo": "string",
+        "nombre": "to"
+      },
+      {
+        "clase": "Query",
+        "llave": "sede",
+        "tipo": "string",
+        "nombre": "sede"
+      },
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "GET",
     "ruta": "/api/data/export/:entity",
     "controlador": "DataController",
     "fichero": "src/data/data.controller.ts",
@@ -7286,13 +7494,17 @@
       "administracion"
     ],
     "permisos": [],
-    "orPermission": [],
+    "orPermission": [
+      "APP_PERMISSIONS.PLAYHUB_OPERATE"
+    ],
     "areasFuente": [
       "'sistemas'",
       "'administracion'"
     ],
     "permisosFuente": [],
-    "orPermissionFuente": [],
+    "orPermissionFuente": [
+      "APP_PERMISSIONS.PLAYHUB_OPERATE"
+    ],
     "scopesFuente": [],
     "dto": null,
     "params": [],
@@ -8113,13 +8325,15 @@
     ],
     "areas": [
       "administracion",
-      "tecnicos"
+      "tecnicos",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
       "'administracion'",
-      "'tecnicos'"
+      "'tecnicos'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -8146,13 +8360,15 @@
     ],
     "areas": [
       "administracion",
-      "tecnicos"
+      "tecnicos",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
       "'administracion'",
-      "'tecnicos'"
+      "'tecnicos'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -8179,13 +8395,15 @@
     ],
     "areas": [
       "administracion",
-      "tecnicos"
+      "tecnicos",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
       "'administracion'",
-      "'tecnicos'"
+      "'tecnicos'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -8212,13 +8430,15 @@
     ],
     "areas": [
       "administracion",
-      "tecnicos"
+      "tecnicos",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
       "'administracion'",
-      "'tecnicos'"
+      "'tecnicos'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -8245,13 +8465,15 @@
     ],
     "areas": [
       "administracion",
-      "tecnicos"
+      "tecnicos",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
       "'administracion'",
-      "'tecnicos'"
+      "'tecnicos'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -8278,13 +8500,15 @@
     ],
     "areas": [
       "administracion",
-      "tecnicos"
+      "tecnicos",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
       "'administracion'",
-      "'tecnicos'"
+      "'tecnicos'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -8318,13 +8542,15 @@
     ],
     "areas": [
       "administracion",
-      "tecnicos"
+      "tecnicos",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
       "'administracion'",
-      "'tecnicos'"
+      "'tecnicos'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -8360,13 +8586,15 @@
     ],
     "areas": [
       "administracion",
-      "tecnicos"
+      "tecnicos",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
       "'administracion'",
-      "'tecnicos'"
+      "'tecnicos'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -8508,13 +8736,15 @@
     ],
     "areas": [
       "administracion",
-      "tecnicos"
+      "tecnicos",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
       "'administracion'",
-      "'tecnicos'"
+      "'tecnicos'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -8554,13 +8784,15 @@
     ],
     "areas": [
       "administracion",
-      "tecnicos"
+      "tecnicos",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
       "'administracion'",
-      "'tecnicos'"
+      "'tecnicos'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -8602,13 +8834,15 @@
     ],
     "areas": [
       "administracion",
-      "tecnicos"
+      "tecnicos",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
       "'administracion'",
-      "'tecnicos'"
+      "'tecnicos'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -8650,13 +8884,15 @@
     ],
     "areas": [
       "administracion",
-      "tecnicos"
+      "tecnicos",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
       "'administracion'",
-      "'tecnicos'"
+      "'tecnicos'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -8704,13 +8940,15 @@
     ],
     "areas": [
       "administracion",
-      "tecnicos"
+      "tecnicos",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
       "'administracion'",
-      "'tecnicos'"
+      "'tecnicos'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -8744,13 +8982,15 @@
     ],
     "areas": [
       "administracion",
-      "tecnicos"
+      "tecnicos",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
       "'administracion'",
-      "'tecnicos'"
+      "'tecnicos'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -8898,13 +9138,15 @@
     ],
     "areas": [
       "administracion",
-      "tecnicos"
+      "tecnicos",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
       "'administracion'",
-      "'tecnicos'"
+      "'tecnicos'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -8944,13 +9186,15 @@
     ],
     "areas": [
       "administracion",
-      "tecnicos"
+      "tecnicos",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
       "'administracion'",
-      "'tecnicos'"
+      "'tecnicos'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -8992,13 +9236,15 @@
     ],
     "areas": [
       "administracion",
-      "tecnicos"
+      "tecnicos",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
       "'administracion'",
-      "'tecnicos'"
+      "'tecnicos'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -9414,7 +9660,8 @@
     ],
     "areas": [
       "tecnicos",
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [
@@ -9422,7 +9669,8 @@
     ],
     "areasFuente": [
       "'tecnicos'",
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [
@@ -9465,7 +9713,8 @@
     ],
     "areas": [
       "tecnicos",
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [
@@ -9473,7 +9722,8 @@
     ],
     "areasFuente": [
       "'tecnicos'",
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [
@@ -9598,13 +9848,15 @@
     ],
     "areas": [
       "tecnicos",
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
       "'tecnicos'",
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -9640,13 +9892,15 @@
     ],
     "areas": [
       "tecnicos",
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
       "'tecnicos'",
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -9689,13 +9943,15 @@
     ],
     "areas": [
       "tecnicos",
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
       "'tecnicos'",
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -12025,6 +12281,218 @@
         "llave": "id",
         "tipo": "string",
         "nombre": "id"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "GET",
+    "ruta": "/api/network/vlans/olt-mapa",
+    "controlador": "OltController",
+    "fichero": "src/network/olt.controller.ts",
+    "handler": "mapaVlans",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard",
+      "ModuloRedGuard"
+    ],
+    "areas": [
+      "tecnicos",
+      "administracion"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'tecnicos'",
+      "'administracion'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [],
+    "query": [
+      "branchId",
+      "refresh"
+    ],
+    "parametros": [
+      {
+        "clase": "Query",
+        "llave": "branchId",
+        "tipo": "string",
+        "nombre": "branchId"
+      },
+      {
+        "clase": "Query",
+        "llave": "refresh",
+        "tipo": "string",
+        "nombre": "refresh"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "GET",
+    "ruta": "/api/network/vlans/salud",
+    "controlador": "OltController",
+    "fichero": "src/network/olt.controller.ts",
+    "handler": "saludVlans",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard",
+      "ModuloRedGuard"
+    ],
+    "areas": [
+      "tecnicos",
+      "administracion"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'tecnicos'",
+      "'administracion'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [],
+    "query": [
+      "branchId",
+      "refresh"
+    ],
+    "parametros": [
+      {
+        "clase": "Query",
+        "llave": "branchId",
+        "tipo": "string",
+        "nombre": "branchId"
+      },
+      {
+        "clase": "Query",
+        "llave": "refresh",
+        "tipo": "string",
+        "nombre": "refresh"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "GET",
+    "ruta": "/api/network/vlans/sugerir",
+    "controlador": "OltController",
+    "fichero": "src/network/olt.controller.ts",
+    "handler": "sugerirVlan",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard",
+      "ModuloRedGuard"
+    ],
+    "areas": [
+      "tecnicos",
+      "administracion"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'tecnicos'",
+      "'administracion'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [],
+    "query": [
+      "oltId",
+      "slot",
+      "port"
+    ],
+    "parametros": [
+      {
+        "clase": "Query",
+        "llave": "oltId",
+        "tipo": "string",
+        "nombre": "oltId"
+      },
+      {
+        "clase": "Query",
+        "llave": "slot",
+        "tipo": "string",
+        "nombre": "slot"
+      },
+      {
+        "clase": "Query",
+        "llave": "port",
+        "tipo": "string",
+        "nombre": "port"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "POST",
+    "ruta": "/api/network/vlans/:id/configurar-equipos",
+    "controlador": "OltController",
+    "fichero": "src/network/olt.controller.ts",
+    "handler": "configurarVlanEquipos",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard",
+      "ModuloRedGuard"
+    ],
+    "areas": [
+      "tecnicos",
+      "administracion"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'tecnicos'",
+      "'administracion'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": "ConfigurarVlanEquiposDto",
+    "params": [
+      "id"
+    ],
+    "query": [],
+    "parametros": [
+      {
+        "clase": "Param",
+        "llave": "id",
+        "tipo": "string",
+        "nombre": "id"
+      },
+      {
+        "clase": "Body",
+        "llave": null,
+        "tipo": "ConfigurarVlanEquiposDto",
+        "nombre": "dto"
+      },
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
       }
     ],
     "usaRes": false,
@@ -15598,6 +16066,12 @@
         "llave": "id",
         "tipo": "string",
         "nombre": "id"
+      },
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
       }
     ],
     "usaRes": false,
@@ -15648,6 +16122,12 @@
         "llave": null,
         "tipo": "UpdateEventDto",
         "nombre": "dto"
+      },
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
       }
     ],
     "usaRes": false,
@@ -16030,12 +16510,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -16161,12 +16643,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -16205,12 +16689,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -16245,12 +16731,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -16285,12 +16773,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -16338,14 +16828,16 @@
       "PermissionsGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [
       "APP_PERMISSIONS.PURCHASES_APPROVE"
     ],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [
       "APP_PERMISSIONS.PURCHASES_APPROVE"
@@ -16395,14 +16887,16 @@
       "PermissionsGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [
       "APP_PERMISSIONS.PURCHASES_APPROVE"
     ],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [
       "APP_PERMISSIONS.PURCHASES_APPROVE"
@@ -16445,12 +16939,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -16497,12 +16993,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -16549,12 +17047,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -16602,12 +17102,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -16655,12 +17157,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -16701,12 +17205,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -16753,12 +17259,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -16800,12 +17308,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -16852,12 +17362,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -16898,12 +17410,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -16950,12 +17464,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -16964,6 +17480,48 @@
     "params": [],
     "query": [],
     "parametros": [],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "GET",
+    "ruta": "/api/orders/destinations",
+    "controlador": "OrdersController",
+    "fichero": "src/orders/orders.controller.ts",
+    "handler": "destinations",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "administracion",
+      "caja"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'administracion'",
+      "'caja'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [],
+    "query": [
+      "warehouseId"
+    ],
+    "parametros": [
+      {
+        "clase": "Query",
+        "llave": "warehouseId",
+        "tipo": "string",
+        "nombre": "warehouseId"
+      }
+    ],
     "usaRes": false,
     "subeFichero": false,
     "subidaFuente": null,
@@ -16981,12 +17539,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -17012,12 +17572,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -17050,12 +17612,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -17090,12 +17654,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -17136,12 +17702,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -17231,12 +17799,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -17262,12 +17832,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -17337,12 +17909,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -17375,12 +17949,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -17415,12 +17991,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -17461,12 +18039,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -17913,7 +18493,9 @@
       "sistemas"
     ],
     "permisos": [],
-    "orPermission": [],
+    "orPermission": [
+      "APP_PERMISSIONS.PLAYHUB_OPERATE"
+    ],
     "areasFuente": [
       "'administracion'",
       "'tecnicos'",
@@ -17921,7 +18503,9 @@
       "'sistemas'"
     ],
     "permisosFuente": [],
-    "orPermissionFuente": [],
+    "orPermissionFuente": [
+      "APP_PERMISSIONS.PLAYHUB_OPERATE"
+    ],
     "scopesFuente": [],
     "dto": null,
     "params": [],
@@ -17950,7 +18534,9 @@
       "sistemas"
     ],
     "permisos": [],
-    "orPermission": [],
+    "orPermission": [
+      "APP_PERMISSIONS.PLAYHUB_OPERATE"
+    ],
     "areasFuente": [
       "'administracion'",
       "'tecnicos'",
@@ -17958,7 +18544,9 @@
       "'sistemas'"
     ],
     "permisosFuente": [],
-    "orPermissionFuente": [],
+    "orPermissionFuente": [
+      "APP_PERMISSIONS.PLAYHUB_OPERATE"
+    ],
     "scopesFuente": [],
     "dto": null,
     "params": [],
@@ -17987,7 +18575,9 @@
       "sistemas"
     ],
     "permisos": [],
-    "orPermission": [],
+    "orPermission": [
+      "APP_PERMISSIONS.PLAYHUB_OPERATE"
+    ],
     "areasFuente": [
       "'administracion'",
       "'tecnicos'",
@@ -17995,7 +18585,9 @@
       "'sistemas'"
     ],
     "permisosFuente": [],
-    "orPermissionFuente": [],
+    "orPermissionFuente": [
+      "APP_PERMISSIONS.PLAYHUB_OPERATE"
+    ],
     "scopesFuente": [],
     "dto": null,
     "params": [
@@ -18039,7 +18631,9 @@
       "sistemas"
     ],
     "permisos": [],
-    "orPermission": [],
+    "orPermission": [
+      "APP_PERMISSIONS.PLAYHUB_OPERATE"
+    ],
     "areasFuente": [
       "'administracion'",
       "'tecnicos'",
@@ -18047,7 +18641,9 @@
       "'sistemas'"
     ],
     "permisosFuente": [],
-    "orPermissionFuente": [],
+    "orPermissionFuente": [
+      "APP_PERMISSIONS.PLAYHUB_OPERATE"
+    ],
     "scopesFuente": [],
     "dto": null,
     "params": [
@@ -18091,7 +18687,9 @@
       "sistemas"
     ],
     "permisos": [],
-    "orPermission": [],
+    "orPermission": [
+      "APP_PERMISSIONS.PLAYHUB_OPERATE"
+    ],
     "areasFuente": [
       "'administracion'",
       "'tecnicos'",
@@ -18099,7 +18697,9 @@
       "'sistemas'"
     ],
     "permisosFuente": [],
-    "orPermissionFuente": [],
+    "orPermissionFuente": [
+      "APP_PERMISSIONS.PLAYHUB_OPERATE"
+    ],
     "scopesFuente": [],
     "dto": "ProductDto",
     "params": [
@@ -18149,7 +18749,9 @@
       "sistemas"
     ],
     "permisos": [],
-    "orPermission": [],
+    "orPermission": [
+      "APP_PERMISSIONS.PLAYHUB_OPERATE"
+    ],
     "areasFuente": [
       "'administracion'",
       "'tecnicos'",
@@ -18157,7 +18759,9 @@
       "'sistemas'"
     ],
     "permisosFuente": [],
-    "orPermissionFuente": [],
+    "orPermissionFuente": [
+      "APP_PERMISSIONS.PLAYHUB_OPERATE"
+    ],
     "scopesFuente": [],
     "dto": null,
     "params": [
@@ -18201,7 +18805,9 @@
       "sistemas"
     ],
     "permisos": [],
-    "orPermission": [],
+    "orPermission": [
+      "APP_PERMISSIONS.PLAYHUB_OPERATE"
+    ],
     "areasFuente": [
       "'administracion'",
       "'tecnicos'",
@@ -18209,7 +18815,9 @@
       "'sistemas'"
     ],
     "permisosFuente": [],
-    "orPermissionFuente": [],
+    "orPermissionFuente": [
+      "APP_PERMISSIONS.PLAYHUB_OPERATE"
+    ],
     "scopesFuente": [],
     "dto": null,
     "params": [
@@ -18253,7 +18861,9 @@
       "sistemas"
     ],
     "permisos": [],
-    "orPermission": [],
+    "orPermission": [
+      "APP_PERMISSIONS.PLAYHUB_OPERATE"
+    ],
     "areasFuente": [
       "'administracion'",
       "'tecnicos'",
@@ -18261,7 +18871,9 @@
       "'sistemas'"
     ],
     "permisosFuente": [],
-    "orPermissionFuente": [],
+    "orPermissionFuente": [
+      "APP_PERMISSIONS.PLAYHUB_OPERATE"
+    ],
     "scopesFuente": [],
     "dto": "ProductDto",
     "params": [
@@ -18394,7 +19006,9 @@
       "sistemas"
     ],
     "permisos": [],
-    "orPermission": [],
+    "orPermission": [
+      "APP_PERMISSIONS.PLAYHUB_OPERATE"
+    ],
     "areasFuente": [
       "'administracion'",
       "'tecnicos'",
@@ -18402,7 +19016,9 @@
       "'sistemas'"
     ],
     "permisosFuente": [],
-    "orPermissionFuente": [],
+    "orPermissionFuente": [
+      "APP_PERMISSIONS.PLAYHUB_OPERATE"
+    ],
     "scopesFuente": [],
     "dto": null,
     "params": [
@@ -19041,13 +19657,17 @@
       "gerencia"
     ],
     "permisos": [],
-    "orPermission": [],
+    "orPermission": [
+      "'screen.proyectos'"
+    ],
     "areasFuente": [
       "'administracion'",
       "'gerencia'"
     ],
     "permisosFuente": [],
-    "orPermissionFuente": [],
+    "orPermissionFuente": [
+      "'screen.proyectos'"
+    ],
     "scopesFuente": [],
     "dto": null,
     "params": [],
@@ -19118,13 +19738,17 @@
       "gerencia"
     ],
     "permisos": [],
-    "orPermission": [],
+    "orPermission": [
+      "'screen.proyectos'"
+    ],
     "areasFuente": [
       "'administracion'",
       "'gerencia'"
     ],
     "permisosFuente": [],
-    "orPermissionFuente": [],
+    "orPermissionFuente": [
+      "'screen.proyectos'"
+    ],
     "scopesFuente": [],
     "dto": "CreateProjectDto",
     "params": [],
@@ -19158,13 +19782,17 @@
       "gerencia"
     ],
     "permisos": [],
-    "orPermission": [],
+    "orPermission": [
+      "'screen.proyectos'"
+    ],
     "areasFuente": [
       "'administracion'",
       "'gerencia'"
     ],
     "permisosFuente": [],
-    "orPermissionFuente": [],
+    "orPermissionFuente": [
+      "'screen.proyectos'"
+    ],
     "scopesFuente": [],
     "dto": null,
     "params": [
@@ -19200,13 +19828,17 @@
       "gerencia"
     ],
     "permisos": [],
-    "orPermission": [],
+    "orPermission": [
+      "'screen.proyectos'"
+    ],
     "areasFuente": [
       "'administracion'",
       "'gerencia'"
     ],
     "permisosFuente": [],
-    "orPermissionFuente": [],
+    "orPermissionFuente": [
+      "'screen.proyectos'"
+    ],
     "scopesFuente": [],
     "dto": "UpdateProjectDto",
     "params": [
@@ -19248,13 +19880,17 @@
       "gerencia"
     ],
     "permisos": [],
-    "orPermission": [],
+    "orPermission": [
+      "'screen.proyectos'"
+    ],
     "areasFuente": [
       "'administracion'",
       "'gerencia'"
     ],
     "permisosFuente": [],
-    "orPermissionFuente": [],
+    "orPermissionFuente": [
+      "'screen.proyectos'"
+    ],
     "scopesFuente": [],
     "dto": "MilestoneDto",
     "params": [
@@ -19296,13 +19932,17 @@
       "gerencia"
     ],
     "permisos": [],
-    "orPermission": [],
+    "orPermission": [
+      "'screen.proyectos'"
+    ],
     "areasFuente": [
       "'administracion'",
       "'gerencia'"
     ],
     "permisosFuente": [],
-    "orPermissionFuente": [],
+    "orPermissionFuente": [
+      "'screen.proyectos'"
+    ],
     "scopesFuente": [],
     "dto": null,
     "params": [
@@ -19338,13 +19978,17 @@
       "gerencia"
     ],
     "permisos": [],
-    "orPermission": [],
+    "orPermission": [
+      "'screen.proyectos'"
+    ],
     "areasFuente": [
       "'administracion'",
       "'gerencia'"
     ],
     "permisosFuente": [],
-    "orPermissionFuente": [],
+    "orPermissionFuente": [
+      "'screen.proyectos'"
+    ],
     "scopesFuente": [],
     "dto": "MilestoneDto",
     "params": [
@@ -19386,13 +20030,17 @@
       "gerencia"
     ],
     "permisos": [],
-    "orPermission": [],
+    "orPermission": [
+      "'screen.proyectos'"
+    ],
     "areasFuente": [
       "'administracion'",
       "'gerencia'"
     ],
     "permisosFuente": [],
-    "orPermissionFuente": [],
+    "orPermissionFuente": [
+      "'screen.proyectos'"
+    ],
     "scopesFuente": [],
     "dto": null,
     "params": [],
@@ -20057,6 +20705,67 @@
         "llave": "accion",
         "tipo": "string",
         "nombre": "accion"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "GET",
+    "ruta": "/api/reports/afiliados",
+    "controlador": "ReportsController",
+    "fichero": "src/reports/reports.controller.ts",
+    "handler": "afiliados",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "gerencia"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'gerencia'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [],
+    "query": [
+      "from",
+      "to",
+      "funcionario",
+      "sede"
+    ],
+    "parametros": [
+      {
+        "clase": "Query",
+        "llave": "from",
+        "tipo": "string",
+        "nombre": "from"
+      },
+      {
+        "clase": "Query",
+        "llave": "to",
+        "tipo": "string",
+        "nombre": "to"
+      },
+      {
+        "clase": "Query",
+        "llave": "funcionario",
+        "tipo": "string",
+        "nombre": "funcionario"
+      },
+      {
+        "clase": "Query",
+        "llave": "sede",
+        "tipo": "string",
+        "nombre": "sede"
       }
     ],
     "usaRes": false,
@@ -21119,6 +21828,60 @@
   },
   {
     "metodo": "GET",
+    "ruta": "/api/reports/cartera-seguimiento",
+    "controlador": "ReportsController",
+    "fichero": "src/reports/reports.controller.ts",
+    "handler": "carteraSeguimiento",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "gerencia"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'gerencia'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [],
+    "query": [
+      "mes",
+      "sede",
+      "categoria"
+    ],
+    "parametros": [
+      {
+        "clase": "Query",
+        "llave": "mes",
+        "tipo": "string",
+        "nombre": "mes"
+      },
+      {
+        "clase": "Query",
+        "llave": "sede",
+        "tipo": "string",
+        "nombre": "sede"
+      },
+      {
+        "clase": "Query",
+        "llave": "categoria",
+        "tipo": "string",
+        "nombre": "categoria"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "GET",
     "ruta": "/api/reports/top-deudores",
     "controlador": "ReportsController",
     "fichero": "src/reports/reports.controller.ts",
@@ -21335,12 +22098,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -21410,12 +22175,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -21454,12 +22221,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -21494,12 +22263,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -21534,12 +22305,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -21586,12 +22359,14 @@
       "AreaGuard"
     ],
     "areas": [
-      "administracion"
+      "administracion",
+      "caja"
     ],
     "permisos": [],
     "orPermission": [],
     "areasFuente": [
-      "'administracion'"
+      "'administracion'",
+      "'caja'"
     ],
     "permisosFuente": [],
     "orPermissionFuente": [],
@@ -22028,6 +22803,112 @@
         "llave": null,
         "tipo": "AuthUser",
         "nombre": "user"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "GET",
+    "ruta": "/api/staff/afiliados",
+    "controlador": "StaffController",
+    "fichero": "src/staff/staff.controller.ts",
+    "handler": "afiliados",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "administracion",
+      "gerencia"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'administracion'",
+      "'gerencia'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [],
+    "query": [
+      "from",
+      "to"
+    ],
+    "parametros": [
+      {
+        "clase": "Query",
+        "llave": "from",
+        "tipo": "string",
+        "nombre": "from"
+      },
+      {
+        "clase": "Query",
+        "llave": "to",
+        "tipo": "string",
+        "nombre": "to"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "GET",
+    "ruta": "/api/staff/:id/afiliados",
+    "controlador": "StaffController",
+    "fichero": "src/staff/staff.controller.ts",
+    "handler": "afiliadosDe",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "administracion",
+      "gerencia"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'administracion'",
+      "'gerencia'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [
+      "id"
+    ],
+    "query": [
+      "from",
+      "to"
+    ],
+    "parametros": [
+      {
+        "clase": "Param",
+        "llave": "id",
+        "tipo": "string",
+        "nombre": "id"
+      },
+      {
+        "clase": "Query",
+        "llave": "from",
+        "tipo": "string",
+        "nombre": "from"
+      },
+      {
+        "clase": "Query",
+        "llave": "to",
+        "tipo": "string",
+        "nombre": "to"
       }
     ],
     "usaRes": false,
@@ -24942,6 +25823,43 @@
   },
   {
     "metodo": "GET",
+    "ruta": "/api/subscribers/afiliadores",
+    "controlador": "SubscribersController",
+    "fichero": "src/subscribers/subscribers.controller.ts",
+    "handler": "afiliadores",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "administracion",
+      "contabilidad",
+      "tecnicos",
+      "caja"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'administracion'",
+      "'contabilidad'",
+      "'tecnicos'",
+      "'caja'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [],
+    "query": [],
+    "parametros": [],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "GET",
     "ruta": "/api/subscribers/branches",
     "controlador": "SubscribersController",
     "fichero": "src/subscribers/subscribers.controller.ts",
@@ -25015,6 +25933,56 @@
     "params": [],
     "query": [],
     "parametros": [
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "POST",
+    "ruta": "/api/subscribers/bulk/ids",
+    "controlador": "SubscribersController",
+    "fichero": "src/subscribers/subscribers.controller.ts",
+    "handler": "bulkIds",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "administracion",
+      "contabilidad",
+      "tecnicos",
+      "caja"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'administracion'",
+      "'contabilidad'",
+      "'tecnicos'",
+      "'caja'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": "BulkFilterDto",
+    "params": [],
+    "query": [],
+    "parametros": [
+      {
+        "clase": "Body",
+        "llave": null,
+        "tipo": "BulkFilterDto",
+        "nombre": "dto"
+      },
       {
         "clase": "CurrentUser",
         "llave": null,
@@ -28072,13 +29040,28 @@
     "scopesFuente": [],
     "dto": null,
     "params": [],
-    "query": [],
+    "query": [
+      "from",
+      "to"
+    ],
     "parametros": [
       {
         "clase": "CurrentUser",
         "llave": null,
         "tipo": "AuthUser",
         "nombre": "user"
+      },
+      {
+        "clase": "Query",
+        "llave": "from",
+        "tipo": "string",
+        "nombre": "from"
+      },
+      {
+        "clase": "Query",
+        "llave": "to",
+        "tipo": "string",
+        "nombre": "to"
       }
     ],
     "usaRes": false,
@@ -28382,6 +29365,63 @@
     "controlador": "TreasuryController",
     "fichero": "src/treasury/treasury.controller.ts",
     "handler": "cashCloseReport",
+    "guards": [
+      "JwtAuthGuard",
+      "AreaGuard"
+    ],
+    "areas": [
+      "contabilidad",
+      "administracion",
+      "caja"
+    ],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [
+      "'contabilidad'",
+      "'administracion'",
+      "'caja'"
+    ],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [],
+    "query": [
+      "cashAccountId",
+      "date"
+    ],
+    "parametros": [
+      {
+        "clase": "Query",
+        "llave": "cashAccountId",
+        "tipo": "string",
+        "nombre": "cashAccountId"
+      },
+      {
+        "clase": "Query",
+        "llave": "date",
+        "tipo": "string",
+        "nombre": "date"
+      },
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
+    "metodo": "GET",
+    "ruta": "/api/treasury/cash-close/wompi",
+    "controlador": "TreasuryController",
+    "fichero": "src/treasury/treasury.controller.ts",
+    "handler": "cashCloseWompi",
     "guards": [
       "JwtAuthGuard",
       "AreaGuard"
@@ -29588,7 +30628,8 @@
     "query": [
       "from",
       "to",
-      "all"
+      "all",
+      "sede"
     ],
     "parametros": [
       {
@@ -29608,6 +30649,12 @@
         "llave": "all",
         "tipo": "string",
         "nombre": "all"
+      },
+      {
+        "clase": "Query",
+        "llave": "sede",
+        "tipo": "string",
+        "nombre": "sede"
       },
       {
         "clase": "CurrentUser",
@@ -32337,6 +33384,54 @@
     "publico": false
   },
   {
+    "metodo": "GET",
+    "ruta": "/api/omni/events/mine",
+    "controlador": "OmniController",
+    "fichero": "src/omni/omni.controller.ts",
+    "handler": "myEvents",
+    "guards": [
+      "JwtAuthGuard"
+    ],
+    "areas": [],
+    "permisos": [],
+    "orPermission": [],
+    "areasFuente": [],
+    "permisosFuente": [],
+    "orPermissionFuente": [],
+    "scopesFuente": [],
+    "dto": null,
+    "params": [],
+    "query": [
+      "from",
+      "to"
+    ],
+    "parametros": [
+      {
+        "clase": "Query",
+        "llave": "from",
+        "tipo": "string",
+        "nombre": "from"
+      },
+      {
+        "clase": "Query",
+        "llave": "to",
+        "tipo": "string",
+        "nombre": "to"
+      },
+      {
+        "clase": "CurrentUser",
+        "llave": null,
+        "tipo": "AuthUser",
+        "nombre": "user"
+      }
+    ],
+    "usaRes": false,
+    "subeFichero": false,
+    "subidaFuente": null,
+    "httpCode": null,
+    "publico": false
+  },
+  {
     "metodo": "POST",
     "ruta": "/api/portal-pagos/aplicar_discount",
     "controlador": "PortalPagosController",
@@ -32566,13 +33661,17 @@
       "gerencia"
     ],
     "permisos": [],
-    "orPermission": [],
+    "orPermission": [
+      "'screen.proyectos'"
+    ],
     "areasFuente": [
       "'administracion'",
       "'gerencia'"
     ],
     "permisosFuente": [],
-    "orPermissionFuente": [],
+    "orPermissionFuente": [
+      "'screen.proyectos'"
+    ],
     "scopesFuente": [],
     "dto": null,
     "params": [],
@@ -32642,13 +33741,17 @@
       "gerencia"
     ],
     "permisos": [],
-    "orPermission": [],
+    "orPermission": [
+      "'screen.proyectos'"
+    ],
     "areasFuente": [
       "'administracion'",
       "'gerencia'"
     ],
     "permisosFuente": [],
-    "orPermissionFuente": [],
+    "orPermissionFuente": [
+      "'screen.proyectos'"
+    ],
     "scopesFuente": [],
     "dto": null,
     "params": [],
@@ -32690,13 +33793,17 @@
       "gerencia"
     ],
     "permisos": [],
-    "orPermission": [],
+    "orPermission": [
+      "'screen.proyectos'"
+    ],
     "areasFuente": [
       "'administracion'",
       "'gerencia'"
     ],
     "permisosFuente": [],
-    "orPermissionFuente": [],
+    "orPermissionFuente": [
+      "'screen.proyectos'"
+    ],
     "scopesFuente": [],
     "dto": null,
     "params": [
@@ -32732,13 +33839,17 @@
       "gerencia"
     ],
     "permisos": [],
-    "orPermission": [],
+    "orPermission": [
+      "'screen.proyectos'"
+    ],
     "areasFuente": [
       "'administracion'",
       "'gerencia'"
     ],
     "permisosFuente": [],
-    "orPermissionFuente": [],
+    "orPermissionFuente": [
+      "'screen.proyectos'"
+    ],
     "scopesFuente": [],
     "dto": "ProjectMaterialsDto",
     "params": [

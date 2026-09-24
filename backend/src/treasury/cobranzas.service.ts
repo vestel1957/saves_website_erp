@@ -15,13 +15,14 @@ import {
   IncomeDto, TransferDto, TxCategoryDto, VoidTxDto,
 } from './dto/cobranzas.dto';
 import {
-  aporteEfectivo, CATEGORIA_SALDO, esNotaSaldo, isoUTC, notaSaldo, proximoDiaHabil, rangoDia,
+  aporteEfectivo, CASH, CATEGORIA_SALDO, esNotaSaldo, isoUTC, notaSaldo, proximoDiaHabil, rangoDia,
   sinElBarridoDelDia, SQL_NOTA_SALDO, whereArrastre, whereEfectivo,
 } from './cierre-legacy';
 import {
   alcanceDe, esCajera, exigirAcceso, exigirAccesoAlMovimiento, exigirCajaDeEscritura, puedeVer,
 } from './caja-scope';
 import { num, round2 } from '../common/money';
+import { centroActivo } from '../common/centro-costo';
 import { conceptoMesAdelantado, periodoDeFactura } from '../common/concepto-factura';
 import { revertirDescuentosVencidos } from '../promotions/revertir-descuentos-vencidos';
 import {
@@ -42,6 +43,9 @@ import {
  * billetes. Paridad legacy: el método "Cheque" sigue vivo allá (último uso ayer).
  */
 const isBankMethod = (method: string | null | undefined) => method === 'Bank' || method === 'Cheque';
+
+/** Cuenta del legacy donde entra la plata de Wompi (la misma de `portal-pagos`). */
+const CUENTA_WOMPI = Number(process.env.PORTAL_WS_CASH_ACCOUNT_ID || 23);
 
 /**
  * Nota del movimiento de un recaudo, con el mismo contenido que el legacy
@@ -150,6 +154,8 @@ type Tx = Prisma.TransactionClient;
  * Operaciones de escritura del módulo Cobranzas (migrado de saves-vestel):
  * recaudo con multipago en cascada, anulación con reversa, egresos y cierre de caja.
  */
+const PERIODO_VACIO = { saldoInicial: 0, ingresos: 0, egresos: 0, saldoFinal: 0, movimientos: 0 };
+
 export class CobranzasService {
   private readonly logger = new Logger('CobranzasService');
 
@@ -262,6 +268,17 @@ export class CobranzasService {
     return staff?.legacyId ?? null;
   }
 
+  /**
+   * El centro de costo que se elige a mano en un ingreso o egreso tiene que existir y estar
+   * activo. Es opcional: sin él no se valida nada y el asiento toma el de la caja.
+   */
+  private async exigirCentroElegido(costCenterId?: string | null) {
+    if (!costCenterId) return;
+    if (!(await centroActivo(this.prisma, costCenterId))) {
+      throw new BadRequestException('El centro de costo elegido no existe o está inactivo.');
+    }
+  }
+
   async createIncome(dto: IncomeDto, user: AuthUser) {
     const amount = round2(Number(dto.amount));
     if (!(amount > 0)) throw new BadRequestException('El monto debe ser mayor a cero');
@@ -272,6 +289,7 @@ export class CobranzasService {
       const sub = await this.prisma.subscriber.findUnique({ where: { id: dto.subscriberId }, select: { id: true } });
       if (!sub) throw new NotFoundException('Cliente no encontrado');
     }
+    await this.exigirCentroElegido(dto.costCenterId);
     const when = dto.date ? dateOnly(dto.date) : dateOnly(hoyColombia());
     const issuerUserId = await this.emisorLegacyId(user);
     const result = await this.prisma.$transaction(async (tx) => {
@@ -295,7 +313,9 @@ export class CobranzasService {
     if (dto.method !== 'Balance') {
       await this.posting.postTreasuryIncome({
         sourceId: result.id, date: when, amount: result.amount, category: dto.category,
-        toBank: isBankMethod(dto.method), createdBy: user?.name ?? user?.email ?? null,
+        toBank: isBankMethod(dto.method),
+        costCenterId: await this.posting.centroDeTesoreria(cashAccountId, dto.costCenterId),
+        createdBy: user?.name ?? user?.email ?? null,
       });
     }
     return result;
@@ -432,14 +452,22 @@ export class CobranzasService {
    * dinero lo recibió el corresponsal, no el operador que sube el archivo, y
    * cargárselo a su caja le inflaría el arqueo con plata que nunca tocó.
    */
-  async collect(dto: CollectDto, user: AuthUser, opts?: { reconectar?: boolean; cajaPropiaSiFalta?: boolean }) {
+  async collect(
+    dto: CollectDto, user: AuthUser,
+    opts?: { reconectar?: boolean; cajaPropiaSiFalta?: boolean; fechaDeVentanilla?: boolean; esperaReconexionMs?: number },
+  ) {
     const montoPedido = round2(Number(dto.amount));
     if (!(montoPedido > 0)) throw new BadRequestException('El monto debe ser mayor a cero');
 
     // El recaudo entra en la caja de quien lo registra si está acotado: así el pago
     // aparece en SU cierre, y no puede empujarlo a la caja de otra sede.
+    // Banco "WOMPI" (2026-09-23): un PSE/Nequi que no entró solo por el portal va a la
+    // MISMA cuenta que usa el portal, no al cajón de quien lo registra. Los bancos los
+    // puede tocar cualquiera (`puedeVer`); la cajera pura queda fuera: lo suyo es su cajón.
+    const pedida = dto.cashAccountId
+      ?? (!esCajera(user) && isBankMethod(dto.method) && dto.bankName === 'WOMPI' ? CUENTA_WOMPI : undefined);
     const cashAccountId = await exigirCajaDeEscritura(
-      this.prisma, user, dto.cashAccountId, { propiaSiFalta: opts?.cajaPropiaSiFalta },
+      this.prisma, user, pedida, { propiaSiFalta: opts?.cajaPropiaSiFalta },
     );
     // El nombre de la caja lo pone el servidor cuando el cliente no lo manda: en las
     // listas de movimientos la columna "Cuenta" sale de aquí, y desde que la cajera
@@ -450,6 +478,7 @@ export class CobranzasService {
         }))?.holder ?? null
       : null);
     const payDate = dto.date ? dateOnly(dto.date) : dateOnly(hoyColombia());
+    if (opts?.fechaDeVentanilla && dto.date) await this.exigirFechaDeVentanilla(payDate, cashAccountId, esCajera(user) ? 'Cash' : dto.method);
 
     const result = await this.prisma.$transaction(async (tx) => {
       // Todo lo que sigue —leer saldos, repartir y escribir— va DENTRO de la
@@ -569,6 +598,7 @@ export class CobranzasService {
       const mesesAdelantar = Math.max(0, Math.trunc(Number(dto.adelantarMeses ?? 0)));
       let adelanto: { pct: number; descuento: number; meses: number; mensualidadNeta: number } | null = null;
       let mesesPropuestos: string[] = [];
+      let fechasPropuestas: Date[] = [];
       if (mesesAdelantar > 0) {
         // Sólo se adelanta desde CERO: si al cliente le queda algo pendiente, el
         // excedente se lo llevaría esa deuda en `aplicarAnticipos` y el mes siguiente
@@ -619,6 +649,7 @@ export class CobranzasService {
           mensualidadNeta: round2(prop.neto / mesesAdelantar),
         };
         mesesPropuestos = prop.meses.map((m) => m.label);
+        fechasPropuestas = prop.meses.map((m) => m.fecha);
       }
 
       const payer = subName(sub);
@@ -757,7 +788,7 @@ export class CobranzasService {
         advanceBalance: anticiposAplicados.pendiente,
         /** El mes adelantado y lo que se le rebajó por adelantarlo (0 si no aplicó). */
         adelanto: adelanto
-          ? { pct: adelanto.pct, descuento: adelanto.descuento, meses: mesesPropuestos }
+          ? { pct: adelanto.pct, descuento: adelanto.descuento, meses: mesesPropuestos, fechas: fechasPropuestas }
           : null,
         // Viaja en la respuesta para que la cajera pueda explicarlo en el
         // mostrador: el cliente llega creyendo que debe el valor con descuento.
@@ -793,7 +824,9 @@ export class CobranzasService {
     if (dto.method !== 'Balance' && recibido > 0) {
       await this.posting.postCustomerPayment({
         sourceId: result.receiptId, date: payDate, amount: recibido,
-        toBank: isBankMethod(dto.method), createdBy: user?.name ?? user?.email ?? null,
+        toBank: isBankMethod(dto.method),
+        costCenterId: await this.posting.centroDeAbonado(dto.subscriberId),
+        createdBy: user?.name ?? user?.email ?? null,
       });
     }
     // Reconexión automática tras el pago (paridad legacy: al pagar se reactiva).
@@ -813,7 +846,7 @@ export class CobranzasService {
     // que levantar, así que no se abre sesión contra ningún equipo.
     const reconexion = opts?.reconectar === false || dto.reconectar === false || !result.applied.length
       ? null
-      : await this.reconexion.porPago(dto.subscriberId, user, `recibo ${result.receiptId}`);
+      : await this.reconexion.porPago(dto.subscriberId, user, `recibo ${result.receiptId}`, { esperaMs: opts?.esperaReconexionMs });
 
     // Aviso para quien quiera contárselo al cliente (hoy, el bot: ver
     // AvisosProactivosService). Va por evento porque tesorería no conoce el canal de
@@ -950,6 +983,7 @@ export class CobranzasService {
       if (!prov) throw new NotFoundException('Beneficiario no encontrado');
       payerName = prov.name;
     }
+    await this.exigirCentroElegido(dto.costCenterId);
     const when = dto.date ? dateOnly(dto.date) : dateOnly(hoyColombia());
     const issuerUserId = await this.emisorLegacyId(user);
     const result = await this.prisma.$transaction(async (tx) => {
@@ -977,7 +1011,9 @@ export class CobranzasService {
     // Contabilización automática (DR gasto, CR banco/caja).
     await this.posting.postTreasuryExpense({
       sourceId: result.id, date: when, amount: result.amount, category: dto.category,
-      fromBank: isBankMethod(dto.method), createdBy: user?.name ?? user?.email ?? null,
+      fromBank: isBankMethod(dto.method),
+      costCenterId: await this.posting.centroDeTesoreria(cashAccountId, dto.costCenterId),
+      createdBy: user?.name ?? user?.email ?? null,
     });
     return result;
   }
@@ -1051,7 +1087,7 @@ export class CobranzasService {
    * Si se pasa `user`, la lista viene ACOTADA a lo que ese usuario puede ver: una cajera
    * sólo su caja + los bancos (port de `acc_list()` del legacy). Ver `caja-scope.ts`.
    */
-  async cashAccounts(user?: AuthUser) {
+  async cashAccounts(user?: AuthUser, rango?: { from?: string; to?: string }) {
     const alcance = user ? await alcanceDe(this.prisma, user) : null;
     // Nombre de la sede: `branchLegacy` no es una FK, se cruza a mano contra
     // `Branch.legacyId` (mismo patrón que `config.service.ts`). Verificado: es el mismo
@@ -1096,7 +1132,60 @@ export class CobranzasService {
     const visibles = alcance
       ? out.filter((a) => puedeVer(alcance, a.id, a.branchLegacy))
       : out;
-    return visibles.sort((a, b) => a.name.localeCompare(b.name));
+    const ordenadas = visibles.sort((a, b) => a.name.localeCompare(b.name));
+    if (!rango?.from && !rango?.to) return ordenadas;
+    const periodo = await this.movimientosPorCaja(ordenadas.map((a) => a.id), rango);
+    return ordenadas.map((a) => ({ ...a, periodo: periodo.get(a.id) ?? PERIODO_VACIO }));
+  }
+
+  /**
+   * Lo que se movió en cada caja entre `from` y `to` (días inclusive, `YYYY-MM-DD`),
+   * con el saldo con que abrió y con el que cerró el rango. Sale de las mismas filas y
+   * con la misma regla que `recomputeCashBalance` (VIGENTE, crédito − débito), así que
+   * con el rango abierto hasta hoy `saldoFinal` es el `balance` de la caja.
+   * `Transaction.date` es `@db.Date`: el día viaja como medianoche UTC y se compara
+   * tal cual, sin corrimiento de zona.
+   */
+  private async movimientosPorCaja(ids: number[], rango: { from?: string; to?: string }) {
+    const dia = (v: string | undefined, campo: string) => {
+      if (!v) return undefined;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) throw new BadRequestException(`'${campo}' debe ir como AAAA-MM-DD.`);
+      return new Date(`${v}T00:00:00.000Z`);
+    };
+    const desde = dia(rango.from, 'from');
+    const hasta = dia(rango.to, 'to');
+    if (desde && hasta && desde > hasta) throw new BadRequestException('La fecha inicial es posterior a la final.');
+    const base = { cashAccountId: { in: ids }, status: 'VIGENTE' as const };
+    const [enRango, antes] = await Promise.all([
+      this.prisma.transaction.groupBy({
+        by: ['cashAccountId'],
+        where: { ...base, date: { ...(desde && { gte: desde }), ...(hasta && { lte: hasta }) } },
+        _sum: { credit: true, debit: true },
+        _count: { _all: true },
+      }),
+      desde
+        ? this.prisma.transaction.groupBy({
+            by: ['cashAccountId'],
+            where: { ...base, date: { lt: desde } },
+            _sum: { credit: true, debit: true },
+          })
+        : Promise.resolve([]),
+    ]);
+    const inicial = new Map(antes.map((r) => [r.cashAccountId, round2(num(r._sum.credit) - num(r._sum.debit))]));
+    const movido = new Map(enRango.map((r) => [r.cashAccountId, r]));
+    const out = new Map<number, typeof PERIODO_VACIO>();
+    for (const id of ids) {
+      const r = movido.get(id);
+      const saldoInicial = inicial.get(id) ?? 0;
+      const ingresos = round2(num(r?._sum.credit));
+      const egresos = round2(num(r?._sum.debit));
+      out.set(id, {
+        saldoInicial, ingresos, egresos,
+        saldoFinal: round2(saldoInicial + ingresos - egresos),
+        movimientos: r?._count._all ?? 0,
+      });
+    }
+    return out;
   }
 
   /**
@@ -1454,6 +1543,33 @@ export class CobranzasService {
   }
 
   /** ¿Ya se cerró esta caja este día? (la pata EXPENSE del arrastre es la marca). */
+  /**
+   * La fecha que la cajera le pone a un recaudo en ventanilla (2026-09-17, pedido de
+   * caja: registrar hoy un pago que se recibió ayer). Sin tope de días atrás. Dos límites:
+   *  - nunca en el futuro (en hora de Colombia);
+   *  - nunca en un día cuya caja ya se cerró: el arqueo y el arrastre de ese día ya
+   *    se barrieron, y un pago metido ahí descuadra el cierre sin que nadie lo vea.
+   * Sólo la ruta de caja la pide: el cargue de pagos y el portal traen su propia fecha.
+   *
+   * El segundo límite es SOLO para efectivo (2026-09-23, un PSE/Nequi del 21 que no se
+   * dejaba subir): el arqueo cuenta únicamente `method` Cash (`whereEfectivo`), así que
+   * una transferencia fechada en un día cerrado no toca el barrido. A la cajera pura se le
+   * pasa siempre 'Cash' (el recaudo NO le impide elegir transferencia): para ella nada cambia.
+   */
+  private async exigirFechaDeVentanilla(d: Date, cashAccountId: number | null | undefined, method?: string | null) {
+    const hoy = dateOnly(hoyColombia());
+    if (d.getTime() > hoy.getTime()) {
+      throw new BadRequestException('La fecha del pago no puede ser posterior a hoy.');
+    }
+    const dias = Math.round((hoy.getTime() - d.getTime()) / 86_400_000);
+    const esEfectivo = CASH.includes(method ?? 'Cash');
+    if (dias > 0 && esEfectivo && cashAccountId != null && await this.cierreDelDia(cashAccountId, d)) {
+      throw new BadRequestException(
+        `La caja ya se cerró el ${d.toISOString().slice(0, 10)}: el pago no puede ir a ese día.`,
+      );
+    }
+  }
+
   async cierreDelDia(cashAccountId: number, d: Date) {
     return this.prisma.transaction.findFirst({
       where: {

@@ -6,7 +6,7 @@ import { MikrotikActionResult, MikrotikService } from '../network/mikrotik.servi
 import { MikrotikAdminService } from '../network/mikrotik-admin.service';
 import { GenieacsService } from '../network/genieacs.service';
 import type { AuthUser } from '../auth/current-user.decorator';
-import { deudaPendiente, num, round2, saldoPendiente } from '../common/money';
+import { deudaPendiente, estaAlDia, num, round2, saldoPendiente } from '../common/money';
 import { direccionDe, referenciaDe } from '../common/subscriber-address';
 import { conVlanEnComentario, vlanDeComentario } from '../common/net-comment';
 import { partirNotaDeEstado, sinEcosDelSync } from './motivo-estado';
@@ -15,6 +15,7 @@ import { mensualidadesCompletas, planDeUltimaFactura } from '../billing/plan-fac
 import { descuentosDePromocionPendientes } from '../promotions/descuento-al-cobrar';
 import { sedesDe, whereSedeSuscriptor, exigirSedeSuscriptor, exigirSedeDestino } from '../common/sede-scope';
 import { esClienteDeSuOrden, esTecnicoDeCampo } from '../common/tecnico-scope';
+import { traductorDeCajas } from '../common/nap-legacy';
 import { exigirBodegaDeSuSede, sedesDeUsuario } from '../network/bodega-scope';
 import { nextTid, TID_SEQ } from '../common/tid';
 import { orden, paginacion } from '../common/pagination-params';
@@ -27,9 +28,14 @@ import { enteroBuscable } from '../support/support.service';
 import { ORDEN_CRONOLOGICO, tieneHoraReal } from '../support/orden-cronologico';
 import { equiposDeOrdenes } from '../support/equipo-reserva.service';
 import { KIND_CARTA_RETIRO } from './subscriber-files.service';
-import { ESTADO_SERVICIO_EVENT, type EstadoServicioEvent } from './subscribers.events';
+import {
+  ESTADO_SERVICIO_EVENT, type EstadoServicioEvent,
+  ESTADO_ABONADO_EVENT, type EstadoAbonadoEvent,
+} from './subscribers.events';
 import type { OrdenAbierta, OrdenesAutomaticasService } from '../support/ordenes-automaticas.service';
 import type { EmisorDeEventos } from '../core/eventos';
+import { afiliadoresDisponibles, afiliadorValido } from '../staff/afiliadores';
+import { canalVentaValido } from './canal-venta';
 
 /**
  * Enumera motivos en castellano: "A, B y C". Con un solo requisito daba igual, pero
@@ -71,6 +77,16 @@ const UNPAID_STATUSES: SubInvoiceStatus[] = ['DUE', 'PARTIAL'];
 
 /** Valores admitidos del filtro «Deuda» (los que `debtIds` sabe resolver). */
 const DEUDA_FILTROS = new Set(['1', 'compromiso', 'gt2', 'fija']);
+
+/**
+ * Piso de plata de TODOS los filtros de «Deuda»: se deja fuera a quien debe
+ * $20.000 o menos. Los filtros que cuentan facturas sacaban al que abonó casi
+ * todo y dejó la factura abierta por centavos: FERNANDO TUMAY (abonado 1396,
+ * Villanueva) pagó $73.050 de $73.150 y salía en «Tiene 1 factura sin pagar»
+ * debiendo $100 (2026-09-22). La deuda es la misma de la columna «Debe»:
+ * Σ(total − pagado) de sus facturas DUE/PARTIAL.
+ */
+const DEUDA_MINIMA = 20000;
 
 /** Filtro compartido por la lista de clientes y las operaciones masivas. */
 type ListFilter = {
@@ -170,6 +186,11 @@ function buildProfileData(dto: Record<string, any>): any {
   if (dto.nomenclature !== undefined) data.nomenclature = dto.nomenclature ?? null;
   return data;
 }
+
+/** Un trozo del lote masivo (ver `resolveBulkIds`). */
+type BulkTanda = { ids?: string[]; tanda?: boolean };
+/** Lo que contesta un trozo en el que no quedó nadie del filtro. */
+const TANDA_VACIA = { total: 0, ok: 0, done: 0, results: [] as never[], ordenes: 0 };
 
 export class SubscribersService {
   constructor(
@@ -1023,16 +1044,7 @@ export class SubscribersService {
     // del legacy: `equipos.nat` es `Nap.legacyId` y `equipos.puerto` es `Port.legacyId`
     // (ver `resolverPuertos` en support-write). La pestaña Equipos enseñaba "Caja Nat
     // 241 · Puerto Nat 2393", que no es ni la caja ni el puerto que hay rotulados.
-    const napsDe = [...new Set(s.equipment.map((e) => e.nat).filter((v): v is number => !!v))];
-    const puertosDe = [...new Set(s.equipment.map((e) => e.port).filter((v): v is number => !!v))];
-    const [napsEq, puertosEq] = await Promise.all([
-      napsDe.length
-        ? this.prisma.nap.findMany({ where: { legacyId: { in: napsDe } }, select: { id: true, legacyId: true, name: true } })
-        : [],
-      puertosDe.length
-        ? this.prisma.port.findMany({ where: { legacyId: { in: puertosDe } }, select: { id: true, legacyId: true, port: true, napLegacy: true } })
-        : [],
-    ]);
+    const cajaDe = await traductorDeCajas(this.prisma, s.equipment);
 
     return {
       id: s.id,
@@ -1155,11 +1167,7 @@ export class SubscribersService {
       }),
       invoices: s.invoices.map(mapInvoice),
       equipment: s.equipment.map((e) => {
-        const caja = e.nat ? napsEq.find((n) => n.legacyId === e.nat) ?? null : null;
-        // Sólo vale si el puerto es DE esa caja: hay 353 equipos importados cuyo
-        // `puerto` no casa con ningún `idp` de su NAP, y pintar el número de un
-        // puerto de otra caja es peor que no pintar nada.
-        const puerto = e.port ? puertosEq.find((p) => p.legacyId === e.port && (!e.nat || p.napLegacy === e.nat)) ?? null : null;
+        const caja = cajaDe(e);
         return {
           id: e.id, code: e.code, brand: e.brand, serial: e.serial, mac: e.mac,
           installType: e.installType, port: e.port, vlan: e.vlan, nat: e.nat, status: e.status,
@@ -1168,9 +1176,9 @@ export class SubscribersService {
           assignedAt: e.endDate,
           warehouse: e.warehouse?.name ?? null, warehouseId: e.warehouse?.id ?? null,
           /** Cómo se llama la caja y qué puerto suyo es, para leerlo sin traducir ids. */
-          napId: caja?.id ?? null, napName: caja?.name ?? null, portNumber: puerto?.port ?? null,
+          napId: caja.napId, napName: caja.napName, portNumber: caja.portNumber,
           /** Id de aquí del puerto: con él la pestaña abre el editor con la caja ya puesta. */
-          portId: puerto?.id ?? null,
+          portId: caja.portId,
         };
       }),
       // `kind` es el tipo de observación que traía el legacy (Compromiso, Traslado,
@@ -1248,8 +1256,8 @@ export class SubscribersService {
     else if (params.tecnologia === 'EOC') where.installTech = 'EOC';
 
     // Estado de la cuenta (deuda / al día / compromiso).
-    if (params.cuenta === 'debe') and.push({ invoices: { some: { status: { in: UNPAID_STATUSES } } } });
-    else if (params.cuenta === 'aldia') and.push({ invoices: { none: { status: { in: UNPAID_STATUSES } } } });
+    // 'debe' se resuelve en `computeWhere`: necesita sumar plata (piso DEUDA_MINIMA).
+    if (params.cuenta === 'aldia') and.push({ invoices: { none: { status: { in: UNPAID_STATUSES } } } });
     else if (params.cuenta === 'compromiso') and.push({ status: 'COMPROMISO' });
 
     if (and.length) where.AND = and;
@@ -1271,9 +1279,15 @@ export class SubscribersService {
        * `pageSize=6`) eran seis clientes SIN NINGUNA RELACIÓN, y el que se
        * buscaba —abonado 6033— quedaba fuera de la página entera.
        */
+      //
+      // El mismo número también se busca como ID (`legacyId`, la columna "ID" del
+      // listado): es el número por el que se pregunta en el legacy (2026-09-22,
+      // "necesito que me deje buscar por el ID también"). Si un cliente tiene ese
+      // abonado y otro ese ID, salen los dos: son exactos, no ruido.
       const esAbonadoCorto = /^\d{1,6}$/.test(search);
       if (esAbonadoCorto) {
-        where.abonado = Number(search);
+        const n = Number(search);
+        where.OR = [{ abonado: n }, { legacyId: n }];
         return where;
       }
       // Cada palabra debe calzar en algún campo (nombre partido en 4 columnas,
@@ -1297,7 +1311,7 @@ export class SubscribersService {
       const n = enteroBuscable(search);
       where.OR = [
         { AND: tokens.map(perToken) },
-        ...(n != null ? [{ abonado: n }] : []),
+        ...(n != null ? [{ abonado: n }, { legacyId: n }] : []),
       ];
     }
     return where;
@@ -1370,6 +1384,7 @@ export class SubscribersService {
           LEFT JOIN ult  u USING ("subscriberId")
          WHERE coalesce(m.fija, u.fija_ult) IS NOT NULL
            AND d.debe >= coalesce(m.fija, u.fija_ult)
+           AND d.debe > ${DEUDA_MINIMA}
       `;
       return rows.map((r) => r.subscriberId);
     }
@@ -1438,6 +1453,7 @@ export class SubscribersService {
            AND min(date_trunc('month', "invoiceDate"))::date = ${dia(mesPasado)}::date
            AND max(date_trunc('month', "invoiceDate"))::date = ${dia(mesActual)}::date
            AND sum("paidAmount") = 0
+           AND sum(total - "paidAmount") > ${DEUDA_MINIMA}
       `;
       const plan = await mensualidadesCompletas(this.prisma, rows.map((r) => r.subscriberId), mesActual);
       return rows
@@ -1448,8 +1464,8 @@ export class SubscribersService {
         .map((r) => r.subscriberId);
     }
     const rows = deuda === 'gt2'
-      ? await this.prisma.$queryRaw<{ subscriberId: string }[]>`SELECT "subscriberId" FROM "SubInvoice" WHERE status IN ('DUE','PARTIAL') GROUP BY "subscriberId" HAVING count(*) > 2`
-      : await this.prisma.$queryRaw<{ subscriberId: string }[]>`SELECT "subscriberId" FROM "SubInvoice" WHERE status IN ('DUE','PARTIAL') GROUP BY "subscriberId" HAVING count(*) = 1`;
+      ? await this.prisma.$queryRaw<{ subscriberId: string }[]>`SELECT "subscriberId" FROM "SubInvoice" WHERE status IN ('DUE','PARTIAL') GROUP BY "subscriberId" HAVING count(*) > 2 AND sum(total - "paidAmount") > ${DEUDA_MINIMA}`
+      : await this.prisma.$queryRaw<{ subscriberId: string }[]>`SELECT "subscriberId" FROM "SubInvoice" WHERE status IN ('DUE','PARTIAL') GROUP BY "subscriberId" HAVING count(*) = 1 AND sum(total - "paidAmount") > ${DEUDA_MINIMA}`;
     return rows.map((r) => r.subscriberId);
   }
 
@@ -1470,6 +1486,17 @@ export class SubscribersService {
       and.push({ id: { in: ids } });
       where.AND = and;
     }
+    // «Estado de cuenta → Debe»: antes bastaba UNA factura abierta, y salía quien
+    // abonó casi todo y quedó debiendo centavos (abonado 1396, $100). Mismo piso
+    // que el filtro de Deuda.
+    if (params.cuenta === 'debe') {
+      const rows = await this.prisma.$queryRaw<{ subscriberId: string }[]>`
+        SELECT "subscriberId" FROM "SubInvoice" WHERE status IN ('DUE','PARTIAL')
+         GROUP BY "subscriberId" HAVING sum(total - "paidAmount") > ${DEUDA_MINIMA}`;
+      const and = Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : [];
+      and.push({ id: { in: rows.map((r) => r.subscriberId) } });
+      where.AND = and;
+    }
     return where;
   }
 
@@ -1485,10 +1512,17 @@ export class SubscribersService {
     return rows.map((r) => r.id);
   }
 
-  private async resolveBulkIds(filter: ListFilter, user?: AuthUser): Promise<string[]> {
+  private async resolveBulkIds(filter: ListFilter & BulkTanda, user?: AuthUser): Promise<string[]> {
     // Con el usuario, para que una masiva NO pueda alcanzar sedes que el listado
     // no le deja ni ver. Sin esto, el filtro de sede sería puramente cosmético.
-    const ids = await this.matchingIds(filter, user);
+    let ids = await this.matchingIds(filter, user);
+    // Un trozo del lote que la pantalla parte para enseñar el avance: sólo esos ids,
+    // y sólo si siguen cumpliendo el filtro. Un trozo vacío no es un error.
+    if (filter.ids?.length) {
+      const pedidos = new Set(filter.ids);
+      ids = ids.filter((id) => pedidos.has(id));
+      if (filter.tanda) return ids;
+    }
     if (ids.length === 0) throw new BadRequestException('No hay clientes que cumplan el filtro.');
     if (ids.length > SubscribersService.MAX_BULK) {
       throw new BadRequestException(`${ids.length} clientes exceden el máximo de ${SubscribersService.MAX_BULK} por operación. Afina el filtro (sede / estado).`);
@@ -1496,34 +1530,48 @@ export class SubscribersService {
     return ids;
   }
 
+  /**
+   * Los ids a los que alcanza el filtro, sin tocar nada. La pantalla masiva los pide
+   * primero para partir el lote en tandas y enseñar cuántos van y cuántos faltan.
+   */
+  async bulkIds(filter: ListFilter, user: AuthUser) {
+    const ids = await this.resolveBulkIds(filter, user);
+    return { total: ids.length, ids };
+  }
+
   /** Corte masivo de TODOS los que cumplen el filtro (no depende de lo cargado en pantalla). */
-  async cutByFilter(filter: ListFilter, user: AuthUser) {
+  async cutByFilter(filter: ListFilter & BulkTanda, user: AuthUser) {
     // El candado (compromiso vigente + nada vencido) lo pone `cutBatch`, que es por
     // donde pasan también los lotes de clientes elegidos a mano en la pantalla. Aquí
     // sólo se resuelve a quiénes alcanza el filtro. Ver `corte.policy.ts`.
     const ids = await this.resolveBulkIds(filter, user);
-    return this.mikrotik.cutBatch(ids, user);
+    if (!ids.length) return TANDA_VACIA;
+    return this.mikrotik.cutBatch(ids, user, { tanda: filter.tanda });
   }
 
   /** Reconexión masiva de TODOS los que cumplen el filtro. */
-  async reconnectByFilter(filter: ListFilter, user: AuthUser) {
+  async reconnectByFilter(filter: ListFilter & BulkTanda, user: AuthUser) {
     const ids = await this.resolveBulkIds(filter, user);
+    if (!ids.length) return TANDA_VACIA;
     return this.mikrotik.reconnectBatch(ids, user);
   }
 
   /** Corte de TV masivo de TODOS los que cumplen el filtro (vía TR-069 u OLT por abonado). */
-  async tvCutByFilter(filter: ListFilter, user: AuthUser) {
+  async tvCutByFilter(filter: ListFilter & BulkTanda, user: AuthUser) {
     // Mismo candado que el corte de internet, y por el mismo sitio: lo aplica el
     // lote (`candadoDeuda`), no este método, para que valga igual cuando los
     // clientes se eligen a mano en la pantalla.
     const ids = await this.resolveBulkIds(filter, user);
-    return this.genieacs.tvBatchBySubscribers(ids, false, user, { candadoDeuda: true });
+    if (!ids.length) return TANDA_VACIA;
+    return this.genieacs.tvBatchBySubscribers(ids, false, user, { candadoDeuda: true, tanda: filter.tanda });
   }
 
   /** Alta de TV masiva de TODOS los que cumplen el filtro. */
-  async tvRestoreByFilter(filter: ListFilter, user: AuthUser) {
+  async tvRestoreByFilter(filter: ListFilter & BulkTanda, user: AuthUser) {
     const ids = await this.resolveBulkIds(filter, user);
-    return this.genieacs.tvBatchBySubscribers(ids, true, user);
+    if (!ids.length) return TANDA_VACIA;
+    // `marcarSinRed`: la decide una persona; con el TR-069 en pausa ella devuelve la señal.
+    return this.genieacs.tvBatchBySubscribers(ids, true, user, { tanda: filter.tanda, marcarSinRed: true });
   }
 
   /** WhatsApp masivo a TODOS los que cumplen el filtro. */
@@ -1723,6 +1771,17 @@ export class SubscribersService {
         data: { subscriberId: id, status: next, date: now, note },
       }),
     ]);
+
+    // Al legacy, EN EL ACTO. `customers.usu_estado` es de los campos que la ida vuelve
+    // a traer cada 15 minutos: lo que no llegue allá antes se deshace solo y la ficha
+    // vuelve a decir lo que decía, sin que nadie haya tocado nada. Hasta el 18-09-2026
+    // sólo viajaban tres transiciones (reconexión, baja, activación), así que un
+    // RETIRADO devuelto a CARTERA —el caso que preguntó Soporte— no duraba un cuarto de
+    // hora. Ver `pushEstadoManual` en `scripts/writeback-legacy.js`.
+    this.events?.emit(
+      ESTADO_ABONADO_EVENT,
+      { subscriberId: id, estado: next, anterior: s.status } satisfies EstadoAbonadoEvent,
+    );
 
     // Y el motivo también en las OBSERVACIONES, que es el pie de la ficha donde
     // quien atiende busca "qué pasó con este cliente". El historial ya lo guarda,
@@ -2356,6 +2415,9 @@ export class SubscribersService {
 
   /** Crear un cliente nuevo (abonado autogenerado max+1, estado INSTALAR). */
   async create(dto: CreateSubscriberDto, user?: AuthUser) {
+    // Sin sede el cliente no lo ve nadie acotado por sede —ni su orden de instalación
+    // en "pendientes"—, y `exigirSedeDestino` sólo se queja con usuarios acotados.
+    if (!dto.branchId?.trim()) throw new BadRequestException('Indica la sede del cliente.');
     // Un usuario acotado sólo da de alta en SUS sedes (y tiene que indicar una).
     await exigirSedeDestino(this.prisma, user, dto.branchId ?? null);
     // Guard de colisión de secret PPP. El legacy NO tenía validación de servidor en el alta
@@ -2376,7 +2438,23 @@ export class SubscribersService {
       }
     }
 
+    // Tipo de venta y, si es «Referido → Funcionario», el funcionario: se comprueba
+    // ANTES de crear nada, para que una elección que ya no vale (inhabilitado, cajera)
+    // frene el alta en vez de dejar al cliente sin dueño.
+    const canal = canalVentaValido(dto);
+    const afiliado = await afiliadorValido(this.prisma, canal.affiliateStaffId);
+    if (canal.affiliateStaffId && !afiliado) {
+      throw new BadRequestException('El funcionario elegido ya no está en la lista. Elige otro.');
+    }
+
     const data: any = buildProfileData(dto);
+    data.saleChannel = canal.saleChannel;
+    data.saleSubchannel = canal.saleSubchannel;
+    // Fecha y autor del alta en todas: el reporte por tipo de venta las necesita
+    // aunque el cliente no quede a nombre de ningún funcionario.
+    data.affiliateAt = new Date();
+    data.affiliateBy = user?.name ?? user?.email ?? null;
+    if (afiliado) data.affiliateStaff = { connect: { id: afiliado.id } };
     // Conectividad automática: hoy sólo se vende fibra, así que la tecnología no
     // se pregunta, y el secret se deriva del cliente (ver `credencialesPpp`).
     if (!data.installTech) data.installTech = TECNOLOGIA_FTTH;
@@ -2398,6 +2476,12 @@ export class SubscribersService {
     // El usuario PPP se devuelve porque puede haberlo puesto este método: el
     // alta lo necesita para el paso del router y para la orden de instalación.
     return { id: created.id, abonado: created.abonado, pppUsername: created.pppUsername };
+  }
+
+  /** Funcionarios que se pueden elegir como afiliador en el alta (activos, sin cajeras). */
+  async afiliadores() {
+    const filas = await afiliadoresDisponibles(this.prisma);
+    return filas.map((f) => ({ id: f.id, nombre: f.name }));
   }
 
   /**
@@ -2614,7 +2698,10 @@ export class SubscribersService {
 
     // Los dos requisitos, por separado: la pantalla y el bot tienen que poder decir
     // CUÁL de los dos falta, no un "no se puede" a secas.
-    const alDia = finalBalance <= 0;
+    // `estaAlDia`, no `<= 0`: el IVA que parte el peso deja facturas en 85.000,11
+    // contra 85.000 cobrados en ventanilla, y once céntimos que nadie puede pagar
+    // le negaban el paz y salvo a un cliente al día. Ver `TOLERANCIA_PESO`.
+    const alDia = estaAlDia(finalBalance);
     const equiposPendientes = equipos.map((e) => ({
       id: e.id, code: e.code, mac: e.mac, serial: e.serial, brand: e.brand,
     }));

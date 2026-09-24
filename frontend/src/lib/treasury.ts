@@ -118,7 +118,7 @@ type Bucket = { cantidad: number; monto: number };
 type MesBucket = { cantidad: number; monto: number; Internet: Bucket; Television: Bucket };
 
 /** Bloques del informe recalculados sin la pasarela en línea — ver `soloCaja`. */
-type SoloCaja = Pick<InformeCierreData, "cobranza" | "formaPago" | "servicios" | "tipoServicio" | "meses">;
+type SoloCaja = Pick<InformeCierreData, "cobranza" | "dineroEnCaja" | "servicios" | "tipoServicio" | "meses">;
 
 /**
  * El informe del cierre: los bloques del legacy (`statement_list.php`) + el arqueo, que
@@ -129,7 +129,20 @@ export type InformeCierreData = {
   fecha: string;
   cobranza: { excento: Bucket; base: Bucket; iva: Bucket; total: Bucket };
   porBanco: { nombre: string; cantidad: number; monto: number }[];
-  formaPago: { saldoAnterior: Bucket; efectivo: Bucket; transferencia: Bucket; wompi: Bucket };
+  /**
+   * El arqueo del cajón: arrastre + recaudo = total en caja; menos egresos = excedente.
+   * `wompi` va aparte (no es una fila del arqueo): esa plata no pasó por la ventanilla.
+   */
+  dineroEnCaja: {
+    saldoAnterior: Bucket;
+    recaudo: Bucket;
+    /** Parte de `recaudo` que entró sin factura (anticipos). Ya está dentro de `recaudo`. */
+    sinFactura: Bucket;
+    totalEnCaja: number;
+    egresos: Bucket;
+    excedente: number;
+    wompi: Bucket;
+  };
   servicios: {
     planes: { clave: string; megas: number; cantidad: number; monto: number }[];
     television: Bucket;

@@ -350,9 +350,9 @@ export default function NuevoTraspasoPage() {
         <p className="mb-4 flex flex-wrap items-center gap-1.5 rounded-lg bg-surface-2 px-3 py-2 text-[12px] text-text-secondary">
           <Icon name="info" size={14} className="text-text-tertiary" />
           {modo === "tecnico"
-            ? <>Entregas material <strong>consumible</strong> a los técnicos de</>
-            : <>Mueves material entre las bodegas de</>}{" "}
-          {ctx.mySedeNames.length ? <strong>{ctx.mySedeNames.join(", ")}</strong> : "tu sede"}.
+            ? <>Entregas material <strong>consumible</strong> a cualquier técnico.</>
+            : <>Mueves material a las bodegas de{" "}
+                {ctx.mySedeNames.length ? <strong>{ctx.mySedeNames.join(", ")}</strong> : "tu sede"}.</>}
         </p>
       ) : null}
 
@@ -400,7 +400,7 @@ export default function NuevoTraspasoPage() {
                 )}
               </Field>
             ) : modo === "tecnico" ? (
-              <Field label="Se le entrega a" required hint={ctx.restricted ? "Técnicos de tu sede" : undefined}>
+              <Field label="Se le entrega a" required hint={ctx.restricted ? "Solo material consumible" : undefined}>
                 <Select value={toWarehouseId} onChange={(e) => setToWarehouseId(e.target.value)}>
                   <option value="">Seleccionar técnico…</option>
                   {ctx.technicians.map((t) => (
@@ -435,7 +435,7 @@ export default function NuevoTraspasoPage() {
           {ctx.technicians.length === 0 && modo === "tecnico" && (
             <p className="flex items-start gap-2 rounded-lg bg-warning-soft px-3 py-2 text-[12px] text-warning-text">
               <Icon name="alert-triangle" size={14} className="mt-0.5 shrink-0" />
-              No hay técnicos disponibles{ctx.restricted ? " en tu sede" : ""}. Cada técnico necesita su bodega en Bodegas de material.
+              No hay técnicos disponibles. Cada técnico necesita su bodega en Bodegas de material.
             </p>
           )}
 

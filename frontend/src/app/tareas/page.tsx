@@ -25,6 +25,8 @@ import { ACCEPT_ADJUNTO } from "@/lib/adjuntos";
 type Task = {
   id: string; legacyId: number; name: string | null; status: string; priority: string;
   tdate: string; start: string | null; dueDate: string | null; description: string | null;
+  /** Día en que se realizó (solo las Hechas; en las heredadas del legacy no existe). */
+  doneDate: string | null;
   orderId: number | null; author: string | null; authorSource: string | null;
   assignee: string | null; overdue: boolean;
   /** Cuántos adjuntos lleva (el listado sólo trae el número, no los ficheros). */
@@ -65,7 +67,7 @@ const toDateInput = (d: string | null | undefined) => (d ? new Date(d).toISOStri
 const stripHtml = (s: string | null) =>
   (s ?? "").replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
 
-const emptyForm = { name: "", status: "DUE", priority: "MEDIUM", start: "", dueDate: "", description: "", orderId: "", assigneeId: "" };
+const emptyForm = { name: "", status: "DUE", priority: "MEDIUM", start: "", dueDate: "", doneDate: "", description: "", orderId: "", assigneeId: "" };
 
 export default function TareasPage() {
   const { loading: authLoading, authFetch } = useAuth();
@@ -136,7 +138,7 @@ export default function TareasPage() {
     setEditing(t);
     setForm({
       name: t.name ?? "", status: t.status, priority: t.priority,
-      start: toDateInput(t.start), dueDate: toDateInput(t.dueDate),
+      start: toDateInput(t.start), dueDate: toDateInput(t.dueDate), doneDate: toDateInput(t.doneDate),
       description: stripHtml(t.description), orderId: t.orderId ? String(t.orderId) : "",
       assigneeId: "",
     });
@@ -241,6 +243,8 @@ export default function TareasPage() {
       };
       if (form.start) body.start = form.start;
       if (form.dueDate) body.dueDate = form.dueDate;
+      // Sin fecha, el backend sella hoy al cerrarla; solo se manda si es una Hecha.
+      if (form.status === "DONE" && form.doneDate) body.doneDate = form.doneDate;
       if (String(form.orderId ?? "").trim()) body.orderId = Number(form.orderId);
       if (form.assigneeId) body.assigneeId = Number(form.assigneeId);
       const res = await authFetch(editing ? `/tasks/${editing.id}` : "/tasks", {
@@ -380,6 +384,10 @@ export default function TareasPage() {
                 ),
               },
               {
+                key: "tdate", header: "Creada", sortable: true,
+                render: (r: Task) => <span className="whitespace-nowrap text-text-secondary">{fmtDate(r.tdate)}</span>,
+              },
+              {
                 key: "orderId", header: "Orden", sortable: true,
                 render: (r: Task) => (r.orderId ? <Badge label={`#${r.orderId}`} tone="default" /> : <span className="text-text-tertiary">Nota</span>),
               },
@@ -465,6 +473,11 @@ export default function TareasPage() {
           <Field label="Vence" error={v.error("dueDate")}>
             <Input type="date" value={form.dueDate} onChange={(e) => setF("dueDate", e.target.value)} {...v.campo("dueDate")} />
           </Field>
+          {form.status === "DONE" && (
+            <Field label="Realizada el" hint="Vacío = hoy. Cámbiala si se hizo otro día.">
+              <Input type="date" max={new Date().toLocaleDateString("en-CA")} value={form.doneDate} onChange={(e) => setF("doneDate", e.target.value)} />
+            </Field>
+          )}
           <Field label="N° de orden" hint="Vacío = nota suelta, sin orden asociada">
             <Input type="number" min={0} value={form.orderId} onChange={(e) => setF("orderId", e.target.value)} placeholder="Opcional" />
           </Field>

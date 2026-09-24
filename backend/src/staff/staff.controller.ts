@@ -41,6 +41,13 @@ export class StaffController {
     return this.staff.list({ search, role, areaId, verInhabilitados: inhabilitados === '1' && esSuper, page: Number(page), pageSize: Number(pageSize), sortBy, sortDir });
   }
   detail(id: string) { return this.staff.detail(id); }
+
+  /** Funcionarios que afilian y cuántos clientes trajeron (/afiliados). */
+  afiliados(from?: string, to?: string) { return this.staff.afiliadosResumen(from, to); }
+
+  /** Clientes que trajo un funcionario, con fecha y hora del alta. */
+  afiliadosDe(id: string, from?: string, to?: string) { return this.staff.afiliadosDe(id, from, to); }
+
   create(dto: CreateStaffDto) { return this.staff.create(dto); }
   update(id: string, dto: UpdateStaffDto, actor: AuthUser) { return this.staff.update(id, dto, actor); }
 

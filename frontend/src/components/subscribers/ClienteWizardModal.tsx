@@ -10,6 +10,7 @@ import { Segmented } from "@/components/ui/Segmented";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { mensajeDeError } from "@/lib/errores";
+import { useValidacion, requerido, cuando } from "@/lib/useValidacion";
 import { fullCurrency } from "@/lib/format";
 import { type Bundle, type Plan, type ServiceKind, SERVICE_KIND_LABEL } from "@/lib/plans";
 // Las casillas de la dirección (y sus catálogos encadenados) viven aparte: las
@@ -72,6 +73,8 @@ const EMPTY: Record<string, any> = {
   provision: true, firstInvoice: true, installOrder: true, installCharge: "",
   // "" = la que propone el sistema según el plan; el precio vacío = el del catálogo.
   affiliationId: "", affiliationPrice: "",
+  // Tipo de venta (obligatorio) y, con «Referido → Funcionario», quién lo refirió.
+  saleChannel: "", saleSubchannel: "", affiliateStaffId: "",
   ...Object.fromEntries(NOM_KEYS.map((k) => [k, ""])),
 };
 
@@ -79,6 +82,23 @@ const dateInput = (d?: string | null) => (d ? new Date(d).toISOString().slice(0,
 const str = (v: any) => (v == null ? "" : String(v));
 
 const STEPS = ["Datos personales", "Ubicación / dirección", "Plan y conexión", "Revisión"];
+/** Los obligatorios de cada paso: "Siguiente" no deja pasar mientras falte alguno. */
+/**
+ * Tipos de venta del alta. Espejo de `CANALES_VENTA` (backend/src/subscribers/canal-venta.ts),
+ * que es quien valida: si se cambia allá, se cambia aquí.
+ */
+const CANALES_VENTA: { id: string; nombre: string; subcanales: { id: string; nombre: string }[] }[] = [
+  { id: "OFICINA", nombre: "Oficina", subcanales: [] },
+  { id: "REDES", nombre: "Redes sociales", subcanales: [
+    { id: "FACEBOOK", nombre: "Facebook" }, { id: "INSTAGRAM", nombre: "Instagram" }, { id: "TIKTOK", nombre: "TikTok" },
+  ] },
+  { id: "REFERIDO", nombre: "Referido", subcanales: [
+    { id: "FAMILIAR", nombre: "Familiar" }, { id: "AMIGO", nombre: "Amigo / conocido" }, { id: "FUNCIONARIO", nombre: "Funcionario" },
+  ] },
+];
+const conSubcanal = (canal: unknown) => !!CANALES_VENTA.find((c) => c.id === canal)?.subcanales.length;
+
+const OBLIGATORIOS_POR_PASO: string[][] = [["saleChannel", "saleSubchannel", "affiliateStaffId", "firstName", "lastName1", "phone1", "email", "birthDate"], ["branchId"], [], []];
 
 /** Resultado de un paso del alta que devuelve el backend (ver AltaClienteService). */
 type PasoAlta = { hecho: boolean; motivo?: string; resultado?: any };
@@ -146,6 +166,28 @@ export function ClienteWizardModal({
     },
     [authFetch],
   );
+
+  // Funcionarios que se pueden elegir en «Referido → Funcionario» (todos los activos
+  // menos las cajeras; la lista la decide el backend). Sólo hace falta en el alta.
+  const [afiliadores, setAfiliadores] = useState<{ id: string; nombre: string }[]>([]);
+  useEffect(() => {
+    if (mode !== "create") return;
+    let vigente = true;
+    authFetch("/subscribers/afiliadores")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((out) => { if (vigente && Array.isArray(out)) setAfiliadores(out); })
+      .catch(() => { /* sin lista, el select sale vacío */ });
+    return () => { vigente = false; };
+  }, [mode, authFetch]);
+  const afiliador = afiliadores.find((a) => a.id === f.affiliateStaffId);
+  const canalVenta = CANALES_VENTA.find((c) => c.id === f.saleChannel);
+  const subcanalVenta = canalVenta?.subcanales.find((s) => s.id === f.saleSubchannel);
+  const referidoPorFuncionario = f.saleSubchannel === "FUNCIONARIO";
+  /** Al cambiar el tipo se borra lo que colgaba del anterior (subtipo y funcionario). */
+  const setCanal = (e: React.ChangeEvent<HTMLSelectElement>) =>
+    setF((p) => ({ ...p, saleChannel: e.target.value, saleSubchannel: "", affiliateStaffId: "" }));
+  const setSubcanal = (e: React.ChangeEvent<HTMLSelectElement>) =>
+    setF((p) => ({ ...p, saleSubchannel: e.target.value, affiliateStaffId: "" }));
 
   const geo = useCallback(
     (path: string) => authFetch(path).then((r) => (r.ok ? r.json() : [])).catch(() => []),
@@ -291,12 +333,34 @@ export function ClienteWizardModal({
     if (perfilDelPlan) setF((p) => (p.pppProfile === perfilDelPlan ? p : { ...p, pppProfile: perfilDelPlan }));
   }, [perfilDelPlan]);
 
-  const missing: string[] = [];
-  if (!f.firstName.trim()) missing.push("1er nombre");
-  if (!f.lastName1.trim()) missing.push("1er apellido");
-  if (!f.phone1.trim()) missing.push("celular");
-  if (!f.email.trim()) missing.push("correo");
-  if (!f.birthDate) missing.push("nacimiento");
+  // Lo obligatorio se marca desde el principio (asterisco rojo) y se avisa campo por
+  // campo al salir de él o al pulsar "Siguiente" — no con un toast al final.
+  // La sede sólo al CREAR: un cliente sin sede es invisible para todo usuario
+  // acotado, ni su orden de instalación sale en "pendientes" (57465 y 57488, sep-2026).
+  // Al editar hay abonados viejos del legacy sin sede, y eso no debe impedir guardarlos.
+  const v = useValidacion(f, {
+    firstName: requerido("Escribe el primer nombre."),
+    lastName1: requerido("Escribe el primer apellido."),
+    phone1: requerido("El celular es obligatorio."),
+    email: requerido("El correo es obligatorio."),
+    birthDate: requerido("La fecha de nacimiento es obligatoria."),
+    branchId: cuando(() => mode === "create", requerido("Elige la sede del cliente.")),
+    saleChannel: cuando(() => mode === "create", requerido("Elige el tipo de venta.")),
+    saleSubchannel: cuando((form) => mode === "create" && conSubcanal(form.saleChannel), requerido("Elige de dónde viene el cliente.")),
+    affiliateStaffId: cuando((form) => mode === "create" && form.saleSubchannel === "FUNCIONARIO", requerido("Elige el funcionario que lo refirió.")),
+  });
+  // Al (re)abrir, sin rojo heredado del intento anterior.
+  const limpiarAvisos = v.limpiar;
+  useEffect(() => { if (open) limpiarAvisos(); }, [open, limpiarAvisos]);
+  const ETIQUETA: Record<string, string> = { firstName: "1er nombre", lastName1: "1er apellido", phone1: "celular", email: "correo", birthDate: "nacimiento", branchId: "sede", saleChannel: "tipo de venta", saleSubchannel: "subtipo de venta", affiliateStaffId: "funcionario que refirió" };
+  const missing = Object.keys(v.errores).map((k) => ETIQUETA[k] ?? k);
+  /** Props de un campo obligatorio: su error y el aviso al salir de él. */
+  const req = (k: string) => ({ required: true, error: v.error(k) });
+
+  /** ¿Se puede dejar este paso? Marca en rojo lo que falte en él. */
+  function pasoListo(i: number): boolean {
+    return v.revisarCampos(OBLIGATORIOS_POR_PASO[i] ?? []);
+  }
 
   function buildPayload() {
     const nomenclature = Object.fromEntries(NOM_KEYS.map((k) => [k, f[k] || null]));
@@ -347,13 +411,18 @@ export function ClienteWizardModal({
             affiliationPrice: f.affiliationPrice === "" ? undefined : precioAfiliacion,
             installCharge: cargoInstalacion > 0 ? cargoInstalacion : undefined,
             installOrder: !!f.installOrder,
+            saleChannel: f.saleChannel || undefined,
+            saleSubchannel: f.saleSubchannel || undefined,
+            affiliateStaffId: referidoPorFuncionario ? f.affiliateStaffId || undefined : undefined,
           }
         : {}),
     };
   }
 
   async function submit() {
-    if (missing.length) { setStep(0); toast(`Faltan campos: ${missing.join(", ")}`, "alert-circle"); return; }
+    // Llevar al primer paso que tenga algo pendiente, con los campos ya en rojo.
+    const pasoMalo = OBLIGATORIOS_POR_PASO.findIndex((campos) => campos.some((c) => v.errores[c]));
+    if (pasoMalo >= 0) { v.revisar(); setStep(pasoMalo); return; }
     setSaving(true);
     try {
       const payload = buildPayload();
@@ -454,7 +523,11 @@ export function ClienteWizardModal({
           <button
             key={s}
             type="button"
-            onClick={() => setStep(i)}
+            onClick={() => {
+              // Hacia atrás, libre; hacia adelante, sólo si los pasos de en medio están completos.
+              for (let p = step; p < i; p++) if (!pasoListo(p)) { setStep(p); return; }
+              setStep(i);
+            }}
             className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-semibold transition-colors ${
               i === step ? "bg-brand text-on-brand" : "bg-surface-2 text-text-secondary hover:brightness-95"
             }`}
@@ -465,14 +538,44 @@ export function ClienteWizardModal({
         ))}
       </div>
 
-      {/* Paso 1 — human-first: nombre → documento → contacto → clasificación */}
+      {/* Paso 1 — tipo de venta → nombre → documento → contacto → clasificación */}
       {step === 0 && (
         <div className="flex flex-col gap-4">
+          {/* Lo primero: por dónde llegó el cliente. Sólo en el alta: se fija al crear y no se cambia después. */}
+          {mode === "create" && (
+            <Section title="Tipo de venta">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <Field label="Tipo de venta" required error={v.error("saleChannel")}>
+                  <Select value={f.saleChannel} onChange={setCanal} {...v.campo("saleChannel")}>
+                    <option value="">Elige…</option>
+                    {CANALES_VENTA.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                  </Select>
+                </Field>
+                {canalVenta && canalVenta.subcanales.length > 0 && (
+                  <Field label={canalVenta.id === "REDES" ? "Red social" : "Referido por"} required error={v.error("saleSubchannel")}>
+                    <Select value={f.saleSubchannel} onChange={setSubcanal} {...v.campo("saleSubchannel")}>
+                      <option value="">Elige…</option>
+                      {canalVenta.subcanales.map((s) => <option key={s.id} value={s.id}>{s.nombre}</option>)}
+                    </Select>
+                  </Field>
+                )}
+                {referidoPorFuncionario && (
+                  <Field label="Funcionario" required error={v.error("affiliateStaffId")}>
+                    <Select value={f.affiliateStaffId} onChange={set("affiliateStaffId")} {...v.campo("affiliateStaffId")}>
+                      <option value="">Elige el funcionario…</option>
+                      {afiliadores.map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}
+                    </Select>
+                  </Field>
+                )}
+              </div>
+            </Section>
+          )}
+
           <Section title="Nombre">
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <Field label="1er nombre *"><Input value={f.firstName} onChange={set("firstName")} autoFocus /></Field>
+              <Field label="1er nombre" {...req("firstName")}><Input value={f.firstName} onChange={set("firstName")} {...v.campo("firstName")} autoFocus /></Field>
               <Field label="2º nombre"><Input value={f.secondName} onChange={set("secondName")} /></Field>
-              <Field label="1er apellido *"><Input value={f.lastName1} onChange={set("lastName1")} /></Field>
+              <Field label="1er apellido" {...req("lastName1")}><Input value={f.lastName1} onChange={set("lastName1")} {...v.campo("lastName1")} /></Field>
               <Field label="2º apellido"><Input value={f.lastName2} onChange={set("lastName2")} /></Field>
             </div>
           </Section>
@@ -488,15 +591,15 @@ export function ClienteWizardModal({
 
           <Section title="Contacto">
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <Field label="Celular *"><Input value={f.phone1} onChange={set("phone1")} inputMode="tel" /></Field>
+              <Field label="Celular" {...req("phone1")}><Input value={f.phone1} onChange={set("phone1")} {...v.campo("phone1")} inputMode="tel" /></Field>
               <Field label="Celular (adi)"><Input value={f.phone2} onChange={set("phone2")} inputMode="tel" /></Field>
-              <div className="col-span-2"><Field label="Correo *"><Input value={f.email} onChange={set("email")} type="email" /></Field></div>
+              <div className="col-span-2"><Field label="Correo" {...req("email")}><Input value={f.email} onChange={set("email")} {...v.campo("email")} type="email" /></Field></div>
             </div>
           </Section>
 
           <Section title="Clasificación y contrato">
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <Field label="Nacimiento *"><Input value={f.birthDate} onChange={set("birthDate")} type="date" /></Field>
+              <Field label="Nacimiento" {...req("birthDate")}><Input value={f.birthDate} onChange={set("birthDate")} {...v.campo("birthDate")} type="date" /></Field>
               <Field label="Estrato"><Select value={f.estrato} onChange={set("estrato")}><option value="">—</option>{ESTRATOS.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
               <Field label="Suscripción"><Select value={f.suscripcion} onChange={set("suscripcion")}><option value="">—</option>{SUSCRIPCIONES.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
               <Field label="Fecha contrato"><Input value={f.contractDate} onChange={set("contractDate")} type="date" /></Field>
@@ -522,7 +625,7 @@ export function ClienteWizardModal({
         <div className="flex flex-col gap-4">
           <Section title="Sede">
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <Field label="Sede"><Select value={f.branchId} onChange={set("branchId")}><option value="">—</option>{branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</Select></Field>
+              <Field label="Sede" required={mode === "create"} error={v.error("branchId")}><Select value={f.branchId} onChange={set("branchId")} {...v.campo("branchId")}><option value="">{mode === "create" ? "Elige la sede…" : "—"}</option>{branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</Select></Field>
             </div>
           </Section>
 
@@ -774,6 +877,7 @@ export function ClienteWizardModal({
                 <Rev k="Plan(es)" v={planesElegidos.map((p) => p.name).join(" + ")} />
                 <Rev k="Mensualidad" v={mensualidad > 0 ? `${fullCurrency(mensualidad)}/mes (desde el mes que viene)` : undefined} />
                 <Rev k="Afiliación" v={f.firstInvoice && afiliacion ? `${afiliacion.name} · ${fullCurrency(precioAfiliacion)}` : undefined} />
+                <Rev k="Tipo de venta" v={canalVenta && [canalVenta.nombre, subcanalVenta?.nombre, referidoPorFuncionario ? afiliador?.nombre : undefined].filter(Boolean).join(" → ")} />
               </>
             )}
           </div>
@@ -865,6 +969,7 @@ export function ClienteWizardModal({
           {step < STEPS.length - 1 ? (
             <Button
               onClick={() => {
+                if (!pasoListo(step)) return;
                 const next = step + 1;
                 // Al entrar a la revisión, consultar duplicados de documento y dirección
                 // (avisan, no bloquean).

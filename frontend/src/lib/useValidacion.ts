@@ -56,6 +56,10 @@ export type Validacion<T> = {
   faltan: number;
   /** Olvida lo marcado. Al reabrir un modal, para no estrenarlo en rojo. */
   limpiar: () => void;
+  /** Marca SÓLO esos campos (los de un paso) y responde si están bien. */
+  revisarCampos: (nombres: (keyof T)[]) => boolean;
+  /** Los fallos de ahora, se enseñen o no (para saber a qué paso volver). */
+  errores: Partial<Record<keyof T, string>>;
 };
 
 export function useValidacion<T extends Record<string, unknown>>(valores: T, reglas: Reglas<T>): Validacion<T> {
@@ -96,10 +100,20 @@ export function useValidacion<T extends Record<string, unknown>>(valores: T, reg
     return Object.keys(errores).length === 0;
   };
 
+  /**
+   * Como `revisar`, pero sólo para ALGUNOS campos: los de un paso de un asistente.
+   * Marca ésos (y no el resto, que se estrenaría en rojo en un paso que la persona
+   * aún no ha visto) y dice si están bien.
+   */
+  const revisarCampos = (nombres: (keyof T)[]) => {
+    setTocados((t) => ({ ...t, ...Object.fromEntries(nombres.map((n) => [n, true])) }));
+    return nombres.every((n) => !errores[n]);
+  };
+
   const limpiar = useCallback(() => { setTocados({}); setIntentado(false); }, []);
 
   const faltan = Object.keys(errores).length;
-  return { error, campo, revisar, valido: faltan === 0, faltan, limpiar };
+  return { error, campo, revisar, revisarCampos, valido: faltan === 0, faltan, limpiar, errores };
 }
 
 /* ─────────────────────────── Reglas de siempre ─────────────────────────── */

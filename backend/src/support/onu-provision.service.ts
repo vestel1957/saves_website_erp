@@ -10,6 +10,7 @@ import { EquipoReservaService } from './equipo-reserva.service';
 import { esAgregarInternet, esAltaDeInternet, esReinstalacion, esTraslado, FRAGMENTOS_TRABAJO_DE_CONEXION, sentidoDeMegas } from './order-types';
 import { esUsuarioPppUtil } from '../subscribers/conexion-alta';
 import type { SubscribersService } from '../subscribers/subscribers.service';
+import type { VlanEquiposService } from '../network/vlan-equipos.service';
 import { normalizarSerial, formasDeSerial, formaHex } from '../common/serial-onu';
 
 /**
@@ -222,7 +223,22 @@ export class OnuProvisionService {
      * de que falta el usuario en vez de crearlo.
      */
     private readonly subs?: SubscribersService,
+    /**
+     * La VLAN del puerto en los equipos (OLT + uplink + Mikrotik): avisa ANTES de
+     * autenticar si no llega al PPPoE y, después, comprueba si el abonado navega.
+     * Opcional: sin él (pruebas) la autenticación funciona igual, sin esos avisos.
+     */
+    private readonly vlanEquipos?: VlanEquiposService,
   ) {}
+
+  /**
+   * Resultado de la comprobación "¿navega?" que se hace 60 s después de
+   * autenticar, por orden. En memoria (1 h): lo que perdura es la nota en el
+   * seguimiento de la orden; esto es para que la pantalla lo recoja al refrescar.
+   */
+  private static readonly navegacion = new Map<string, { at: number; estado: 'PENDIENTE' | 'NAVEGANDO' | 'SIN_PPPOE' | 'SIN_REVISAR'; mensaje: string }>();
+  private static readonly NAVEGACION_TTL_MS = 60 * 60_000;
+  private static readonly ESPERA_NAVEGACION_MS = 60_000;
 
   /** Orden + abonado + comprobación de sede. Punto único de entrada de permisos. */
   private async cargarOrden(ticketId: string, user?: AuthUser) {
@@ -830,6 +846,16 @@ export class OnuProvisionService {
        * descubra en el resultado — y para que nadie lo vaya a crear a mano.
        */
       altaMikrotikPendiente: esAltaDeInternet(t.type) && !esUsuarioPppUtil(sub.pppUsername),
+      /**
+       * ¿La VLAN del puerto donde está la ONU llega al PPPoE? (OLT creada + uplink +
+       * Mikrotik). Si no, la ONU quedará en línea y SIN internet: fue lo de la 590
+       * de Villanueva. Se avisa antes de autenticar; no bloquea.
+       */
+      vlanPuerto: null as Awaited<ReturnType<VlanEquiposService['chequeoDePuerto']>> | null,
+      /** El mismo chequeo para cada puerto con ONUs esperando (hasta 3): la pantalla enseña el de la elegida. */
+      vlanPuertos: [] as Awaited<ReturnType<VlanEquiposService['chequeoDePuerto']>>[],
+      /** Lo que dio la comprobación de navegación tras autenticar (60 s después). */
+      navegacion: this.navegacionDeOrden(t.id),
     };
 
     // Sin OLT, sin plan o sin mapeo no tiene sentido gastar una sesión SSH: se
@@ -858,6 +884,23 @@ export class OnuProvisionService {
         };
       }
       base.auto = await this.decidirAutomatico(sub, base.candidatos, inv, t.id, !esTraslado(t.type));
+      // La VLAN de los puertos donde hay ONUs esperando: primero el de la que se
+      // autenticaría sola, luego los demás (hasta 3: cada puerto nuevo cuesta ~2 s de
+      // OLT la primera vez; luego sale de la caché de `chequeoDePuerto`).
+      if (this.vlanEquipos && r.ok) {
+        const elegida = base.candidatos.find((c: any) => c.sn && c.sn === base.auto?.sn) ?? base.candidatos[0];
+        // Si el sistema ya eligió la ONU, basta su puerto; si elige el técnico, varios.
+        const aRevisar = base.auto?.sn ? [elegida] : [elegida, ...base.candidatos];
+        const fsps = [...new Set(aRevisar.map((c: any) => String(c?.fsp ?? '')).filter(Boolean))].slice(0, 3);
+        for (const fsp of fsps) {
+          const pos = fsp.match(/(\d+)\s*\/\s*(\d+)\s*\/\s*(\d+)/);
+          if (!pos) continue;
+          base.vlanPuertos.push(await this.vlanEquipos.chequeoDePuerto(
+            olt.id, Number(pos[1]), Number(pos[2]), Number(pos[3]), Number((mapeo as any)?.vlan) || null,
+          ));
+        }
+        base.vlanPuerto = base.vlanPuertos[0] ?? null;
+      }
       base.equipoAsignado = await this.equipoDelAbonado(sub.id, t.id, base.candidatos, r.ok ? olt.id : null);
       // Dos ONUs dadas de alta a nombre del mismo cliente es lo que deja un cambio
       // de equipo a medias: autenticar la nueva no borra la vieja de la OLT (y no
@@ -1031,10 +1074,15 @@ export class OnuProvisionService {
       if (!usuarioCreado) {
         const st = await this.mikrotik.liveStatus(sub.id).catch(() => null);
         if (st?.ok && st.live?.secretExists) {
+          // Lo único que se completa en un secret existente: la IP local, si
+          // nació vacía (ver `MikrotikService.completarIpLocal`).
+          const ipLocal = await this.mikrotik.completarIpLocal(sub.id, user).catch(() => null);
           return {
             ok: true, creado: false, usuarioCreado: false, dryRun: !!st.dryRun,
-            pppUsername, perfil: null, router: st.mikrotik?.name ?? null, pasos: [],
-            mensaje: `El abonado ya tenía su alta en la Mikrotik (secret ${pppUsername}${st.mikrotik?.name ? ` en ${st.mikrotik.name}` : ''}).`,
+            pppUsername, perfil: null, router: st.mikrotik?.name ?? null,
+            pasos: ipLocal ? [`IP local ${ipLocal} puesta en el secret (estaba vacía)`] : [],
+            mensaje: `El abonado ya tenía su alta en la Mikrotik (secret ${pppUsername}${st.mikrotik?.name ? ` en ${st.mikrotik.name}` : ''})`
+              + (ipLocal ? ` · se le puso la IP local ${ipLocal}, que le faltaba.` : '.'),
           };
         }
       }
@@ -1371,7 +1419,9 @@ export class OnuProvisionService {
     // Lo que ya funciona en ese puerto: VLAN, gemport y perfiles. El mapeo del
     // plan pisa lo que traiga configurado; si no, manda el puerto; y en último
     // término los valores por defecto de la OLT.
-    const sug = (await this.olt.sugerencia(olt!.id, frame, slot, port)).sugerencia ?? {};
+    // El modelo que anuncia la ONU solo cuenta si el puerto está vacío: entonces
+    // el srv-profile es el que se llama como él (ver `perfilesParaPuertoVacio`).
+    const sug = (await this.olt.sugerencia(olt!.id, frame, slot, port, encontrada.model ?? null)).sugerencia ?? {};
     const elegir = (...vs: any[]) => {
       for (const v of vs) if (v !== undefined && v !== null && v !== '') return v;
       return undefined;
@@ -1389,19 +1439,9 @@ export class OnuProvisionService {
       traffic_out: mapeo!.trafficOut ?? undefined,
       desc: this.comentario(sub),
     };
-    if (!params.lineprofile || !params.srvprofile) {
-      throw new BadRequestException(
-        `No se pudo deducir el perfil de alta para el puerto ${frame}/${slot}/${port}: `
-        + `de las ONUs que ya cuelgan de ahí no se pudo leer ${!params.lineprofile ? 'el line-profile' : 'el srv-profile'} `
-        + '(puerto vacío o ninguna con la configuración legible), y la OLT no tiene valores por defecto. '
-        + 'Autentíquela desde Red › OLT indicando line-profile y srv-profile, o póngalos en el plan '
-        + '(Planes › perfiles de OLT) o como valores por defecto de la OLT.',
-      );
-    }
-    if (!params.vlan) {
-      throw new BadRequestException(
-        `No se pudo deducir la VLAN del puerto ${frame}/${slot}/${port}. Sin VLAN la ONU quedaría registrada pero sin servicio.`,
-      );
+    const vacio = sug.puertoVacio ?? null;
+    if (!params.lineprofile || !params.srvprofile || !params.vlan) {
+      throw new BadRequestException(this.motivoSinPerfil(`${frame}/${slot}/${port}`, params, vacio));
     }
 
     // En un traslado, el alta vieja se quita ANTES de hacer la nueva: si no, el
@@ -1444,8 +1484,14 @@ export class OnuProvisionService {
         instaladoId: equipoRegistrado ? instaladoId : null, sn,
       });
     }
+    // ¿Navega? Se mira a los 60 s (lo que tarda la ONU en levantar PPPoE) sin
+    // hacer esperar a la petición; el resultado queda en el seguimiento.
+    const navegacion = !res.dryRun
+      ? this.programarComprobacionDeNavegacion({ t, sub, oltId: olt!.id, frame, slot, port, vlan: Number(params.vlan) || null, verificacion: res.verificacion })
+      : null;
     return {
       ...res,
+      navegacion,
       plan: { id: plan!.planId, name: plan!.planName },
       velocidad: { trafficIn: mapeo!.trafficIn, trafficOut: mapeo!.trafficOut },
       fsp: `${frame}/${slot}/${port}`,
@@ -1695,6 +1741,36 @@ export class OnuProvisionService {
   }
 
   /** Comentario que queda en la OLT. Formato del legacy: `<abonado><nombre>`, que es lo que lee el auto-vinculador. */
+  /**
+   * Por qué no se pudo armar el alta, dicho de forma que alguien lo arregle. En
+   * un puerto vacío dice QUÉ falta (VLAN en el catálogo, srv-profile del modelo…)
+   * en vez de mandar a buscar "valores por defecto" que en esta planta no existen.
+   */
+  private motivoSinPerfil(
+    fsp: string,
+    params: { lineprofile?: any; srvprofile?: any; vlan?: any },
+    vacio: { vlanMotivo?: string | null; lineMotivo?: string | null; srvMotivo?: string | null } | null,
+  ): string {
+    const salida = 'Autentíquela desde Red › OLT indicando line-profile, srv-profile y VLAN.';
+    if (!vacio) {
+      const falta = [
+        !params.lineprofile && 'el line-profile',
+        !params.srvprofile && 'el srv-profile',
+        !params.vlan && 'la VLAN',
+      ].filter(Boolean).join(', ');
+      return `No se pudo deducir el alta para el puerto ${fsp}: de las ONUs que ya cuelgan de ahí no se pudo leer ${falta}. ${salida}`;
+    }
+    const motivos = [
+      !params.vlan && vacio.vlanMotivo
+        ? `${vacio.vlanMotivo} (corríjalo en Red › VLANs: bandeja y puerto de OLT)`
+        : null,
+      !params.lineprofile && vacio.lineMotivo,
+      !params.srvprofile && vacio.srvMotivo,
+    ].filter(Boolean);
+    return `El puerto ${fsp} no tiene ninguna otra ONU de la que copiar la configuración, y `
+      + `${motivos.join('; ') || 'no se pudo completar el alta'}. ${salida}`;
+  }
+
   private comentario(sub: any): string {
     const nombre = nombreDe(sub).replace(/[^A-Za-zÁÉÍÓÚÑáéíóúñ ]/g, '').trim().split(/\s+/).slice(0, 2).join('');
     return `${sub.abonado ?? ''}${nombre}`.slice(0, 32);
@@ -1705,6 +1781,70 @@ export class OnuProvisionService {
    * el hilo de la orden. Sin esto el alta se pierde: nadie sabría, leyendo la
    * orden, que la ONU se autenticó desde ahí ni con qué velocidad.
    */
+  private navegacionDeOrden(ticketId: string) {
+    const x = OnuProvisionService.navegacion.get(ticketId);
+    if (!x || Date.now() - x.at > OnuProvisionService.NAVEGACION_TTL_MS) return null;
+    return x;
+  }
+
+  /**
+   * Deja programada la comprobación "¿navega?" y responde enseguida con
+   * `{ estado: 'PENDIENTE', enSegundos }`. La comprobación mira la sesión PPPoE
+   * del abonado en su Mikrotik; si no hay, revisa la VLAN del puerto en los
+   * equipos para decir QUÉ falta. Solo lectura. Nunca lanza.
+   */
+  private programarComprobacionDeNavegacion(x: {
+    t: any; sub: any; oltId: string; frame: number; slot: number; port: number; vlan: number | null; verificacion: any;
+  }) {
+    if (!this.vlanEquipos) return null;
+    const enSegundos = Math.round(OnuProvisionService.ESPERA_NAVEGACION_MS / 1000);
+    OnuProvisionService.navegacion.set(x.t.id, {
+      at: Date.now(), estado: 'PENDIENTE', mensaje: `Comprobando si el abonado navega en ${enSegundos} s…`,
+    });
+    const timer = setTimeout(() => {
+      this.comprobarNavegacion(x).catch((e) => this.logger.warn(`Comprobación de navegación de la orden ${x.t.code}: ${(e as Error).message}`));
+    }, OnuProvisionService.ESPERA_NAVEGACION_MS);
+    timer.unref?.();
+    return { estado: 'PENDIENTE' as const, enSegundos };
+  }
+
+  private async comprobarNavegacion(x: {
+    t: any; sub: any; oltId: string; frame: number; slot: number; port: number; vlan: number | null; verificacion: any;
+  }) {
+    const fsp = `${x.frame}/${x.slot}/${x.port}`;
+    let estado: 'NAVEGANDO' | 'SIN_PPPOE' | 'SIN_REVISAR' = 'SIN_REVISAR';
+    let mensaje = '';
+    let st: any = null;
+    try {
+      st = esUsuarioPppUtil(x.sub.pppUsername) ? await this.mikrotik.liveStatus(x.sub.id) : null;
+    } catch (e) {
+      mensaje = `No se pudo consultar la sesión PPPoE: ${(e as Error).message}`;
+    }
+    if (!st && !mensaje) mensaje = 'El abonado no tiene usuario PPPoE en su ficha: no hay sesión que buscar.';
+    else if (st?.dryRun) mensaje = 'Mikrotik en dry-run: no se consultó la sesión PPPoE.';
+    else if (st && !st.ok) mensaje = `No se pudo consultar la sesión PPPoE: ${st.error ?? st.message}`;
+    else if (st?.live?.sessionActive) {
+      estado = 'NAVEGANDO';
+      mensaje = `Navegando: sesión PPPoE activa en ${st.mikrotik?.name ?? 'el Mikrotik'}${st.live.ip ? ` (IP ${st.live.ip})` : ''}.`;
+    } else if (st) {
+      estado = 'SIN_PPPOE';
+      const enLinea = /online/i.test(String(x.verificacion?.run_state ?? ''));
+      const ch = await this.vlanEquipos!.chequeoDePuerto(x.oltId, x.frame, x.slot, x.port, x.vlan);
+      mensaje = (enLinea ? 'La ONU está en línea pero NO hay sesión PPPoE' : 'No hay sesión PPPoE')
+        + ` a los ${Math.round(OnuProvisionService.ESPERA_NAVEGACION_MS / 1000)} s — revisar VLAN/uplink/credenciales.`
+        + (ch.falta.length
+          ? ` VLAN ${ch.vlan ?? '?'} de ${fsp}: ${ch.falta.join('; ')}. Se arregla en Red › VLANs › "Configurar en equipos".`
+          : ` La VLAN ${ch.vlan ?? '?'} está completa en OLT y Mikrotik: revisar usuario/clave PPPoE en el equipo del cliente`
+            + (st.live?.secretExists === false ? ' (el secret NO existe en el router)' : st.live?.secretDisabled ? ' (el secret está deshabilitado)' : '')
+            + '.');
+    }
+    OnuProvisionService.navegacion.set(x.t.id, { at: Date.now(), estado, mensaje });
+    if (x.t.code == null) return;
+    await this.prisma.ticketThread
+      .create({ data: { ticketCode: x.t.code, message: `Comprobación tras autenticar (${fsp}): ${mensaje}`, subscriberId: x.sub.id, employeeId: 0, date: new Date() } })
+      .catch((e) => this.logger.warn(`No se pudo anotar la comprobación en la orden ${x.t.code}: ${e.message}`));
+  }
+
   private async vincularYAnotar(oltId: string, sn: string, sub: any, t: any, params: any, res: any, plan: any, equipo: EquipoRegistrado) {
     try {
       const onu = await this.prisma.oltOnu.findFirst({ where: { oltId, sn }, select: { id: true } });

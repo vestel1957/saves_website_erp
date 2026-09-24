@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Modal } from "@/components/Modal";
 import { Button } from "@/components/ui/Button";
 import { Field, Input, Select, Textarea } from "@/components/ui/Field";
 import { Icon } from "@/components/Icon";
+import { MultiSelect } from "@/components/ui/MultiSelect";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthProvider";
 import { mensajeDeError } from "@/lib/errores";
@@ -32,7 +33,10 @@ type Formulario = {
   color: string;
   priority: string;
   description: string;
+  attendeeIds: string[];
 };
+
+type Funcionario = { id: string; name: string | null; email: string };
 
 /**
  * Crear, editar y borrar un evento de la agenda.
@@ -49,6 +53,7 @@ export function EventoModal({
   abierto,
   evento,
   fechaSugerida,
+  soloLectura = false,
   onCerrar,
   onGuardado,
 }: {
@@ -57,10 +62,13 @@ export function EventoModal({
   evento: Evento | null;
   /** Dónde se pulsó en la rejilla: es la fecha/hora que se propone al crear. */
   fechaSugerida: Date | null;
+  /** El evento es de otro y a mí me invitaron: se enseña, no se edita. */
+  soloLectura?: boolean;
   onCerrar: () => void;
   onGuardado: () => void;
 }) {
-  const { authFetch } = useAuth();
+  const { authFetch, user } = useAuth();
+  const [funcionarios, setFuncionarios] = useState<Funcionario[]>([]);
   const [form, setForm] = useState<Formulario>(() => vacio(null));
   const [guardando, setGuardando] = useState(false);
   const [confirmandoBorrado, setConfirmandoBorrado] = useState(false);
@@ -76,6 +84,31 @@ export function EventoModal({
     setForm(evento ? deEvento(evento) : vacio(fechaSugerida));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [abierto, evento?.id]);
+
+  // Los funcionarios activos, para invitarlos. Es un catálogo cacheado por sesión
+  // (`AuthProvider`), así que abrir el modal diez veces no lo pide diez veces.
+  useEffect(() => {
+    if (!abierto) return;
+    let vivo = true;
+    void authFetch("/auth/users/options")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((j) => { if (vivo) setFuncionarios(Array.isArray(j) ? j : []); })
+      .catch(() => { if (vivo) setFuncionarios([]); });
+    return () => { vivo = false; };
+  }, [abierto, authFetch]);
+
+  const nombreDe = useMemo(() => {
+    const m = new Map(funcionarios.map((f) => [f.id, f.name?.trim() || f.email]));
+    return (id: string) => m.get(id) ?? "Funcionario";
+  }, [funcionarios]);
+
+  // Uno no se invita a sí mismo: el evento ya está en su agenda por ser suyo.
+  const opcionesAsistentes = useMemo(
+    () => funcionarios
+      .filter((f) => f.id !== user?.id)
+      .map((f) => ({ value: f.id, label: f.name?.trim() || f.email })),
+    [funcionarios, user?.id],
+  );
 
   async function guardar() {
     if (!form.start) { toast("Indica cuándo empieza", "alert-triangle"); return; }
@@ -110,13 +143,18 @@ export function EventoModal({
         // `null` y no `undefined` al editar: quitarle el fin a un evento que lo tenía
         // es un cambio, y con `undefined` el PATCH no lo miraría (ver `updateEvent`).
         end: fin ? fin.toISOString() : evento ? null : undefined,
+        attendeeIds: form.attendeeIds,
       };
       const res = await authFetch(evento ? `/omni/events/${evento.id}` : "/omni/events", {
         method: evento ? "PATCH" : "POST",
         body: JSON.stringify(cuerpo),
       });
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.message || "No se pudo guardar");
-      toast(evento ? "Evento actualizado" : "Evento agendado", "check");
+      const nuevos = form.attendeeIds.filter((id) => !(evento?.attendeeIds ?? []).includes(id)).length;
+      toast(
+        `${evento ? "Evento actualizado" : "Evento agendado"}${nuevos ? ` · se avisó a ${nuevos} ${nuevos === 1 ? "funcionario" : "funcionarios"}` : ""}`,
+        "check",
+      );
       onGuardado();
       onCerrar();
     } catch (e) {
@@ -140,6 +178,38 @@ export function EventoModal({
     } finally {
       setGuardando(false);
     }
+  }
+
+  if (soloLectura && evento) {
+    const inicio = inicioDe(evento);
+    const cuando = evento.allDay
+      ? inicio.toLocaleDateString("es-CO", { weekday: "long", day: "numeric", month: "long" }) + " · todo el día"
+      : `${inicio.toLocaleString("es-CO", { weekday: "long", day: "numeric", month: "long", hour: "numeric", minute: "2-digit" })}`
+        + ` – ${finDe(evento).toLocaleTimeString("es-CO", { hour: "numeric", minute: "2-digit" })}`;
+    return (
+      <Modal open={abierto} onClose={onCerrar} title={evento.title?.trim() || "Evento"} maxWidth="max-w-lg">
+        <div className="flex flex-col gap-2.5 text-[13px] text-text-secondary">
+          <p className="flex items-center gap-2 first-letter:uppercase">
+            <Icon name="calendar-days" size={14} className="shrink-0 text-text-tertiary" /> {cuando}
+          </p>
+          {evento.assignedBy && (
+            <p className="flex items-center gap-2">
+              <Icon name="user" size={14} className="shrink-0 text-text-tertiary" /> Te invitó {evento.assignedBy}
+            </p>
+          )}
+          {evento.description && <p className="whitespace-pre-wrap text-text-primary">{evento.description}</p>}
+          {!!evento.attendeeIds?.length && (
+            <div>
+              <p className="mb-1 text-[11.5px] font-semibold uppercase tracking-wide text-text-tertiary">Asistentes</p>
+              <Asistentes ids={evento.attendeeIds} nombreDe={nombreDe} />
+            </div>
+          )}
+        </div>
+        <div className="mt-4 flex justify-end">
+          <Button variant="secondary" onClick={onCerrar}>Cerrar</Button>
+        </div>
+      </Modal>
+    );
   }
 
   return (
@@ -235,6 +305,34 @@ export function EventoModal({
             <Textarea rows={2} value={form.description} onChange={(e) => set("description", e.target.value)} />
           </Field>
         </div>
+
+        {/*
+          Los invitados. Al guardar, a cada funcionario NUEVO le suena la campanita y el
+          evento le aparece en su «Mi agenda»; si luego cambia la hora, se les avisa a
+          todos, y si se quita a alguien se le retira el aviso.
+        */}
+        <div className="sm:col-span-2">
+          <Field label="Asistentes">
+            <div className="flex flex-col gap-2">
+              <MultiSelect
+                label="Asistentes"
+                todos="Invitar funcionarios…"
+                options={opcionesAsistentes}
+                value={form.attendeeIds}
+                onChange={(v) => set("attendeeIds", v)}
+                width={300}
+                buscarDesde={6}
+              />
+              {form.attendeeIds.length > 0 && (
+                <Asistentes
+                  ids={form.attendeeIds}
+                  nombreDe={nombreDe}
+                  onQuitar={(id) => set("attendeeIds", form.attendeeIds.filter((x) => x !== id))}
+                />
+              )}
+            </div>
+          </Field>
+        </div>
       </div>
 
       {/* Lo que el evento arrastra y aquí no se edita: de dónde salió y quién lo puso. */}
@@ -280,6 +378,34 @@ export function EventoModal({
   );
 }
 
+/** Los invitados como fichas, con su «×» cuando se pueden quitar. */
+function Asistentes({
+  ids, nombreDe, onQuitar,
+}: { ids: string[]; nombreDe: (id: string) => string; onQuitar?: (id: string) => void }) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {ids.map((id) => (
+        <span
+          key={id}
+          className="inline-flex items-center gap-1 rounded-full border border-border-subtle bg-surface-2 py-0.5 pl-2.5 pr-1.5 text-[12px] font-medium text-text-primary"
+        >
+          {nombreDe(id)}
+          {onQuitar && (
+            <button
+              type="button"
+              onClick={() => onQuitar(id)}
+              aria-label={`Quitar a ${nombreDe(id)}`}
+              className="foco rounded-full p-0.5 text-text-tertiary hover:bg-surface hover:text-text-primary"
+            >
+              <Icon name="x" size={12} />
+            </button>
+          )}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 /** Formulario en blanco, con la fecha/hora de donde se pulsó (o la próxima hora en punto). */
 function vacio(sugerida: Date | null): Formulario {
   const inicio = sugerida ?? proximaHoraEnPunto();
@@ -292,6 +418,7 @@ function vacio(sugerida: Date | null): Formulario {
     color: COLOR_POR_DEFECTO,
     priority: "Media",
     description: "",
+    attendeeIds: [],
   };
 }
 
@@ -314,6 +441,7 @@ function deEvento(e: Evento): Formulario {
       color: e.color || COLOR_POR_DEFECTO,
       priority: e.priority ?? "Media",
       description: e.description ?? "",
+      attendeeIds: e.attendeeIds ?? [],
     };
   }
   return {
@@ -324,5 +452,6 @@ function deEvento(e: Evento): Formulario {
     color: e.color || COLOR_POR_DEFECTO,
     priority: e.priority ?? "Media",
     description: e.description ?? "",
+    attendeeIds: e.attendeeIds ?? [],
   };
 }

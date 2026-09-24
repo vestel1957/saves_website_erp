@@ -25,6 +25,7 @@ export class ReportsController {
     return this.reports.ordenes(from, to, sede);
   }
   topDeudores(sede?: string) { return this.reports.topDeudores(sede); }
+  carteraSeguimiento(mes?: string, sede?: string, categoria?: string) { return this.reports.carteraSeguimiento(mes, sede, categoria); }
   estadisticasServicios() { return this.reports.estadisticasServicios(); }
   cortesActivaciones(from?: string, to?: string, sede?: string) { return this.reports.cortesActivaciones(from, to, sede); }
   movimientos(from?: string, to?: string, sede?: string) { return this.reports.movimientos(from, to, sede); }
@@ -78,6 +79,11 @@ export class ReportsController {
     sede?: string,
   ) {
     return this.staffReports.anulaciones(from, to, quien, sede);
+  }
+
+  /** Clientes que se dieron de alta con el código de afiliado de cada funcionario. */
+  afiliados(from?: string, to?: string, funcionario?: string, sede?: string) {
+    return this.staffReports.afiliados(from, to, funcionario, sede);
   }
 
   /** Actividad en el sistema, desde la bitácora de auditoría. */

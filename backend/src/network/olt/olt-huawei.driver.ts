@@ -1,4 +1,4 @@
-import { OltDriver } from './olt-ssh.client';
+import { OltDriver, type PuertoConVlans } from './olt-ssh.client';
 
 /**
  * OltHuawei - Driver para OLTs Huawei (MA5608T / MA5680T / MA5800...).
@@ -164,6 +164,70 @@ export class OltHuawei extends OltDriver {
       });
     }
     return found;
+  }
+
+  /**
+   * Qué VLAN usa cada puerto PON, sacado de TODOS los service-ports en un solo
+   * comando (~20 s y ~2.000 filas en VILLANUEVA). Es la verdad de la planta con
+   * la que se contrasta el catálogo de VLANs de `/red/vlans`.
+   */
+  async vlansPorPuerto(): Promise<PuertoConVlans[]> {
+    return vlansPorPuertoDeSalida(await this.sendCommand('display service-port all'));
+  }
+
+  /**
+   * VLANs de la OLT y sus uplinks, en pocos comandos: `display vlan all`, los
+   * puertos de red de `display vlan 1` (la 1 va en todos) y `display port vlan`
+   * de cada uno. Leer `display vlan N` de las ~50 VLANs tardaba ~100 s en
+   * VILLANUEVA; así son segundos. Solo si una VLAN dice tener puerto estándar y
+   * no aparece en ninguno de esos, se mira su `display vlan N`.
+   */
+  async leerVlans() {
+    const vlans = vlansDeSalida(await this.sendCommand('display vlan all'));
+    if (!vlans.length) {
+      this.error = 'La OLT no devolvió la lista de VLANs (display vlan all).';
+      return false as const;
+    }
+    const puertosDeRed = detalleVlanDeSalida(1, await this.sendCommand('display vlan 1')).uplinks
+      .map((u) => ({ fsp: u.fsp, estado: u.estado }));
+    const vlansPorPuertoDeRed: Record<string, number[]> = {};
+    for (const p of puertosDeRed) {
+      vlansPorPuertoDeRed[p.fsp] = vlansDePuertoDeRedDeSalida(await this.sendCommand(`display port vlan ${p.fsp}`));
+    }
+    const vistas = new Set(Object.values(vlansPorPuertoDeRed).flat());
+    for (const v of vlans.filter((x) => x.estandar > 0 && x.vlan !== 1 && !vistas.has(x.vlan))) {
+      for (const u of detalleVlanDeSalida(v.vlan, await this.sendCommand(`display vlan ${v.vlan}`)).uplinks) {
+        if (!puertosDeRed.some((p) => p.fsp === u.fsp)) puertosDeRed.push({ fsp: u.fsp, estado: u.estado });
+        (vlansPorPuertoDeRed[u.fsp] ??= []).push(v.vlan);
+      }
+    }
+    return { vlans, puertosDeRed, vlansPorPuertoDeRed };
+  }
+
+  /** `display vlan N` → existe / uplinks / service-ports (solo lectura). */
+  async detalleVlan(vlan: number) {
+    const n = Number(vlan);
+    if (!Number.isInteger(n) || n < 1 || n > 4094) { this.error = `VLAN inválida: ${vlan}`; return false as const; }
+    return detalleVlanDeSalida(n, await this.sendCommand(`display vlan ${n}`));
+  }
+
+  /**
+   * Crea la VLAN (`vlan N smart`) y/o la pone en el uplink (`port vlan N F/S P`).
+   * Solo lo pedido: quien llama ya comprobó qué falta. Nunca borra ni hace
+   * `save` (la OLT tiene autosave de cambios cada 60 min). La sesión ya está en
+   * modo `config` (ver `prepare`). Corta en el primer rechazo.
+   */
+  async configurarVlan(p: { vlan: number; crear: boolean; uplink: string | null }) {
+    const respuestas: { cmd: string; out: string }[] = [];
+    for (const cmd of comandosOltParaVlan(p)) {
+      const out = await this.sendCommand(cmd, true);
+      respuestas.push({ cmd, out: this.resumenDeSalida(out) });
+      if (/failure|error|unknown command|incomplete|invalid/i.test(out)) {
+        this.error = this.mensajeDeFallo(out, 'la configuración de la VLAN');
+        return { ok: false, respuestas, error: this.error };
+      }
+    }
+    return { ok: true, respuestas };
   }
 
   /** Perfiles GPON disponibles: line-profile y srv-profile. */
@@ -450,7 +514,12 @@ export class OltHuawei extends OltDriver {
    * puerto y se toma lo mayoritario: así funciona en cualquier planta y se
    * adapta sola si mañana cambian el esquema.
    */
-  async sugerenciaDePuerto(frame: number, slot: number, port: number): Promise<any> {
+  async sugerenciaDePuerto(
+    frame: number,
+    slot: number,
+    port: number,
+    opts: { model?: string | null; vlanCatalogo?: number[] } = {},
+  ): Promise<any> {
     const out = await this.sendCommand(`display service-port port ${frame}/${slot}/${port}`);
     const votos = { vlan: new Map<string, number>(), gem: new Map<string, number>(), rx: new Map<string, number>(), tx: new Map<string, number>() };
     const sumar = (m: Map<string, number>, v: string) => { if (v) m.set(v, (m.get(v) ?? 0) + 1); };
@@ -514,7 +583,7 @@ export class OltHuawei extends OltDriver {
         if (configOk) sumar(votosSpOk, sp); // preferimos los que dan config normal
       }
     }
-    const lineprofile = top(votosLp);
+    let lineprofile = top(votosLp);
 
     // srv-profile sugerido = el que usan las ONTs que están en `config: normal`
     // en este mismo puerto (las que de verdad tienen servicio). Es la definición
@@ -525,15 +594,67 @@ export class OltHuawei extends OltDriver {
     // al perfil mayoritario del puerto. Autenticar con el perfil que usan las
     // vecinas es peor que con uno normal, pero infinitamente mejor que no poder
     // autenticar: el resultado se verifica después y se avisa si queda failed.
-    const srvprofile = top(votosSpOk) ?? top(votosSp);
+    let srvprofile = top(votosSpOk) ?? top(votosSp);
+
+    /**
+     * PUERTO VACÍO (2026-09-22, VILLANUEVA 0/2/13, traslado 506510): el primer
+     * abonado de un PON no tiene vecinas que copiar y el alta moría sin salida.
+     * Solo en ese caso —con vecinas manda lo que ya funciona— se recurre a:
+     *  · VLAN: el catálogo de VLANs de la sede (bandeja + puerto de OLT), que lo
+     *    pasa el servicio, y SOLO si en la OLT esa VLAN no está ya en otro puerto
+     *    (si lo está, el catálogo está viejo). Cada PON tiene su VLAN; nunca se
+     *    deduce por fórmula: una VLAN equivocada deja la ONU arriba sin servicio.
+     *  · line-profile: el FLEXIBLE de SmartOLT, que no lleva la VLAN dentro (la
+     *    pone el service-port) y es el más usado de la planta.
+     *  · srv-profile: el que se llama como el modelo que anuncia la ONU, que es
+     *    lo que hace SmartOLT en un alta con el perfil flexible.
+     */
+    let vlanFinal: string | null = vlan;
+    let puertoVacio: any = null;
+    if (listado.length === 0 && filas === 0) {
+      const perfiles = await this.getProfiles();
+      const elegidos = perfilesParaPuertoVacio(perfiles.line, perfiles.srv, opts.model);
+      let vlanCat: string | null = null;
+      let vlanMotivo: string | null = null;
+      const cands = [...new Set(opts.vlanCatalogo ?? [])];
+      if (cands.length === 1) {
+        // Que la VLAN aparezca en otro puerto no basta: en esta planta casi todos
+        // los PON arrastran VLANs ajenas (abonados trasladados que conservaron la
+        // suya). Solo es un choque si es la PRINCIPAL de ese otro puerto.
+        const usos = await this.sendCommand(`display service-port vlan ${cands[0]}`);
+        let otro: string | null = null;
+        for (const fsp of puertosAjenosConVlan(usos, frame, slot, port).slice(0, 3)) {
+          const principal = vlansPorPuertoDeSalida(await this.sendCommand(`display service-port port ${fsp}`))[0]?.vlans[0]?.vlan;
+          if (principal === cands[0]) { otro = fsp; break; }
+        }
+        if (otro) vlanMotivo = `la VLAN ${cands[0]} del catálogo es la principal del puerto ${otro}`;
+        else vlanCat = String(cands[0]);
+      } else if (cands.length > 1) {
+        vlanMotivo = `el catálogo de VLANs trae varias para ese puerto (${cands.join(', ')})`;
+      } else {
+        vlanMotivo = `el puerto ${frame}/${slot}/${port} no está en el catálogo de VLANs de la sede`;
+      }
+      lineprofile = lineprofile ?? elegidos.lineprofile;
+      srvprofile = srvprofile ?? elegidos.srvprofile;
+      vlanFinal = vlanFinal ?? vlanCat;
+      puertoVacio = {
+        vlanDeCatalogo: vlanCat,
+        vlanMotivo,
+        lineprofileNombre: elegidos.lineprofileNombre,
+        srvprofileNombre: elegidos.srvprofileNombre,
+        srvMotivo: elegidos.srvMotivo,
+        lineMotivo: elegidos.lineMotivo,
+      };
+    }
 
     return {
       basadoEn: filas,
+      puertoVacio,
       /** Cuántas de las ONTs muestreadas estaban en `config: normal`. */
       muestraNormal: [...votosSpOk.values()].reduce((a, b) => a + b, 0),
-      vlan,
-      user_vlan: vlan,
-      gemport: top(votos.gem),
+      vlan: vlanFinal,
+      user_vlan: vlanFinal,
+      gemport: top(votos.gem) ?? (puertoVacio ? '1' : null),
       traffic_in: top(votos.rx),
       traffic_out: top(votos.tx),
       lineprofile,
@@ -1146,10 +1267,11 @@ export class OltHuawei extends OltDriver {
   private parseProfiles(out: string): any[] {
     const rows: any[] = [];
     for (const line of out.split('\n')) {
-      const m = line.match(/^\s*(\d+)\s+(\S+)/);
+      const m = line.match(/^\s*(\d+)\s+(\S+)(?:\s+(\d+))?/);
       if (m) {
         if (m[2].toLowerCase() === 'profile-name') continue;
-        rows.push({ id: m[1], name: m[2] });
+        // `binds` = "Binding times": cuántas ONTs lo usan.
+        rows.push({ id: m[1], name: m[2], binds: m[3] !== undefined ? Number(m[3]) : null });
       }
     }
     return rows;
@@ -1209,4 +1331,148 @@ export class OltHuawei extends OltDriver {
     }
     return '';
   }
+}
+
+/**
+ * Perfiles para el PRIMER alta de un puerto PON (sin vecinas que copiar).
+ * line-profile: el FLEXIBLE GPON de SmartOLT (no el XGPON/XGSPON) que más ONTs
+ * usen. srv-profile: el que se llama exactamente como el EquipmentID de la ONU.
+ * Si falta alguno se devuelve null con el porqué: no se adivina.
+ */
+export function perfilesParaPuertoVacio(
+  line: { id: string; name: string; binds?: number | null }[],
+  srv: { id: string; name: string; binds?: number | null }[],
+  model?: string | null,
+) {
+  const flex = line
+    .filter((p) => /flexible/i.test(p.name) && !/xg/i.test(p.name))
+    .sort((a, b) => (b.binds ?? 0) - (a.binds ?? 0))[0];
+  const m = String(model ?? '').trim().toUpperCase();
+  const delModelo = m ? srv.find((p) => p.name.toUpperCase() === m) : undefined;
+  return {
+    lineprofile: flex?.id ?? null,
+    lineprofileNombre: flex?.name ?? null,
+    lineMotivo: flex ? null : 'la OLT no tiene un line-profile flexible (SMARTOLT_FLEXIBLE_GPON)',
+    srvprofile: delModelo?.id ?? null,
+    srvprofileNombre: delModelo?.name ?? null,
+    srvMotivo: delModelo
+      ? null
+      : m
+        ? `la OLT no tiene un srv-profile para el modelo ${m}`
+        : 'la ONU no anuncia su modelo (EquipmentID)',
+  };
+}
+
+/**
+ * Salida de `display service-port vlan N`: los F/S/P DISTINTOS al indicado que
+ * ya usan esa VLAN, el que más service-ports tiene primero.
+ */
+export function puertosAjenosConVlan(out: string, frame: number, slot: number, port: number): string[] {
+  return vlansPorPuertoDeSalida(out)
+    .filter((p) => p.frame !== frame || p.slot !== slot || p.port !== port)
+    .sort((a, b) => b.servicios - a.servicios)
+    .map((p) => `${p.frame}/${p.slot}/${p.port}`);
+}
+
+/**
+ * Agrupa por F/S/P la salida de `display service-port all` (o de un solo
+ * puerto): cuántos service-ports hay y con qué VLANs. Ordenado por slot/puerto,
+ * y dentro de cada puerto la VLAN más usada primero.
+ */
+export function vlansPorPuertoDeSalida(out: string): PuertoConVlans[] {
+  const mapa = new Map<string, { frame: number; slot: number; port: number; servicios: number; vlans: Map<number, number> }>();
+  for (const line of out.split('\n')) {
+    // INDEX VLAN ATTR gpon F/ S/ P VPI VCI ...
+    const m = line.match(/^\s*\d+\s+(\d+)\s+\S+\s+[a-z]+\s+(\d+)\s*\/\s*(\d+)\s*\/\s*(\d+)\s/i);
+    if (!m) continue;
+    const [vlan, frame, slot, port] = [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])];
+    const k = `${frame}/${slot}/${port}`;
+    const e = mapa.get(k) ?? { frame, slot, port, servicios: 0, vlans: new Map<number, number>() };
+    e.servicios++;
+    e.vlans.set(vlan, (e.vlans.get(vlan) ?? 0) + 1);
+    mapa.set(k, e);
+  }
+  return [...mapa.values()]
+    .sort((a, b) => a.frame - b.frame || a.slot - b.slot || a.port - b.port)
+    .map((e) => ({
+      frame: e.frame, slot: e.slot, port: e.port, servicios: e.servicios,
+      vlans: [...e.vlans.entries()].sort((a, b) => b[1] - a[1]).map(([vlan, servicios]) => ({ vlan, servicios })),
+    }));
+}
+
+/** Una fila de `display vlan all`. */
+export type VlanDeOlt = { vlan: number; tipo: string; atributo: string; estandar: number; servicePorts: number };
+
+/**
+ * Salida de `display vlan all` → una fila por VLAN. `estandar` es la columna
+ * STND-Port NUM (puertos de red, o sea el uplink) y `servicePorts` la
+ * SERV-Port NUM. Con servicePorts > 0 y estandar = 0 la VLAN tiene clientes
+ * pero no sale de la OLT: fue lo que dejó sin navegar a la 590 de Villanueva.
+ */
+export function vlansDeSalida(out: string): VlanDeOlt[] {
+  const filas: VlanDeOlt[] = [];
+  for (const line of out.split('\n')) {
+    const m = line.match(/^\s*(\d+)\s+(smart|mux|standard|super|stacking)\s+(\S+)\s+(\d+)\s+(\d+)/i);
+    if (m) filas.push({ vlan: Number(m[1]), tipo: m[2].toLowerCase(), atributo: m[3], estandar: Number(m[4]), servicePorts: Number(m[5]) });
+  }
+  return filas;
+}
+
+/** Detalle de una VLAN según `display vlan N`: sus puertos de red (uplink) y cuántos service-ports lleva. */
+export type DetalleVlanOlt = {
+  vlan: number;
+  existe: boolean;
+  tipo: string | null;
+  uplinks: { fsp: string; nativa: number; estado: string }[];
+  servicePorts: number;
+};
+
+/**
+ * Salida de `display vlan N`. Los puertos de red salen en la tabla
+ * "F /S /P  Native VLAN  State" (una fila por puerto estándar); las filas de
+ * service-ports empiezan por su INDEX y el tipo (`gpon`/`epon`), así que no se
+ * confunden. Si la VLAN no existe la OLT responde "Failure: The VLAN does not
+ * exist" (o parecido) y no hay "VLAN ID".
+ */
+export function detalleVlanDeSalida(vlan: number, out: string): DetalleVlanOlt {
+  const existe = new RegExp(`VLAN ID\\s*:\\s*${vlan}\\b`, 'i').test(out);
+  const tipo = (out.match(/VLAN type\s*:\s*(\S+)/i) ?? [])[1]?.toLowerCase() ?? null;
+  const uplinks: DetalleVlanOlt['uplinks'] = [];
+  for (const line of out.split('\n')) {
+    const m = line.match(/^\s*(\d+)\s*\/\s*(\d+)\s*\/\s*(\d+)\s+(\d+)\s+(up|down)\b/i);
+    if (m) uplinks.push({ fsp: `${m[1]}/${m[2]}/${m[3]}`, nativa: Number(m[4]), estado: m[5].toLowerCase() });
+  }
+  const sp = Number((out.match(/Service virtual port number\s*:\s*(\d+)/i) ?? [])[1] ?? 0);
+  return { vlan, existe, tipo: existe ? tipo : null, uplinks, servicePorts: sp };
+}
+
+/**
+ * Salida de `display port vlan F/S/P` → las VLANs que lleva ese puerto de red.
+ * La tabla es solo números en filas de seis; "Total" y "Native VLAN" se saltan.
+ */
+export function vlansDePuertoDeRedDeSalida(out: string): number[] {
+  const vlans: number[] = [];
+  for (const line of out.split('\n')) {
+    if (!/^[\s\d]+$/.test(line) || !line.trim()) continue;
+    for (const n of line.trim().split(/\s+/)) vlans.push(Number(n));
+  }
+  return vlans;
+}
+
+/**
+ * Comandos de OLT para dejar una VLAN creada y en el uplink. Solo lo que falta:
+ * `crear` si la VLAN no existe, `uplink` si no sale por él. El uplink llega
+ * como F/S/P ("0/8/0") y Huawei lo pide como "0/8 0".
+ */
+export function comandosOltParaVlan(p: { vlan: number; crear: boolean; uplink: string | null }): string[] {
+  const n = Number(p.vlan);
+  if (!Number.isInteger(n) || n < 2 || n > 4094) throw new Error(`VLAN inválida: ${p.vlan}`);
+  const cmds: string[] = [];
+  if (p.crear) cmds.push(`vlan ${n} smart`);
+  if (p.uplink) {
+    const m = p.uplink.match(/^(\d+)\/(\d+)\/(\d+)$/);
+    if (!m) throw new Error(`Uplink inválido: ${p.uplink}`);
+    cmds.push(`port vlan ${n} ${m[1]}/${m[2]} ${m[3]}`);
+  }
+  return cmds;
 }

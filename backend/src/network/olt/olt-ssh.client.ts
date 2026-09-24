@@ -346,12 +346,47 @@ export abstract class OltDriver {
     this.error = `Listar perfiles aún no está implementado para ${this.getMarca()}.`;
     return false;
   }
+  /** VLAN(s) en uso por cada puerto PON, leídas de los service-ports. */
+  async vlansPorPuerto(): Promise<PuertoConVlans[] | false> {
+    this.error = `Leer las VLANs por puerto aún no está implementado para ${this.getMarca()}.`;
+    return false;
+  }
+  /**
+   * VLANs de la OLT y por qué puerto de red (uplink) sale cada una. Es la mitad
+   * OLT de la salud de VLANs (`vlan-salud.ts`); los service-ports por PON van
+   * aparte (`vlansPorPuerto`, que ya se cachea para el mapa).
+   */
+  async leerVlans(): Promise<{
+    vlans: { vlan: number; tipo: string; atributo: string; estandar: number; servicePorts: number }[];
+    puertosDeRed: { fsp: string; estado: string }[];
+    vlansPorPuertoDeRed: Record<string, number[]>;
+  } | false> {
+    this.error = `Leer las VLANs aún no está implementado para ${this.getMarca()}.`;
+    return false;
+  }
+  /** `display vlan N`: si existe y por qué puertos de red sale. */
+  async detalleVlan(_vlan: number): Promise<{ vlan: number; existe: boolean; tipo: string | null; uplinks: { fsp: string; nativa: number; estado: string }[]; servicePorts: number } | false> {
+    this.error = `Leer una VLAN aún no está implementado para ${this.getMarca()}.`;
+    return false;
+  }
+  /** Crea la VLAN y/o la pone en el uplink. Solo lo que se pida; nunca borra. */
+  async configurarVlan(_p: { vlan: number; crear: boolean; uplink: string | null }): Promise<{
+    ok: boolean; respuestas: { cmd: string; out: string }[]; error?: string;
+  } | false> {
+    this.error = `Configurar VLANs aún no está implementado para ${this.getMarca()}.`;
+    return false;
+  }
   /** Tablas de tráfico (CIR/PIR): es donde se limita la velocidad del abonado. */
   async getTrafficTables(): Promise<{ id: string; cir: string; pir: string }[]> {
     return [];
   }
   /** Configuración de alta deducida de los abonados que ya cuelgan del puerto. */
-  async sugerenciaDePuerto(_frame: number, _slot: number, _port: number): Promise<any> {
+  async sugerenciaDePuerto(
+    _frame: number,
+    _slot: number,
+    _port: number,
+    _opts?: { model?: string | null; vlanCatalogo?: number[] },
+  ): Promise<any> {
     return { basadoEn: 0 };
   }
   async provisionOnu(_p: any): Promise<any | false> {
@@ -682,3 +717,6 @@ export abstract class OltDriver {
     return msg;
   }
 }
+
+/** Un puerto PON con las VLANs que usan sus service-ports (y cuántos cada una). */
+export type PuertoConVlans = { frame: number; slot: number; port: number; servicios: number; vlans: { vlan: number; servicios: number }[] };

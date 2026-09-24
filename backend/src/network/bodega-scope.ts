@@ -22,10 +22,17 @@ import { esCajera } from '../treasury/caja-scope';
 const P_JEFE_BODEGA = 'inventory.admin';
 const P_SUPERADMIN = 'system.admin';
 
-/** ¿Es el encargado de bodega (o el superusuario, que puede todo)? */
+/**
+ * ¿Es el encargado de bodega (o el superusuario, que puede todo)?
+ *
+ * Una cajera NO lo es aunque traiga `inventory.admin`: desde 2026-09-17 el rol de
+ * caja lo lleva para aprobar y administrar el inventario de SU sede, pero el usuario
+ * decidió que siga acotada a ella — cruzar sedes sigue siendo del jefe de bodega.
+ */
 export function esJefeDeBodega(user: AuthUser): boolean {
   const p = user?.permissions ?? [];
-  return p.includes(P_JEFE_BODEGA) || p.includes(P_SUPERADMIN);
+  if (p.includes(P_SUPERADMIN)) return true;
+  return p.includes(P_JEFE_BODEGA) && !esCajera(user);
 }
 
 /** ¿Es superusuario? (puede firmar en lugar de una cajera si hace falta). */

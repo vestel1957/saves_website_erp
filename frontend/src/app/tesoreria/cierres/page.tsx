@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Icon } from "@/components/Icon";
 import { PageHeading } from "@/components/ui/PageHeading";
@@ -10,6 +10,7 @@ import { Field, Input, Select } from "@/components/ui/Field";
 import { PageSkeleton } from "@/components/skeletons/PageSkeleton";
 import { useAuth } from "@/context/AuthProvider";
 import { cop } from "@/lib/subscribers";
+import { fmtFechaCon } from "@/lib/format";
 import {
   esCajera,
   type CashCloseList,
@@ -19,14 +20,17 @@ import {
 } from "@/lib/treasury";
 import { CierreArqueo, type CierreDetalle } from "@/components/treasury/CierreArqueo";
 import { CerrarCajaBoton } from "@/components/treasury/CerrarCajaBoton";
+import { WompiDelDia } from "@/components/treasury/WompiDelDia";
 import { TabStrip } from "@/components/ui/TabStrip";
+import { useFiltrosEnUrl, useFiltrosRecordados } from "@/lib/useFiltrosUrl";
 
 /** Sede que agrupa a los bancos (legacy `accounts.sede = 0`). */
 const SEDE_BANCO = 0;
 
 const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+/** Las fechas del cierre llegan como medianoche UTC: se pintan en UTC o se corren un día. */
 const fechaCorta = (d?: string | null) =>
-  d ? new Date(d).toLocaleDateString("es-CO", { weekday: "short", day: "2-digit", month: "short" }) : "—";
+  fmtFechaCon(d, { weekday: "short", day: "2-digit", month: "short" });
 
 const InformeCierre = dynamic(
   () => import("@/components/treasury/InformeCierre").then((m) => m.InformeCierre),
@@ -43,8 +47,32 @@ const InformeCierre = dynamic(
 export default function CierresPage() {
   const { loading: authLoading, user } = useAuth();
   if (authLoading) return <PageSkeleton />;
-  return esCajera(user) ? <ArqueoDeMiCaja /> : <CierresAdmin />;
+  // `useFiltrosRecordados` usa `useSearchParams`, que en el App Router exige una
+  // frontera de Suspense.
+  return (
+    <Suspense fallback={<PageSkeleton />}>
+      {esCajera(user) ? <ArqueoDeMiCaja /> : <CierresAdmin />}
+    </Suspense>
+  );
 }
+
+/**
+ * La fecha se escribe en la dirección SÓLO si no es hoy.
+ *
+ * Con `fecha=2026-09-18` escrita siempre, la pantalla recordaría esa fecha y mañana
+ * abriría en el día de ayer. En una pantalla de cierres eso no es una molestia: cerrar
+ * el día equivocado deja la caja bloqueada sin manera de reabrirla desde la interfaz
+ * (pasó en Yopal el 2026-09-04). Así, un enlace con fecha lleva a esa fecha, y entrar
+ * por el menú lleva siempre a hoy.
+ */
+const fechaParaUrl = (fecha: string) => (fecha === iso(new Date()) ? "" : fecha);
+
+/**
+ * La fecha inicial: la de la dirección, nunca la recordada de la última visita.
+ * Por lo mismo de arriba — el resto de filtros sí se recuerdan.
+ */
+const fechaInicial = (inicial: { valores: Record<string, string>; recordado: boolean }) =>
+  (!inicial.recordado && inicial.valores.fecha) || iso(new Date());
 
 /* ───────────────────────── Cajera: solo su arqueo ───────────────────────── */
 
@@ -57,9 +85,16 @@ export default function CierresPage() {
  * ya cerrado que para el de hoy, que es el que va a mirar el 90% de las veces.
  */
 function ArqueoDeMiCaja() {
+  const inicial = useFiltrosRecordados();
+  if (!inicial) return <PageSkeleton />;
+  return <ArqueoDeMiCajaCon inicial={inicial} />;
+}
+
+function ArqueoDeMiCajaCon({ inicial }: { inicial: { valores: Record<string, string>; recordado: boolean } }) {
   const { authFetch } = useAuth();
   const [mi, setMi] = useState<MiCaja | null>(null);
-  const [fecha, setFecha] = useState(iso(new Date()));
+  const [fecha, setFecha] = useState(() => fechaInicial(inicial));
+  useFiltrosEnUrl({ fecha: fechaParaUrl(fecha) });
   const [d, setD] = useState<CierreDetalle | null>(null);
   const [cargando, setCargando] = useState(true);
   const [err, setErr] = useState("");
@@ -209,24 +244,57 @@ const masDias = (f: string, n: number) => {
  *    curso, que es el que más se mira, no había forma de verlo así.
  */
 function CierresAdmin() {
+  const inicial = useFiltrosRecordados();
+  if (!inicial) return <PageSkeleton />;
+  return <CierresAdminCon inicial={inicial} />;
+}
+
+function CierresAdminCon({ inicial }: { inicial: { valores: Record<string, string>; recordado: boolean } }) {
+  const v = inicial.valores;
   const { authFetch } = useAuth();
   const [accounts, setAccounts] = useState<CashAccountOpt[]>([]);
 
-  const [sede, setSede] = useState("");
-  const [cashAccountId, setCashAccountId] = useState("");
-  const [fecha, setFecha] = useState(iso(new Date()));
+  const [sede, setSede] = useState(v.sede ?? "");
+  const [cashAccountId, setCashAccountId] = useState(v.caja ?? "");
+  const [fecha, setFecha] = useState(() => fechaInicial(inicial));
+  /** La pestaña del informe y el interruptor del legacy viven aquí para poder guardarlos. */
+  const [tab, setTab] = useState(v.tab ?? "Dinero en caja");
+  const [legacy, setLegacy] = useState(v.legacy === "1");
 
   const [informe, setInforme] = useState<InformeCierreData | null>(null);
   const [historial, setHistorial] = useState<CashCloseList | null>(null);
   const [cargando, setCargando] = useState(false);
   const [err, setErr] = useState("");
   /** Qué pestaña se está mirando: las cifras del día o el arqueo de la cajera. */
-  const [vista, setVista] = useState<"informe" | "arqueo">("informe");
+  const [vista, setVista] = useState<"informe" | "arqueo">(v.vista === "arqueo" ? "arqueo" : "informe");
+  /** El corte Entró/Salió de los movimientos del arqueo (`mov=in|out` en la dirección). */
+  const [mov, setMov] = useState<"in" | "out" | "">(v.mov === "in" || v.mov === "out" ? v.mov : "");
+  /** Las tarjetas Recaudo / Egresos del informe aterrizan aquí, ya filtradas. */
+  const verMovimientos = (dir: "in" | "out") => {
+    setMov(dir);
+    setVista("arqueo");
+  };
   /** El arqueo (vista de la cajera). Se pide sólo cuando se abre su pestaña. */
   const [arqueo, setArqueo] = useState<CierreDetalle | null>(null);
   const [cargandoArqueo, setCargandoArqueo] = useState(false);
   /** Se incrementa al cerrar la caja, para que el informe se vuelva a pedir. */
   const [recarga, setRecarga] = useState(0);
+
+  /**
+   * Todo el estado de la pantalla en la dirección: se puede recargar, volver atrás,
+   * abrir en otra pestaña y pasarle el enlace a un compañero para que vea EXACTAMENTE
+   * el mismo cierre. Un solo `useFiltrosEnUrl` por pantalla: el hook reescribe la
+   * query entera, así que dos llamadas se pisarían la una a la otra.
+   */
+  useFiltrosEnUrl({
+    sede,
+    caja: cashAccountId,
+    fecha: fechaParaUrl(fecha),
+    vista: vista === "arqueo" ? "arqueo" : "",
+    mov: vista === "arqueo" ? mov : "",
+    tab: tab === "Dinero en caja" ? "" : tab,
+    legacy: legacy ? "1" : "",
+  });
 
   useEffect(() => {
     void authFetch("/treasury/cash-accounts")
@@ -257,6 +325,17 @@ function CierresAdmin() {
    * viene acotado por `caja-scope.ts`, así que a la cajera le llega su caja y nada
    * más: elegirla a mano es un paso vacío, se selecciona sola.
    */
+  /**
+   * Un enlace que traiga sólo la caja (o uno viejo, de antes de guardar la sede) debe
+   * abrir igual: la sede se deduce de la caja en cuanto llega el catálogo. Sin esto el
+   * desplegable de caja sale vacío, porque se llena a partir de la sede elegida.
+   */
+  useEffect(() => {
+    if (sede || !cashAccountId || !cajas.length) return;
+    const suya = cajas.find((c) => String(c.id) === cashAccountId);
+    if (suya?.branchLegacy != null) setSede(String(suya.branchLegacy));
+  }, [sede, cashAccountId, cajas]);
+
   const unicaCaja = cajas.length === 1 ? cajas[0] : null;
   useEffect(() => {
     if (!unicaCaja) return;
@@ -473,7 +552,7 @@ function CierresAdmin() {
           <div className="flex flex-col gap-4">
             {/* Lo mismo que ve la cajera en su pantalla: de qué se compone el efectivo del
                 cajón y los movimientos uno a uno, con los cortes Entró / Salió. */}
-            <CierreArqueo d={arqueo} maxMovimientos="max-h-[34rem]" />
+            <CierreArqueo d={arqueo} maxMovimientos="max-h-[34rem]" dir={mov} onDir={setMov} />
             <p className="text-[12px] text-text-tertiary">
               Esto es lo que ve la cajera de {cajaSel?.name ?? "esta caja"} en su pantalla de cierre.
               Las cifras del día (cobranza, formas de pago, servicios) están en la pestaña{" "}
@@ -485,7 +564,17 @@ function CierresAdmin() {
         <PageSkeleton />
       ) : informe ? (
         <div className="flex flex-col gap-6">
-          <InformeCierre d={informe} />
+          <InformeCierre d={informe} tab={tab} onTab={setTab} legacy={legacy} onLegacy={setLegacy}
+            onVerMovimientos={verMovimientos}
+            detalleBancos={
+              // Los pagos por Wompi uno a uno: el desglose de la fila WOMPI de «Bancos».
+              <WompiDelDia
+                cashAccountId={cashAccountId}
+                fecha={fecha}
+                enInforme={informe.porBanco.find((b) => b.nombre === "WOMPI")}
+                incrustado
+              />
+            } />
 
           {a && (
             <p className="text-[12px] text-text-tertiary">
@@ -505,7 +594,7 @@ function CierresAdmin() {
                 rows={historial.items}
                 empty="Esta caja no tiene cierres."
                 columns={[
-                  { key: "date", header: "Fecha", render: (r) => (r.date ? new Date(r.date).toLocaleDateString("es-CO", { weekday: "short", day: "2-digit", month: "short", year: "numeric" }) : "—") },
+                  { key: "date", header: "Fecha", render: (r) => fmtFechaCon(r.date, { weekday: "short", day: "2-digit", month: "short", year: "numeric" }) },
                   { key: "cajero", header: "Cajero", render: (r) => <span className="text-text-secondary">{r.cajero ?? "—"}</span> },
                   { key: "sur", header: "Excedente barrido", align: "right", render: (r) => <span className="font-semibold">{cop(r.surplus)}</span> },
                   { key: "habil", header: "Arrastra a", render: (r) => <span className="text-text-tertiary">{fechaCorta(r.proximoDiaHabil)}</span> },

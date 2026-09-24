@@ -27,11 +27,12 @@ async function main() {
   console.log('\nResumen por Banco');
   for (const b of inf.porBanco) fila(b.nombre, b.cantidad, b.monto);
 
-  console.log('\nResumen por Forma de pago');
-  fila('Saldo Anterior', inf.formaPago.saldoAnterior.cantidad, inf.formaPago.saldoAnterior.monto);
-  fila('Efectivo', inf.formaPago.efectivo.cantidad, inf.formaPago.efectivo.monto);
-  fila('Transferencia', inf.formaPago.transferencia.cantidad, inf.formaPago.transferencia.monto);
-  fila('WOMPI', inf.formaPago.wompi.cantidad, inf.formaPago.wompi.monto);
+  console.log('\nDinero en caja');
+  fila('Saldo Anterior', inf.dineroEnCaja.saldoAnterior.cantidad, inf.dineroEnCaja.saldoAnterior.monto);
+  fila('Recaudo del día', inf.dineroEnCaja.recaudo.cantidad, inf.dineroEnCaja.recaudo.monto);
+  fila('TOTAL EN CAJA', '', inf.dineroEnCaja.totalEnCaja);
+  fila('Egresos del día', inf.dineroEnCaja.egresos.cantidad, -inf.dineroEnCaja.egresos.monto);
+  fila('EXCEDENTE BARRIDO', '', inf.dineroEnCaja.excedente);
 
   console.log('\nResumen por tipo de servicio');
   fila('Internet', inf.tipoServicio.Internet.cantidad, inf.tipoServicio.Internet.monto);

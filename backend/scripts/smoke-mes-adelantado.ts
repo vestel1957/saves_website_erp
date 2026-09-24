@@ -26,6 +26,7 @@ import 'reflect-metadata';
 import { PrismaClient, Prisma } from '@prisma/client';
 import { CobranzasService } from '../src/treasury/cobranzas.service';
 import { TreasuryService } from '../src/treasury/treasury.service';
+import { FacturasService } from '../src/billing/facturas.service';
 import { aplicarAnticipos, saldoAFavor } from '../src/billing/anticipos';
 import { num } from '../src/common/money';
 
@@ -56,6 +57,9 @@ async function main() {
   const candidato = await prisma.subscriber.findFirst({
     where: {
       branchId: { not: null },
+      // ACTIVO: la corrida (y por tanto la emisión del mes adelantado) sólo factura
+      // a Activo/Compromiso.
+      status: 'ACTIVO',
       invoices: { some: { status: 'DUE', kind: 'RECURRENTE' } },
       services: { some: { status: 'ACTIVO' } },
     },
@@ -170,23 +174,36 @@ async function main() {
         `por ${cop(renglonMes?.amount ?? 0)}, que es lo que se le cobró`);
       check(Math.abs(pdf.paid - aCobrar) < 1.5, `el recibo suma lo recibido (${cop(pdf.paid)})`);
 
-      // --- 4. nace la factura del mes siguiente ---
-      const plantilla = await tx.subInvoice.findFirst({
-        where: { subscriberId: candidato.id },
-        orderBy: { invoiceDate: 'desc' },
-        select: { branchRef: true, term: true },
-      });
+      // --- 4. la factura del mes adelantado se EMITE en el acto (2026-09-16) ---
+      // Es lo que hace el endpoint después del recaudo: la corrida del mes acotada a
+      // este cliente, que dentro concede el descuento y la deja pagada con el anticipo.
+      const facturas = new FacturasService(
+        fake, { postSalesInvoice: async () => undefined } as any, cobranzas, {} as any,
+      );
+      const fa = await facturas.emitirMesesAdelantados(
+        candidato.id, (r.adelanto.fechas as string[]).map((f) => new Date(f)), USUARIO,
+      );
+      check(fa.emitidas.length === 1 && !fa.pendientes.length,
+        `se emitió la factura del mes: #${fa.emitidas[0]?.tid ?? '—'} ${fa.pendientes[0]?.motivo ?? ''}`);
       const mesSig = new Date(adelanto.meses[0].fecha);
-      const nueva = await tx.subInvoice.create({
-        data: {
-          subscriberId: candidato.id, tid: -999_101, kind: 'RECURRENTE', status: 'DUE',
-          invoiceDate: mesSig, dueDate: mesSig,
-          subtotal: adelanto.bruto, tax: 0, total: adelanto.bruto, paidAmount: 0,
-          branchRef: plantilla?.branchRef ?? null, term: plantilla?.term ?? null,
-        },
-        select: { id: true },
-      });
-      await aplicarAnticipos(tx, candidato.id, { fecha: new Date() });
+      const nueva = (await tx.subInvoice.findFirst({
+        where: { subscriberId: candidato.id, tid: fa.emitidas[0]?.tid ?? -1 },
+        select: { id: true, invoiceDate: true },
+      }))!;
+      check(!!nueva && +new Date(nueva.invoiceDate) === +mesSig, 'con fecha del día 1 de ese mes');
+
+      // La corrida del día 1 no la duplica.
+      const dia1: any = await facturas.generate(
+        { subscriberIds: [candidato.id], invoiceDate: mesSig.toISOString() }, USUARIO, { conPlan: true },
+      );
+      check(dia1.generated === 0 && dia1.plan?.[0]?.reason === 'ALREADY_BILLED',
+        'la corrida del día 1 la salta (ALREADY_BILLED)');
+
+      // Y el recibo, reimpreso, nombra ESA factura en vez de correrse a un mes después.
+      const pdf2: any = await new TreasuryService(fake).receiptPdfData(r.receiptId);
+      check(pdf2.items.some((i: any) => i.tid === fa.emitidas[0]?.tid),
+        `el recibo reimpreso trae la factura #${fa.emitidas[0]?.tid}`);
+      check(Math.abs(pdf2.paid - aCobrar) < 1.5, `y sigue sumando lo recibido (${cop(pdf2.paid)})`);
 
       const quedo = await tx.subInvoice.findUnique({
         where: { id: nueva.id },

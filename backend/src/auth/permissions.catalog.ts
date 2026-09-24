@@ -186,6 +186,11 @@ export const APP_PERMISSIONS = {
   // plata sin que entre plata, y hasta 2026-09-10 podía hacerlo todo el área de
   // contabilidad (y, por el atajo de `system.admin`, los trece superusuarios).
   BILLING_NOTES_EMIT: 'billing.notes.emit',
+  // Operar PlayHub desde la ficha del cliente: consultar, crear la cuenta, activar y
+  // cancelar paquetes. Va aparte del área para dárselo a una persona sin abrirle toda
+  // administración (2026-09-17: Edgar Esteban Rodriguez, cajero). La barrida masiva
+  // (`/playhub/sync-all`) NO entra: sigue siendo de las áreas.
+  PLAYHUB_OPERATE: 'playhub.operate',
 } as const;
 
 export type AppPermission = (typeof APP_PERMISSIONS)[keyof typeof APP_PERMISSIONS];
@@ -221,6 +226,7 @@ export const ALL_APP_PERMISSIONS: { key: string; label: string; group: string }[
   { key: A.CONTRACTS_MANAGE, label: 'Editar cláusulas de permanencia del contrato', group: 'Operaciones críticas' },
   { key: A.SUPPORT_WRITE, label: 'Crear y modificar órdenes de servicio (sin él, solo consulta)', group: 'Soporte' },
   { key: A.BILLING_NOTES_EMIT, label: 'Emitir notas crédito/débito (incluida la nota crédito DIAN)', group: 'Operaciones críticas' },
+  { key: A.PLAYHUB_OPERATE, label: 'Operar PlayHub en la ficha del cliente (crear cuenta, activar y cancelar)', group: 'Clientes' },
 ];
 
 /**
@@ -446,6 +452,7 @@ export const SCREENS: ScreenDef[] = [
   { href: '/reportes/ventas-sede', label: 'Ventas por sede', module: 'Reportes', areas: ['gerencia'] },
   { href: '/reportes/ingresos-egresos', label: 'Ingresos y egresos', module: 'Reportes', areas: ['gerencia'] },
   { href: '/reportes/cartera', label: 'Cartera / deudores', module: 'Reportes', areas: ['gerencia'] },
+  { href: '/reportes/cartera-seguimiento', label: 'Seguimiento de cartera', module: 'Reportes', areas: ['gerencia'] },
   { href: '/reportes/iva', label: 'Reporte de IVA', module: 'Reportes', areas: ['gerencia'] },
   { href: '/reportes/ordenes', label: 'Órdenes de servicio', module: 'Reportes', areas: ['gerencia'] },
   { href: '/reportes/cortes-activaciones', label: 'Cortes y activaciones', module: 'Reportes', areas: ['gerencia'] },
@@ -453,6 +460,7 @@ export const SCREENS: ScreenDef[] = [
   { href: '/reportes/altas-retiros', label: 'Altas y retiros', module: 'Reportes', areas: ['gerencia'] },
   { href: '/reportes/tecnicos', label: 'Rendimiento de técnicos', module: 'Reportes', areas: ['gerencia'] },
   { href: '/reportes/recaudo-funcionario', label: 'Recaudo por funcionario', module: 'Reportes', areas: ['gerencia'] },
+  { href: '/reportes/afiliados', label: 'Afiliados por funcionario', module: 'Reportes', areas: ['gerencia'] },
   { href: '/reportes/anulaciones', label: 'Anulaciones (control)', module: 'Reportes', areas: ['gerencia'] },
   { href: '/reportes/actividad', label: 'Actividad en el sistema', module: 'Reportes', areas: ['gerencia'] },
 
@@ -513,6 +521,11 @@ export const SCREENS: ScreenDef[] = [
   // de esas fechas, así que es de contabilidad y administración, no de caja.
   { href: '/contabilidad/cierres', label: 'Cierre de mes (arrastre de saldos)', module: 'Contabilidad', areas: ['contabilidad', 'administracion'] },
   { href: '/contabilidad/mapeo-cuentas', label: 'Mapeo de cuentas', module: 'Contabilidad', areas: ['contabilidad'] },
+  // Contabilidad de gestión por sede (docs/centros-de-costo/PLAN.md, 2026-09-24): el informe
+  // es para quien dirige (gerencia) además de contabilidad y administración; los centros los
+  // ven los tres pero sólo contabilidad y administración los crean o editan (lo decide la API).
+  { href: '/contabilidad/resultados-por-sede', label: 'Resultados por sede', module: 'Contabilidad', areas: ['contabilidad', 'administracion', 'gerencia'] },
+  { href: '/contabilidad/centros-de-costo', label: 'Centros de costo', module: 'Contabilidad', areas: ['contabilidad', 'administracion', 'gerencia'] },
 
   { href: '/clientes', label: 'Clientes', module: 'Clientes', areas: ['administracion', 'caja'] },
   // PlayHub (2026-09-04): la cajera lo vende y lo cancela en ventanilla, así que la
@@ -520,6 +533,17 @@ export const SCREENS: ScreenDef[] = [
   // (`ExtrasService.playhub`) y las operaciones por cliente pasan por
   // `exigirSedeSuscriptor`. La barrida masiva sigue sin ser de caja.
   { href: '/playhub', label: 'PlayHub / IPTV', module: 'Clientes', areas: ['administracion', 'caja'] },
+  // Las cuatro siguientes estaban EN EL MENÚ pero no en este catálogo, que es la
+  // misma trampa que ya se documentó abajo con /red/naps: sin llave de pantalla
+  // `can(screenKey(href))` sólo la da por buena a `system.admin`, así que la entrada
+  // quedaba invisible para TODO el mundo menos el superusuario — nadie la echaba de
+  // menos porque quien probaba era superusuario. Las áreas que se les ponen son las
+  // que el gate de la URL (`frontend/src/middleware.ts`) ya dejaba pasar; esto no
+  // abre nada nuevo, sólo deja de esconder lo que ya era suyo. (2026-09-19)
+  { href: '/clientes/grupos', label: 'Grupos de clientes', module: 'Clientes', areas: ['administracion', 'caja'] },
+  // El mapa: abonados, cajas NAP y —para quien la tiene— la capa de técnicos, que se
+  // filtra aparte dentro de la página y en el backend.
+  { href: '/mapa', label: 'Mapa (abonados, NAPs y técnicos)', module: 'Clientes', areas: ['gerencia', 'administracion', 'contabilidad', 'tecnicos', 'sistemas', 'caja'] },
 
   // Sin 'tecnicos' desde el 2026-09-10, a pedido del usuario («quitemos este módulo
   // completo para los técnicos… es más, todo el módulo de clientes»). Era la ÚNICA
@@ -538,6 +562,10 @@ export const SCREENS: ScreenDef[] = [
   // orden de las visitas. NO es del técnico — él sigue la agenda, no la arma —, y el
   // servicio se lo vuelve a negar por API (`AgendaService.mover`).
   { href: '/soporte/agenda', label: 'Agendamiento de órdenes', module: 'Soporte', areas: ['caja', 'administracion'] },
+  // Auditoría de los cierres contra la geo-cerca (quién cerró desde dónde y qué se
+  // marcó como sospechoso). Es control sobre el trabajo del técnico, así que NO es
+  // suya: administración y gerencia, que son quienes responden por él.
+  { href: '/soporte/geocerca', label: 'Geo-cerca de cierres (auditoría)', module: 'Soporte', areas: ['administracion', 'gerencia'] },
   // La otra cara de lo mismo: lo que el técnico VE de la agenda que le armaron.
   // Pantalla propia y no un bloque dentro de /soporte, para que sea su landing.
   { href: '/mi-agenda', label: 'Mi agenda (técnico)', module: 'Soporte', areas: ['tecnicos'] },
@@ -562,11 +590,11 @@ export const SCREENS: ScreenDef[] = [
   // técnica): son el inventario de equipos de la empresa, que es justo la sección
   // INVENTARIO. El jefe de bodega ya las alcanza por `@OrPermission(inventory.admin)`.
   { href: '/red/transferencias', label: 'Transferencias', module: 'Red / ISP', areas: ['administracion', 'caja'] },
-  { href: '/red/equipos', label: 'Administrar equipos', module: 'Red / ISP', areas: ['administracion'] },
-  { href: '/red/equipos/nuevo', label: 'Ingreso de equipo', module: 'Red / ISP', areas: ['administracion'] },
+  { href: '/red/equipos', label: 'Administrar equipos', module: 'Red / ISP', areas: ['administracion', 'caja'] },
+  { href: '/red/equipos/nuevo', label: 'Ingreso de equipo', module: 'Red / ISP', areas: ['administracion', 'caja'] },
   // "Bodega de equipos" SÍ se le deja, pero al técnico le muestra únicamente los
   // equipos que están a su nombre (ver `NetworkWriteService.equipmentWarehouses`).
-  { href: '/red/bodegas', label: 'Bodega de equipos', module: 'Red / ISP', areas: ['tecnicos', 'administracion'] },
+  { href: '/red/bodegas', label: 'Bodega de equipos', module: 'Red / ISP', areas: ['tecnicos', 'administracion', 'caja'] },
   // Equipos disponibles (2026-09-14): una pantalla por sede, vacías por ahora. De
   // administración y de la cajera; el jefe de bodega las recibe en su rol. El técnico
   // no: él ve sólo lo suyo. Una llave por sede para poder repartirlas por empleado.
@@ -578,6 +606,9 @@ export const SCREENS: ScreenDef[] = [
   // Faltaban en el catálogo pese a estar en el nav: sin llave de pantalla, `can()`
   // solo las concedía a system.admin, así que un técnico no las veía en el menú.
   { href: '/red/naps', label: 'Cajas NAP', module: 'Red / ISP', areas: ['administracion'] },
+  // VLANs: volvió a pasar lo mismo que con las NAPs. La pantalla existe desde el
+  // 2026-08-27 y el CRUD del backend desde antes, pero sin llave nadie veía el enlace.
+  { href: '/red/vlans', label: 'VLANs', module: 'Red / ISP', areas: ['administracion'] },
   { href: '/red/olt', label: 'Gestión OLT', module: 'Red / ISP', areas: ['administracion'] },
   { href: '/red/genieacs', label: 'GenieACS · TR-069', module: 'Red / ISP', areas: ['administracion'] },
 
@@ -587,7 +618,9 @@ export const SCREENS: ScreenDef[] = [
   { href: '/mikrotik/masivo', label: 'Operaciones masivas', module: 'Mikrotik', areas: ['administracion'] },
   { href: '/mikrotik/ips', label: 'IPs de usuarios', module: 'Mikrotik', areas: ['administracion'] },
 
-  { href: '/inventario', label: 'Material', module: 'Inventario / Compras', areas: ['administracion'] },
+  { href: '/inventario', label: 'Material', module: 'Inventario / Compras', areas: ['administracion', 'caja'] },
+  // (2026-09-17: la cajera ya tiene el inventario COMPLETO — ver el rol `area-caja`.
+  // Lo de abajo es la historia de por qué empezó con sólo los traspasos.)
   // Lo ÚNICO que la cajera hace en inventario (decisión 2026-07-29): entregarle
   // material a un técnico. Un traspaso al "Almacén <técnico>" ES esa entrega —cada
   // técnico tiene su bodega (`MaterialWarehouse.technicianRef`)— y el acta queda
@@ -601,7 +634,11 @@ export const SCREENS: ScreenDef[] = [
   // llave de pantalla sólo la veía el superusuario. Se le da al técnico porque es SU
   // bodega la que abre —el backend le devuelve una sola, la suya
   // (`InventoryService.warehouses`)— y a administración, que es la dueña del módulo.
-  { href: '/inventario/bodegas', label: 'Bodegas de material', module: 'Inventario / Compras', areas: ['administracion', 'tecnicos'] },
+  // Categorías de material, Órdenes de servicio y Categorías de compra llevaban
+  // tiempo en el menú SIN llave de pantalla (sólo las veía el superusuario). Nacen
+  // el 2026-09-17 al abrirle el inventario completo a la cajera.
+  { href: '/inventario/categorias', label: 'Categorías de material', module: 'Inventario / Compras', areas: ['administracion', 'caja'] },
+  { href: '/inventario/bodegas', label: 'Bodegas de material', module: 'Inventario / Compras', areas: ['administracion', 'tecnicos', 'caja'] },
   // "Actas" NO estaba en el catálogo pese a llevar tiempo en el menú: sin llave de
   // pantalla sólo la veía el superusuario, y el técnico —que es justo quien tiene
   // que FIRMAR el recibido— no tenía por dónde entrar. Las tres áreas son las
@@ -620,8 +657,10 @@ export const SCREENS: ScreenDef[] = [
   // tampoco son suyos.
   { href: '/ordenes', label: 'Órdenes de compra', module: 'Inventario / Compras', areas: ['administracion', 'caja'] },
   { href: '/ordenes/historial', label: 'Historial de órdenes', module: 'Inventario / Compras', areas: ['administracion', 'caja'] },
-  { href: '/proveedores', label: 'Proveedores', module: 'Inventario / Compras', areas: ['administracion'] },
-  { href: '/devoluciones', label: 'Devoluciones', module: 'Inventario / Compras', areas: ['administracion'] },
+  { href: '/ordenes/servicios', label: 'Órdenes de servicio', module: 'Inventario / Compras', areas: ['administracion', 'caja'] },
+  { href: '/ordenes/categorias', label: 'Categorías de compra', module: 'Inventario / Compras', areas: ['administracion', 'caja'] },
+  { href: '/proveedores', label: 'Proveedores', module: 'Inventario / Compras', areas: ['administracion', 'caja'] },
+  { href: '/devoluciones', label: 'Devoluciones', module: 'Inventario / Compras', areas: ['administracion', 'caja'] },
 
   // Empleados se mudó a CONFIGURACIÓN y Documentos bajó aquí (2026-08-05): las dos
   // pantallas se movieron de ruta junto con su sección, así que sus llaves cambiaron
@@ -632,6 +671,8 @@ export const SCREENS: ScreenDef[] = [
   // cambiar de sitio una pantalla no es quitársela a quien la usa.
   { href: '/documentos', label: 'Documentos', module: 'Personas y Proyectos', areas: ['administracion', 'sistemas'] },
   { href: '/proyectos', label: 'Proyectos', module: 'Personas y Proyectos', areas: ['administracion'] },
+  // Afiliados (2026-09-23): cada funcionario con los clientes que trajo.
+  { href: '/afiliados', label: 'Afiliados por funcionario', module: 'Personas y Proyectos', areas: ['administracion', 'gerencia'] },
   { href: '/agenda', label: 'Agenda / Tareas', module: 'Personas y Proyectos', areas: ['administracion', 'caja'] },
   // Sin 'tecnicos' desde el 2026-09-10, a pedido del usuario («eliminar el módulo
   // Panel de Tareas: las actividades de los técnicos se gestionan mediante el
@@ -651,6 +692,13 @@ export const SCREENS: ScreenDef[] = [
 
   { href: '/configuracion', label: 'Configuración', module: 'Sistemas', areas: ['sistemas'] },
   { href: '/configuracion/planes', label: 'Planes de servicio', module: 'Sistemas', areas: ['sistemas'] },
+  // Cuatro más que estaban en el menú sin llave (ver la nota de /clientes/grupos).
+  // Todas cuelgan de /configuracion, cuyo gate de URL es sólo 'sistemas': ponerles
+  // otra área las dejaría visibles en el menú y rebotadas al abrirlas.
+  { href: '/configuracion/categorias', label: 'Categorías de transacción', module: 'Sistemas', areas: ['sistemas'] },
+  { href: '/configuracion/contratos', label: 'Cláusulas de permanencia', module: 'Sistemas', areas: ['sistemas'] },
+  { href: '/configuracion/promociones', label: 'Promociones', module: 'Sistemas', areas: ['sistemas'] },
+  { href: '/configuracion/whatsapp/plantillas', label: 'Plantillas de WhatsApp', module: 'Sistemas', areas: ['sistemas'] },
   { href: '/configuracion/api', label: 'API pública', module: 'Sistemas', areas: ['sistemas'] },
   { href: '/configuracion/usuarios', label: 'Usuarios y roles', module: 'Sistemas', areas: ['sistemas'] },
   { href: '/configuracion/empleados', label: 'Empleados', module: 'Sistemas', areas: ['sistemas', 'administracion'] },
@@ -771,11 +819,18 @@ export const ALL_ROLES: RoleDef[] = [
     // para subirles la factura del proveedor y el comprobante del pago, pero no las
     // crea ni las aprueba ni las paga. Su sección propia en el sidebar se gatea con
     // `area.caja`.
+    // INVENTARIO COMPLETO desde 2026-09-17 (a pedido del usuario: «que las cajeras
+    // puedan sí o sí ver todo el módulo de inventario, con todos sus submódulos y
+    // todos los accesos»): equipos, disponibles, material, compras, devoluciones y
+    // proveedores, con `inventory.admin` (aprobar/despachar transferencias y
+    // mandarlas entre sedes). Lo que ve de equipos y traspasos sigue acotado a sus
+    // sedes (`bodega-scope.ts`, `InventoryService.transferContext`). Aprobar una
+    // orden de compra NO va incluido: es la firma nominal `purchases.approve`.
     key: 'area-caja',
     name: 'Caja y ventas',
     description: 'Cajera: apertura/cierre de su caja, ingresos, egresos, transferencias, entrega de material a técnicos, transferencias de equipos, clientes y tickets',
     area: 'Áreas Vestel',
-    permissions: [A.AREA_CAJA, A.ACCOUNTING_VIEW, A.WHATSAPP_INBOX, A.SUPPORT_WRITE, ...screensForArea('caja')],
+    permissions: [A.AREA_CAJA, A.ACCOUNTING_VIEW, A.WHATSAPP_INBOX, A.SUPPORT_WRITE, P.ADMIN, ...screensForArea('caja')],
   },
   {
     key: 'auditor',

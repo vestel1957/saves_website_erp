@@ -7,8 +7,9 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/current-user.decorator';
 import { PostingService } from '../accounting/posting.service';
-import { num, round2 } from '../common/money';
+import { ivaDe, num, round2 } from '../common/money';
 import { nextTid, TID_SEQ } from '../common/tid';
+import { NotificationsService } from '../common/notifications/notifications.service';
 
 const dOnly = (s?: string) => { const d = s ? new Date(s) : new Date(); return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())); };
 
@@ -36,6 +37,8 @@ export class EventDto {
   @IsOptional() @IsInt() orderNo?: number;
   // Mismo vocabulario que la prioridad de las órdenes de soporte.
   @IsOptional() @IsIn(['Baja', 'Media', 'Alta', 'Urgente']) priority?: string;
+  /** Funcionarios invitados (`User.id`). A cada uno le llega un aviso. */
+  @IsOptional() @IsArray() @IsString({ each: true }) attendeeIds?: string[];
 }
 export class UpdateEventDto {
   @IsOptional() @IsString() title?: string;
@@ -45,6 +48,7 @@ export class UpdateEventDto {
   @IsOptional() @IsString() end?: string;
   @IsOptional() allDay?: boolean;
   @IsOptional() @IsIn(['Baja', 'Media', 'Alta', 'Urgente']) priority?: string;
+  @IsOptional() @IsArray() @IsString({ each: true }) attendeeIds?: string[];
 }
 export class QuoteStatusDto {
   @IsString() @IsIn(['draft', 'pending', 'sent', 'accepted', 'rejected', 'converted']) status!: string;
@@ -54,6 +58,7 @@ export class OmniService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly posting: PostingService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   // --- Eventos / agenda ---
@@ -297,6 +302,7 @@ export class OmniService {
         id: e.id, orderNo: e.orderNo, title: e.title, description: e.description, color: e.color,
         start: e.start, end: e.end, allDay: e.allDay, priority: e.priority,
         assignedBy: e.assignedBy ? OmniService.etiquetaAsignador(e.assignedBy, nombres) : null,
+        attendeeIds: e.attendeeIds,
       })),
       // Con `truncado`, la pantalla avisa en vez de mentir por omisión: un calendario
       // al que le faltan eventos y no lo dice es peor que uno que no carga.
@@ -307,18 +313,111 @@ export class OmniService {
   }
 
   async createEvent(dto: EventDto, user: AuthUser) {
+    const asistentes = await this.asistentesValidos(dto.attendeeIds);
     const e = await this.prisma.calendarEvent.create({
       data: {
         title: dto.title ?? null, description: dto.description ?? null, color: dto.color ?? null,
         start: new Date(dto.start), end: dto.end ? new Date(dto.end) : null,
         allDay: dto.allDay ?? false, orderNo: dto.orderNo ?? null, assignedBy: user?.name ?? user?.email ?? null,
+        attendeeIds: asistentes,
         ...(dto.priority ? { priority: dto.priority } : {}),
       },
     });
+    await this.avisarAsistentes(e, asistentes, user, 'invitado');
     return { id: e.id };
   }
 
-  async updateEvent(id: string, dto: UpdateEventDto) {
+  /**
+   * Los eventos de UNA persona en una ventana de días: los que puso ella y a los que
+   * la invitaron. Es lo que pinta «Mi agenda».
+   *
+   * Va aparte de `eventsCalendar` porque aquél es de contabilidad, administración y
+   * caja, y a un evento se puede invitar a cualquier funcionario —un técnico
+   * incluido—: si la lista de sus eventos colgara de esas áreas, el invitado nunca
+   * vería la reunión a la que lo llamaron. Aquí no hace falta área: sólo se devuelve
+   * lo que ya es suyo.
+   */
+  async myEvents(from: string | undefined, to: string | undefined, user: AuthUser) {
+    const ventana = rangoDeDiasColombia(from, to);
+    if (ventana === null || !ventana.gte || !ventana.lt) {
+      throw new BadRequestException('El calendario necesita un rango de días válido ("desde" y "hasta").');
+    }
+    const { gte: desde, lt: hasta } = ventana;
+    const mios: Prisma.CalendarEventWhereInput[] = [{ attendeeIds: { has: user.id } }];
+    if (user.name) mios.push({ assignedBy: user.name });
+    const rows = await this.prisma.calendarEvent.findMany({
+      where: {
+        AND: [
+          { OR: mios },
+          { start: { not: null, lt: hasta } },
+          { OR: [{ end: { gte: desde } }, { AND: [{ end: null }, { start: { gte: desde } }] }] },
+        ],
+      },
+      orderBy: [{ start: 'asc' }, { id: 'asc' }],
+      take: OmniService.TOPE_CALENDARIO,
+    });
+    return {
+      items: rows.map((e) => ({
+        id: e.id, orderNo: e.orderNo, title: e.title, description: e.description, color: e.color,
+        start: e.start, end: e.end, allDay: e.allDay, priority: e.priority,
+        assignedBy: e.assignedBy, attendeeIds: e.attendeeIds,
+        // Al invitado se le enseña el evento pero no se le deja cambiarlo: es de quien lo puso.
+        propio: !!user.name && e.assignedBy === user.name,
+      })),
+    };
+  }
+
+  /** Sólo funcionarios activos y sin repetir: un id de más no puede recibir avisos. */
+  private async asistentesValidos(ids?: string[]): Promise<string[]> {
+    const unicos = [...new Set((ids ?? []).map((i) => i.trim()).filter(Boolean))];
+    if (!unicos.length) return [];
+    const vivos = await this.prisma.user.findMany({
+      where: { id: { in: unicos }, isActive: true },
+      select: { id: true },
+    });
+    const ok = new Set(vivos.map((u) => u.id));
+    return unicos.filter((i) => ok.has(i));
+  }
+
+  /**
+   * La campanita de los invitados. Quien crea el evento no se avisa a sí mismo.
+   * Un aviso por evento (`groupKey`): si cambia la hora antes de que lo lea, se le
+   * refresca el que tiene en vez de apilarle otro.
+   */
+  private async avisarAsistentes(
+    e: { id: string; title: string | null; start: Date | null; allDay: boolean },
+    destinatarios: string[],
+    quien: AuthUser | undefined,
+    motivo: 'invitado' | 'cambio' | 'cancelado',
+  ) {
+    const a = destinatarios.filter((id) => id !== quien?.id);
+    if (!a.length) return;
+    const titulo = e.title?.trim() || 'Evento';
+    const cuando = e.start
+      ? e.start.toLocaleString('es-CO', {
+          timeZone: 'America/Bogota', weekday: 'long', day: 'numeric', month: 'long',
+          ...(e.allDay ? {} : { hour: 'numeric', minute: '2-digit' }),
+        })
+      : '';
+    const de = quien?.name ? ` · ${quien.name}` : '';
+    const encabezado = {
+      invitado: `Te invitaron: ${titulo}`,
+      cambio: `Cambió el evento: ${titulo}`,
+      cancelado: `Se canceló: ${titulo}`,
+    }[motivo];
+    await this.notifications.notify(a, {
+      kind: 'agenda.evento',
+      title: encabezado,
+      body: `${cuando}${e.allDay ? ' (todo el día)' : ''}${de}`,
+      // El día va en el enlace: «Mi agenda» se abre en él y despliega el evento.
+      link: motivo === 'cancelado' || !e.start
+        ? null
+        : `/mi-agenda?evento=${e.id}&dia=${e.start.toLocaleDateString('en-CA', { timeZone: 'America/Bogota' })}`,
+      groupKey: `evento:${e.id}`,
+    });
+  }
+
+  async updateEvent(id: string, dto: UpdateEventDto, user?: AuthUser) {
     const e = await this.prisma.calendarEvent.findUnique({ where: { id } });
     if (!e) throw new NotFoundException('Evento no encontrado');
     const data: Prisma.CalendarEventUpdateInput = {};
@@ -329,12 +428,35 @@ export class OmniService {
     if (dto.end !== undefined) data.end = dto.end ? new Date(dto.end) : null;
     if (dto.allDay !== undefined) data.allDay = dto.allDay;
     if (dto.priority !== undefined) data.priority = dto.priority;
-    await this.prisma.calendarEvent.update({ where: { id }, data });
+    const antes = e.attendeeIds;
+    const ahora = dto.attendeeIds !== undefined ? await this.asistentesValidos(dto.attendeeIds) : antes;
+    if (dto.attendeeIds !== undefined) data.attendeeIds = ahora;
+    const nuevo = await this.prisma.calendarEvent.update({ where: { id }, data });
+
+    // Los recién invitados reciben la invitación; a los que ya estaban sólo se les
+    // avisa si cambió CUÁNDO es, que es lo que les obliga a hacer algo. Al que se
+    // quita se le retira el aviso: ya no tiene a qué ir.
+    const recien = ahora.filter((u) => !antes.includes(u));
+    const siguen = ahora.filter((u) => antes.includes(u));
+    const quitados = antes.filter((u) => !ahora.includes(u));
+    const cambioHora =
+      e.start?.getTime() !== nuevo.start?.getTime() ||
+      e.end?.getTime() !== nuevo.end?.getTime() ||
+      e.allDay !== nuevo.allDay;
+    await this.avisarAsistentes(nuevo, recien, user, 'invitado');
+    if (cambioHora) await this.avisarAsistentes(nuevo, siguen, user, 'cambio');
+    if (quitados.length) {
+      await this.notifications.retirar(`evento:${id}`, 'agenda.evento', ahora);
+    }
     return { id, ok: true };
   }
 
-  async deleteEvent(id: string) {
+  async deleteEvent(id: string, user?: AuthUser) {
+    const e = await this.prisma.calendarEvent.findUnique({ where: { id } });
+    if (!e) throw new NotFoundException('Evento no encontrado');
     await this.prisma.calendarEvent.delete({ where: { id } });
+    // Al invitado hay que decirle que ya no hay reunión: si no, se presenta.
+    await this.avisarAsistentes(e, e.attendeeIds, user, 'cancelado');
     return { id, deleted: true };
   }
 
@@ -388,7 +510,9 @@ export class OmniService {
     // Contabilización automática de la factura resultante (idempotente; no rompe el flujo).
     await this.posting.postSalesInvoice({
       sourceId: result.invoiceId, date: today, number: result.tid,
-      subtotal: num(q.subtotal), tax: num(q.tax), createdBy: user?.name ?? user?.email ?? null,
+      subtotal: num(q.subtotal), tax: num(q.tax),
+      costCenterId: await this.posting.centroDeAbonado(q.subscriberId),
+      createdBy: user?.name ?? user?.email ?? null,
     });
     return result;
   }
@@ -427,7 +551,7 @@ export class OmniService {
     if (!dto.items?.length) throw new BadRequestException('La cotización no tiene ítems');
     const rows = dto.items.map((it) => {
       const qty = Math.max(0, Math.round(it.qty)); const price = round2(it.price); const taxRate = round2(it.taxRate ?? 0);
-      const subtotal = round2(qty * price); const taxTotal = round2((subtotal * taxRate) / 100);
+      const subtotal = round2(qty * price); const taxTotal = ivaDe(subtotal, taxRate);
       return { ...it, qty, price, taxRate, subtotal, taxTotal };
     });
     const subtotal = round2(rows.reduce((s, r) => s + r.subtotal, 0));

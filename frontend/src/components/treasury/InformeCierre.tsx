@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Icon } from "@/components/Icon";
 import { cop } from "@/lib/subscribers";
+import { fmtFechaCon } from "@/lib/format";
 import type { InformeCierreData } from "@/lib/treasury";
 
 /**
@@ -45,7 +46,6 @@ function etiquetaPlan(p: Plan, todos: Plan[]): string {
   return repetido ? `${base} · ${p.clave}` : base;
 }
 
-type Bucket = { cantidad: number; monto: number };
 type Fila = { label: string; cant?: number | string; monto: number; sub?: boolean; nota?: string };
 
 /* ─────────────────────────── Piezas ─────────────────────────── */
@@ -249,42 +249,37 @@ function DesgloseBloque({ filas, totalLabel }: { filas: Fila[]; totalLabel: stri
 }
 
 /** Un paso de la cinta de cuadre. El resultado va teñido de marca para que salte. */
-function Paso({ op, k, v, tono }: { op?: string; k: string; v: number; tono?: "pos" | "neg" | "res" }) {
+/**
+ * Un paso de la cinta. Con `onClick` (Recaudo y Egresos, en la pantalla de Cierre de
+ * caja) la tarjeta lleva a los movimientos que la suman, ya filtrados por Entró o Salió.
+ */
+function Paso({ op, k, v, tono, onClick, ayuda }: {
+  op?: string; k: string; v: number; tono?: "pos" | "neg" | "sub" | "res";
+  onClick?: () => void; ayuda?: string;
+}) {
+  const Tag = onClick ? "button" : "div";
   return (
-    <div className={`flex min-w-0 flex-col gap-0.5 px-4 py-3 ${tono === "res" ? "bg-brand-soft" : "bg-surface"}`}>
+    <Tag
+      {...(onClick ? { type: "button" as const, onClick, title: ayuda } : {})}
+      className={`group flex min-w-0 flex-col gap-0.5 px-4 py-3 text-left ${
+      tono === "res" ? "bg-brand-soft" : tono === "sub" ? "bg-surface-2" : "bg-surface"
+    } ${onClick ? "cursor-pointer transition-colors hover:bg-surface-2 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-brand" : ""}`}>
       <span className="text-[11px] font-bold text-text-tertiary">{op || " "}</span>
       <span className={`text-[12px] leading-snug ${tono === "res" ? "font-semibold text-brand" : "text-text-secondary"}`}>{k}</span>
       <span className={`text-lg font-bold tabular-nums leading-tight ${
-        tono === "res" ? "text-brand" : tono === "pos" ? "text-success-text" : tono === "neg" ? "text-error-text" : "text-text-primary"
+        tono === "res" ? "text-brand"
+        : tono === "pos" ? "text-success-text"
+        : tono === "neg" ? "text-error-text"
+        : "text-text-primary"
       }`}>
         {cop(v)}
       </span>
-    </div>
-  );
-}
-
-/** Los cuatro números del día. La barrita los pone en escala contra el cobrado. */
-const TONO_IND = {
-  ok: { texto: "text-success-text", barra: "bg-success-text" },
-  brand: { texto: "text-brand", barra: "bg-brand" },
-  neutro: { texto: "text-text-primary", barra: "bg-text-tertiary" },
-  mal: { texto: "text-error-text", barra: "bg-error-text" },
-} as const;
-
-function Indicador({ k, v, sub, tono, pct }: {
-  k: string; v: number; sub: string; tono: keyof typeof TONO_IND; pct: number;
-}) {
-  const c = TONO_IND[tono];
-  return (
-    <div className="flex flex-col gap-1.5 rounded-xl border border-border-subtle bg-surface px-4 py-3">
-      <span className="text-[10px] font-semibold uppercase tracking-wider text-text-tertiary">{k}</span>
-      <span className={`text-xl font-bold tabular-nums leading-none ${c.texto}`}>{cop(v)}</span>
-      <span className="block h-[3px] overflow-hidden rounded-full bg-surface-2">
-        <span className={`block h-full rounded-full ${c.barra}`}
-          style={{ width: `${Math.min(100, Math.max(0, pct * 100)).toFixed(1)}%` }} />
-      </span>
-      <span className="text-[11.5px] text-text-tertiary">{sub}</span>
-    </div>
+      {onClick && (
+        <span className="mt-0.5 inline-flex items-center gap-1 text-[11px] font-semibold text-brand opacity-70 group-hover:opacity-100">
+          Ver movimientos <Icon name="arrow-right" size={11} />
+        </span>
+      )}
+    </Tag>
   );
 }
 
@@ -299,43 +294,78 @@ function Dato({ k, v, fuerte }: { k: string; v: string; fuerte?: boolean }) {
 
 /* ─────────────────────────── El informe ─────────────────────────── */
 
-export function InformeCierre({ d }: { d: InformeCierreData }) {
-  const [pestana, setPestana] = useState("Forma de pago");
-  const [legacy, setLegacy] = useState(false);
+/**
+ * La pestaña y el interruptor "ver como el legacy" se pueden gobernar desde fuera para
+ * que vivan en la URL. Sin esas props el componente los lleva por dentro, como siempre:
+ * en el panel de la cajera (`/dashboard`) el informe va embebido y quien manda en la
+ * dirección es el panel, no esto.
+ */
+export function InformeCierre({ d, tab, onTab, legacy: legacyProp, onLegacy, onVerMovimientos, detalleBancos }: {
+  d: InformeCierreData;
+  /**
+   * El desglose de «Bancos» (hoy, los pagos por Wompi uno a uno). Va DENTRO de esa
+   * pestaña y sólo ahí: debajo de «Dinero en caja», que dice que Wompi no pasa por la
+   * ventanilla, una lista de pagos de Wompi se leía como plata del cajón.
+   */
+  detalleBancos?: ReactNode;
+  /** Lleva al arqueo con los movimientos filtrados: `in` = ingresos, `out` = egresos. */
+  onVerMovimientos?: (dir: "in" | "out") => void;
+  tab?: string;
+  onTab?: (t: string) => void;
+  legacy?: boolean;
+  onLegacy?: (v: boolean) => void;
+}) {
+  const [tabLocal, setTabLocal] = useState("Dinero en caja");
+  const [legacyLocal, setLegacyLocal] = useState(false);
+  const pestana = tab ?? tabLocal;
+  const setPestana = onTab ?? setTabLocal;
+  const legacy = legacyProp ?? legacyLocal;
+  const setLegacy = onLegacy ?? setLegacyLocal;
 
   const a = d.arqueo;
   const m = d.meses;
-  const g = a.desglose;
+  /**
+   * El nombre del mes de la fecha del informe, corrido `delta` meses.
+   *
+   * El `timeZone: "UTC"` que mete `fmtFechaCon` NO es un detalle: la fecha se arma con
+   * `Date.UTC(...)`, o sea medianoche UTC del día 1, y pintada en hora de Colombia (−5)
+   * cae a las 7 p. m. del último día del mes ANTERIOR. El informe del 16 de septiembre
+   * salía rotulado "agosto de 2026", y el del mes anterior, "julio".
+   */
   const mesNombre = (delta: number) => {
     const base = new Date(d.fecha);
-    return new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth() + delta, 1))
-      .toLocaleDateString("es-CO", { month: "long", year: "numeric" });
+    return fmtFechaCon(
+      new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth() + delta, 1)),
+      { month: "long", year: "numeric" },
+    );
   };
 
   const totalBanco = {
     cant: d.porBanco.reduce((s, b) => s + b.cantidad, 0),
     monto: d.porBanco.reduce((s, b) => s + b.monto, 0),
   };
-  const fp = d.formaPago;
-  const totalFormaPago = {
-    cant: fp.saldoAnterior.cantidad + fp.efectivo.cantidad + fp.transferencia.cantidad + fp.wompi.cantidad,
-    monto: fp.saldoAnterior.monto + fp.efectivo.monto + fp.transferencia.monto + fp.wompi.monto,
-  };
-  const mes = (b: Bucket & { Internet: Bucket; Television: Bucket }) => b;
+  const dc = d.dineroEnCaja;
 
-  /** Contra qué se escalan las barritas de los indicadores. */
-  const cobrado = d.cobranza.total.monto || 1;
+  /**
+   * Fuera las filas sin nada. Un renglón en $0 no dice "no se cobró de ese mes": ocupa
+   * sitio y, cuando va en gris (las subfilas), parece un dato apagado. En septiembre de
+   * 2026 "Meses anteriores" salía vacío el 47% de los días y sus dos subfilas el ~50%.
+   * No cambia ningún total: los totales se calculan sobre las filas principales y una
+   * fila en cero no suma.
+   */
+  const conMovimiento = (filas: Fila[]) =>
+    filas.filter((f) => f.monto !== 0 || (typeof f.cant === "number" && f.cant !== 0));
 
   /* Los bloques del legacy, reagrupados en pestañas. Ninguno desaparece. */
   const bloques: Record<string, { filas: Fila[]; total: string; nota: string }> = {
-    "Forma de pago": {
-      total: "Total forma de pago",
-      nota: "Cómo entró la plata. Es el bloque que se concilia contra el legacy cifra por cifra.",
+    "Dinero en caja": {
+      total: "Excedente barrido",
+      nota: "La plata del cajón, en el orden en que se cuenta a mano. Los pagos por transferencia bancaria y por WOMPI no salen aquí porque no pasaron por la ventanilla: están en «Bancos».",
       filas: [
-        { label: "Saldo anterior", cant: fp.saldoAnterior.cantidad, monto: fp.saldoAnterior.monto },
-        { label: "Efectivo", cant: fp.efectivo.cantidad, monto: fp.efectivo.monto },
-        { label: "Transferencia", cant: fp.transferencia.cantidad, monto: fp.transferencia.monto },
-        { label: "WOMPI", cant: fp.wompi.cantidad, monto: fp.wompi.monto },
+        { label: "Saldo anterior (arrastre del día anterior)", cant: dc.saldoAnterior.cantidad, monto: dc.saldoAnterior.monto },
+        { label: "Recaudo del día", cant: dc.recaudo.cantidad, monto: dc.recaudo.monto },
+        { label: "Total en caja", monto: dc.totalEnCaja, sub: true },
+        { label: "Egresos del día", cant: dc.egresos.cantidad, monto: -dc.egresos.monto },
       ],
     },
     "Servicios": {
@@ -347,12 +377,12 @@ export function InformeCierre({ d }: { d: InformeCierreData }) {
           ? [{ label: "Television", cant: d.servicios.television.cantidad, monto: d.servicios.television.monto }]
           : []),
         ...d.servicios.afiliaciones.map((x) => ({ label: x.producto, cant: x.cantidad, monto: x.monto })),
+        // "Total Materiales" y "Total Otros" ya no se pintan: el backend los devuelve
+        // SIEMPRE en 0 (el legacy nunca los calculó) y en la base no hay un solo ítem de
+        // material, así que eran dos renglones en $0 fijos para toda la vida. Siguen en
+        // el payload y en la vista "como el legacy", para conciliar.
         { label: "Total Reconexiones", cant: d.servicios.reconexiones.cantidad, monto: d.servicios.reconexiones.monto, sub: true },
-        { label: "Total Materiales", cant: d.servicios.materiales.cantidad, monto: d.servicios.materiales.monto, sub: true,
-          nota: "El legacy lo imprime fijo en 0: no es que no haya, es que nunca lo calculó." },
-        { label: "Total Otros", cant: d.servicios.otros.cantidad, monto: d.servicios.otros.monto, sub: true,
-          nota: "El legacy lo imprime fijo en 0: no es que no haya, es que nunca lo calculó." },
-      ],
+      ].filter((f) => f.monto !== 0 || f.cant !== 0),
     },
     "Tipo de servicio": {
       total: "Total tipo de servicio",
@@ -364,23 +394,20 @@ export function InformeCierre({ d }: { d: InformeCierreData }) {
     },
     "Meses cobrados": {
       total: "Total cobranza por meses",
-      nota: "Por fecha de la FACTURA, no del pago. El monto es el recaudo crudo, por eso no cuadra con Internet + TV (igual que el legacy).",
-      filas: [
+      nota: "Sólo los meses de los que se cobró algo, por fecha de la FACTURA y no del pago. El monto es el recaudo crudo: por eso no cuadra con el reparto de la pestaña «Tipo de servicio» (igual que el legacy).",
+      // Sólo los tres periodos. El desglose Internet/TV por mes que había aquí (seis
+      // renglones grises) no lo tiene ni el PDF ni la vista del legacy: era propio de esta
+      // pantalla y repetía en gris lo que la pestaña "Tipo de servicio" ya dice entero.
+      filas: conMovimiento([
         { label: mesNombre(0), cant: m.actual.cantidad, monto: m.actual.monto },
         { label: mesNombre(-1), cant: m.anterior.cantidad, monto: m.anterior.monto },
         { label: "Meses anteriores", cant: m.anteriores.cantidad, monto: m.anteriores.monto },
-        { label: `Internet · ${mesNombre(0)}`, cant: mes(m.actual).Internet.cantidad, monto: mes(m.actual).Internet.monto, sub: true },
-        { label: `Internet · ${mesNombre(-1)}`, cant: mes(m.anterior).Internet.cantidad, monto: mes(m.anterior).Internet.monto, sub: true },
-        { label: "Internet · meses anteriores", cant: mes(m.anteriores).Internet.cantidad, monto: mes(m.anteriores).Internet.monto, sub: true },
-        { label: `TV · ${mesNombre(0)}`, cant: mes(m.actual).Television.cantidad, monto: mes(m.actual).Television.monto, sub: true },
-        { label: `TV · ${mesNombre(-1)}`, cant: mes(m.anterior).Television.cantidad, monto: mes(m.anterior).Television.monto, sub: true },
-        { label: "TV · meses anteriores", cant: mes(m.anteriores).Television.cantidad, monto: mes(m.anteriores).Television.monto, sub: true },
-      ],
+      ]),
     },
     "Bancos": {
       total: "Total banco",
-      nota: "Movimientos de banco que caen en esta caja porque el referente de la factura dice esta sede.",
-      filas: d.porBanco.map((b) => ({ label: b.nombre, cant: b.cantidad, monto: b.monto })),
+      nota: "Movimientos de banco que caen en esta caja porque la factura dice esta sede (o, si no dice ninguna, porque el cliente es de esta sede). Sólo se listan las cuentas con movimiento ese día. Los pagos por Wompi, uno a uno, están aquí debajo.",
+      filas: conMovimiento(d.porBanco.map((b) => ({ label: b.nombre, cant: b.cantidad, monto: b.monto }))),
     },
     "Cobranza / IVA": {
       total: "Total cobranza",
@@ -396,20 +423,20 @@ export function InformeCierre({ d }: { d: InformeCierreData }) {
     "Egresos": {
       total: "Total egresos",
       nota: "Salidas de la caja. Los traslados a otra caja se listan aparte del gasto.",
-      filas: [
+      filas: conMovimiento([
         { label: "Pago Orden de Compra", cant: d.egresos.ordenes.cantidad, monto: d.egresos.ordenes.monto },
         { label: "Transacciones", cant: d.egresos.transacciones.cantidad, monto: d.egresos.transacciones.monto },
         { label: "Transferencias", cant: d.egresos.traslados.cantidad, monto: d.egresos.traslados.monto },
-      ],
+      ]),
     },
     "Anulaciones": {
       total: "Cobrado − anulado de otras fechas",
       nota: "Lo que se cayó del día. La cobranza efectiva incluye lo anulado; el neto es lo que de verdad quedó.",
-      filas: [
+      filas: conMovimiento([
         { label: "Anulado de este cierre", cant: d.anulaciones.anuladoDeCierre.cantidad, monto: d.anulaciones.anuladoDeCierre.monto },
         { label: "Anulado de otros cierres", cant: d.anulaciones.anuladoDeOtrosCierres.cantidad, monto: d.anulaciones.anuladoDeOtrosCierres.monto },
         { label: "Cobranza efectiva", cant: "", monto: d.anulaciones.cobranzaEfectiva.monto, sub: true },
-      ],
+      ]),
     },
   };
   const pestanas = Object.keys(bloques);
@@ -422,7 +449,7 @@ export function InformeCierre({ d }: { d: InformeCierreData }) {
         <h3 className="mb-2 text-[13px] font-semibold text-text-primary">Cierre de Caja</h3>
         <div className="grid grid-cols-2 gap-x-8 gap-y-1.5 text-[12px] sm:grid-cols-3">
           <Dato k="Caja" v={d.caja.holder + (d.caja.accountNumber ? ` · ${d.caja.accountNumber}` : "")} />
-          <Dato k="Fecha" v={new Date(d.fecha).toLocaleDateString("es-CO", { weekday: "long", day: "2-digit", month: "long", year: "numeric" })} />
+          <Dato k="Fecha" v={fmtFechaCon(d.fecha, { weekday: "long", day: "2-digit", month: "long", year: "numeric" })} />
           <Dato k="Cajero" v={a.cajero ?? "—"} />
           <Dato k="Hora apertura" v={fmtHora(a.horaApertura)} />
           <Dato k="Hora cierre" v={fmtHora(a.horaCierre)} />
@@ -436,32 +463,26 @@ export function InformeCierre({ d }: { d: InformeCierreData }) {
         )}
       </section>
 
-      {/* ── La cinta de cuadre: la respuesta antes que cualquier tabla ── */}
-      {g && (
+      {/* ── La cinta de cuadre: la respuesta antes que cualquier tabla ──
+           Los traslados entre cajas dejaron de ser un paso suelto: una consignación al
+           banco es plata que sale del cajón, así que va dentro de "Egresos del día". Un
+           paso aparte obligaba a sumar cuatro números para saber cuánta plata hubo. ── */}
+      {dc && (
         <section className="shrink-0">
           <h3 className="mb-1 text-[13px] font-semibold text-text-primary">Cómo se compone el cajón</h3>
           <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-border-subtle bg-border-subtle sm:grid-cols-3 lg:grid-cols-5">
-            <Paso k="Arrastre del cierre anterior" v={g.arrastre} />
-            <Paso op="+" k="Recaudo en efectivo del día" v={g.ventas} tono="pos" />
-            <Paso op="−" k="Egresos en efectivo" v={g.egresos} tono="neg" />
-            <Paso op={g.transferencias < 0 ? "−" : "+"} k="Traslados entre cajas" v={Math.abs(g.transferencias)}
-              tono={g.transferencias < 0 ? "neg" : "pos"} />
-            <Paso op="=" k={a.yaCerrado ? "Excedente barrido" : "Efectivo en el cajón"} v={a.excedente} tono="res" />
+            <Paso k="Arrastre del día anterior" v={dc.saldoAnterior.monto} />
+            <Paso op="+" k="Recaudo del día" v={dc.recaudo.monto} tono="pos"
+              onClick={onVerMovimientos && (() => onVerMovimientos("in"))}
+              ayuda="Ver los ingresos del día en Arqueo y movimientos" />
+            <Paso op="=" k="Total en caja" v={dc.totalEnCaja} tono="sub" />
+            <Paso op="−" k="Egresos del día" v={dc.egresos.monto} tono="neg"
+              onClick={onVerMovimientos && (() => onVerMovimientos("out"))}
+              ayuda="Ver los egresos del día en Arqueo y movimientos" />
+            <Paso op="=" k="Saldo en caja arrastre" v={dc.excedente} tono="res" />
           </div>
         </section>
       )}
-
-      {/* ── Los indicadores del día ── */}
-      {/* Tres, no cuatro: el recaudo que no es efectivo se quitó. Esta pantalla es el
-          arqueo del cajón y esa plata nunca pasa por él. */}
-      <div className="grid shrink-0 grid-cols-1 gap-3 sm:grid-cols-3">
-        <Indicador k="Cobrado del día" v={d.cobranza.total.monto} tono="ok" pct={1}
-          sub={`${d.cobranza.total.cantidad} cargos cobrados`} />
-        <Indicador k="Efectivo en el cajón" v={a.excedente} tono="brand" pct={a.excedente / cobrado}
-          sub={a.yaCerrado ? "ya se barrió al cerrar" : "se barre al cerrar"} />
-        <Indicador k="Egresos del día" v={d.egresos.total.monto} tono="mal"
-          pct={d.egresos.total.monto / cobrado} sub={`${d.egresos.total.cantidad} salidas de caja`} />
-      </div>
 
       {/* ── El desglose: una tabla a la vez, no diez a la vez ── */}
       <section className="shrink-0 overflow-hidden rounded-xl border border-border-subtle bg-surface">
@@ -482,7 +503,7 @@ export function InformeCierre({ d }: { d: InformeCierreData }) {
             ))}
           </div>
           <button
-            onClick={() => setLegacy((v) => !v)}
+            onClick={() => setLegacy(!legacy)}
             title="Las mismas cifras en las tablas del sistema viejo, todas a la vez"
             className="hidden shrink-0 items-center gap-1 rounded-md border border-border-default px-2 py-1 text-[12px] text-text-secondary hover:bg-surface-2 sm:inline-flex"
           >
@@ -496,6 +517,9 @@ export function InformeCierre({ d }: { d: InformeCierreData }) {
             <p className="border-t border-border-subtle bg-surface-2 px-4 py-2 text-[11.5px] text-text-tertiary">
               {bloque.nota}
             </p>
+            {pestana === "Bancos" && detalleBancos && (
+              <div className="border-t border-border-subtle">{detalleBancos}</div>
+            )}
           </>
         )}
       </section>
@@ -520,14 +544,14 @@ export function InformeCierre({ d }: { d: InformeCierreData }) {
           />
 
           <Tabla
-            titulo="Resumen por Forma de pago"
+            titulo="Dinero en caja"
             filas={[
-              { label: "Saldo Anterior", cant: fp.saldoAnterior.cantidad, monto: fp.saldoAnterior.monto },
-              { label: "Efectivo", cant: fp.efectivo.cantidad, monto: fp.efectivo.monto },
-              { label: "Transferencia", cant: fp.transferencia.cantidad, monto: fp.transferencia.monto },
-              { label: "WOMPI", cant: fp.wompi.cantidad, monto: fp.wompi.monto },
+              { label: "Saldo Anterior (arrastre)", cant: dc.saldoAnterior.cantidad, monto: dc.saldoAnterior.monto },
+              { label: "Recaudo del día", cant: dc.recaudo.cantidad, monto: dc.recaudo.monto },
+              { label: "Total en caja", monto: dc.totalEnCaja, sub: true },
+              { label: "Egresos del día", cant: dc.egresos.cantidad, monto: -dc.egresos.monto },
             ]}
-            total={{ label: "Total forma pago", cant: totalFormaPago.cant, monto: totalFormaPago.monto }}
+            total={{ label: "Excedente barrido", monto: dc.excedente }}
           />
 
           <Tabla

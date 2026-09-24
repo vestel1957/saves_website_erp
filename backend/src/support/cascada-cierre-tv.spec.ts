@@ -76,7 +76,7 @@ describe('cascada de cierre por servicio', () => {
     const { cascada, mikrotik, genieacs, serviciosMarcados } = armar();
     const c = await cascada('Reconexion Television');
 
-    expect(genieacs.tvBatchBySubscribers).toHaveBeenCalledWith(['sub-1'], true, undefined);
+    expect(genieacs.tvBatchBySubscribers).toHaveBeenCalledWith(['sub-1'], true, undefined, { desdeOrden: true });
     expect(mikrotik.reconnect).not.toHaveBeenCalled();
     expect(c.tv).toMatchObject({ ok: true, via: 'TR069' });
     expect(serviciosMarcados.map((x: any) => x.status)).toEqual(['ACTIVO']);
@@ -149,7 +149,7 @@ describe('cascada de cierre por servicio', () => {
     const { cascada, mikrotik, genieacs } = armar();
     const c = await cascada('Reconexion Combo');
     expect(mikrotik.reconnect).toHaveBeenCalled();
-    expect(genieacs.tvBatchBySubscribers).toHaveBeenCalledWith(['sub-1'], true, undefined);
+    expect(genieacs.tvBatchBySubscribers).toHaveBeenCalledWith(['sub-1'], true, undefined, { desdeOrden: true });
     expect(c.statusSet).toBe('ACTIVO');
   });
 

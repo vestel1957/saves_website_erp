@@ -46,12 +46,6 @@ function parseSedesCsv(csv: string | null | undefined): number[] {
   return [...new Set(ids)];
 }
 
-/** Dos ámbitos de sede se cruzan si comparten alguna, o si alguno es "todas" (`[]`). */
-function sedesOverlap(a: number[], b: number[]): boolean {
-  if (a.length === 0 || b.length === 0) return true;
-  return a.some((x) => b.includes(x));
-}
-
 /**
  * `MaterialWarehouse.technicianRef` es texto libre venido del legacy y trae basura
  * de captura ('OmarTec ', mayúsculas distintas), así que nunca se compara a pelo.
@@ -335,9 +329,10 @@ export class InventoryService {
       // `banned` calza 1-a-1 con `User.isActive=false`). El material que aún tengan
       // se recupera por el modo "entre bodegas", que sí lista todas las bodegas.
       .filter((t) => !t.retired)
-      // La cajera sólo ve técnicos de su sede; sin empleado vinculado no se puede
-      // saber la sede, así que no se le ofrece.
-      .filter((t) => (unrestricted ? true : t.linked && sedesOverlap(mySedes, t.sedes)))
+      // Todos ven a todos los técnicos, de cualquier sede (2026-09-17, «que todos
+      // puedan ver las bodegas de los técnicos»): antes la cajera sólo veía los de su
+      // sede y los que viajan entre sedes no le salían. La cajera sigue acotada en QUÉ
+      // entrega (sólo consumible) y en DE DÓNDE sale (bodega general).
       .sort((a, b) => (a.name ?? a.warehouseTitle).localeCompare(b.name ?? b.warehouseTitle, 'es'));
 
     // El nombre del dueño va con la bodega: los almacenes de técnico se llaman
@@ -359,18 +354,16 @@ export class InventoryService {
     // "Entre bodegas" para la cajera (2026-09-11): sólo dentro de SU sede, igual que
     // las transferencias de equipos. Entra a una bodega general de su sede —nunca al
     // almacén de un técnico: eso sería entregarle herramienta por la puerta de atrás
-    // de la regla del consumible— y sale de una bodega de su sede o del almacén de un
-    // técnico de su sede, retirados incluidos, que es como se recupera su material.
+    // de la regla del consumible— y sale de una bodega de su sede o del almacén de
+    // cualquier técnico, retirados incluidos, que es como se recupera su material.
     // Sin sede conocida no ve ninguna (lado seguro, como `network/bodega-scope.ts`).
     const deMiSede = (w: (typeof warehouses)[number]) =>
       mySedes.length > 0 && w.branchLegacy != null && mySedes.includes(w.branchLegacy);
-    const tecnicosDeMiSede = new Set(
-      todosLosTecnicos.filter((t) => mySedes.length > 0 && t.linked && sedesOverlap(mySedes, t.sedes)).map((t) => t.warehouseId),
-    );
     const warehouseTargets = unrestricted ? warehouses : warehouses.filter((w) => !w.technicianRef && deMiSede(w));
     const warehouseOrigins = unrestricted
       ? warehouses
-      : warehouses.filter((w) => (w.technicianRef ? tecnicosDeMiSede.has(w.id) : deMiSede(w)));
+      // Los almacenes de técnico, de cualquier sede (2026-09-17, ver `technicians`).
+      : warehouses.filter((w) => (w.technicianRef ? true : deMiSede(w)));
 
     return {
       // La cajera no elige libremente quién recibe ni qué mueve.
@@ -713,7 +706,7 @@ export class InventoryService {
     if (ctx.restricted) {
       const aTecnico = ctx.technicians.find((t) => t.warehouseId === to.id);
       if (aTecnico) {
-        // A técnico: 1) de su sede, 2) desde una bodega general, 3) sólo consumible.
+        // A técnico (de cualquier sede): 1) desde una bodega general, 2) sólo consumible.
         if (from.isTechnician) throw new ForbiddenException('El material debe salir de una bodega, no del almacén de otro técnico.');
         const noConsumible = await this.prisma.material.findFirst({
           where: { id: { in: materialIds }, OR: [{ categoryId: null }, { categoryId: { notIn: ctx.consumableCategoryIds } }] },
@@ -723,10 +716,10 @@ export class InventoryService {
       } else {
         // Entre bodegas: origen y destino de su sede (el destino, bodega general).
         if (!ctx.warehouseTargets.some((w) => w.id === to.id)) {
-          throw new ForbiddenException('Sólo puedes entregarle material a un técnico de tu sede o moverlo a una bodega de tu sede.');
+          throw new ForbiddenException('Sólo puedes entregarle material a un técnico o moverlo a una bodega de tu sede.');
         }
         if (!ctx.warehouseOrigins.some((w) => w.id === from.id)) {
-          throw new ForbiddenException('El material tiene que salir de una bodega de tu sede.');
+          throw new ForbiddenException('El material tiene que salir de una bodega de tu sede o del almacén de un técnico.');
         }
       }
     }

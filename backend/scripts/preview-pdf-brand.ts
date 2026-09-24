@@ -105,7 +105,10 @@ cashClosePdf(salida('6-cierre-caja.pdf'), {
     cobranza: { excento: B(12, 300000), base: B(40, 2800000), iva: B(0, 532000), total: B(52, 3632000) },
     porBanco: [{ nombre: 'Bancolombia', cantidad: 14, monto: 1120000 }, { nombre: 'Davivienda', cantidad: 6, monto: 480000 }],
     cajaVirtual: { nombre: 'Efecty', cantidad: 3, monto: 231000 },
-    formaPago: { saldoAnterior: cero, efectivo: B(32, 2032000), transferencia: B(20, 1600000), wompi: cero },
+    dineroEnCaja: {
+      saldoAnterior: B(1, 1327108), recaudo: B(32, 2032000), sinFactura: B(2, 48890), totalEnCaja: 3359108,
+      egresos: B(5, 892000), excedente: 2467108, wompi: cero,
+    },
     servicios: {
       planes: [{ clave: 'p300', megas: 300, cantidad: 30, monto: 2310000 }, { clave: 'p600', megas: 600, cantidad: 8, monto: 880000 }],
       television: B(14, 350000), mensualidades: B(52, 3540000), reconexiones: B(4, 48000),

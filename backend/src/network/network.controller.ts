@@ -1,5 +1,5 @@
 import type { Response } from 'express';
-import { IsArray, IsIn, IsOptional, IsString, ArrayNotEmpty } from 'class-validator';
+import { IsArray, IsBoolean, IsIn, IsOptional, IsString, ArrayNotEmpty } from 'class-validator';
 import { NetworkService } from './network.service';
 import { NetworkWriteService, EquipTransferDto, AssignPortDto, AssignEquipmentSubDto, CreateEquipmentDto, CreateIpPoolDto, CreateNapDto, CreateVlanDto, ReceiveTransferDto, RejectTransferDto, SignTransferDto, UpdateEquipmentDto, UpdateIpPoolDto, UpdateNapDto } from './network-write.service';
 import { MikrotikService } from './mikrotik.service';
@@ -10,6 +10,8 @@ import { actaPdf } from '../common/pdf/pdf-docs';
 
 export class BatchIdsDto {
   @IsArray() @ArrayNotEmpty() @IsString({ each: true }) ids!: string[];
+  /** Trozo de un lote que la pantalla parte para enseñar el avance. */
+  @IsOptional() @IsBoolean() tanda?: boolean;
 }
 export class MessageBatchDto {
   @IsArray() @ArrayNotEmpty() @IsString({ each: true }) ids!: string[];
@@ -71,7 +73,7 @@ export class NetworkController {
     return this.mikrotik.testRouter(id);
   }
   cutBatch(dto: BatchIdsDto, user: AuthUser) {
-    return this.mikrotik.cutBatch(dto.ids, user);
+    return this.mikrotik.cutBatch(dto.ids, user, { tanda: dto.tanda });
   }
   reconnectBatch(dto: BatchIdsDto, user: AuthUser) {
     return this.mikrotik.reconnectBatch(dto.ids, user);
